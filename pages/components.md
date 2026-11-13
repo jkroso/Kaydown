@@ -76,7 +76,7 @@ Row(padding(22px, 28px), child_gap=40px,
 ```
 
 The editor uses a shadow under each thing that floats over the page: the list
-of headings, the file finder that ⌘P opens and the bar of buttons over a table.
+of headings, the file finder that ⌘O opens and the bar of buttons over a table.
 
 ## Text
 

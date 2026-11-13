@@ -171,7 +171,9 @@ warm_up() = begin
   # Bigger and smaller text, the sidebar, the outline and the file finder
   press(Keys.equal, Keys.cmd); press(Keys.minus, Keys.cmd); press(Keys.var"0", Keys.cmd)
   press(Keys.backslash, Keys.cmd); press(Keys.backslash, Keys.cmd)
-  press(Keys.p, Keys.cmd); press(Keys.n); press(Keys.escape)
+  press(Keys.o, Keys.cmd); press(Keys.n); press(Keys.escape)
+  # The page drawn for paper. A window that isn't on the screen shows no print panel.
+  press(Keys.p, Keys.cmd)
   # The mouse over the top bar's buttons, and a click and a drag on the page
   foreach(x -> mouse(x, 22), (50, 550, 940, 1000, 1040, 1075))
   press(Keys.up, Keys.cmd)

@@ -28,7 +28,8 @@ You can write in **bold**, in *italic* or in ***both***. Use backticks for
 
 | Keys | What they do |
 |------|--------------|
-| ⌘P | Finds a file in this folder by name |
+| ⌘O | Finds a file in this folder by name |
+| ⌘P | Prints the page, or saves it as a PDF |
 | ⌘\ | Shows and hides the list of files |
 | ⌘Z and ⌘⇧Z | Undo and redo |
 | ⌥← and ⌥→ | Move the caret a word at a time |

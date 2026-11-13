@@ -8,7 +8,7 @@ To see the code of a block, hold ⌥ and click the block. A block can use each c
 
 Code can run in a line of text too. Write a `!` and then the code between backticks, and the line shows what the code comes to. Click a line to see its code.
 
-A wall that is 12m long and 2.4m high has an area of !`12m * 2.4m`. Two coats of paint that covers 16m² a litre take !`12m * 2.4m * 2 / (16m^2 / litre)`. A car that goes 150km in 2 hours travels at !`150km / 2hr`, which is !`convert(m/s, 150km / 2hr)`. A person who is 5 feet 10 inches tall is !`convert(cm, 5ft + 10inch)` tall.
+A wall that is !`l = 16m` long and !`h = 2.4m` high has an area of !`area = l * h`. Two coats of paint that covers !`coverage = 16m²` a litre take !`area * 2 / (coverage / litre)`. A car that goes 150km in 2 hours travels at !`150km / 2hr`, which is !`convert(m/s, 150km / 2hr)`. A person who is 5 feet 10 inches tall is !`convert(cm, 5ft + 10inch)` tall.
 
 The numbers have units from Units.jl: lengths like `m`, `km`, `ft` and `inch`, times like `s`, `minute` and `hr`, masses like `kg`, and volumes like `litre`. A sheet has the same units.
 

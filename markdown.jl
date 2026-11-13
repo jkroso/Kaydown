@@ -52,8 +52,10 @@ end
 "True when `text` is a to-do item that's done: its box has an x in it"
 isdone(text::AbstractString) = (m = match(TODO, text); m !== nothing && m[2] != " ")
 
-const MATTER = "front matter"   # the language of the lines of a document's front matter
+const MATTER = "front matter"            # the language of the lines of a document's YAML front matter
+const TOML_MATTER = "toml front matter"  # and of its TOML front matter, between lines of +++
 const KEY = r"^\w[\w .-]*:(\s|$)"
+const TOML_KEY = r"^\s*[\w\"'.-]+\s*="   # like `title = "Notes"`, or `site.title = ` with a dot
 
 "True when `text` is the line that closes a document's front matter"
 closes(text::AbstractString) = rstrip(text) in ("---", "...")
@@ -64,15 +66,20 @@ isyaml(text::AbstractString) =
 
 """
 The line that closes a document's front matter, or 0 when it has none. Front
-matter is lines of YAML at the very top of a file, between a line of --- and
-another, like `title: Notes`. They say things about the document and aren't
-part of its text.
+matter is at the very top of a file, and says things about the document. It
+isn't part of its text. There are two kinds:
 
-Each line between the two has to be a line of YAML, and one of them has to be
-a key. So a page that starts with a divider and a paragraph stays as it is.
+- lines of YAML between a line of --- and another, like `title: Notes`
+- lines of TOML between a line of +++ and another, like `title = "Notes"`
+
+One of the lines between has to be a key. Each line of YAML has to be one that
+YAML can have, so a page that starts with a divider and a paragraph stays as it is.
 """
 front_matter(lines) = begin
-  (length(lines) >= 2 && rstrip(lines[1]) == "---") || return 0
+  length(lines) >= 2 || return 0
+  fence = rstrip(lines[1])
+  fence == "+++" && return toml_matter(lines)
+  fence == "---" || return 0
   keys = 0
   for i in 2:length(lines)
     closes(lines[i]) && return keys > 0 || i == 2 ? i : 0
@@ -82,13 +89,26 @@ front_matter(lines) = begin
   0
 end
 
+"The line of +++ that closes TOML front matter, or 0. A line of TOML can be anything, like the `]` that ends a list."
+toml_matter(lines) = begin
+  keys = 0
+  for i in 2:length(lines)
+    rstrip(lines[i]) == "+++" && return keys > 0 || i == 2 ? i : 0
+    keys += occursin(TOML_KEY, lines[i])
+  end
+  0
+end
+
+"The language of the lines of a document's front matter: `MATTER` for YAML or `TOML_MATTER` for TOML"
+matter_lang(lines) = rstrip(lines[1]) == "+++" ? TOML_MATTER : MATTER
+
 "What each line of a document is"
 classify(lines) = begin
   lang = nothing
   matter = front_matter(lines)
   map(enumerate(lines)) do (i, text)
     # Front matter is a block of its own, like a code block: its first and last lines open and close it
-    i <= matter && return Line(i == 1 || i == matter ? Kind.fence : Kind.code, i == matter ? 1 : 0, 0, MATTER)
+    i <= matter && return Line(i == 1 || i == matter ? Kind.fence : Kind.code, i == matter ? 1 : 0, 0, matter_lang(lines))
     line = Line(text, lang)
     # The line that opens a code block names its language
     line.kind == Kind.fence || return line
@@ -265,4 +285,4 @@ end
 "How many words are in a document"
 words(lines) = sum(text -> count(_ -> true, eachmatch(r"[\p{L}\p{N}][\p{L}\p{N}'’-]*", text)), lines, init=0)
 
-export Kind, Line, Span, Cell, classify, spans, tablecells, isdivider, words, isdone, front_matter, MATTER
+export Kind, Line, Span, Cell, classify, spans, tablecells, isdivider, words, isdone, front_matter, MATTER, TOML_MATTER

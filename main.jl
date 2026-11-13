@@ -35,7 +35,8 @@
 #     it makes in the line: a node like a switch or a file path, or a value
 #     as text. Click the line to see the code again.
 #   - Start a file with front matter: lines like `title: Notes` between two
-#     lines of ---. It shows as a block of its own.
+#     lines of ---, or lines like `title = "Notes"` between two lines of +++.
+#     It shows as a block of its own.
 #   - Click the word count to count characters or reading time instead.
 #   - ⌘+ and ⌘- change the text size by a pixel. ⌘0 puts it back.
 #   - ⌘P prints the page, or saves it as a PDF.
@@ -71,7 +72,7 @@
 @use "github.com/jkroso/UI.jl/Interface/Semantic/TextInput" TextInput
 @use "github.com/jkroso/UI.jl/Interface/Semantic/ListTree" => Tree
 @use "github.com/jkroso/UI.jl/Interface/Semantic/STLViewer" STLViewer Mesh load!
-@use "./markdown" Kind Line Span Cell classify spans tablecells isdivider words isdone front_matter MATTER
+@use "./markdown" Kind Line Span Cell classify spans tablecells isdivider words isdone front_matter MATTER TOML_MATTER
 @use "./highlight" tokens
 @use "./sheet" SHEET Result sheetcells parts uses tally known units shown
 @use "github.com/jkroso/URI.jl/FSPath" FSPath
@@ -567,6 +568,7 @@ end
   buffers::Dict{String,Buffer} = Dict{String,Buffer}()
   folder::String = ""
   files::Vector{String} = String[]      # the Markdown files in the folder
+  listed::Vector{String} = String[]     # every file in the folder, as the sidebar lists them
   panel::Bool = false                   # is the sidebar showing?
   slid::Float64 = 0.0                   # when the sidebar last started to slide in or out
   slid_from::Float64 = 0.0              # how far open it was then, from 0 to 1
@@ -699,7 +701,10 @@ end
 
 list_files!(e) = begin
   names = isdir(e.folder) ? readdir(e.folder) : String[]
-  e.files = [joinpath(e.folder, n) for n in sort!(names, by=lowercase) if ismarkdown(n) && !startswith(n, '.')]
+  paths = [joinpath(e.folder, n) for n in sort!(names, by=lowercase) if !startswith(n, '.')]
+  # The sidebar lists each file. Kaydown shows the Markdown ones, and the Mac opens the others.
+  e.listed = filter(isfile, paths)
+  e.files = filter(ismarkdown, e.listed)
 end
 
 "Show the file at `path`. A file that's already open keeps its changes."
@@ -768,6 +773,22 @@ pieces(e, text::String, line::Line, raw::Bool, i::Int=0) = begin
     if startswith(lstrip(text), '#') || m === nothing
       comment = startswith(lstrip(text), '#')
       isempty(text) || push!(out, piece(text, 0, comment ? Face(base, color=colours.comment, style="Italic") : base))
+    else
+      isempty(m[1]) || push!(out, piece(String(m[1]), 0, base))
+      push!(out, piece(String(m[2]), length(m[1]), Face(base, color=colours.dim)))
+      isempty(m[3]) || push!(out, piece(String(m[3]), length(m[1]) + length(m[2]), base))
+    end
+    return out
+  elseif k == Kind.code && line.lang == TOML_MATTER
+    # TOML front matter looks like YAML front matter: a key and its = are fainter, and so is a
+    # [table] line that starts a group of keys. A comment slants.
+    m = match(r"^(\s*)((?:\"[^\"]*\"|'[^']*'|[\w.-])+\s*=)(.*)$", text)
+    if startswith(lstrip(text), '#')
+      push!(out, piece(text, 0, Face(base, color=colours.comment, style="Italic")))
+    elseif startswith(lstrip(text), '[') && m === nothing
+      push!(out, piece(text, 0, Face(base, color=colours.dim)))
+    elseif m === nothing
+      isempty(text) || push!(out, piece(text, 0, base))
     else
       isempty(m[1]) || push!(out, piece(String(m[1]), 0, base))
       push!(out, piece(String(m[2]), length(m[1]), Face(base, color=colours.dim)))
@@ -3550,9 +3571,12 @@ describe(l::FileLabel) = begin
   name = get(e.nodes, :renaming, "") == l.path ?
     Box(width(grow=grow), height(22px), padding(5px, 0px), radius(4px), Alignment.Start, background(colours.bg),
         border(1px, :solid, colours.accent), renamer(e)) :
-    Box(width(grow=grow), Alignment.Start, label(title(l.path), weight=l.path == e.buf.path ? "Semibold" : ""))
+    ismarkdown(l.path) ?
+    Box(width(grow=grow), Alignment.Start, label(title(l.path), weight=l.path == e.buf.path ? "Semibold" : "")) :
+    # A file that Kaydown doesn't show has its whole name, and it's fainter
+    Box(width(grow=grow), Alignment.Start, label(basename(l.path), color=colours.dim))
   Row(width(grow=grow), height(grow=grow), padding(0px, 8px, 0px, 0px), child_gap=4px, clip=true, name="File",
-    mark(l, "file-earmark-text"),
+    mark(l, ismarkdown(l.path) ? "file-earmark-text" : "file-earmark"),
     name,
     (changed ? (Box(width(6px), height(6px), radius(3px), background(colours.dim)),) : ())...)
 end
@@ -3648,13 +3672,16 @@ items(parent; hidden=false, out=Tree.TreeItem[]) = begin
 end
 
 """
-A click on the name of a file opens the file. A click on a heading or a
+A click on the name of a file opens the file. A file that isn't Markdown opens
+in the app that the Mac uses for it. A click on a heading or a
 component goes to it, and opens its file first if another file is showing.
 Return does the same for the item the keyboard is on. Each gives the keyboard
 to the text.
 """
 choose!(e, item) = begin
   l = item.firstchild
+  # Kaydown doesn't show a file that isn't Markdown, so the app that the Mac uses for it opens it
+  l isa FileLabel && !ismarkdown(l.path) && return (open_url(l.path); e.nodes[:chose] = true; nothing)
   # A group's name shows what's in the group. Only its icon hides that.
   item isa Tree.ItemGroup && (item.collapsed = false)
   l.path == e.buf.path || open!(e, l.path)
@@ -3710,7 +3737,7 @@ here(e, tree) = begin
   i = findfirst(group -> group.firstchild.path == e.buf.path, collect(tree.children))
   i === nothing && return nothing
   group = collect(tree.children)[i]
-  group.collapsed && return group
+  (!(group isa Tree.ItemGroup) || group.collapsed) && return group
   at = findlast(item -> 0 < item.firstchild.line <= e.buf.caret[1], items(group))
   at === nothing ? group : items(group)[at]
 end
@@ -3718,18 +3745,19 @@ end
 "Make the sidebar's tree show the folder's files and the headings of each file that's open in it"
 fill_tree!(e, tree) = begin
   tree.guides = SIDEBAR_GUIDES
-  if [group.firstchild.path for group in tree.children] != e.files
+  if [group.firstchild.path for group in tree.children] != e.listed
     kept = Dict(group.firstchild.path => group for group in tree.children)
     foreach(detach!, collect(tree.children))
-    for p in e.files
+    for p in e.listed
       add_child!(tree, get(kept, p) do
         delete!(e.nodes, (:outline, p))   # a new group has no headings in it yet
-        Tree.ItemGroup(FileLabel(path=p))
+        # A file that Kaydown doesn't show has nothing in it to list
+        ismarkdown(p) ? Tree.ItemGroup(FileLabel(path=p)) : Tree.Item(FileLabel(path=p))
       end)
     end
   end
   for group in tree.children
-    group.collapsed || outline!(e, group)
+    group isa Tree.ItemGroup && !group.collapsed && outline!(e, group)
   end
   w = window_of(e)
   # A click somewhere else while a file is renamed gives the file the name that's typed

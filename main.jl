@@ -443,7 +443,17 @@ end
 
 const stamp = Ref(0)
 
-load(path) = (READ[path] = mtime(path); Buffer(path=path, lines=text(path)))
+load(path) = begin
+  READ[path] = mtime(path)
+  b = Buffer(path=path, lines=text(path))
+  # The caret starts at the text, after any front matter, so the front matter shows as a card
+  t = front_matter(b.lines)
+  if t > 0
+    i = something(findnext(l -> !isempty(strip(l)), b.lines, t + 1), min(t + 1, length(b.lines)))
+    b.caret = b.anchor = (i, 0)
+  end
+  b
+end
 text(path) = String.(split(replace(read(path, String), "\r\n" => "\n"), '\n'))
 
 const READ = Dict{String,Float64}()   # when each open file was last read or written, as the disk tells it
@@ -568,7 +578,7 @@ end
   buffers::Dict{String,Buffer} = Dict{String,Buffer}()
   folder::String = ""
   files::Vector{String} = String[]      # the Markdown files in the folder
-  listed::Vector{String} = String[]     # every file in the folder, as the sidebar lists them
+  listed::Vector{String} = String[]     # the folders and files in the folder, as the sidebar lists them
   panel::Bool = false                   # is the sidebar showing?
   slid::Float64 = 0.0                   # when the sidebar last started to slide in or out
   slid_from::Float64 = 0.0              # how far open it was then, from 0 to 1
@@ -655,8 +665,7 @@ struct Entry
   caret::Int      # the line the caret goes to: the heading's own, or the line after a component
 end
 """
-A heading or a component of a file, under that file in the sidebar's tree. One
-without a line says that the file has nothing to list.
+A heading or a component of a file, under that file in the sidebar's tree
 """
 @def mutable struct EntryLabel <: SemanticUI
   path::String = ""
@@ -702,9 +711,10 @@ end
 list_files!(e) = begin
   names = isdir(e.folder) ? readdir(e.folder) : String[]
   paths = [joinpath(e.folder, n) for n in sort!(names, by=lowercase) if !startswith(n, '.')]
-  # The sidebar lists each file. Kaydown shows the Markdown ones, and the Mac opens the others.
-  e.listed = filter(isfile, paths)
-  e.files = filter(ismarkdown, e.listed)
+  # The sidebar lists the folders, then each file. Kaydown shows the Markdown files, and the Mac opens the others.
+  files = filter(isfile, paths)
+  e.listed = [filter(isdir, paths); files]
+  e.files = filter(ismarkdown, files)
 end
 
 "Show the file at `path`. A file that's already open keeps its changes."
@@ -726,6 +736,17 @@ open!(e, path) = begin
 end
 
 window_size(e) = something(viewport(e), e.size)
+
+"The folder of the document that's showing. The sidebar can show another folder."
+docdir(e) = isempty(e.buf.path) ? e.folder : dirname(e.buf.path)
+
+"Show the folders and files of `folder` in the sidebar. The document that's showing stays."
+go_folder!(e, folder) = begin
+  e.folder = folder
+  list_files!(e)
+  e.files_scroll.offset = 0px
+  e
+end
 input(e) = e.nodes[:input]::TextInput
 
 # --- faces -----------------------------------------------------------------------------
@@ -1855,7 +1876,7 @@ evaluate(e, code::String; key=(:live, e.buf.path, code), inline=false) = begin
   e.nodes[:running] = key
   try
     # Kip finds a path like "./widgets.jl" from the folder of the document, and so does a relative FSPath
-    cd(isdir(e.folder) ? e.folder : pwd()) do
+    cd(isdir(docdir(e)) ? docdir(e) : pwd()) do
       value = include_string(sandbox(e), code, isempty(path) ? joinpath(e.folder, "untitled.md") : path)
       node = inline ? present_inline(value) : present(value)
       node !== nothing ? node : inline ? (said(value), false) : note(repr("text/plain", value), colours.ink)
@@ -2276,6 +2297,100 @@ live(e, code::String) = begin
   Live(node, concrete.height + 2LIVE_GAP)
 end
 
+# --- front matter as a card ---------------------------------------------------------
+#
+# While the caret isn't in it, front matter shows as a card: a small FRONTMATTER
+# heading, then each key with what it's set to. A click on the card puts the
+# caret in the line that was clicked, and the lines show as they're written.
+
+"Front matter, shown as a card"
+@def mutable struct MatterCard <: SemanticUI
+  rows::Vector{Tuple{Int,String,String}} = Tuple{Int,String,String}[]   # the line, the key and what it's set to
+  size::px = 13px                                                       # of the text
+end
+
+"A key of front matter and what it's set to, in its card"
+@def mutable struct MatterRow <: SemanticUI
+  line::Int = 0
+  key::String = ""
+  value::String = ""
+  keys::px = 0px    # how wide the widest key is, so that what each is set to starts in one place
+  size::px = 13px
+end
+
+"""
+The keys of the front matter that ends at line `t`, each with the line it's on and
+what it's set to. A line that goes on from the one above, like an item of a list,
+joins what that key is set to. A comment isn't shown.
+"""
+matter_rows(lines, t) = begin
+  toml = rstrip(lines[1]) == "+++"
+  key = toml ? r"^\s*((?:\"[^\"]*\"|'[^']*'|[\w.-])+)\s*=\s*(.*)$" : r"^([^:#\s-][^:#]*):(?:\s+(.*)|$)"
+  rows = Tuple{Int,String,String}[]
+  for i in 2:t-1
+    text = rstrip(lines[i])
+    (isempty(strip(text)) || startswith(lstrip(text), '#')) && continue
+    m = match(key, text)
+    if m !== nothing
+      push!(rows, (i, String(m[1]), something(m[2], "")))
+    elseif toml && startswith(lstrip(text), '[') && !isempty(rows) && !endswith(last(rows)[3], ',') && !endswith(last(rows)[3], '[')
+      push!(rows, (i, String(strip(text)), ""))   # a [table] that starts a group of keys
+    elseif isempty(rows)
+      push!(rows, (i, "", String(strip(text))))
+    else
+      # An item of a list, or the next part of a value that goes over several lines
+      at, k, v = pop!(rows)
+      part = strip(replace(strip(text), r"^-\s+" => ""))
+      push!(rows, (at, k, isempty(v) ? String(part) : endswith(v, '[') ? v * part : v * (startswith(text, r"\s*-\s") ? ", " : " ") * part))
+    end
+  end
+  rows
+end
+
+"The front matter that ends at line `t`, as a card"
+matter_card(e, t) = begin
+  card = node!(MatterCard, e, :matter)
+  card.rows = matter_rows(e.buf.lines, t)
+  card.size = body(e).size * 0.76
+  own!(node!(Document, e, :document), card)
+  # Lay it out once to learn how tall it is
+  concrete = describe(Column(fixed(e.width), Alignment.Start, geometry(card)), (e.width, 9999px))
+  Live(card, concrete.height + 2LIVE_GAP)
+end
+
+describe(c::MatterCard) = begin
+  s = c.size
+  keyface = Face(SANS, "Semibold", s, colours.dim, false)
+  keys = maximum(r -> measure(keyface, r[2]), c.rows, init=0px)
+  Column(width(grow=grow), Alignment.Start, padding(s, s * 0.7), child_gap=s * 0.4, radius(6px),
+         border(1px, :solid, colours.line), background(colours.block), name="Front matter",
+    # The heading has a little more room under it than the rows have between them
+    Box(padding(0px, 0px, s * 0.2, 0px), label("FRONTMATTER", s * 0.72, color=colours.dim, weight="Bold")),
+    [MatterRow(line=at, key=k, value=v, keys=keys, size=s) for (at, k, v) in c.rows]...)
+end
+
+describe(r::MatterRow) = begin
+  s, keys = r.size, r.keys
+  Row(width(grow=grow), Alignment.Start, padding(0px, s * 0.15), child_gap=(keys > 0px ? s * 0.9 : 0px),
+    (keys > 0px ? (Box(fixed(keys), label(r.key, s, color=colours.dim, weight="Semibold")),) : ())...,
+    Box(width(grow=grow), Alignment.Start, Text(r.value, size=s, family=SANS, color=colours.ink, wrap=WrapMode.words)))
+end
+
+cursor(::Union{MatterCard,MatterRow}) = :ibeam
+
+"Put the caret at the end of line `i` of the front matter, so it shows as it's written"
+edit_matter!(node, i) = begin
+  e = editor(node)
+  b = e.buf
+  b.caret = b.anchor = (i, length(b.lines[i]))
+  focus(e)
+  touch!(e)
+  handled
+end
+
+onkey(r::MatterRow, ::KeyPress{Keys.mouse_left}) = edit_matter!(r, r.line)
+onkey(c::MatterCard, ::KeyPress{Keys.mouse_left}) = edit_matter!(c, isempty(c.rows) ? 1 : first(c.rows)[1])
+
 # The code of a live block can load methods that are newer than the frame that
 # ran it, so the node is described with the newest methods there are
 geometry(node::SemanticUI) = Base.invokelatest(convert, GeometricUI, node)
@@ -2303,6 +2418,17 @@ layout!(e, width=text_width(e)) = begin
     if ks[i].kind == Kind.table
       while j < n && ks[j+1].kind == Kind.table
         j += 1
+      end
+    end
+    # Front matter shows as a card, unless the caret is in it
+    if i == 1 && ks[1].kind == Kind.fence && ks[1].lang in (MATTER, TOML_MATTER) && !incode(b, 1)
+      t = front_matter(b.lines)
+      if t > 1
+        content = matter_card(e, t)
+        push!(items, Item(1, t, top, content.tall, content))
+        top += content.tall
+        i = t + 1
+        continue
       end
     end
     # A `ui` code block shows what its code makes, unless the caret is in it
@@ -2861,7 +2987,7 @@ end
 
 "Open a link: a Markdown file in this editor, and anything else in the app the system picks for it"
 follow!(e, url) = begin
-  path = abspath(e.folder, url)
+  path = abspath(docdir(e), url)
   ismarkdown(path) && isfile(path) ? open!(e, path) : open_url(url)
 end
 
@@ -3558,7 +3684,9 @@ onkey(r::FileRow, ::KeyPress{Keys.mouse_left}) = open!(editor(r), r.path)
 "The icon that a file, a heading or a component starts with in the sidebar, in the place a tree has its arrow"
 mark(l, icon; size=13px) = begin
   item = l.parent
-  over = item isa Tree.ItemGroup && Tree.hovered(item)
+  # A file that's open and has nothing under it has no arrow, since there's nothing to open or close.
+  # A closed file might have headings, so it has one.
+  over = item isa Tree.ItemGroup && Tree.hovered(item) && (item.collapsed || any(c -> c isa Tree.TreeItem, item.children))
   Box(width(18px), height(grow=grow), Alignment.Center,
     (isempty(icon) ? () : (Icon(over ? (item.collapsed ? "chevron-right" : "chevron-down") : icon,
                                 size=over ? 10px : size, color=colours.dim),))...)
@@ -3571,12 +3699,13 @@ describe(l::FileLabel) = begin
   name = get(e.nodes, :renaming, "") == l.path ?
     Box(width(grow=grow), height(22px), padding(5px, 0px), radius(4px), Alignment.Start, background(colours.bg),
         border(1px, :solid, colours.accent), renamer(e)) :
+    isdir(l.path) ? Box(width(grow=grow), Alignment.Start, label(basename(l.path))) :
     ismarkdown(l.path) ?
     Box(width(grow=grow), Alignment.Start, label(title(l.path), weight=l.path == e.buf.path ? "Semibold" : "")) :
     # A file that Kaydown doesn't show has its whole name, and it's fainter
     Box(width(grow=grow), Alignment.Start, label(basename(l.path), color=colours.dim))
   Row(width(grow=grow), height(grow=grow), padding(0px, 8px, 0px, 0px), child_gap=4px, clip=true, name="File",
-    mark(l, ismarkdown(l.path) ? "file-earmark-text" : "file-earmark"),
+    mark(l, isdir(l.path) ? "folder" : ismarkdown(l.path) ? "file-earmark-text" : "file-earmark"),
     name,
     (changed ? (Box(width(6px), height(6px), radius(3px), background(colours.dim)),) : ())...)
 end
@@ -3673,7 +3802,7 @@ end
 
 """
 A click on the name of a file opens the file. A file that isn't Markdown opens
-in the app that the Mac uses for it. A click on a heading or a
+in the app that the Mac uses for it, and a folder shows its own folders and files. A click on a heading or a
 component goes to it, and opens its file first if another file is showing.
 Return does the same for the item the keyboard is on. Each gives the keyboard
 to the text.
@@ -3681,6 +3810,7 @@ to the text.
 choose!(e, item) = begin
   l = item.firstchild
   # Kaydown doesn't show a file that isn't Markdown, so the app that the Mac uses for it opens it
+  l isa FileLabel && isdir(l.path) && return (go_folder!(e, l.path); e.nodes[:chose] = true; nothing)
   l isa FileLabel && !ismarkdown(l.path) && return (open_url(l.path); e.nodes[:chose] = true; nothing)
   # A group's name shows what's in the group. Only its icon hides that.
   item isa Tree.ItemGroup && (item.collapsed = false)
@@ -3713,7 +3843,8 @@ outline!(e, group) = begin
   end
   closed = Set((item.firstchild.level, item.firstchild.title) for item in old if item isa Tree.ItemGroup && item.collapsed)
   foreach(detach!, [item for item in group.children if item isa Tree.TreeItem])
-  isempty(found) && return add_child!(group, Tree.Item(EntryLabel(path=path, title="Nothing to list")))
+  # A file with no headings or components has nothing under it
+  isempty(found) && return
   # Each one goes in the nearest heading above it that is bigger
   above = Any[(0, group)]
   for (k, x) in enumerate(found)
@@ -3752,7 +3883,7 @@ fill_tree!(e, tree) = begin
       add_child!(tree, get(kept, p) do
         delete!(e.nodes, (:outline, p))   # a new group has no headings in it yet
         # A file that Kaydown doesn't show has nothing in it to list
-        ismarkdown(p) ? Tree.ItemGroup(FileLabel(path=p)) : Tree.Item(FileLabel(path=p))
+        isfile(p) && ismarkdown(p) ? Tree.ItemGroup(FileLabel(path=p)) : Tree.Item(FileLabel(path=p))
       end)
     end
   end
@@ -3803,6 +3934,7 @@ file_menu!(e, w) = begin
   item = Tree.item_under(tree, w)
   (item === nothing || !(item.firstchild isa FileLabel)) && return
   path = item.firstchild.path
+  isdir(path) && return
   # The tree takes the keyboard, so the file that the menu is for stays marked
   focus(tree)
   tree.focused = item
@@ -3945,11 +4077,86 @@ describe(s::Sidebar) = begin
     Column(fixed(PANEL_W), height(grow=grow), Alignment.Start, background(colours.panel), name="Files",
            border(1px, :solid, colours.line)[:right], offset_x=shows - PANEL_W,
       Box(width(grow=grow), height(TOPBAR_H)),   # under the top bar
-      Row(width(grow=grow), height(30px), padding(16px, 0px), clip=true,
-        label(uppercase(basename(e.folder)), 11px, color=colours.dim, weight="Semibold")),
+      Row(width(grow=grow), height(30px), padding(16px, 0px), Alignment.Center, clip=true, name="Folder",
+        folder_trail(e, PANEL_W - 32px)...),
       reuse!(e.files_scroll,
         Column(width(grow=grow), Alignment.Start, padding(0px, 8px, 12px, 8px), tree))))
 end
+
+# --- the folder at the top of the sidebar ---------------------------------------------
+
+const TRAIL_SIZE = 12px
+const TRAIL_ARROW = 7px   # the size of the arrow between two names
+const TRAIL_GAP = 2px     # on each side of an arrow
+const TRAIL_PAD = 3px     # inside a name, on each side, so its hover background has room
+
+"""
+The names of the folders on the way to `folder`, each with where it is, in no
+more than `room` with an arrow between each two. The sidebar is narrow, so when
+the names don't fit, the ones furthest from the folder shrink to their first
+letter, from the left, like `~ › D › Canon › City`. If that still doesn't fit, an
+… takes the place of names after the first, and last of all the folder's own
+name loses its middle. The … has no path.
+"""
+trail_names(folder, room) = begin
+  short = steps(folder)
+  face(i) = Face(SANS, i == length(short) ? "Semibold" : "", TRAIL_SIZE, colours.ink, false)
+  wide() = sum(i -> measure(face(i), short[i][1]) + 2TRAIL_PAD, eachindex(short)) + (length(short) - 1) * (TRAIL_ARROW + 2TRAIL_GAP)
+  # A hidden folder keeps its dot, so .config shrinks to .c
+  initial(n) = startswith(n, '.') ? first(n, 2) : first(n, 1)
+  for i in 2:length(short)-1
+    wide() <= room && return short
+    short[i] = (initial(short[i][1]), short[i][2])
+  end
+  while wide() > room && length(short) > 2 && short[2][1] != "…"
+    # The first name stays, so the trail still shows where it starts
+    deleteat!(short, 2)
+    length(short) > 2 ? (short[2] = ("…", "")) : insert!(short, 2, ("…", ""))
+  end
+  while wide() > room && length(short) > 3
+    deleteat!(short, 3)
+  end
+  # A folder whose own name is too long loses the middle of it
+  name, at = short[end]
+  k = length(name) ÷ 2
+  while wide() > room && k > 2
+    k -= 1
+    short[end] = (first(name, k) * "…" * last(name, k), at)
+  end
+  short
+end
+
+"One name in the trail at the top of the sidebar. A click shows that folder in the sidebar."
+@def mutable struct TrailName <: SemanticUI
+  path::String = ""   # empty for the … that stands for names left out
+  name::String = ""
+  last::Bool = false  # the folder that the sidebar shows
+end
+
+"The folder at the top of the sidebar, as a trail of names"
+folder_trail(e, room) = begin
+  names = trail_names(e.folder, room)
+  arrow() = Box(padding(TRAIL_GAP, 0px), Icon("chevron-right", size=TRAIL_ARROW, color=colours.faint))
+  parts = Any[]
+  for (i, (n, at)) in enumerate(names)
+    i > 1 && push!(parts, arrow())
+    # Each name is kept, so it knows when the mouse is over it
+    t = node!(() -> TrailName(), e, (:trail, i))
+    t.path, t.name, t.last = at, n, i == length(names)
+    push!(parts, t)
+  end
+  parts
+end
+
+goes(t::TrailName) = !t.last && !isempty(t.path)
+
+describe(t::TrailName) =
+  Box(padding(TRAIL_PAD, 1px), radius(4px), background(goes(t) && ishovered(t) ? colours.hover : clear),
+    label(t.name, TRAIL_SIZE, color=t.last ? colours.ink : colours.dim, weight=t.last ? "Semibold" : ""))
+
+cursor(t::TrailName) = goes(t) ? :hand : :arrow
+
+onkey(t::TrailName, ::KeyPress{Keys.mouse_left}) = goes(t) ? (go_folder!(editor(t), t.path); handled) : nothing
 
 floating(children...; w) =
   Column(fixed(w), radius(9px), Alignment.Start, background(colours.float), border(1px, :solid, colours.line), lifted, children...)

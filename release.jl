@@ -37,13 +37,15 @@ const tag = "v" * strip(read(joinpath(@__DIR__, "VERSION"), String))
 # Find what would stop the release before the build, which takes a few minutes
 ok(`xcrun notarytool history --keychain-profile $profile`) ||
   error("notarytool has no account under the name \"$profile\". See the top of release.jl for how to store one.")
+include("app/bundle.jl")   # defines `out` and `uncommitted`, and finds the packages the app is built from
 if publish
   isempty(output(`git status --porcelain`)) || error("Commit your changes first, so the release matches a commit.")
+  isempty(uncommitted()) || error("Commit the changes in ", join(uncommitted(), ", ", " and "), " first. The app is built from them.")
   isempty(output(`git tag --list $tag`)) || error("There is already a tag $tag. Change the VERSION file.")
   ok(`gh release view $tag --repo $repo`) && error("GitHub already has a release $tag. Change the VERSION file.")
 end
 
-include("app/build.jl")   # defines `app`, `out` and `version`
+include("app/build.jl")   # builds the app, and defines `app` and `version`
 
 const zip = joinpath(out, "Kaydown-$version.zip")
 pack() = (rm(zip, force=true); run(`ditto -c -k --keepParent $app $zip`))

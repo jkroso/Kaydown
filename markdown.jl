@@ -6,7 +6,7 @@
 
 @use "github.com/jkroso/Prospects.jl" ["Enum" @Enum]
 
-@Enum Kind blank paragraph heading bullet ordered blockquote fence code rule table
+@Enum Kind blank paragraph heading bullet ordered blockquote fence code rule table todo
 
 "What one line of a document is"
 struct Line
@@ -20,6 +20,7 @@ Line(kind::Kind, level::Int, prefix::Int) = Line(kind, level, prefix, "")
 
 const HEADING = r"^(#{1,6})\s+"
 const BULLET  = r"^(\s*)[-*+]\s+"
+const TODO    = r"^(\s*)[-*+]\s+\[([ xX])\]\s+"   # a list item with a box: - [ ] to do, or - [x] done
 const ORDERED = r"^(\s*)\d+[.)]\s+"
 const QUOTE   = r"^\s*>\s?"
 const FENCE   = r"^\s*(```|~~~)\s*([^\s`]*)"
@@ -35,6 +36,8 @@ Line(text::AbstractString, lang::Union{Nothing,AbstractString}=nothing) = begin
   m = match(HEADING, text)
   m === nothing || return Line(Kind.heading, length(m[1]), length(m.match))
   occursin(RULE, text) && return Line(Kind.rule, 0, 0)
+  m = match(TODO, text)
+  m === nothing || return Line(Kind.todo, length(m[1]), length(m.match))
   m = match(BULLET, text)
   m === nothing || return Line(Kind.bullet, length(m[1]), length(m.match))
   m = match(ORDERED, text)
@@ -46,10 +49,46 @@ Line(text::AbstractString, lang::Union{Nothing,AbstractString}=nothing) = begin
   Line(Kind.paragraph, indent, indent)
 end
 
+"True when `text` is a to-do item that's done: its box has an x in it"
+isdone(text::AbstractString) = (m = match(TODO, text); m !== nothing && m[2] != " ")
+
+const MATTER = "front matter"   # the language of the lines of a document's front matter
+const KEY = r"^\w[\w .-]*:(\s|$)"
+
+"True when `text` is the line that closes a document's front matter"
+closes(text::AbstractString) = rstrip(text) in ("---", "...")
+
+"True when `text` can be a line of front matter: a key, a list item, a comment, a line that's indented or an empty line"
+isyaml(text::AbstractString) =
+  isempty(strip(text)) || startswith(text, ' ') || startswith(text, '#') || occursin(r"^-(\s|$)", text) || occursin(KEY, text)
+
+"""
+The line that closes a document's front matter, or 0 when it has none. Front
+matter is lines of YAML at the very top of a file, between a line of --- and
+another, like `title: Notes`. They say things about the document and aren't
+part of its text.
+
+Each line between the two has to be a line of YAML, and one of them has to be
+a key. So a page that starts with a divider and a paragraph stays as it is.
+"""
+front_matter(lines) = begin
+  (length(lines) >= 2 && rstrip(lines[1]) == "---") || return 0
+  keys = 0
+  for i in 2:length(lines)
+    closes(lines[i]) && return keys > 0 || i == 2 ? i : 0
+    isyaml(lines[i]) || return 0
+    keys += occursin(KEY, lines[i])
+  end
+  0
+end
+
 "What each line of a document is"
 classify(lines) = begin
   lang = nothing
-  map(lines) do text
+  matter = front_matter(lines)
+  map(enumerate(lines)) do (i, text)
+    # Front matter is a block of its own, like a code block: its first and last lines open and close it
+    i <= matter && return Line(i == 1 || i == matter ? Kind.fence : Kind.code, i == matter ? 1 : 0, 0, MATTER)
     line = Line(text, lang)
     # The line that opens a code block names its language
     line.kind == Kind.fence || return line
@@ -69,6 +108,7 @@ struct Span
   strike::Bool
   link::String   # where it goes when it's the text of a link
   markup::Bool   # true for characters like ** that only say how to draw others
+  live::Bool     # true for inline code that runs: the code of !`code`
 end
 
 struct Style
@@ -116,8 +156,8 @@ end
 "Split `chars[from:to]` into spans, added to `out`. `offset` is the column of `chars[1]`."
 function scan!(out, chars, from, to, style::Style, offset)
   plain = from
-  emit(i, j; markup=false, code=false, s=style) = i <= j &&
-    push!(out, Span(offset + i - 1, String(chars[i:j]), s.bold, s.italic, code, s.strike, s.link, markup))
+  emit(i, j; markup=false, code=false, live=false, s=style) = i <= j &&
+    push!(out, Span(offset + i - 1, String(chars[i:j]), s.bold, s.italic, code, s.strike, s.link, markup, live))
   i = from
   while i <= to
     c = chars[i]
@@ -128,6 +168,14 @@ function scan!(out, chars, from, to, style::Style, offset)
       plain = i + 1
       i += 2
       continue
+    elseif c == '!' && next == '`'
+      # !`code` is inline code that runs. The page shows what the code makes.
+      j = find(chars, "`", i + 2, to)
+      if j > i + 2
+        emit(plain, i - 1); emit(i, i + 1, markup=true); emit(i + 2, j - 1, code=true, live=true); emit(j, j, markup=true)
+        plain = i = j + 1
+        continue
+      end
     elseif c == '`'
       j = find(chars, "`", i + 1, to)
       if j > i + 1
@@ -217,4 +265,4 @@ end
 "How many words are in a document"
 words(lines) = sum(text -> count(_ -> true, eachmatch(r"[\p{L}\p{N}][\p{L}\p{N}'’-]*", text)), lines, init=0)
 
-export Kind, Line, Span, Cell, classify, spans, tablecells, isdivider, words
+export Kind, Line, Span, Cell, classify, spans, tablecells, isdivider, words, isdone, front_matter, MATTER

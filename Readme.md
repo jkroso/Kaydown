@@ -39,6 +39,8 @@ julia --project=. app/build.jl --install   # and copies it into /Applications
 
 The app runs without Julia installed. It is signed for your Mac only. `app/bundle.jl` lists what the build needs and the settings it takes.
 
+The build uses the same copy of UI.jl that `main.jl` runs with: your UI.jl folder if it has changes that aren't committed, or its last commit if not. It prints a line when it builds from uncommitted changes. `release.jl --publish` stops if there are any.
+
 ## Make a release
 
 1. Change the version in the `VERSION` file, and commit.

@@ -20,11 +20,29 @@
 #   - Double-click selects a word, triple-click a line. ⌘-click opens a link.
 #   - The button at the top left, or ⌘\, shows the other Markdown files in the
 #     folder. ⌘O finds one by name.
-#   - The buttons at the top right show the headings, switch between a serif and
-#     a sans-serif font, and change the colours. Click the word count to count
-#     characters or reading time instead.
-#   - ⌘+ and ⌘- change the text size. ⌘0 puts it back.
+#   - Click the icon beside a file in that list to see the file's headings and
+#     components, and click one to go to it. ⌘⇧\ gives that list the keyboard: ↑ and ↓
+#     move through it, → and ← show and hide what's under an item, Return
+#     opens the item and esc goes back to the text.
+#   - Right-click a file in that list to rename it, copy its path or move it
+#     to the Trash.
+#   - Right-click the page to cut, copy and paste, and to insert a new block
+#     where you clicked: a heading, a list, a to-do item, a table, a sheet, a
+#     code block, a live block or a divider.
+#   - Start a list item with `- [ ]` to make a to-do item. Click its box to
+#     tick it.
+#   - Write !`code` in a line of text. The page runs the code and shows what
+#     it makes in the line: a node like a switch or a file path, or a value
+#     as text. Click the line to see the code again.
+#   - Start a file with front matter: lines like `title: Notes` between two
+#     lines of ---. It shows as a block of its own.
+#   - Click the word count to count characters or reading time instead.
+#   - ⌘+ and ⌘- change the text size by a pixel. ⌘0 puts it back.
 #   - ⌘P prints the page, or saves it as a PDF.
+#   - ⌘, opens the settings page, where you choose the colours, the font, the
+#     text size, the width of the page and what the count at the top right
+#     counts. A button there makes Kaydown the app that opens Markdown files.
+#     ⌘, again goes back.
 #   - ⌘⌥I opens the layout inspector.
 #
 # The keyboard is read as a US one, because UI.jl gets keys rather than the
@@ -33,7 +51,7 @@
 # It uses these UI.jl features: a `Scroll` that only builds the lines
 # on screen, a `draw` method that adds the caret and selection over a node,
 # italic and bold fonts by name, a colour for each part of a line of code, a
-# `Stack` to float the outline and the file finder over the page, and
+# `Stack` to float the file finder over the page, and
 # `hide_titlebar!` for a window without a title bar.
 
 @use "github.com/jkroso/Prospects.jl" @def
@@ -42,18 +60,20 @@
 @use "github.com/jkroso/MiniFB.jl"...
 @use "github.com/jkroso/UI.jl/Interface/Geometric"...
 @use "github.com/jkroso/UI.jl/Interface/Specific"...
-@use "github.com/jkroso/UI.jl/Interface/abstract" SemanticUI GeometricUI WrapMode Theme with_theme adopt_theme! light describe reuse! detach! window_of focus
-@use "github.com/jkroso/UI.jl/Interface/draw" ui draw ishovered cursor open_url viewport show_tooltip! hide_tooltip! hittest
-@use "github.com/jkroso/UI.jl/Interface/objc" libobjc cls sel msg nsstring with_pool send
+@use "github.com/jkroso/UI.jl/Interface/abstract" SemanticUI GeometricUI WrapMode Theme with_theme adopt_theme! light describe describe! reuse! detach! add_child! window_of focus handled
+@use "github.com/jkroso/UI.jl/Interface/draw" ui draw ishovered cursor open_url viewport show_tooltip! hide_tooltip! hittest show_menu! hide_menu! redraw_in! rect popup! close_popup!
+@use "github.com/jkroso/UI.jl/Interface/objc" libobjc cls sel msg nsstring jstring with_pool send
 @use "github.com/jkroso/UI.jl/Interface/fonts" skia_font register_font
 @use "github.com/jkroso/UI.jl/Interface/image" image_aspect
 @use "github.com/jkroso/UI.jl/Interface/inspector" toggle_inspector!
-@use "github.com/jkroso/UI.jl/Interface/window" hide_titlebar! drag_window! set_dark! nswindow
+@use "github.com/jkroso/UI.jl/Interface/window" hide_titlebar! drag_window! set_dark! nswindow system_menu
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Icon" Icon
 @use "github.com/jkroso/UI.jl/Interface/Semantic/TextInput" TextInput
-@use "./markdown" Kind Line Span Cell classify spans tablecells isdivider words
+@use "github.com/jkroso/UI.jl/Interface/Semantic/ListTree" => Tree
+@use "github.com/jkroso/UI.jl/Interface/Semantic/STLViewer" STLViewer Mesh load!
+@use "./markdown" Kind Line Span Cell classify spans tablecells isdivider words isdone front_matter MATTER
 @use "./highlight" tokens
-@use "./sheet" SHEET Result sheetcells parts uses tally known
+@use "./sheet" SHEET Result sheetcells parts uses tally known units shown
 @use "github.com/jkroso/URI.jl/FSPath" FSPath
 @use Colors: @colorant_str, RGBA, Colorant
 @use InteractiveUtils: clipboard
@@ -62,7 +82,6 @@
 
 const SANS = isfile("/System/Library/Fonts/SFNS.ttf") ? ".SF NS" : "Helvetica"
 const SERIF = "Charter"
-const PLAIN = "Helvetica Neue"   # the sans-serif choice for the page. It has italics.
 const MONO = "Menlo"
 const SYMBOL_FONT = "Lucida Grande"
 
@@ -83,7 +102,7 @@ Base.@kwdef mutable struct Palette
   panel::Colorant     # the sidebar
   hover::Colorant
   active::Colorant    # the open file in the sidebar
-  float::Colorant     # the outline and the file finder
+  float::Colorant     # the file finder, and the other things that float over the page
   shade::Colorant     # dims the window behind the file finder
   # In a code block
   comment::Colorant
@@ -136,8 +155,11 @@ const NIGHT = Palette(bg=colorant"rgb(30,30,32)", ink=colorant"rgb(222,220,214)"
 const THEMES = (sepia=SEPIA, paper=PAPER, night=NIGHT)
 const colours = deepcopy(SEPIA)
 
+# A component's label is 13/12 of its theme's size. This makes a label as tall as the page's text.
+const LABEL = 12 / 13
+
 "The page's colours, font and text size, for the components that a live block shows"
-component_theme(zoom=1.0) = Theme(size=TEXT_SIZE * zoom, surface=colours.float, text=colours.ink, dim=colours.dim, line=colours.line,
+component_theme(zoom=1.0) = Theme(size=TEXT_SIZE * zoom * LABEL, surface=colours.float, text=colours.ink, dim=colours.dim, line=colours.line,
                           track=colours.faint, hover=colours.hover, select=colours.active,
                           accent=colours.accent, on_accent=colours.bg, family=SANS, mono=SHEET_FONT, mono_style=SHEET_WEIGHT,
                           number=colours.number, string=colours.string, symbol=colours.call,
@@ -148,7 +170,7 @@ use!(p::Palette) = foreach(n -> setfield!(colours, n, getfield(p, n)), fieldname
 
 const TOPBAR_H = 44px
 const PANEL_W = 230px
-const PROSE_W = 780px    # the widest the text gets, before zooming
+const PROSE_W = 780px    # the widest the text gets, before zooming, until the settings page changes it
 const PAGE_X = 32px      # the least space beside the text
 const PAGE_TOP = 28px
 const PAGE_BOTTOM = 160px
@@ -178,10 +200,12 @@ struct Face
   size::px
   color::Colorant
   chip::Bool
+  lang::String   # the language of code whose parts each get a colour, or "" for text in one colour
 end
 
-Face(f::Face; style=f.style, size=f.size, color=f.color, family=f.family, chip=f.chip) =
-  Face(family, style, size, color, chip)
+Face(family, style, size, color, chip) = Face(family, style, size, color, chip, "")
+Face(f::Face; style=f.style, size=f.size, color=f.color, family=f.family, chip=f.chip, lang=f.lang) =
+  Face(family, style, size, color, chip, lang)
 
 const measured = Dict{Tuple{String,String,Float32,String},px}()
 
@@ -200,6 +224,13 @@ end
 # where each run of its text goes, so the same numbers place the text, the
 # caret and the selection, and turn a click back into a column.
 
+"The node that a piece of inline code made, with the room it takes in its line"
+struct Inline
+  node::Any      # a Shown
+  w::px
+  h::px
+end
+
 "A run of a line's text before it's wrapped"
 struct Piece
   text::String
@@ -208,6 +239,7 @@ struct Piece
   face::Face
   atomic::Bool   # true when `text` isn't the line's own text, like a • for a -
   link::String
+  node::Union{Nothing,Inline}   # what's drawn in place of the text, for inline code that made a node
 end
 
 "A run of text placed on one line of the screen"
@@ -220,6 +252,7 @@ struct Seg
   link::String
   x::px          # from the left edge of the page's text
   w::px
+  node::Union{Nothing,Inline}
 end
 
 "One line on screen"
@@ -228,11 +261,13 @@ struct VLine
   x::px          # where its text starts
   from::Int      # the columns it covers
   to::Int
+  top::px        # how far it is under the first line
+  high::px       # a line with a tall node in it is taller than the others
 end
 
 struct Flow
   lines::Vector{VLine}
-  lh::px         # the height of each line on screen
+  lh::px         # the height of a line on screen that has only text
   size::px       # the font size, which sets the caret's height
   above::px
   below::px
@@ -240,50 +275,85 @@ struct Flow
   raw::Bool      # true when the markup characters are showing
 end
 
-tall(f::Flow) = f.above + f.lh * length(f.lines) + f.below
+tall(f::Flow) = f.above + sum(vl -> vl.high, f.lines, init=0px) + f.below
+
+"How far screen line `k` of `f` is under the top of `f`"
+line_top(f::Flow, k::Int) = f.above + f.lines[k].top
+
+"The screen line of `f` that's `dy` under the top of `f`"
+line_at(f::Flow, dy::px) = something(findlast(vl -> f.above + vl.top <= dy, f.lines), 1)
+
+const INLINE_GAP = 4px   # the least room above and below a node in a line of text, in all
 
 "Wrap `pieces` to `limit`. Lines start at `left`, and all but the first at `hang`."
 wrap(pieces, limit::px; lh, size, left=0px, hang=left, above=0px, below=0px, kind=Kind.paragraph, raw=false) = begin
   lines = VLine[]
   segs = Seg[]
   x = start = left
+  top = 0px
   flush!() = begin
     from = isempty(segs) ? (isempty(lines) ? 0 : last(lines).to) : first(segs).col
     to = isempty(segs) ? from : last(segs).col + last(segs).n
-    push!(lines, VLine(segs, start, from, to))
+    high = max(lh, maximum(s -> s.node === nothing ? 0px : s.node.h + INLINE_GAP, segs, init=0px))
+    push!(lines, VLine(segs, start, from, to, top, high))
+    top += high
     segs = Seg[]
     x = start = hang
   end
   # Add `text`, which is `n` characters from `col`, to the line being built
   add!(p::Piece, text, col, n) = begin
     pad = p.face.chip ? 2(CHIP_X + 1px) : 0px
-    if !isempty(segs) && !p.atomic && last(segs).col + last(segs).n == col && last(segs).face === p.face && last(segs).link == p.link
+    if !isempty(segs) && !p.atomic && !last(segs).atomic && last(segs).col + last(segs).n == col && last(segs).face === p.face && last(segs).link == p.link
       s = pop!(segs)
       joined = s.text * text
-      push!(segs, Seg(joined, s.col, s.n + n, s.face, false, s.link, s.x, measure(s.face, joined) + pad))
+      push!(segs, Seg(joined, s.col, s.n + n, s.face, false, s.link, s.x, measure(s.face, joined) + pad, nothing))
       x = s.x + last(segs).w
     else
-      w = measure(p.face, text) + pad
-      push!(segs, Seg(text, col, n, p.face, p.atomic, p.link, x, w))
+      w = p.node === nothing ? measure(p.face, text) + pad : p.node.w
+      push!(segs, Seg(text, col, n, p.face, p.atomic, p.link, x, w, p.node))
       x += w
     end
   end
+  # Cut the pieces into words, each with the spaces after it. What inline code made is one word.
+  words = Tuple{Piece,String,Int,Int}[]
   for p in pieces
     if p.atomic
-      add!(p, p.text, p.col, p.n)
+      push!(words, (p, p.text, p.col, p.n))
       continue
     end
     col = p.col
     for m in eachmatch(r"\S+\s*|\s+", p.text)
-      word = m.match
-      n = length(word)
-      # Spaces at the end of a line may hang past the edge
-      if x + measure(p.face, rstrip(word)) > limit && x > start
-        flush!()
-      end
-      add!(p, String(word), col, n)
+      n = length(m.match)
+      push!(words, (p, String(m.match), col, n))
       col += n
     end
+  end
+  # How far a word reaches past where it starts. A `code` chip has room inside it on each side.
+  # Spaces at the end of a line may hang past the edge, but the spaces in a chip are inside it.
+  reach((p, text, col, n), last) =
+    p.node !== nothing ? p.node.w :
+    p.atomic ? measure(p.face, text) :
+    p.face.chip ? measure(p.face, text) + (col == p.col ? 2(CHIP_X + 1px) : 0px) :
+    measure(p.face, last ? rstrip(text) : text)
+  i = 1
+  while i <= length(words)
+    # Words with no space between them go onto a line together, like a `code` chip and the comma after it
+    j = i
+    while j < length(words) && !endswith(words[j][2], r"\s") && !startswith(words[j+1][2], r"\s")
+      j += 1
+    end
+    w = sum(k -> reach(words[k], k == j), i:j)
+    if w <= limit - hang
+      x + w > limit && x > start && flush!()
+      foreach(k -> add!(words[k][1], words[k][2:4]...), i:j)
+    else
+      # Words that are too wide for a whole line together break where they must
+      for k in i:j
+        x + reach(words[k], k == j) > limit && x > start && flush!()
+        add!(words[k][1], words[k][2:4]...)
+      end
+    end
+    i = j + 1
   end
   flush!()
   Flow(lines, lh, size, above, below, kind, raw)
@@ -387,8 +457,10 @@ end
 kinds(b::Buffer) = begin
   if b.kinds_at != b.version
     b.kinds = classify(b.lines)
-    b.words = words(b.lines)
-    b.chars = sum(length, b.lines, init=0)
+    # Front matter says things about the document, so the counts leave it out
+    counted = @view b.lines[front_matter(b.lines)+1:end]
+    b.words = words(counted)
+    b.chars = sum(length, counted, init=0)
     b.kinds_at = b.version
   end
   b.kinds
@@ -491,17 +563,18 @@ end
   applied::Symbol = :none               # the theme the window was last told about
   font::String = SERIF                  # of the page's text
   zoom::Float64 = 1.0
+  remember::Bool = false                # write the settings to a file when they change
   stat::Symbol = :words                 # what the count at the top right counts
-  popup::Symbol = :none                 # :outline or :finder when one is open
+  popup::Symbol = :none                 # :finder while the file finder is open
   picked::Int = 1                       # the file the finder will open
   scroll::Scroll = Scroll(width(grow=grow), height(grow=grow), scrollbar_inset=0px)   # the page's scrollbar is at the window's edge
   files_scroll::Scroll = Scroll(width(grow=grow), height(grow=grow))
-  outline_scroll::Scroll = Scroll(width(grow=grow), height(grow=grow))
   nodes::Dict{Any,Any} = Dict{Any,Any}()   # the parts of the window, kept between frames
   flows::Dict{Any,Any} = Dict{Any,Any}()
   layout::Vector{Item} = Item[]
   shown::UnitRange{Int} = 1:0           # the items that were built for the last frame
   width::px = PROSE_W                   # how wide the text is
+  widest::px = PROSE_W                  # the widest the text gets, before zooming. The settings page sets it.
   origin::Tuple{px,px} = (0px, 0px)     # where the page's text was last drawn in the window
   goal::Union{Nothing,px} = nothing     # where ↑ and ↓ try to keep the caret
   reveal::Bool = false                  # scroll to the caret before the next frame
@@ -551,14 +624,34 @@ end
   rect::NTuple{4,px} = (0px, 0px, 0px, 0px)
 end
 const Block = Union{Paragraph,Heading,List,Quote,CodeBlock,Table,Rule,LiveBlock,SheetBlock}
+"A file in the file finder's list"
 @def mutable struct FileRow <: SemanticUI
   path::String = ""
-  finder::Int = 0    # its place in the file finder's list, or 0 in the sidebar
+  finder::Int = 0    # its place in the list
 end
-@def mutable struct OutlineRow <: SemanticUI
+"The name of a file in the sidebar's tree"
+@def mutable struct FileLabel <: SemanticUI
+  path::String = ""
+end
+"A heading or a component of a file, as the sidebar lists it"
+struct Entry
+  line::Int       # where it starts
+  level::Int      # a heading's level. A component has level 7, so it goes in the heading above it.
+  title::String
+  icon::String
+  caret::Int      # the line the caret goes to: the heading's own, or the line after a component
+end
+"""
+A heading or a component of a file, under that file in the sidebar's tree. One
+without a line says that the file has nothing to list.
+"""
+@def mutable struct EntryLabel <: SemanticUI
+  path::String = ""
   line::Int = 0
   level::Int = 1
   title::String = ""
+  icon::String = ""
+  caret::Int = 0
 end
 
 editor(node) = begin
@@ -637,21 +730,40 @@ end
 "The face for one span of a line whose plain text is drawn in `base`"
 face(base::Face, s::Span) = begin
   s.markup && return Face(base, color=colours.faint)
-  s.code && return Face(MONO, "", base.size * 0.86, base.color, true)
+  # Inline code that runs is Julia, so its parts get the colours they have in a code block
+  s.code && return Face(MONO, "", base.size * 0.86, base.color, true, s.live ? "julia" : "")
   bold = s.bold || occursin("Bold", base.style)
   italic = s.italic || occursin("Italic", base.style)
   style = bold && italic ? "Bold Italic" : bold ? "Bold" : italic ? "Italic" : ""
   Face(base, style=style, color=!isempty(s.link) ? colours.accent : s.strike ? colours.faint : base.color)
 end
 
-piece(text, col, face; atomic=false, n=length(text), link="") = Piece(text, col, n, face, atomic, link)
+piece(text, col, face; atomic=false, n=length(text), link="", node=nothing) = Piece(text, col, n, face, atomic, link, node)
+
+# The text that stands for the box of a to-do item. The box is drawn in its place, so only the text's width matters.
+# Both hold the same characters, so an empty box and a ticked one are the same width.
+const TODO_OPEN, TODO_DONE = "[ ] ", "] [ "
+"True when `seg` is the box of a to-do item"
+isbox(seg) = seg.atomic && (seg.text == TODO_OPEN || seg.text == TODO_DONE)
 
 "The runs of text that line `text` is drawn as. With `raw`, the markup shows."
-pieces(e, text::String, line::Line, raw::Bool) = begin
+pieces(e, text::String, line::Line, raw::Bool, i::Int=0) = begin
   base = face(e, line)
   out = Piece[]
   k = line.kind
-  if k == Kind.code
+  if k == Kind.code && line.lang == MATTER
+    # In front matter, the key is fainter than what it's set to, and a comment slants
+    m = match(r"^(\s*(?:-\s+)?)([^:#\s][^:#]*:)(.*)$", text)
+    if startswith(lstrip(text), '#') || m === nothing
+      comment = startswith(lstrip(text), '#')
+      isempty(text) || push!(out, piece(text, 0, comment ? Face(base, color=colours.comment, style="Italic") : base))
+    else
+      isempty(m[1]) || push!(out, piece(String(m[1]), 0, base))
+      push!(out, piece(String(m[2]), length(m[1]), Face(base, color=colours.dim)))
+      isempty(m[3]) || push!(out, piece(String(m[3]), length(m[1]) + length(m[2]), base))
+    end
+    return out
+  elseif k == Kind.code
     # Each part of a line of code has its own colour, and comments slant
     for t in tokens(text, line.lang)
       colour = t.kind == :plain ? base.color : getfield(colours, t.kind)
@@ -664,14 +776,18 @@ pieces(e, text::String, line::Line, raw::Bool) = begin
     return out
   end
   lead = head(text, line.prefix)
-  if k == Kind.bullet || k == Kind.ordered
+  if k in (Kind.bullet, Kind.ordered, Kind.todo)
     line.level > 0 && push!(out, piece(head(lead, line.level), 0, base))
     mark = Face(base, style="Bold", color=colours.marker)
     if k == Kind.bullet && !raw
       push!(out, piece("•  ", line.level, mark, atomic=true, n=line.prefix - line.level))
+    elseif k == Kind.todo && !raw
+      push!(out, piece(isdone(text) ? TODO_DONE : TODO_OPEN, line.level, base, atomic=true, n=line.prefix - line.level))
     else
       push!(out, piece(rest(lead, line.level), line.level, mark))
     end
+    # A to-do item that's done reads fainter
+    k == Kind.todo && isdone(text) && (base = Face(base, color=colours.dim))
   elseif k == Kind.paragraph
     isempty(lead) || push!(out, piece(lead, 0, base))
   elseif raw && !isempty(lead)
@@ -679,9 +795,83 @@ pieces(e, text::String, line::Line, raw::Bool) = begin
   end
   for s in spans(rest(text, line.prefix), line.prefix)
     s.markup && !raw && continue
-    symbols!(out, s.text, s.col, face(base, s), s.link)
+    s.live && !raw ? push!(out, inline(e, i, s, base)) : symbols!(out, s.text, s.col, face(base, s), s.link)
   end
   out
+end
+
+# --- inline code -------------------------------------------------------------------------
+#
+# !`code` in a line of text is inline code. The page runs the code and shows
+# what it makes in place of the code: a node, like a switch or a file path, or
+# any other value as text. The code shows again while the caret is on its line.
+
+const INLINE = "!`"   # what inline code starts with
+
+"The lines of `b` that have inline code"
+inline_lines(e, b::Buffer) = get!(e.flows, (:inline, b.path, b.version)) do
+  [i for (i, text) in enumerate(b.lines) if occursin(INLINE, text)]
+end
+
+"""
+Which one of the document's pieces of inline code with this code the span `s`
+of line `i` is: 1 for the first. Two pieces with the same code each make a
+node of their own.
+"""
+ordinal(e, i::Int, s::Span) = begin
+  b = e.buf
+  marked = INLINE * s.text * "`"
+  1 <= i <= length(b.lines) || return 1
+  before = sum(j -> count(marked, b.lines[j]), Iterators.filter(<(i), inline_lines(e, b)), init=0)
+  before + count(marked, head(b.lines[i], max(0, s.col - length(INLINE)))) + 1
+end
+
+"""
+What the `n`th piece of inline code `code` of the document made. It's a Shown
+when the code made a node. For any other value it's the value as text, and
+true if that text says what went wrong.
+"""
+made(e, code::String, n::Int) = begin
+  key = (:inline, e.buf.path, code, n)
+  get!(e.nodes, key) do
+    out = evaluate(e, code, key=key, inline=true)
+    out isa Tuple && return out
+    shown = Shown(value=out, inline=true)
+    out isa SemanticUI && own!(shown, out)
+    shown
+  end
+end
+
+"Lay out what inline code made, to learn how much room it takes in its line"
+fit(e, shown) = begin
+  own!(node!(Document, e, :document), shown)
+  concrete = describe(Row(Alignment.Start, geometry(shown)), (e.width, 9999px))
+  # A node with no width of its own, like a slider, takes all the room it's given. In a line it gets this much.
+  w = concrete.width < 16px ? INLINE_W * e.zoom : concrete.width
+  Inline(shown, min(w, e.width), concrete.height)
+end
+
+const INLINE_W = 180px   # of a node in a line of text that has no width of its own, before the text is zoomed
+
+"The piece that stands for the inline code of span `s`, on line `i`, in text drawn in `base`"
+inline(e, i::Int, s::Span, base::Face) = begin
+  out = made(e, s.text, ordinal(e, i, s))
+  n = length(s.text)
+  out isa Tuple || return piece(s.text, s.col, base, atomic=true, n=n, node=fit(e, out))
+  text, failed = out
+  piece(text, s.col, failed ? Face(base, color=colours.accent) : base, atomic=true, n=n)
+end
+
+const LONGEST_VALUE = 200   # characters of a value that inline code shows as text
+
+"""
+A value as the text that inline code shows for it. A number reads the way a
+sheet shows it: 28.8 and not 28.799999999999997, with or without a unit.
+"""
+said(value) = begin
+  text = value isa AbstractString ? String(value) : value === nothing ? "nothing" : Base.invokelatest(shown, value)
+  text = replace(text, r"\s*\n\s*" => " ")
+  length(text) > LONGEST_VALUE ? first(text, LONGEST_VALUE) * "…" : text
 end
 
 # The page's fonts have no ⌘ or arrows, so those characters are drawn in one that does
@@ -728,20 +918,23 @@ flow(e, i::Int, raw::Bool=israw(e.buf, i)) = begin
   text, line = e.buf.lines[i], kinds(e.buf)[i]
   # The lines that open and close a code block only show while the caret is in the block
   line.kind == Kind.fence && (raw = incode(e.buf, i))
-  length(e.flows) > 4000 && empty!(e.flows)
-  get!(e.flows, (text, line, raw)) do
+  build() = begin
     base = face(e, line)
-    ps = pieces(e, text, line, raw)
+    ps = pieces(e, text, line, raw, i)
     k = line.kind
     # A hidden ``` line leaves a little room at the top or bottom of its block
     lh = k == Kind.heading ? base.size * 1.35 : body(e).size * (k == Kind.fence && !raw ? 0.6 : 1.65)
     left = k in (Kind.code, Kind.fence) ? BLOCK_X : k == Kind.blockquote ? QUOTE_X : 0px
     # Lines that a list item wraps onto start under its text, not under its bullet
-    hang = k in (Kind.bullet, Kind.ordered) ? sum(p -> measure(p.face, p.text), ps[1:min(end, line.level > 0 ? 2 : 1)], init=0px) : left
+    hang = k in (Kind.bullet, Kind.ordered, Kind.todo) ? sum(p -> measure(p.face, p.text), ps[1:min(end, line.level > 0 ? 2 : 1)], init=0px) : left
     above = k == Kind.heading ? lh * 0.3 : 0px
     below = k == Kind.heading ? lh * 0.12 : 0px
     wrap(ps, e.width; lh, size=base.size, left, hang, above, below, kind=k, raw)
   end
+  # What inline code made can change its size, so its line is laid out again each time
+  !raw && occursin(INLINE, text) && !(line.kind in (Kind.code, Kind.fence, Kind.rule)) && return build()
+  length(e.flows) > 4000 && empty!(e.flows)
+  get!(build, e.flows, (text, line, raw))
 end
 
 "Forget every layout, after something that changes how all the text is drawn"
@@ -830,14 +1023,17 @@ row_edge(b::Buffer, i::Int, by::Int) = begin
 end
 
 "The runs of text in a cell that shows columns `lo` to `hi` of `text`"
-cellpieces(text::String, lo::Int, hi::Int, base::Face, raw::Bool) = begin
+cellpieces(e, i::Int, text::String, lo::Int, hi::Int, base::Face, raw::Bool) = begin
   out = Piece[]
   for s in spans(rest(head(text, hi), lo), lo)
     s.markup && !raw && continue
-    symbols!(out, s.text, s.col, face(base, s), s.link)
+    s.live && !raw ? push!(out, inline(e, i, s, base)) : symbols!(out, s.text, s.col, face(base, s), s.link)
   end
   out
 end
+
+"How wide a piece is before it's wrapped"
+wide(p::Piece) = p.node === nothing ? measure(p.face, p.text) : p.node.w
 
 "The text of each cell of a row of a table, without the spaces around it"
 celltexts(line::AbstractString) = begin
@@ -862,7 +1058,7 @@ align(f::Flow, room::px, side::Symbol) = begin
   side == :left && return f
   lines = map(f.lines) do vl
     dx = max(0px, room - sum(seg -> seg.w, vl.segs, init=0px)) * (side == :center ? 0.5 : 1)
-    VLine([Seg(s.text, s.col, s.n, s.face, s.atomic, s.link, s.x + dx, s.w) for s in vl.segs], vl.x + dx, vl.from, vl.to)
+    VLine([Seg(s.text, s.col, s.n, s.face, s.atomic, s.link, s.x + dx, s.w, s.node) for s in vl.segs], vl.x + dx, vl.from, vl.to, vl.top, vl.high)
   end
   Flow(lines, f.lh, f.size, f.above, f.below, f.kind, f.raw)
 end
@@ -871,7 +1067,7 @@ end
 grid(e, from::Int, to::Int) = begin
   b = e.buf
   caret = from <= b.caret[1] <= to ? b.caret : nothing
-  get!(e.flows, (:grid, from, b.lines[from:to], caret)) do
+  build() = begin
     base = Face(body(e), size=body(e).size * 0.94)
     lh = base.size * 1.5
     rows = tablerows((from, to))
@@ -883,12 +1079,12 @@ grid(e, from::Int, to::Int) = begin
         cell = cells[r][c]
         # The cell with the caret shows its markup, and the spaces typed after its text
         active = caret !== nothing && caret[1] == i && within(cell, caret[2])
-        cellpieces(b.lines[i], cell.lo, active ? max(cell.hi, caret[2]) : cell.hi,
+        cellpieces(e, i, b.lines[i], cell.lo, active ? max(cell.hi, caret[2]) : cell.hi,
                    r == 1 ? Face(base, style="Bold") : base, active)
       end
     end
     # Each column gets room in proportion to its longest cell
-    natural = [maximum(row -> sum(p -> measure(p.face, p.text), row[c], init=0px), parts, init=0px) + 2CELL_X for c in 1:ncols]
+    natural = [maximum(row -> sum(wide, row[c], init=0px), parts, init=0px) + 2CELL_X for c in 1:ncols]
     natural = [clamp(w, 60px, e.width * 0.75) for w in natural]
     space = e.width - 1px * (ncols + 1)
     widths = natural .* (num(space) / num(sum(natural)))
@@ -898,6 +1094,9 @@ grid(e, from::Int, to::Int) = begin
     heights = [maximum(f -> tall(f), row) + 2CELL_Y for row in flows]
     Grid(rows, widths, heights, cells, flows)
   end
+  # What inline code made can change its size, so a table with some in it is laid out again each time
+  any(text -> occursin(INLINE, text), @view b.lines[from:to]) && return build()
+  get!(build, e.flows, (:grid, from, b.lines[from:to], caret))
 end
 
 const TABLE_GAP = 8px   # above and below a table
@@ -1480,9 +1679,27 @@ end
 # A code block in the language `ui` holds Julia code. The page runs it once and
 # shows its value where the block is: a UI node from any module, or any other
 # value as text. The node is kept, so a node with state keeps it between frames.
+#
+# The code can use the names that pages use most with no line that loads them:
+# UI.jl's components, like Slider and STLViewer, the parts of a layout, like
+# Column and px, a file path as fs"notes.md" and a colour as colorant"tomato".
 
 const LIVE = "ui"
 const LIVE_GAP = 8px   # above and below what a live block shows
+
+"The modules whose names a live block can use with no line that loads them"
+const USUAL = ("github.com/jkroso/UI.jl/Interface/Semantic", "github.com/jkroso/UI.jl/Interface/Geometric")
+
+"Give the module `m` each name that the module at `path` exports"
+share!(m, path) = begin
+  from = include_string(m, "@use $(repr(path))")
+  # The module can be new, so its names are asked for as they are now
+  for name in Base.invokelatest(names, from)
+    # A menu and a tree each have an Item, so a block loads the one it means
+    (name == nameof(from) || name == :Item) && continue
+    Core.eval(m, :(const $name = $(Base.invokelatest(getglobal, from, name))))
+  end
+end
 
 "The module that the live blocks of every document run in"
 sandbox(e) = get!(e.nodes, :sandbox) do
@@ -1490,6 +1707,9 @@ sandbox(e) = get!(e.nodes, :sandbox) do
   # Kip by the module that's loaded here, not by name. A built app can't find a package by name.
   Core.eval(m, :(const Kip = $Kip))
   Core.eval(m, :(using .Kip))
+  foreach(path -> share!(m, path), USUAL)
+  include_string(m, "@use \"github.com/jkroso/URI.jl/FSPath\" FSPath @fs_str")
+  Core.eval(m, :(const $(Symbol("@colorant_str")) = $(var"@colorant_str")))
   # A live block can read and set the page's colours: `page_theme()` gives "Sepia", "Paper" or "Night"
   Core.eval(m, :(const page_theme = $(() -> (reads!(e, :theme); titlecase(string(e.theme))))))
   Core.eval(m, :(const page_theme! = $(name -> theme!(e, Symbol(lowercase(string(name)))))))
@@ -1499,30 +1719,58 @@ sandbox(e) = get!(e.nodes, :sandbox) do
   # ... and the font of the page's text, by name
   Core.eval(m, :(const page_font = $(() -> (reads!(e, :font); e.font))))
   Core.eval(m, :(const page_font! = $(name -> font!(e, String(name)))))
+  # ... and the width of the page, in pixels
+  Core.eval(m, :(const page_width = $(() -> e.widest.value)))
+  Core.eval(m, :(const page_width! = $(width -> page_width!(e, width))))
+  # ... and what the count at the top right counts: `page_count()` gives "Words", "Characters" or "Reading time"
+  Core.eval(m, :(const page_count = $(() -> (reads!(e, :stat); STAT_NAMES[findfirst(==(e.stat), STATS)]))))
+  Core.eval(m, :(const page_count! = $(name -> stat!(e, STATS[something(findfirst(==(String(name)), STAT_NAMES), 1)]))))
+  # ... and the app that opens Markdown files: `markdown_app()` gives its name, like "Kaydown", or "" when macOS can't say.
+  # `default_app!()` asks macOS to make that app Kaydown. It gives false when the Kaydown app isn't installed.
+  # `app_installed()` is true when the Kaydown app is on this Mac.
+  Core.eval(m, :(const markdown_app = $(() -> (reads!(e, :app); app_name(markdown_app())))))
+  Core.eval(m, :(const app_installed = $(() -> (reads!(e, :app); !isempty(app_path())))))
+  Core.eval(m, :(const default_app! = $(() -> default_app!(e))))
+  # The units that a sheet has, from Units.jl, so that code can work with lengths, times and so on: 12m * 2.4m.
+  # They come in with `using`, so a name that a block makes or loads for itself wins over a unit with that name.
+  Core.eval(m, :(const SheetUnits = $(units())))
+  Core.eval(m, :(using .SheetUnits))
   m
 end
 
 """
 Note that the live block that's running now asked for a setting of the page:
-`:theme`, `:zoom` or `:font`. Such a block is run again when the setting changes, so
+`:theme`, `:zoom`, `:font` or `:stat`. Such a block is run again when the setting changes, so
 what it shows stays true.
 """
 reads!(e, setting::Symbol) = begin
-  code = get(e.nodes, :running, nothing)
-  code === nothing || push!(get!(() -> Set{Any}(), e.nodes, (:readers, setting)), (:live, e.buf.path, code))
+  key = get(e.nodes, :running, nothing)
+  key === nothing || push!(get!(() -> Set{Any}(), e.nodes, (:readers, setting)), key)
   nothing
+end
+
+"""
+Ask macOS to make Kaydown the app that opens Markdown files, for the button on
+the settings page. macOS asks you to confirm, so the window then looks for
+your answer. It's false when the Kaydown app isn't installed.
+"""
+default_app!(e) = begin
+  before = markdown_app()
+  make_default!() || return false
+  e.nodes[:asked] = (time(), before, time())
+  true
 end
 
 "Run again the live blocks that asked for `setting`"
 rerun!(e, setting::Symbol) = foreach(key -> delete!(e.nodes, key), pop!(e.nodes, (:readers, setting), ()))
 
 """
-Make the page's text `size` pixels tall, for a live block. The block under the
-mouse stays where it is in the window, so a slider that's being dragged
-doesn't move away from the mouse.
+Wrap the page's text again, for a live block that changed a setting. The block
+under the mouse stays where it is in the window, so a slider that's being
+dragged doesn't move up or down, away from the mouse.
 """
-text_size!(e, size) = begin
-  e.zoom = clamp(Float64(size) / TEXT_SIZE.value, 0.6, 2.5)
+rewrap!(e) = begin
+  save_settings!(e)
   empty!(e.flows)
   win = window_of(e)
   if win !== nothing && !isempty(e.layout)
@@ -1533,13 +1781,27 @@ text_size!(e, size) = begin
   e
 end
 
+"Make the page's text `size` pixels tall, for a live block"
+text_size!(e, size) = (e.zoom = zoom_for(size); rewrap!(e))
+
+const NARROWEST, WIDEST = 400, 1200   # the page widths that the settings page offers
+
+"""
+Make the page `width` pixels wide, to the nearest ten, for a live block. That's
+its width while the text is its usual size: bigger text gets a wider page, so
+a line holds as many words as before. A window that's too narrow for the page
+shows it as wide as it can.
+"""
+page_width!(e, width) = (e.widest = px(clamp(10round(Int, width / 10), NARROWEST, WIDEST)); rewrap!(e))
+
 "Draw the page's text in the font called `name`"
-font!(e, name::String) = (e.font = name; rerun!(e, :font); restyle!(e))
+font!(e, name::String) = (e.font = name; save_settings!(e); rerun!(e, :font); restyle!(e))
 
 "Use the colours called `name` for the page"
 theme!(e, name::Symbol) = begin
   name in THEME_ORDER || error("The page's colours are Sepia, Paper and Night. $name isn't one of them.")
   e.theme = name
+  save_settings!(e)
   rerun!(e, :theme)
   restyle!(e)
 end
@@ -1547,24 +1809,30 @@ end
 # The errors of the live blocks that failed. The app's self-test reads it, to check its own pages.
 const problems = String[]
 
-"Run the code of a live block and return a UI node that shows its value, or its error"
-evaluate(e, code::String) = begin
+"""
+Run the code of a live block and return a UI node that shows its value, or its
+error. `key` is where the editor keeps what the code made. With `inline`, the
+code is in a line of text: a value that isn't a node comes back as its text,
+with true if the text says what went wrong.
+"""
+evaluate(e, code::String; key=(:live, e.buf.path, code), inline=false) = begin
   path = e.buf.path
   # The code can load the drawing methods of a node, and the frame that runs it
   # can't call them yet. So the window draws one more frame soon after.
   e.nodes[:ran] = true
-  e.nodes[:running] = code
+  e.nodes[:running] = key
   try
     # Kip finds a path like "./widgets.jl" from the folder of the document, and so does a relative FSPath
     cd(isdir(e.folder) ? e.folder : pwd()) do
       value = include_string(sandbox(e), code, isempty(path) ? joinpath(e.folder, "untitled.md") : path)
-      node = present(value)
-      node === nothing ? note(repr("text/plain", value), colours.ink) : node
+      node = inline ? present_inline(value) : present(value)
+      node !== nothing ? node : inline ? (said(value), false) : note(repr("text/plain", value), colours.ink)
     end
   catch err
     err = err isa LoadError ? err.error : err
     push!(problems, sprint(showerror, err))
-    note(sprint(showerror, err), colours.accent)
+    # A line of text has room for the first line of what went wrong
+    inline ? (said(first(split(sprint(showerror, err), '\n'))), true) : note(sprint(showerror, err), colours.accent)
   finally
     delete!(e.nodes, :running)
   end
@@ -1576,11 +1844,22 @@ a method to show a type of your own as a node.
 """
 present(value) = nothing
 present(node::Union{SemanticUI,GeometricUI}) = node
+# Text on its own goes in a box as wide as the page, so that it wraps and takes the page's colours
+present(text::Text) = Box(width(grow=grow), Alignment.Start, text)
 present(p::FSPath) = begin
   path = abspath(string(p))
   path = ispath(path) ? realpath(path) : path
   Breadcrumb(at=length(path) > 1 ? String(rstrip(path, '/')) : path)
 end
+
+"""
+The node that shows `value` in a line of text, for inline code, or nothing to
+show it as text. It's what a live block shows, unless a type has a method here.
+"""
+present_inline(value) = present(value)
+present_inline(text::Text) = Box(Alignment.Start, text)
+# A file path in a line of text is as wide as its names. Its list floats under it.
+present_inline(p::FSPath) = (l = present(p); l.inline = true; l)
 
 note(text, colour) = Box(width(grow=grow), padding(BLOCK_X, 10px), background(colours.block),
   Text(String(text), size=13px, family=MONO, color=colour))
@@ -1594,18 +1873,31 @@ a click on a checkbox shows.
 @def mutable struct Shown <: SemanticUI
   value::Any = nothing   # a SemanticUI or a GeometricUI
   was::Theme = light     # the theme that the text in a GeometricUI value has now
+  inline::Bool = false   # made by inline code, so it's in a line of text and only as wide as what it shows
 end
 
 cursor(::Shown) = :arrow
+
+# A drag that starts in a live block is the block's. The page's text doesn't select as the mouse moves.
+onmouse(s::Shown, ::MouseMove) = held(s, Keys.mouse_left) ? handled : nothing
 
 # The components in the block get the page's colours
 describe(s::Shown) = begin
   t = component_theme(editor(s).zoom)
   was, s.was = s.was, t
   with_theme(t) do
-    Column(width(grow=grow), Alignment.Start,
-      s.value isa SemanticUI ? Base.invokelatest(convert, GeometricUI, s.value) : redescribe!(detach!(s.value), t, was))
+    inner = s.value isa SemanticUI ? Base.invokelatest(convert, GeometricUI, s.value) : redescribe!(detach!(s.value), t, was)
+    s.inline ? Row(width(grow=grow), Alignment.Center, inner) : Column(width(grow=grow), Alignment.Start, inner)
   end
+end
+
+# What inline code made can float a list over the page, as a file path does. A
+# click in that list is the list's, so it stops here, before the page's text sees it.
+onkey(s::Shown, ev::KeyPress{Keys.mouse_left}) = begin
+  s.inline || return nothing
+  r = rect(s)
+  x, y = ev.window.mouse
+  r !== nothing && r.left <= x < r.left + r.width && r.top <= y < r.top + r.height ? nothing : handled
 end
 
 """
@@ -1650,8 +1942,9 @@ end
 # in a row. Click the last name to list what's in that folder under the
 # breadcrumb, and click an earlier name to go to that folder. A click on a
 # line of the list makes that file or folder the path, so its name joins the
-# breadcrumb. Under a path to a file is a preview of the file: a picture, or
-# the first lines of a text file.
+# breadcrumb. Under a path to a file is a preview of the file: a picture, the
+# model in an STL or 3MF file, or the text of a text file, which the wheel scrolls
+# through. The lines of a file of code have the colours that a code block gives them.
 
 "One line of the list under a Breadcrumb: a file or a folder"
 @def mutable struct FileEntry <: SemanticUI
@@ -1671,6 +1964,30 @@ end
   # Kept so each name and each line knows when the mouse is over it
   crumbs::Dict{String,Crumb} = Dict{String,Crumb}()
   entries::Dict{String,FileEntry} = Dict{String,FileEntry}()
+  viewer::Any = nothing  # the STLViewer of the file at `at`. Kept so the model stays as it was turned.
+  text::Any = nothing    # the FileText of the file at `at`, or false for a file that isn't text
+  read::Any = nothing    # the path of the file that `text` is for, and when the file last changed
+  inline::Bool = false   # in a line of text, so its list floats under it and takes no room on the page
+end
+
+"The list or the preview under a breadcrumb that's in a line of text. It floats over the page."
+@def mutable struct Listing <: SemanticUI
+  of::Any = nothing   # the Breadcrumb
+end
+
+const LISTING_W = 340px
+
+describe(f::Listing) =
+  Column(width(grow=grow), Alignment.Start, padding(6px), radius(8px), background(colours.block), border(1px, :solid, colours.line),
+         lifted, child_gap=1px, contents(f.of)...)
+
+"Show the list of a breadcrumb that's in a line of text when it's open, and take the list away when it isn't"
+list!(l::Breadcrumb, w) = begin
+  w === nothing && return
+  l.open || return close_popup!(w, :listing)
+  e = editor(l)
+  popup!(w, Listing(of=l), anchor=l, gap=4px, width=min(LISTING_W, e.width), key=:listing, onclose=() -> (l.open = false),
+         theme=component_theme(e.zoom))
 end
 
 const MOST_FILES = 100
@@ -1701,19 +2018,25 @@ describe(l::Breadcrumb) = begin
   names = [get!(() -> own!(l, Crumb(path=path, name=name)), l.crumbs, path) for (name, path) in steps(l.at)]
   arrow() = Icon("chevron-right", size=9px, color=colours.faint)
   # The first name and as many of the last names as fit. An … stands for the names left out.
-  n = fitting(map(wide, names), editor(l).width)
+  # An open breadcrumb that isn't in a line of text is in a panel with what's under it, so it has less room
+  panel = l.open && !l.inline
+  n = fitting(map(wide, names), editor(l).width - (panel ? 2PANEL_PAD : 0px))
   kept = n < length(names) - 1 ? Any[names[1], Box(width(DOTS_W), label("…", color=colours.dim)), names[end-n+1:end]...] : names
-  trail = Row(width(grow=grow), height(30px), child_gap=CRUMB_GAP, clip=true,
-    Iterators.flatten(i == 1 ? (c,) : (arrow(), c) for (i, c) in enumerate(kept))...)
-  l.open || return Column(width(grow=grow), Alignment.Start, trail)
-  Column(width(grow=grow), Alignment.Start, child_gap=4px, trail,
-    Column(width(grow=grow), Alignment.Start, padding(6px), radius(8px), background(colours.block), child_gap=1px,
-      contents(l)...))
+  parts = Iterators.flatten(i == 1 ? (c,) : (arrow(), c) for (i, c) in enumerate(kept))
+  l.inline && return Row(height(24px), child_gap=CRUMB_GAP, clip=true, parts...)
+  trail = Row(width(grow=grow), height(30px), child_gap=CRUMB_GAP, clip=true, parts...)
+  panel || return Column(width(grow=grow), Alignment.Start, trail)
+  # One background goes round the names and what's under them, to show that they're one thing
+  Column(width(grow=grow), Alignment.Start, padding(PANEL_PAD), radius(8px), background(colours.block), child_gap=1px,
+    trail, contents(l)...)
 end
+
+const PANEL_PAD = 6px
 
 "What shows under an open breadcrumb: the lines of a folder, or the preview of a file"
 contents(l::Breadcrumb) = begin
-  isdir(l.at) || return (preview(l.at),)
+  isdir(l.at) || return (preview(l, l.at),)
+  l.viewer = l.text = nothing
   names = listing(l.at)
   shown = first(names, MOST_FILES)
   isempty(names) && return (Row(width(grow=grow), height(26px), padding(10px, 0px), label("This folder is empty", 12px, color=colours.dim)),)
@@ -1763,9 +2086,13 @@ end
 cursor(::Crumb) = :hand
 
 # The last name shows and hides the list. An earlier name goes to its folder.
-onkey(c::Crumb, ::KeyPress{Keys.mouse_left}) = begin
+onkey(c::Crumb, ev::KeyPress{Keys.mouse_left}) = begin
   l = c.parent::Breadcrumb
+  # In a line of text, a click with ⌥ held shows the code and leaves the path as it is
+  l.inline && held(c, Keys.opt) && return nothing
   c.path == l.at ? (l.open = !l.open) : (l.at = c.path; l.open = true)
+  l.inline && list!(l, ev.window)
+  nothing
 end
 
 describe(r::FileEntry) = begin
@@ -1789,20 +2116,91 @@ end
 
 const PICTURES = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
 const PREVIEW_LINES = 12
+const MODELS = (".stl", ".3mf")   # the files of 3D models that the viewer reads
+const MODEL_HEIGHT = 260px
 
-"The first lines of the file at `path`, or nothing if it isn't text"
-opening(path) = begin
-  bytes = open(io -> read(io, 4000), path)
-  (0x00 in bytes || isempty(bytes)) && return nothing
-  s = String(bytes)
-  # The 4000 bytes can stop part way through a character
-  while !isvalid(s) && sizeof(s) > length(bytes) - 4; s = chop(s) end
-  isvalid(s) || return nothing
-  [first(replace(line, '\t' => "  "), 110) for line in first(split(s, '\n'), PREVIEW_LINES)]
+"The viewer of the model in the STL or 3MF file at `path`, or nothing if the file can't be read as a model"
+model(l::Breadcrumb, path) = begin
+  v = l.viewer
+  (v === nothing || v.path != path) && (v = l.viewer = own!(l, STLViewer(path=path, height=MODEL_HEIGHT)))
+  load!(v) isa Mesh ? v : nothing
 end
 
-"What shows under the line of a file that was clicked: the picture, or the start of the text, and when it last changed"
-preview(path) = begin
+const LINE_H = 18px          # the height of a line of a file's text
+const TEXT_PAD = 8px         # above the first line and under the last
+const MOST_TEXT = 400_000    # bytes. The preview of a longer file stops there.
+
+"""
+The text of the file that a breadcrumb previews. It's kept so that the file
+is read once, and so that the text stays where you scrolled it to.
+"""
+mutable struct FileText
+  path::String
+  changed::Float64
+  lines::Vector{String}
+  more::Bool        # the file is longer than what was read
+  scroll::Scroll
+end
+
+"The lines of the file at `path` and whether it has more, or nothing if it isn't text"
+reading(path) = begin
+  bytes = open(io -> read(io, MOST_TEXT + 1), path)
+  more = length(bytes) > MOST_TEXT
+  more && resize!(bytes, MOST_TEXT)
+  (isempty(bytes) || 0x00 in view(bytes, 1:min(length(bytes), 4000))) && return nothing
+  s = String(bytes)
+  # A file that was cut short can stop part way through a character
+  for _ in 1:3
+    (isvalid(s) || !more) && break
+    s = String(codeunits(s)[1:end-1])
+  end
+  isvalid(s) || return nothing
+  lines = [String(first(replace(rstrip(line, '\r'), '\t' => "  "), 200)) for line in split(s, '\n')]
+  # The last line of a file that was cut short isn't all there, and a file that ends with a new line has no line after it
+  (more || isempty(lines[end])) && length(lines) > 1 && pop!(lines)
+  lines, more
+end
+
+"The text of the file at `path` for the breadcrumb `l`, or nothing if the file isn't text"
+text!(l::Breadcrumb, path) = begin
+  t, changed = l.text, mtime(path)
+  t isa FileText && t.path == path && t.changed == changed && return t
+  t === false && l.read == (path, changed) && return nothing
+  l.read = (path, changed)
+  found = reading(path)
+  found === nothing && (l.text = false; return nothing)
+  lines, more = found
+  high = LINE_H * min(length(lines), PREVIEW_LINES) + 2TEXT_PAD
+  l.text = FileText(path, changed, lines, more, Scroll(width(grow=grow), height(high)))
+end
+
+"""
+The text of a file, `PREVIEW_LINES` lines of it at a time. The wheel scrolls
+through the rest. Only the lines in view are made, so a long file costs no
+more than a short one.
+"""
+textview(t::FileText, lang) = begin
+  n = length(t.lines)
+  lo = clamp(floor(Int, (t.scroll.offset - TEXT_PAD) / LINE_H), 0, max(0, n - PREVIEW_LINES))
+  hi = min(n, lo + PREVIEW_LINES + 2)
+  Box(width(grow=grow), padding(10px, 0px), radius(5px), background(colours.bg), clip=true,
+    reuse!(t.scroll, Column(width(grow=grow), Alignment.Start,
+      spacer(TEXT_PAD + LINE_H * lo),
+      [codeline(t.lines[i], lang) for i in lo+1:hi]...,
+      spacer(TEXT_PAD + LINE_H * (n - hi)))))
+end
+
+"""
+One line of a file's text. A file of code has the colours that a code block
+has: `lang` is the end of the file's name, like jl, and a file that isn't code
+is all one colour.
+"""
+codeline(line, lang) = Row(height(LINE_H),
+  [Text(t.text, size=12px, family=MONO, subfamily=t.kind == :comment ? "Italic" : "", wrap=WrapMode.none,
+        color=t.kind == :plain ? colours.ink : getfield(colours, t.kind)) for t in tokens(line, lang)]...)
+
+"What shows under the path of a file: the picture, the model or the start of the text, and when it last changed"
+preview(l::Breadcrumb, path) = begin
   isfile(path) || return Box(height(0px))
   ext = lowercase(splitext(path)[2])
   changed = Libc.strftime("%-d %b %Y, %H:%M", mtime(path))
@@ -1811,11 +2209,14 @@ preview(path) = begin
     if ext in PICTURES
       w = min(420px, 260px * image_aspect(path))
       Image(path, fixed(w), height(w / image_aspect(path)), radius(4px))
+    elseif ext in MODELS && (viewer = model(l, path)) !== nothing
+      viewer
     else
-      lines = opening(path)
-      lines === nothing ? label("This file has no preview", 12px, color=colours.dim) :
-        Column(width(grow=grow), Alignment.Start, padding(10px, 8px), radius(5px), background(colours.bg), clip=true,
-          [Row(height(18px), Text(String(line), size=12px, family=MONO, color=colours.ink, wrap=WrapMode.none)) for line in lines]...)
+      text = text!(l, path)
+      text === nothing ? label("This file has no preview", 12px, color=colours.dim) : begin
+        text.more && (about *= "  ·  the first $(bytes(MOST_TEXT)) of $(bytes(filesize(path)))")
+        textview(text, lstrip(ext, '.'))
+      end
     end
   catch
     label("This file has no preview", 12px, color=colours.dim)
@@ -1853,7 +2254,7 @@ text_width(e) = begin
   w, _ = window_size(e)
   # While the sidebar slides, the text keeps the width it has beside the
   # sidebar, so it doesn't wrap again on each frame
-  clamp(w - (e.panel || sliding(e) ? PANEL_W : 0px) - 2PAGE_X, 240px, PROSE_W * e.zoom)
+  clamp(w - (e.panel || sliding(e) ? PANEL_W : 0px) - 2PAGE_X, 240px, e.widest * e.zoom)
 end
 
 "Work out what the page shows and how tall each part is, for text that's `width` wide"
@@ -1919,8 +2320,8 @@ reveal!(e) = begin
   top, bottom = it.top, it.top + it.tall
   if it.content isa Flow
     k, _ = spot(it.content, e.buf.caret[2])
-    top = it.top + it.content.above + it.content.lh * (k - 1)
-    bottom = top + it.content.lh
+    top = it.top + line_top(it.content, k)
+    bottom = top + it.content.lines[k].high
   elseif it.content isa Sheet
     r = clamp(e.buf.caret[1] - it.first, 1, length(it.content.rows))
     top = it.top + row_top(it.content, r)
@@ -1931,17 +2332,38 @@ end
 
 # --- drawing the text -----------------------------------------------------------------
 
+"The box of a to-do item: empty, or filled and ticked when the item is done"
+todo_box(seg::Seg) = begin
+  side = px(round(num(seg.face.size) * 0.82))
+  box = seg.text == TODO_DONE ?
+    Box(fixed(side), height(side), radius(side * 0.22), Alignment.Center, justify=Alignment.Center, background(colours.accent),
+        Icon("check", size=side * 0.9, color=colours.bg)) :
+    Box(fixed(side), height(side), radius(side * 0.22), border(1.5px, :solid, colours.marker))
+  Box(fixed(seg.w), Alignment.Start, box)
+end
+
 describe(seg::Seg) = begin
+  # What inline code made is drawn in place of the code
+  seg.node === nothing || return Box(fixed(seg.w), Alignment.Start, geometry(seg.node.node))
+  isbox(seg) && return todo_box(seg)
   f = seg.face
   t = Text(seg.text, size=f.size, family=f.family, subfamily=f.style, color=f.color, wrap=WrapMode.none)
   # A Text on its own would take a share of the spare room in its row
   f.chip || return Box(fixed(seg.w), Alignment.Start, t)
+  isempty(f.lang) || (t = Row(Alignment.Start, map(tok -> coloured(tok, f), tokens(seg.text, f.lang))...))
   Box(fixed(seg.w), height(f.size * 1.5), padding(CHIP_X, 0px), radius(4px), background(colours.chip), border(1px, :solid, colours.chip_line), t)
+end
+
+"One part of a line of code in a chip, in the colour of its kind. It's as wide as its text measures, so the caret lines up with it."
+coloured(tok, f::Face) = begin
+  face = Face(f, color=tok.kind == :plain ? f.color : getfield(colours, tok.kind), style=tok.kind == :comment ? "Italic" : "")
+  Box(fixed(measure(f, tok.text)), Alignment.Start,
+    Text(tok.text, size=face.size, family=face.family, subfamily=face.style, color=face.color, wrap=WrapMode.none))
 end
 
 "The lines of a Flow, as rows of text. `edge` is the width of a border on its left."
 rows(f::Flow, edge=0px) =
-  [Row(width(grow=grow), height(f.lh), padding(0px, 0px, 0px, vl.x - edge), clip=true, map(describe, vl.segs)...) for vl in f.lines]
+  [Row(width(grow=grow), height(vl.high), padding(0px, 0px, 0px, vl.x - edge), clip=true, map(describe, vl.segs)...) for vl in f.lines]
 
 describe(e::Editor, it::Item) = describe(e, it, it.content)
 
@@ -1984,7 +2406,7 @@ blocktype(it::Item) = begin
 end
 
 blocktype(k::Kind) =
-  k == Kind.paragraph ? Paragraph : k == Kind.heading ? Heading : k in (Kind.bullet, Kind.ordered) ? List :
+  k == Kind.paragraph ? Paragraph : k == Kind.heading ? Heading : k in (Kind.bullet, Kind.ordered, Kind.todo) ? List :
   k == Kind.blockquote ? Quote : k in (Kind.code, Kind.fence) ? CodeBlock : k == Kind.table ? Table :
   k == Kind.rule ? Rule : nothing
 
@@ -2034,7 +2456,10 @@ end
 cursor(d::Document) = begin
   e = editor(d)
   w = window_of(e)
-  w !== nothing && Keys.cmd in w.keys && link_at(e, w.mouse) !== nothing ? :hand : :ibeam
+  w === nothing && return :ibeam
+  # A click on a to-do item's box ticks it
+  todo_at(e, w.mouse) === nothing || return :hand
+  Keys.cmd in w.keys && link_at(e, w.mouse) !== nothing ? :hand : :ibeam
 end
 
 describe(p::Page) = begin
@@ -2071,8 +2496,8 @@ marks(f::Flow, x, y, (from, to, more); margin=true) = begin
     # A little extra shows that the end of the line is selected too
     (to > vl.to || (more && k == n)) && (x2 += 7px)
     x2 > x1 || continue
-    top = k == 1 ? 0px : f.above + f.lh * (k - 1)
-    bottom = f.above + f.lh * k + (k == n ? f.below : 0px)
+    top = k == 1 ? 0px : line_top(f, k)
+    bottom = line_top(f, k) + vl.high + (k == n ? f.below : 0px)
     push!(out, (num(x + x1), num(y + top), num(x + x2), num(y + bottom)))
   end
   out
@@ -2146,7 +2571,7 @@ caret(ctx, e, f::Flow, x, y, col) = begin
   (since < 0.5 || mod(since - 0.5, 1.0) >= 0.5) || return
   k, cx = spot(f, col)
   high = f.size * 1.25
-  rectangle(ctx, x + cx - 0.75px, y + f.above + f.lh * (k - 1) + (f.lh - high)/2, 1.5px, high, background=colours.ink, border=0px)
+  rectangle(ctx, x + cx - 0.75px, y + line_top(f, k) + (f.lines[k].high - high)/2, 1.5px, high, background=colours.ink, border=0px)
 end
 
 # The caret and the selection are drawn over the text, once it has been placed
@@ -2226,7 +2651,7 @@ locate(e, (x, y)) = begin
     c = min(c, length(cells))
     f = g.flows[r][c]
     x, y = cell_origin(g, r, c)
-    k = clamp(floor(Int, num(dy - it.top - y) / num(f.lh)) + 1, 1, length(f.lines))
+    k = line_at(f, dy - it.top - y)
     return (g.rows[r], cellcol(f, k, dx - x, cells[c]))
   end
   it.content isa Sheet && return locate(e, it, it.content, dx, dy - it.top)
@@ -2236,8 +2661,7 @@ locate(e, (x, y)) = begin
     return above && it.first > 1 ? line_end(e.buf, it.first - 1) : it.last < length(e.buf.lines) ? (it.last + 1, 0) : (it.first, 0)
   end
   f = it.content::Flow
-  k = clamp(floor(Int, num(dy - it.top - f.above) / num(f.lh)) + 1, 1, length(f.lines))
-  (it.first, colat(f, k, dx))
+  (it.first, colat(f, line_at(f, dy - it.top), dx))
 end
 
 "The link under a point in the window, or nothing"
@@ -2272,9 +2696,75 @@ touch!(e; keep_goal=false) = begin
   e
 end
 
+"The line of the to-do item whose box is under a point in the window, or nothing"
+todo_at(e, (x, y)) = begin
+  isempty(e.layout) && return nothing
+  dx, dy = x - e.origin[1], y - e.origin[2]
+  it = e.layout[something(findlast(it -> it.top <= dy, e.layout), 1)]
+  f = it.content
+  (f isa Flow && f.kind == Kind.todo && !f.raw) || return nothing
+  # The box is on the item's first line
+  it.top + f.above <= dy < it.top + f.above + first(f.lines).high || return nothing
+  for seg in first(f.lines).segs
+    isbox(seg) && return seg.x <= dx < seg.x + seg.w ? it.first : nothing
+  end
+  nothing
+end
+
+"What inline code made that's under a point in the window: its Inline, or nothing"
+inline_at(e, (x, y)) = begin
+  isempty(e.layout) && return nothing
+  dx, dy = x - e.origin[1], y - e.origin[2]
+  it = e.layout[something(findlast(it -> it.top <= dy, e.layout), 1)]
+  c = it.content
+  if c isa Grid
+    for r in eachindex(c.rows), col in eachindex(c.flows[r])
+      cx, cy = cell_origin(c, r, col)
+      found = inline_at(c.flows[r][col], dx - cx, dy - it.top - cy)
+      found === nothing || return found
+    end
+    return nothing
+  end
+  c isa Flow ? inline_at(c, dx, dy - it.top) : nothing
+end
+
+inline_at(f::Flow, dx::px, dy::px) = begin
+  (0px <= dy < tall(f)) || return nothing
+  for seg in f.lines[line_at(f, dy)].segs
+    seg.node !== nothing && seg.x <= dx < seg.x + seg.w && return seg.node
+  end
+  nothing
+end
+
+"Tick the box of the to-do item on line `i`, or take its tick away. The caret stays where it is."
+tick!(e, i::Int) = begin
+  b = e.buf
+  text = b.lines[i]
+  col = findfirst('[', text)   # the column after the [, because only spaces and a - come before it
+  caret, anchor = b.caret, b.anchor
+  edit!(b, (i, col), (i, col + 1), isdone(text) ? " " : "x")
+  b.caret, b.anchor = caret, anchor
+  e
+end
+
 press!(e, pos) = begin
   b = e.buf
+  box = held(e, Keys.opt) ? nothing : todo_at(e, pos)
+  if box !== nothing
+    # A click on a to-do item's box ticks it, and doesn't move the caret
+    focus(e)
+    e.popup = :none
+    e.clicked = (time(), (box, 0), 0)
+    return tick!(e, box)
+  end
   it = e.layout[something(findlast(it -> it.top <= pos[2] - e.origin[2], e.layout), 1)]
+  if !held(e, Keys.opt) && inline_at(e, pos) !== nothing
+    # What inline code made takes its own clicks, as a live block does. A click with ⌥ held shows the code.
+    e.popup = :none
+    e.clicked = (time(), (it.first, 0), 0)
+    took(e) || focus(e)
+    return
+  end
   if it.content isa Live && !held(e, Keys.opt)
     # A live block takes its own clicks. A part of it that took the keyboard, like a text field, keeps it.
     e.popup = :none
@@ -2543,9 +3033,14 @@ newline!(e, ::Type{<:Union{List,Quote,Paragraph}}) = begin
     b.anchor = (i, 0)
     return type!(e, "")
   end
+  type!(e, "\n" * carry(lead, k))
+end
+
+"What starts the line after a list item or a quote that starts with `lead`: the next number, or a to-do box with no tick"
+carry(lead, k::Kind) = begin
+  k == Kind.todo && return replace(lead, r"\[[xX]\]" => "[ ]")
   m = k == Kind.ordered ? match(r"^(\s*)(\d+)(.*)$", lead) : nothing
-  m === nothing || (lead = string(m[1], parse(Int, m[2]) + 1, m[3]))
-  type!(e, "\n" * lead)
+  m === nothing ? lead : string(m[1], parse(Int, m[2]) + 1, m[3])
 end
 
 # In code, the new line starts under the text of the line before. It starts
@@ -2683,16 +3178,25 @@ end
 copy_selection!(e) = selecting(e.buf) && clipboard(excerpt(e.buf, selection(e.buf)...))
 paste!(e) = type!(e, replace(clipboard(), "\r\n" => "\n", '\r' => '\n', '\t' => "  "))
 
-zoom!(e, z) = (e.zoom = clamp(z, 0.6, 2.5); rerun!(e, :zoom); restyle!(e))
+zoom!(e, z) = (e.zoom = clamp(z, 0.6, 2.5); save_settings!(e); rerun!(e, :zoom); restyle!(e))
+
+"The size of the page's text, to the nearest pixel"
+text_size(e) = round(Int, TEXT_SIZE.value * e.zoom)
+# The page's text is a whole number of pixels tall, so the settings page can show its size as a number
+"The zoom that makes the page's text `size` pixels tall. Sizes are whole numbers from 11 to 42."
+zoom_for(size) = clamp(round(Int, size), 11, 42) / TEXT_SIZE.value
 
 "The one after `x` in `list`, going back to the start after the last"
 after(list, x) = list[mod1(findfirst(==(x), list) + 1, length(list))]
 
 const THEME_ORDER = (:sepia, :paper, :night)
-next_theme!(e) = theme!(e, after(THEME_ORDER, e.theme))
 
 const STATS = (:words, :chars, :minutes)
-next_stat!(e) = (e.stat = after(STATS, e.stat))
+const STAT_NAMES = ("Words", "Characters", "Reading time")   # what the settings page calls them
+
+"Make the count at the top right count `stat`: one of `STATS`"
+stat!(e, stat::Symbol) = (e.stat = stat; save_settings!(e); rerun!(e, :stat); e)
+next_stat!(e) = stat!(e, after(STATS, e.stat))
 
 const SLIDE_TIME = 0.25   # seconds for the sidebar to slide in or out
 
@@ -2713,6 +3217,9 @@ end
 ismouse(k) = k in (Keys.mouse_left, Keys.mouse_right, Keys.mouse_middle)
 
 onkey(e::Editor, ev::KeyPress{K}) where K = begin
+  # A key that the sidebar's tree took, like Return on a heading, comes here next. It isn't for the text.
+  pop!(e.nodes, :chose, false) && return
+  K == Keys.mouse_right && return context_menu!(e, ev.window)
   ismouse(K) && return
   w = ev.window
   shift, cmd, opt, ctrl = Keys.shft in w.keys, Keys.cmd in w.keys, Keys.opt in w.keys, Keys.ctrl in w.keys
@@ -2720,12 +3227,19 @@ onkey(e::Editor, ev::KeyPress{K}) where K = begin
   # While a part of a live block has the keyboard, the keys are its own and
   # don't change the text. Escape gives the keyboard back to the text.
   if w.focus !== e && w.focus !== input(e)
-    if K == Keys.escape
+    if w.focus === renamer(e)
+      rename_key!(e, K)
+    elseif K == Keys.escape
+      hide_menu!(w)
       focus(e)
     elseif cmd && K == Keys.s
       save!(b)
     elseif cmd && K == Keys.p
       print!(e, w)
+    elseif cmd && K == Keys.backslash && w.focus === file_tree(e)
+      # ⌘\ hides the sidebar while it has the keyboard too, and the text gets the keyboard back
+      shift || toggle_panel!(e)
+      focus(e)
     end
     return
   end
@@ -2743,11 +3257,11 @@ onkey(e::Editor, ev::KeyPress{K}) where K = begin
     shift ? redo!(b) : undo!(b)
     touch!(e)
   elseif cmd && K == Keys.a
-    b.anchor, b.caret = (1, 0), line_end(b, length(b.lines))
+    select_all!(e)
   elseif cmd && K == Keys.c
     copy_selection!(e)
   elseif cmd && K == Keys.x
-    copy_selection!(e) === false || type!(e, "")
+    cut!(e)
   elseif cmd && K == Keys.v
     paste!(e)
   elseif cmd && K == Keys.b
@@ -2759,11 +3273,13 @@ onkey(e::Editor, ev::KeyPress{K}) where K = begin
   elseif cmd && K == Keys.p
     print!(e, w)
   elseif cmd && K == Keys.backslash
-    toggle_panel!(e)
+    shift ? focus_panel!(e) : toggle_panel!(e)
+  elseif cmd && K == Keys.comma
+    toggle_settings!(e)
   elseif cmd && K == Keys.equal
-    zoom!(e, e.zoom + 0.1)
+    zoom!(e, zoom_for(text_size(e) + 1))
   elseif cmd && K == Keys.minus
-    zoom!(e, e.zoom - 0.1)
+    zoom!(e, zoom_for(text_size(e) - 1))
   elseif cmd && K == getproperty(Keys, Symbol(0))
     zoom!(e, 1.0)
   elseif K == Keys.left || K == Keys.right
@@ -2897,19 +3413,17 @@ end
 describe(b::ToolButton) = begin
   e = editor(b)
   ishovered(b) || (b.quiet = false)
-  on = (b.action == :panel && e.panel) || (b.action == :outline && e.popup == :outline)
+  on = b.action == :panel && e.panel
   Box(width(30px), height(28px), radius(6px), Alignment.Center, name="Button",
       background(on ? colours.active : ishovered(b) ? colours.hover : clear),
     Icon(b.icon, size=15px, color=colours.dim))
 end
 
+cursor(::ToolButton) = :hand
+
 onkey(b::ToolButton, ::KeyPress{Keys.mouse_left}) = begin
   e = editor(b)
-  a = b.action
-  a == :panel ? toggle_panel!(e) :
-  a == :outline ? (e.popup = e.popup == :outline ? :none : :outline) :
-  a == :font ? font!(e, e.font == SERIF ? PLAIN : SERIF) :
-  a == :theme ? next_theme!(e) : nothing
+  b.action == :panel && toggle_panel!(e)
   hush!(b)
   focus(e)
 end
@@ -2923,11 +3437,7 @@ const TIP_INK = colorant"rgb(240,240,240)"   # on the dark grey that every toolt
 "What the tooltip of a button in the top bar says"
 tip(b::ToolButton) = begin
   e = editor(b)
-  a = b.action
-  a == :panel ? (e.panel ? "Hide sidebar  ⌘\\" : "Show sidebar  ⌘\\") :
-  a == :outline ? (e.popup == :outline ? "Hide outline" : "Show outline") :
-  a == :font ? (e.font == SERIF ? "Use a sans-serif font" : "Use a serif font") :
-  a == :theme ? "Use the $(titlecase(string(after(THEME_ORDER, e.theme)))) colours" : ""
+  b.action == :panel ? (e.panel ? "Hide sidebar  ⌘\\" : "Show sidebar  ⌘\\") : ""
 end
 tip(c::Count) = begin
   s = after(STATS, editor(c).stat)
@@ -2957,6 +3467,8 @@ describe(c::Count) = begin
     label(s, 12px, color=colours.dim))
 end
 
+cursor(::Count) = :hand
+
 onkey(c::Count, ::KeyPress{Keys.mouse_left}) = (next_stat!(editor(c)); hush!(c))
 
 button(e, action, icon) = node!(() -> ToolButton(icon=icon, action=action), e, action)
@@ -2975,11 +3487,8 @@ describe(t::TopBar) = begin
       Row(child_gap=6px,
         label(name(b), 13px, color=colours.dim),
         (dirty(b) ? (label("— edited", 13px, color=colours.faint),) : ())...)),
-    Row(fixed(side), height(grow=grow), justify=Alignment.End, padding(0px, 10px, 0px, 0px), child_gap=2px,
-      node!(Count, e, :count),
-      button(e, :outline, "list-nested"),
-      button(e, :font, "fonts"),
-      button(e, :theme, "circle-half")))
+    Row(fixed(side), height(grow=grow), justify=Alignment.End, padding(0px, 10px, 0px, 0px),
+      node!(Count, e, :count)))
 end
 
 # The window has no title bar, so you move it by dragging the top bar
@@ -2991,24 +3500,408 @@ title(path) = splitext(basename(path))[1]
 
 describe(r::FileRow) = begin
   e = editor(r)
-  open = r.finder == 0 ? r.path == e.buf.path : r.finder == e.picked
+  picked = r.finder == e.picked
   changed = haskey(e.buffers, r.path) && dirty(e.buffers[r.path])
-  Row(width(grow=grow), height(28px), padding(10px, 0px), radius(6px), child_gap=8px, clip=true, name="File",
-      background(open ? colours.active : ishovered(r) ? colours.hover : clear),
+  Row(width(grow=grow), height(28px), padding(0px, 10px), radius(6px), child_gap=8px, clip=true, name="File",
+      background(picked ? colours.active : ishovered(r) ? colours.hover : clear),
     Icon("file-earmark-text", size=13px, color=colours.dim),
-    Box(width(grow=grow), Alignment.Start, label(title(r.path), weight=open ? "Semibold" : "")),
+    Box(width(grow=grow), Alignment.Start, label(title(r.path), weight=picked ? "Semibold" : "")),
     (changed ? (Box(width(6px), height(6px), radius(3px), background(colours.dim)),) : ())...)
 end
 
+cursor(::FileRow) = :hand
+
 onkey(r::FileRow, ::KeyPress{Keys.mouse_left}) = open!(editor(r), r.path)
+
+# The sidebar is a tree, UI.jl's ListTree. Each file of the folder is a group.
+# The items in it are the file's headings and its components: the sheets and
+# what its `ui` blocks show. A heading is a group too when it has smaller
+# headings or components under it. The tree keeps which groups are open and
+# which item the keyboard is on.
+#
+# Each item starts with an icon that says what it is. The tree draws no arrows.
+# While the mouse is over a group, the group's icon is an arrow that shows
+# whether it's open, and a click on the icon opens or closes the group.
+
+"The icon that a file, a heading or a component starts with in the sidebar, in the place a tree has its arrow"
+mark(l, icon; size=13px) = begin
+  item = l.parent
+  over = item isa Tree.ItemGroup && Tree.hovered(item)
+  Box(width(18px), height(grow=grow), Alignment.Center,
+    (isempty(icon) ? () : (Icon(over ? (item.collapsed ? "chevron-right" : "chevron-down") : icon,
+                                size=over ? 10px : size, color=colours.dim),))...)
+end
+
+describe(l::FileLabel) = begin
+  e = editor(l)
+  changed = haskey(e.buffers, l.path) && dirty(e.buffers[l.path])
+  # While the file is renamed, a text field with its name is where the name was
+  name = get(e.nodes, :renaming, "") == l.path ?
+    Box(width(grow=grow), height(22px), padding(5px, 0px), radius(4px), Alignment.Start, background(colours.bg),
+        border(1px, :solid, colours.accent), renamer(e)) :
+    Box(width(grow=grow), Alignment.Start, label(title(l.path), weight=l.path == e.buf.path ? "Semibold" : ""))
+  Row(width(grow=grow), height(grow=grow), padding(0px, 8px, 0px, 0px), child_gap=4px, clip=true, name="File",
+    mark(l, "file-earmark-text"),
+    name,
+    (changed ? (Box(width(6px), height(6px), radius(3px), background(colours.dim)),) : ())...)
+end
+
+describe(l::EntryLabel) =
+  Row(width(grow=grow), height(grow=grow), padding(0px, 8px, 0px, 0px), child_gap=4px, clip=true, name="Entry",
+    mark(l, l.icon),
+    Box(width(grow=grow), Alignment.Start, label(l.title, 12px, color=l.line == 0 ? colours.faint : colours.dim)))
+
+# The name that the sidebar gives each component of UI.jl, and its icon
+const COMPONENTS = Dict(
+  "Checkbox" => ("Checkbox", "check2-square"), "Toggle" => ("Switch", "toggle-on"),
+  "RadioGroup" => ("Radio buttons", "ui-radios"), "Dropdown" => ("Menu", "menu-button-wide"), "Select" => ("Menu", "menu-button-wide"),
+  "Slider" => ("Slider", "sliders"), "ColorPicker" => ("Colour picker", "palette"),
+  "TextInput" => ("Text field", "input-cursor-text"), "KeyCombo" => ("Keys", "command"),
+  "Tooltip" => ("Tooltip", "chat-square-text"), "ListTree" => ("Tree", "list-nested"),
+  "Inspector" => ("Inspector", "braces"), "Table" => ("Table", "table"), "Button" => ("Button", "hand-index"),
+  "ProgressBar" => ("Progress bar", "hr"), "STLViewer" => ("3D model", "box"))
+const LAYOUTS = ("Box", "Row", "Column", "Stack", "Scroll", "Text", "Image")
+"Every icon that the sidebar can show. The built app reads them all when it's made."
+const SIDEBAR_ICONS = unique(["file-earmark-text", "chevron-right", "chevron-down", "calculator", "puzzle", "bounding-box",
+                              ("type-h$n" for n in 1:6)..., (icon for (_, icon) in values(COMPONENTS))...])
+
+"""
+The name and the icon of what a block of `ui` code shows. It's read from the
+code, so the block needn't have run: the first component of UI.jl that the
+code names, or else the first thing it makes that isn't a layout.
+"""
+component(code) = begin
+  made = String[]
+  for line in code
+    startswith(lstrip(line), "@use") && continue
+    append!(made, (m[1] for m in eachmatch(r"\b([A-Z]\w*)\(", line)))
+  end
+  i = findfirst(name -> haskey(COMPONENTS, name), made)
+  i === nothing || return COMPONENTS[made[i]]
+  i = findfirst(name -> !(name in LAYOUTS) && !isdefined(Base, Symbol(name)), made)
+  i === nothing ? ("Layout", "bounding-box") : (made[i], "puzzle")
+end
+
+"The headings and the components among `lines`, from the top"
+outline(lines::Vector{String}, kinds::Vector{Line}) = begin
+  out = Entry[]
+  for (i, l) in enumerate(kinds)
+    if l.kind == Kind.heading
+      push!(out, Entry(i, l.level, rest(lines[i], l.prefix), "type-h$(l.level)", i))
+    elseif l.kind == Kind.fence && l.level == 0 && l.lang in (LIVE, SHEET)
+      # The line that closes the block, or the last line when nothing closes it
+      close = something(findnext(k -> k.kind == Kind.fence, kinds, i + 1), length(lines))
+      if l.lang == SHEET
+        push!(out, Entry(i, 7, "Sheet", "calculator", min(i + 1, length(lines))))
+      else
+        name, icon = component(view(lines, i+1:close-1))
+        # The caret goes under the block. In the block, it would show the block's code.
+        push!(out, Entry(i, 7, name, icon, min(close + 1, length(lines))))
+      end
+    end
+  end
+  out
+end
+outline(b::Buffer) = outline(b.lines, kinds(b))
+
+"""
+The headings and the components of the file at `path`. A file that has been
+opened gives those of its text as it is now, with the changes that aren't
+saved. Any other file is read from the disk, and read again when it changes there.
+"""
+outline(e::Editor, path::String) = begin
+  haskey(e.buffers, path) && return outline(e.buffers[path])
+  isfile(path) || return Entry[]
+  at = mtime(path)
+  kept = get(e.nodes, (:read, path), nothing)
+  kept !== nothing && kept[1] == at && return kept[2]
+  lines = text(path)
+  found = outline(lines, classify(lines))
+  e.nodes[(:read, path)] = (at, found)
+  found
+end
+
+const SIDEBAR_GUIDES = true   # draw the lines that join each item in the sidebar to the item it's in
+
+"The sidebar's tree"
+file_tree(e) = node!(() -> Tree.ListTree(guides=SIDEBAR_GUIDES, frame=false, arrows=false, onchoose=item -> choose!(e, item)), e, :tree)
+
+"The items in `parent` and in the groups in it, from the top. With `hidden`, those in a closed group too."
+items(parent; hidden=false, out=Tree.TreeItem[]) = begin
+  for item in parent.children
+    item isa Tree.TreeItem || continue
+    push!(out, item)
+    item isa Tree.ItemGroup && (hidden || !item.collapsed) && items(item; hidden, out)
+  end
+  out
+end
+
+"""
+A click on the name of a file opens the file. A click on a heading or a
+component goes to it, and opens its file first if another file is showing.
+Return does the same for the item the keyboard is on. Each gives the keyboard
+to the text.
+"""
+choose!(e, item) = begin
+  l = item.firstchild
+  # A group's name shows what's in the group. Only its icon hides that.
+  item isa Tree.ItemGroup && (item.collapsed = false)
+  l.path == e.buf.path || open!(e, l.path)
+  focus(e)
+  e.nodes[:chose] = true
+  (l isa EntryLabel && l.line > 0) || return
+  b = e.buf
+  line = clamp(l.caret, 1, length(b.lines))
+  b.caret = b.anchor = settle(b, (line, length(b.lines[line])))
+  # Put its first line near the top of the window rather than just on screen.
+  # The next frame does it, once it has laid out the file that's showing.
+  e.nodes[:hold] = (clamp(l.line, 1, length(b.lines)), 24px - PAGE_TOP)
+  e.blink = time()
+end
+
+"Put the headings and the components of a file in its group, when they aren't the ones that it has"
+outline!(e, group) = begin
+  path = group.firstchild.path
+  found = outline(e, path)
+  found == get(e.nodes, (:outline, path), nothing) && return
+  e.nodes[(:outline, path)] = found
+  old = items(group, hidden=true)
+  labels = [item.firstchild for item in old]
+  if !isempty(found) && length(labels) == length(found) &&
+     all(l.level == x.level && l.title == x.title && l.icon == x.icon for (l, x) in zip(labels, found))
+    # The same ones on other lines, as when a line is typed above them
+    foreach((l, x) -> (l.line = x.line; l.caret = x.caret), labels, found)
+    return
+  end
+  closed = Set((item.firstchild.level, item.firstchild.title) for item in old if item isa Tree.ItemGroup && item.collapsed)
+  foreach(detach!, [item for item in group.children if item isa Tree.TreeItem])
+  isempty(found) && return add_child!(group, Tree.Item(EntryLabel(path=path, title="Nothing to list")))
+  # Each one goes in the nearest heading above it that is bigger
+  above = Any[(0, group)]
+  for (k, x) in enumerate(found)
+    while above[end][1] >= x.level
+      pop!(above)
+    end
+    label = EntryLabel(path=path, line=x.line, level=x.level, title=x.title, icon=x.icon, caret=x.caret)
+    if k < length(found) && found[k+1].level > x.level
+      item = Tree.ItemGroup(label)
+      item.collapsed = (x.level, x.title) in closed
+      add_child!(above[end][2], item)
+      push!(above, (x.level, item))
+    else
+      add_child!(above[end][2], Tree.Item(label))
+    end
+  end
+end
+
+"The item for where the caret is: the last heading or component above it that shows, or its file"
+here(e, tree) = begin
+  i = findfirst(group -> group.firstchild.path == e.buf.path, collect(tree.children))
+  i === nothing && return nothing
+  group = collect(tree.children)[i]
+  group.collapsed && return group
+  at = findlast(item -> 0 < item.firstchild.line <= e.buf.caret[1], items(group))
+  at === nothing ? group : items(group)[at]
+end
+
+"Make the sidebar's tree show the folder's files and the headings of each file that's open in it"
+fill_tree!(e, tree) = begin
+  tree.guides = SIDEBAR_GUIDES
+  if [group.firstchild.path for group in tree.children] != e.files
+    kept = Dict(group.firstchild.path => group for group in tree.children)
+    foreach(detach!, collect(tree.children))
+    for p in e.files
+      add_child!(tree, get(kept, p) do
+        delete!(e.nodes, (:outline, p))   # a new group has no headings in it yet
+        Tree.ItemGroup(FileLabel(path=p))
+      end)
+    end
+  end
+  for group in tree.children
+    group.collapsed || outline!(e, group)
+  end
+  w = window_of(e)
+  # A click somewhere else while a file is renamed gives the file the name that's typed
+  w !== nothing && haskey(e.nodes, :renaming) && w.focus !== renamer(e) && (finish_rename!(e); delete!(e.nodes, :renaming))
+  shown = items(tree)
+  if w === nothing || w.focus !== tree
+    # While the text has the keyboard, the tree marks where the caret is
+    tree.focused = here(e, tree)
+  elseif !any(item -> item === tree.focused, shown)
+    tree.focused = something(here(e, tree), get(shown, 1, nothing), Some(nothing))
+  elseif tree.focused !== get(e.nodes, :tree_at, nothing)
+    # An arrow key moved to another item. Keep it in sight.
+    high = Tree.ROW_HEIGHT   # the height of a row while the theme's text has its usual size, as the sidebar's has
+    row = findfirst(item -> item === tree.focused, shown)
+    scroll_into_view!(e.files_scroll, high * (row - 1), high * row)
+  end
+  e.nodes[:tree_at] = tree.focused
+  tree
+end
+
+"The colours of the sidebar's tree"
+panel_theme() = Theme(size=Tree.LABEL_SIZE, surface=colours.panel, text=colours.ink, dim=colours.dim, line=colours.line,
+                      hover=colours.hover, select=colours.active, family=SANS)
+
+# --- the menu of a file in the sidebar ------------------------------------------------------
+#
+# A right-click on a file in the sidebar shows a menu that renames the file,
+# copies its path or moves it to the Trash. It's a menu of macOS's own, so it
+# looks and works like the other menus on the Mac. A window that isn't on a
+# screen, like the one a test makes, gets a menu that Kaydown draws.
+
+const FILE_MENU = ["Rename", "Copy Path", "-", "Move to Trash"]   # "-" is a line between two groups
+
+# A menu's text is 13/12 of its theme's size. This size makes it 13px, the size of a file's name in the sidebar.
+"The colours and the text size of a menu that floats over the window"
+menu_theme() = Theme(size=12px, surface=colours.float, text=colours.ink, dim=colours.dim, line=colours.line,
+                     hover=colours.hover, select=colours.active, family=SANS)
+
+"Show the menu of the file in the sidebar that the mouse is over, if it's over one"
+file_menu!(e, w) = begin
+  e.panel || return
+  tree = file_tree(e)
+  item = Tree.item_under(tree, w)
+  (item === nothing || !(item.firstchild isa FileLabel)) && return
+  path = item.firstchild.path
+  # The tree takes the keyboard, so the file that the menu is for stays marked
+  focus(tree)
+  tree.focused = item
+  act(name) = name == "Rename" ? rename!(e, path) : name == "Copy Path" ? clipboard(path) :
+              name == "Move to Trash" ? trash!(e, path) : nothing
+  if !system_menu(w, FILE_MENU, i -> act(get(FILE_MENU, i, "")))
+    names = filter(!=("-"), FILE_MENU)
+    show_menu!(w, names, w.mouse[1], w.mouse[2], 150px, theme=menu_theme(), item_height=28px, dividers=true, lift=3.0,
+               onselect=i -> act(get(names, i, "")))
+  end
+  nothing
+end
+
+"The text field that a file's new name is typed in"
+renamer(e) = node!(e, :renamer) do
+  TextInput(placeholder="", font_family=SANS, font_size=13px,
+            look=(_, text) -> Row(width(grow=grow), height(grow=grow), clip=true, text))
+end
+
+"Start to rename the file at `path`: its name in the sidebar becomes a text field, with the whole name selected"
+rename!(e, path) = begin
+  i = renamer(e)
+  i.color = colours.ink
+  i.text = title(path)
+  i.anchor, i.cursor = 0, length(i.text)
+  e.nodes[:renaming] = path
+  focus(i)
+end
+
+"Return gives the file the name that's typed, and esc leaves it with the name it has"
+rename_key!(e, K) = begin
+  if K == Keys.escape
+    delete!(e.nodes, :renaming)
+    focus(file_tree(e))
+  elseif K == Keys.enter && finish_rename!(e)
+    delete!(e.nodes, :renaming)
+    focus(file_tree(e))
+  end
+  nothing
+end
+
+"""
+Give the file that's being renamed the name in the text field. The file keeps
+its ending, like .md, unless the name is typed with one. It's false when
+another file has that name already, and then nothing changes.
+"""
+finish_rename!(e) = begin
+  old = get(e.nodes, :renaming, "")
+  name = String(strip(renamer(e).text))
+  (isempty(old) || isempty(name) || occursin('/', name)) && return true
+  new = joinpath(dirname(old), ismarkdown(name) ? name : name * splitext(old)[2])
+  new == old && return true
+  # A Mac's disk takes Notes.md and notes.md to be one file, so a change of capitals isn't a clash
+  ispath(new) && lowercase(new) != lowercase(old) && return false
+  move!(e, old, new)
+  true
+end
+
+"Give the file at `old` the path `new`: on the disk, and in everything the editor keeps by path"
+move!(e, old, new) = begin
+  if isfile(old)
+    try
+      Base.Filesystem.rename(old, new)
+    catch
+      return   # the disk said no, so the file keeps its name
+    end
+  end
+  if haskey(e.buffers, old)
+    b = e.buffers[new] = pop!(e.buffers, old)
+    b.path = new
+  end
+  haskey(READ, old) && (READ[new] = pop!(READ, old))
+  for kind in (:read, :outline)
+    haskey(e.nodes, (kind, old)) && (e.nodes[(kind, new)] = pop!(e.nodes, (kind, old)))
+  end
+  get(e.nodes, :before_settings, "") == old && (e.nodes[:before_settings] = new)
+  for item in items(file_tree(e), hidden=true)
+    item.firstchild.path == old && (item.firstchild.path = new)
+  end
+  list_files!(e)
+end
+
+"Move the file at `path` to the Trash. It's true when the file went there."
+trash(path) = begin
+  Sys.isapple() || return false
+  try
+    with_pool() do
+      url = msg(cls("NSURL"), "fileURLWithPath:", nsstring(path))
+      ccall((:objc_msgSend, libobjc), Bool, (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}),
+            msg(cls("NSFileManager"), "defaultManager"), sel("trashItemAtURL:resultingItemURL:error:"), url, C_NULL, C_NULL)
+    end && !ispath(path)
+  catch
+    false
+  end
+end
+
+# What moves a file to the Trash. A test puts a function of its own here, so it doesn't fill the Trash.
+const trasher = Ref{Function}(trash)
+
+"""
+Move the file at `path` to the Trash and take it out of the sidebar. Changes
+that aren't saved are written to the file first, so they are in the Trash
+too. If the file was showing, the next file in the sidebar shows.
+"""
+trash!(e, path) = begin
+  b = get(e.buffers, path, nothing)
+  b !== nothing && dirty(b) && save!(b)
+  isfile(path) && !trasher[](path) && return
+  at = something(findfirst(==(path), e.files), 1)
+  delete!(e.buffers, path)
+  delete!(READ, path)
+  delete!(e.nodes, (:read, path))
+  delete!(e.nodes, (:outline, path))
+  list_files!(e)
+  if e.buf.path == path
+    open!(e, isempty(e.files) ? joinpath(e.folder, "Untitled.md") : e.files[min(at, end)])
+  else
+    focus(e)
+  end
+  e
+end
+
+"Show the sidebar, if it's hidden, and give it the keyboard"
+focus_panel!(e) = begin
+  e.panel || toggle_panel!(e)
+  focus(file_tree(e))
+end
 
 """
 The sidebar keeps its width as it slides in and out from the left edge of the
-window, so only its right part shows while it's partly out.
+window, so only its right part shows while it's partly out. It lists the
+folder's files, and under each file that's open in the list, that file's
+headings and components.
 """
 describe(s::Sidebar) = begin
   e = editor(s)
   shows = PANEL_W * opened(e)
+  tree = with_theme(() -> describe!(fill_tree!(e, file_tree(e))), panel_theme())
   Row(fixed(shows), height(grow=grow), Alignment.Start, clip=true,
     Column(fixed(PANEL_W), height(grow=grow), Alignment.Start, background(colours.panel), name="Files",
            border(1px, :solid, colours.line)[:right], offset_x=shows - PANEL_W,
@@ -3016,49 +3909,179 @@ describe(s::Sidebar) = begin
       Row(width(grow=grow), height(30px), padding(16px, 0px), clip=true,
         label(uppercase(basename(e.folder)), 11px, color=colours.dim, weight="Semibold")),
       reuse!(e.files_scroll,
-        Column(width(grow=grow), Alignment.Start, padding(0px, 8px, 12px, 8px), child_gap=1px,
-          [get!(() -> own!(s, FileRow(path=p)), e.nodes, (:file, p)) for p in e.files]...))))
-end
-
-# --- the outline ----------------------------------------------------------------------------
-
-"The headings of the document, as (line, level, title)"
-headings(b::Buffer) =
-  [(i, l.level, rest(b.lines[i], l.prefix)) for (i, l) in enumerate(kinds(b)) if l.kind == Kind.heading]
-
-describe(r::OutlineRow) =
-  Row(width(grow=grow), height(26px), padding(0px, 10px, 0px, 10px + 14px * (r.level - 1)), radius(5px), clip=true,
-      background(ishovered(r) ? colours.hover : clear),
-    label(r.title, color=r.level == 1 ? colours.ink : colours.dim, weight=r.level == 1 ? "Semibold" : ""))
-
-onkey(r::OutlineRow, ::KeyPress{Keys.mouse_left}) = begin
-  e = editor(r)
-  e.popup = :none
-  e.buf.caret = e.buf.anchor = (r.line, length(e.buf.lines[r.line]))
-  focus(e)
-  # Put the heading near the top of the window rather than just on screen
-  e.scroll.offset = max(0px, PAGE_TOP + item(e, r.line).top - 24px)
-  e.blink = time()
+        Column(width(grow=grow), Alignment.Start, padding(0px, 8px, 12px, 8px), tree))))
 end
 
 floating(children...; w) =
   Column(fixed(w), radius(9px), Alignment.Start, background(colours.float), border(1px, :solid, colours.line), lifted, children...)
 
-outline(e) = begin
-  hs = headings(e.buf)
-  _, h = window_size(e)
-  found = [node!(() -> OutlineRow(line=i, level=l, title=t), e, (:heading, i, l, t)) for (i, l, t) in hs]
-  high = min(26px * max(1, length(found)) + 12px, h - TOPBAR_H - 40px)
-  list = isempty(found) ?
-    Box(width(grow=grow), height(grow=grow), label("No headings yet", color=colours.dim)) :
-    reuse!(e.outline_scroll, Column(width(grow=grow), Alignment.Start, padding(6px), found...))
-  Row(width(grow=grow), height(grow=grow), Alignment.Start, justify=Alignment.End, padding(TOPBAR_H - 4px, 12px, 0px, 0px),
-    floating(Box(width(grow=grow), height(high), list), w=300px))
+# The backdrop dims the window behind the file finder
+describe(b::Backdrop) = Box(width(grow=grow), height(grow=grow), background(colours.shade))
+onkey(b::Backdrop, ::KeyPress) = (e = editor(b); e.popup = :none; focus(e))
+
+# --- the menu of the page ------------------------------------------------------------------
+#
+# A right-click on the page opens a menu at the mouse: cut, copy, paste, select
+# all and Insert. Insert opens a menu of the kinds of block that a page can
+# hold. A right-click on the selection keeps it. Anywhere else, it puts the
+# caret there first.
+
+"""
+What the Insert menu adds. Each one has its name, the lines of the block, and
+the line and the column of the block that the caret goes to. "-" is a line
+between two groups.
+"""
+const INSERTS = [
+  ("Paragraph",     [""],                           (1, 0)),
+  ("Heading 1",     ["# "],                         (1, 2)),
+  ("Heading 2",     ["## "],                        (1, 3)),
+  ("Heading 3",     ["### "],                       (1, 4)),
+  "-",
+  ("Bulleted List", ["- "],                         (1, 2)),
+  ("Numbered List", ["1. "],                        (1, 3)),
+  ("To-do",         ["- [ ] "],                     (1, 6)),
+  ("Quote",         ["> "],                         (1, 2)),
+  "-",
+  ("Table",         ["|  |  |  |", "|---|---|---|", "|  |  |  |", "|  |  |  |"], (1, 2)),
+  ("Sheet",         ["```$SHEET", " = ", "```"],    (2, 0)),
+  ("Code",          ["```julia", "", "```"],        (2, 0)),
+  ("Live Block",    ["```$LIVE", "", "```"],        (2, 0)),
+  "-",
+  # The caret goes to an empty line under the divider
+  ("Divider",       ["---", "", ""],                (3, 0)),
+  "-",
+  # This one goes at the top of the document, wherever the caret is
+  ("Front Matter",  ["---", "title: ", "---"],      (2, 7)),
+]
+
+const PAGE_MENU = ["Cut", "Copy", "Paste", "-", "Select All", "-", "Insert" => [x isa String ? x : x[1] for x in INSERTS]]
+
+cut!(e) = copy_selection!(e) === false || type!(e, "")
+select_all!(e) = begin
+  b = e.buf
+  b.anchor, b.caret = (1, 0), line_end(b, length(b.lines))
+  e
 end
 
-# The backdrop only dims the window behind the file finder
-describe(b::Backdrop) = Box(width(grow=grow), height(grow=grow), background(editor(b).popup == :finder ? colours.shade : clear))
-onkey(b::Backdrop, ::KeyPress) = (e = editor(b); e.popup = :none; focus(e))
+"The last line of the block that line `i` is in: the end of its table or of its code block, or the line itself"
+block_end(b::Buffer, i::Int) = begin
+  k = kinds(b)[i].kind
+  k == Kind.table ? table(b, i)[2] : k in (Kind.fence, Kind.code) ? codeblock(b, i)[2] : i
+end
+
+"""
+Add a block of `lines` to the document, and put the caret at `at`: a line and
+a column of the block. On an empty line, the block takes that line's place.
+From any other line, it goes after the block that the caret is in. An empty
+line goes between the new block and the text on each side of it. A list item
+that's added to a list of its own kind goes straight after the item before it.
+"""
+add_block!(e, lines::Vector{String}, at::Pos) = begin
+  b = e.buf
+  ks = kinds(b)
+  i = b.caret[1]
+  onblank = ks[i].kind == Kind.blank
+  t = onblank ? i : block_end(b, i)
+  before, after = (onblank ? i - 1 : t), t + 1   # the lines that the block will sit between
+  blank(j) = !(1 <= j <= length(ks)) || ks[j].kind == Kind.blank
+  kind = Line(lines[1]).kind
+  item = kind in (Kind.bullet, Kind.ordered, Kind.todo)
+  joins = item && !blank(before) && ks[before].kind == kind
+  if joins
+    # It's the next item of that list: the next number, and as far in as the item before
+    lead = carry(head(b.lines[before], ks[before].prefix), kind)
+    lines, at = [lead], (1, length(lead))
+  end
+  pre = !joins && !blank(before)
+  post = !blank(after) && !(item && ks[after].kind == kind)
+  new = join([pre ? [""] : String[]; lines; post ? [""] : String[]], "\n")
+  onblank ? edit!(b, (i, 0), line_end(b, i), new) : edit!(b, line_end(b, t), line_end(b, t), "\n" * new)
+  row = (onblank ? i : t + 1) + pre + at[1] - 1
+  b.caret = b.anchor = (row, at[2])
+  # In a new table, the first cell is selected, as Tab would leave it
+  cells = kinds(b)[row].kind == Kind.table ? tablecells(b.lines[row]) : Cell[]
+  isempty(cells) || (b.anchor = (row, cells[1].lo); b.caret = (row, cells[1].hi))
+  focus(e)
+  touch!(e)
+end
+
+"""
+Add front matter to the top of the document, and put the caret after its first
+key. A document has front matter only once, so if it's there already the caret
+just goes to it.
+"""
+add_front_matter!(e) = begin
+  b = e.buf
+  if front_matter(b.lines) == 0
+    _, lines, _ = last(INSERTS)
+    # An empty line goes between the front matter and the text
+    edit!(b, (1, 0), (1, 0), join(lines, "\n") * "\n" * (isempty(strip(b.lines[1])) ? "" : "\n"))
+  end
+  b.caret = b.anchor = line_end(b, 2)
+  focus(e)
+  touch!(e)
+end
+
+"Do what the item at `i` of the page's menu does. `j` is the item's place in the Insert menu, when it's one of those."
+page_act!(e, i::Int, j::Int=0) = begin
+  name = PAGE_MENU[i] isa Pair ? first(PAGE_MENU[i]) : PAGE_MENU[i]
+  if name == "Cut"
+    cut!(e)
+  elseif name == "Copy"
+    copy_selection!(e)
+  elseif name == "Paste"
+    paste!(e)
+  elseif name == "Select All"
+    select_all!(e)
+  elseif name == "Insert" && j in eachindex(INSERTS) && INSERTS[j] isa Tuple
+    INSERTS[j][1] == "Front Matter" ? add_front_matter!(e) : add_block!(e, INSERTS[j][2], INSERTS[j][3])
+  end
+  nothing
+end
+
+"""
+Show `items` as a menu that Kaydown draws, for a window that macOS has no menu
+for. They're the items that `system_menu` takes. An item that opens a menu
+shows that menu in this one's place.
+"""
+drawn_menu!(w, items, act; off=(), path=(), at=(w.mouse[1], w.mouse[2])) = begin
+  isoff(i) = (path..., i) in off || (isempty(path) && i in off)
+  shown = [(i, entry) for (i, entry) in enumerate(items) if entry != "-" && !isoff(i)]
+  names = [entry isa Pair ? first(entry) * "  ›" : entry for (_, entry) in shown]
+  show_menu!(w, names, at[1], at[2], 170px, theme=menu_theme(), item_height=28px, lift=3.0, onselect=k -> begin
+    k in eachindex(shown) || return
+    i, entry = shown[k]
+    entry isa Pair ? drawn_menu!(w, last(entry), act; off, path=(path..., i), at) : act(path..., i)
+  end)
+end
+
+"Show the page's menu at the mouse"
+page_menu!(e, w) = begin
+  b = e.buf
+  e.popup = :none
+  focus(e)
+  at = settle(b, locate(e, w.mouse))
+  lo, hi = selection(b)
+  # A right-click on the selection keeps it. Anywhere else, it puts the caret there.
+  if !(selecting(b) && lo <= at <= hi)
+    b.caret = b.anchor = at
+    touch!(e)
+  end
+  act(place...) = page_act!(e, place...)
+  # Cut and Copy are grey with nothing selected, and Front Matter is grey in a document that has it
+  off = Any[]
+  selecting(b) || push!(off, 1, 2)
+  front_matter(b.lines) == 0 || push!(off, (length(PAGE_MENU), length(INSERTS)))
+  system_menu(w, PAGE_MENU, act; off) || drawn_menu!(w, PAGE_MENU, act; off)
+  nothing
+end
+
+"Show the menu for what the mouse is over: the page, or a file in the sidebar"
+context_menu!(e, w) = begin
+  # The text is the editor's own node, so the mouse can be over it and not over the area around it
+  onpage = ishovered(node!(Document, e, :document)) || ishovered(node!(Page, e, :page))
+  onpage ? page_menu!(e, w) : file_menu!(e, w)
+end
 
 # --- the file finder -----------------------------------------------------------------------
 
@@ -3124,6 +4147,104 @@ finder(e) = begin
              list, w=460px))
 end
 
+# --- the app for Markdown files ----------------------------------------------------------
+#
+# macOS keeps, for each kind of file, the app that opens it when you
+# double-click one. The settings page has a button that makes Kaydown that app
+# for Markdown files. macOS then tells Kaydown which file to open with a
+# message, not with an argument, so the app keeps a list of the files it's
+# been asked for and the window opens them.
+
+const APP_ID = "com.jkroso.kaydown"                   # the Kaydown app's name for macOS, as app/build.jl gives it
+const MARKDOWN_TYPE = "net.daringfireball.markdown"   # macOS's name for the kind of file that Markdown is
+
+"macOS's object for the kind of file that Markdown is"
+markdown_type() = begin
+  # The class is in a framework that a window loads, but a test without a window hasn't
+  ccall(:dlopen, Ptr{Cvoid}, (Cstring, Cint), "/System/Library/Frameworks/UniformTypeIdentifiers.framework/UniformTypeIdentifiers", 1)
+  msg(cls("UTType"), "typeWithIdentifier:", nsstring(MARKDOWN_TYPE))
+end
+
+workspace() = msg(cls("NSWorkspace"), "sharedWorkspace")
+"The file path of an NSURL, or an empty string for none"
+url_path(url::Ptr{Cvoid}) = url == C_NULL ? "" : jstring(msg(url, "path"))
+
+"Where the Kaydown app is on this Mac, or an empty string when it isn't installed"
+app_path() = Sys.isapple() ? with_pool(() -> url_path(msg(workspace(), "URLForApplicationWithBundleIdentifier:", nsstring(APP_ID)))) : ""
+
+"The app that opens a Markdown file when you double-click one, or an empty string when macOS can't say"
+markdown_app() = begin
+  Sys.isapple() || return ""
+  with_pool() do
+    type = markdown_type()
+    type == C_NULL ? "" : url_path(msg(workspace(), "URLForApplicationToOpenContentType:", type))
+  end
+end
+
+"The name of the app at `path`, like Kaydown for /Applications/Kaydown.app"
+app_name(path) = splitext(basename(path))[1]
+
+"""
+Ask macOS to make Kaydown the app that opens Markdown files. macOS shows a
+dialog of its own that asks you to confirm, and changes the app when you say
+yes. It's true when macOS was asked. It's false when the Kaydown app isn't
+installed on this Mac, because macOS would then ask about an app with no name.
+"""
+make_default!() = begin
+  (Sys.isapple() && !isempty(app_path())) || return false
+  with_pool() do
+    # 0xffffffff is every way of opening a file: to read it, to change it and so on
+    ccall((:LSSetDefaultRoleHandlerForContentType, "/System/Library/Frameworks/CoreServices.framework/CoreServices"), Int32,
+          (Ptr{Cvoid}, UInt32, Ptr{Cvoid}), nsstring(MARKDOWN_TYPE), 0xffffffff, nsstring(APP_ID)) == 0
+  end
+end
+
+"""
+Look for your answer to macOS's dialog, twice a second for two minutes after
+the button on the settings page. When the app for Markdown files changes, the
+blocks that show which app it is run again.
+"""
+await_default!(e) = begin
+  asked = get(e.nodes, :asked, nothing)
+  asked === nothing && return
+  at, before, checked = asked
+  now = time()
+  if now - checked >= 0.5
+    if markdown_app() != before
+      delete!(e.nodes, :asked)
+      return rerun!(e, :app)
+    end
+    now - at > 120 && return delete!(e.nodes, :asked)
+    e.nodes[:asked] = (at, before, now)
+  end
+  # Nothing else may happen in the window while the dialog is open, so ask for the next look
+  redraw_in!(e, 0.5)
+end
+
+"""
+The files that macOS asked Kaydown to open, which it hasn't opened yet. macOS
+asks when you double-click a Markdown file in the Finder or drop one on
+Kaydown's icon. The app puts its own list here.
+"""
+const inbox = Ref(String[])
+
+"Show the last file or folder that macOS asked for. A window shows one file, so that's the one to show."
+receive!(e) = begin
+  files = inbox[]
+  isempty(files) && return
+  path = pop!(files)
+  empty!(files)
+  if isdir(path)
+    e.folder = path
+    e.panel = true
+    list_files!(e)
+    isempty(e.files) || open!(e, e.files[1])
+  elseif isfile(path)
+    open!(e, path)
+  end
+  touch!(e)
+end
+
 # --- the whole window ---------------------------------------------------------------------
 
 describe(e::Editor) = begin
@@ -3133,6 +4254,8 @@ describe(e::Editor) = begin
     set_dark!(win, e.theme == :night)
     e.applied = e.theme
   end
+  receive!(e)
+  await_default!(e)
   refresh!(e.buf)
   layout!(e)
   # A live block that changed the size of the text stays where it was in the window
@@ -3156,7 +4279,7 @@ describe(e::Editor) = begin
     Column(width(grow=grow), height(grow=grow), Alignment.Start,
       Box(width(grow=grow), height(TOPBAR_H)),   # under the top bar
       node!(Page, e, :page)))
-  popup = e.popup == :none ? () : (node!(Backdrop, e, :backdrop), e.popup == :outline ? outline(e) : finder(e))
+  popup = e.popup == :none ? () : (node!(Backdrop, e, :backdrop), finder(e))
   Stack(width(grow=grow), height(grow=grow), Alignment.Start, name="Editor",
     body, tablebar(e)..., suggestbox(e)..., node!(TopBar, e, :topbar), popup...)
 end
@@ -3165,21 +4288,112 @@ end
 
 const WELCOME = joinpath(@__DIR__, "pages", "welcome.md")
 
+# --- settings -----------------------------------------------------------------------------
+#
+# The settings are the page's colours, its font, the size of its text, its width
+# and what the count at the top right counts. ⌘, opens the settings page, a
+# Markdown file whose live blocks change them. They are kept in a file, so the
+# next window opens with them.
+
+"The folder of Kaydown's own pages. The built app changes it to the copies it writes out."
+const pages_dir = Ref(joinpath(@__DIR__, "pages"))
+
+"Show the settings page, or go back to the page that was open before it"
+toggle_settings!(e) = begin
+  page = joinpath(pages_dir[], "settings.md")
+  if e.buf.path == page
+    back = get(e.nodes, :before_settings, "")
+    isempty(back) || open!(e, back)
+  else
+    e.nodes[:before_settings] = e.buf.path
+    open!(e, page)
+  end
+  e
+end
+
+settings_file() = joinpath(homedir(), "Library", "Application Support", "Kaydown", "settings")
+
+"Write the settings to their file, if this editor keeps them. An editor that's made for a test doesn't."
+save_settings!(e) = begin
+  e.remember || return
+  try
+    mkpath(dirname(settings_file()))
+    write(settings_file(), "theme=$(e.theme)\nfont=$(e.font)\nzoom=$(e.zoom)\nwidth=$(e.widest.value)\ncount=$(e.stat)\n")
+  catch
+    # A file that can't be written only means the settings last as long as the window
+  end
+  nothing
+end
+
+"Give `e` the settings that were kept the last time one changed"
+load_settings!(e) = begin
+  isfile(settings_file()) || return e
+  for line in eachline(settings_file())
+    name, value = (split(line, '=', limit=2)..., "")[1:2]
+    if name == "theme" && Symbol(value) in THEME_ORDER
+      e.theme = Symbol(value)
+    elseif name == "font" && !isempty(value)
+      e.font = String(value)
+    elseif name == "zoom"
+      z = tryparse(Float64, value)
+      z === nothing || (e.zoom = clamp(z, 0.6, 2.5))
+    elseif name == "width"
+      w = tryparse(Float64, value)
+      w === nothing || (e.widest = px(clamp(w, NARROWEST, WIDEST)))
+    elseif name == "count" && Symbol(value) in STATS
+      e.stat = Symbol(value)
+    end
+  end
+  e
+end
+
 """
 Open an editor window and run it until it closes. `args` can name a Markdown
-file or a folder, and `--paper` or `--night` to choose the colours.
+file or a folder, and `--paper` or `--night` to choose the colours for this window.
 """
 open_editor(args) = begin
   # macOS can pass its own -options to an app it opens, so skip anything with a dash
   paths = filter(a -> !startswith(a, "-"), args)
   e = build_editor(isempty(paths) ? WELCOME : paths[1])
-  e.theme = "--night" in args ? :night : "--paper" in args ? :paper : :sepia
-  window = Window(e, title="Kaydown", size=(1100px, 800px))
+  load_settings!(e)
+  "--night" in args && (e.theme = :night)
+  "--paper" in args && (e.theme = :paper)
+  e.remember = true
+  e.size = paper_window()
+  window = Window(e, title="Kaydown", size=e.size)
   focus(e)
   display(window)
 end
 
 onopen(::Editor, w::Window) = hide_titlebar!(w)
+
+const PAGE_AREA_W = 850px   # the width of the page's part of a new window: room for the page at the width it starts with, and the space beside it
+
+"How tall the part of the main screen is that a window can use, under the menu bar and over the Dock"
+screen_room() = begin
+  if Sys.isapple() && Sys.ARCH == :aarch64
+    # macOS gives the rectangle as four numbers: where it starts, how wide it is and how tall
+    frame = with_pool() do
+      screen = msg(cls("NSScreen"), "mainScreen")
+      screen == C_NULL ? nothing : ccall((:objc_msgSend, libobjc), NTuple{4,Float64}, (Ptr{Cvoid}, Ptr{Cvoid}), screen, sel("visibleFrame"))
+    end
+    frame === nothing || return px(frame[4])
+  end
+  # Anywhere else, leave room for a menu bar and a Dock of the usual size
+  Screen().size[2] - 110px
+end
+
+"""
+The size that a new window opens at. The page's part of it, beside the
+sidebar, has the shape of a sheet of A4 paper that stands up: √2 times as tall
+as it's wide. So the window is that wide plus the width of the sidebar, and the
+page keeps its shape while the sidebar is open. The page's part is
+`PAGE_AREA_W` wide, or as big as fits on a screen that isn't tall enough for that.
+"""
+paper_window(room::px=screen_room()) = begin
+  tall = min(num(PAGE_AREA_W) * √2, num(room) - 20)   # a little space under the window
+  (px(round(tall / √2)) + PANEL_W, px(round(tall)))
+end
 
 # --- printing ------------------------------------------------------------------------------
 #
@@ -3227,7 +4441,7 @@ breaks(e) = begin
     c = it.content
     if c isa Flow
       for k in 1:length(c.lines)-1
-        push!(out, it.top + c.above + c.lh * k)
+        push!(out, it.top + line_top(c, k + 1))
       end
     elseif c isa Grid
       # Under the line under each row, after the second

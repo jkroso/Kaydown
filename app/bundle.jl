@@ -26,7 +26,7 @@
 #
 # The app's entry point is app.jl, which starts with start.jl.
 
-using JuliaC
+using JuliaC, Kip
 
 const root = normpath(joinpath(@__DIR__, ".."))
 const out = joinpath(root, "build")
@@ -53,6 +53,65 @@ end
 
 const project = project_files(option("PROJECT", root))
 
+# --- the packages Kip gets from GitHub ------------------------------------------
+#
+# Kaydown names UI.jl and other packages by their GitHub paths. When Kaydown
+# runs from its source, Kip loads a linked package from its folder if the
+# folder has changes that aren't committed, and from a copy of its last commit
+# if not. While Julia builds an app, Kip can't ask Git which of those to use,
+# and it loads the newest copy it has of any commit. That copy can be older than
+# what you've been running. So the build first asks Kip where each package is,
+# and gives the build a folder of links to those places to use as Kip's own.
+
+"Each `.jl` and `.md` file under `dir`, apart from those in hidden folders and build folders"
+source_files(dir) = begin
+  found = String[]
+  for (folder, folders, files) in walkdir(dir)
+    filter!(f -> !startswith(f, ".") && f != "build", folders)
+    append!(found, joinpath(folder, f) for f in files if endswith(f, ".jl") || endswith(f, ".md"))
+  end
+  found
+end
+
+"""
+Where a normal run finds each GitHub package that Kaydown's code names, or that
+one of those packages names. Each key is a `(user, repo)`.
+"""
+find_packages() = begin
+  places = Dict{Tuple{String,String},String}()
+  waiting = [root]
+  while !isempty(waiting)
+    for file in source_files(pop!(waiting)), m in eachmatch(r"\"github\.com/([\w\-.]+)/([\w\-.]+)", read(file, String))
+      key = (String(m[1]), String(m[2]))
+      (haskey(places, key) || !isdir(joinpath(Kip.repos, key...))) && continue
+      places[key] = try
+        rstrip(Kip.checkout_repo(Kip.getrepo(key...), key..., nothing), '/')
+      catch
+        # Kip can't tell which commit to use, so use the folder as it is
+        realpath(joinpath(Kip.repos, key...))
+      end
+      push!(waiting, places[key])
+    end
+  end
+  places
+end
+
+const packages = find_packages()
+
+"The packages that the app would be built from a folder with changes that aren't committed"
+uncommitted() = sort!(["$user/$repo" for ((user, repo), place) in packages
+                       if isdir(joinpath(place, ".git")) && Kip.LibGit2.isdirty(Kip.LibGit2.GitRepo(place))])
+
+"A folder to be Kip's own while the app is built. It holds a link to where each package is."
+package_links() = begin
+  dir = mktempdir()
+  for ((user, repo), place) in packages
+    mkpath(joinpath(dir, "repos", user))
+    symlink(place, joinpath(dir, "repos", user, repo))
+  end
+  dir
+end
+
 """
 Build `entry` into build/`name`.app, with the program in Contents/MacOS/`program`.
 `id` is its bundle identifier and `version` its version, like "1.2.0". `threads` sets how many threads the app runs
@@ -70,6 +129,9 @@ build_app(; name, program, id, entry, version="1.0", threads=nothing, icon=nothi
   # Kip normally keeps a compiled cache of each file it loads. Julia can't make
   # those while it builds an app, so Kip includes the files directly instead.
   ENV["KIP_FROZEN"] = "1"
+  ENV["KIP_DIR"] = package_links()
+  changed = uncommitted()
+  isempty(changed) || println("Building with the changes that aren't committed in ", join(changed, ", ", " and "))
 
   options = threads === nothing ? Dict{String,String}() : Dict("threads" => threads)
   build_time = @elapsed begin

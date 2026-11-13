@@ -11,7 +11,7 @@
 
 include("start.jl")
 
-@use ".." build_editor open_editor WELCOME restyle! problems
+@use ".." build_editor open_editor WELCOME restyle! problems pages_dir SIDEBAR_ICONS todo_at inbox
 @use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse
 @use "github.com/jkroso/Font.jl/units" px
 @use "github.com/jkroso/UI.jl/Interface/abstract" focus
@@ -28,8 +28,8 @@ building && start_packages()
 
 # Icons are read from UI.jl's Icons folder the first time they're drawn. Reading
 # them now keeps them in the app, so it doesn't need that folder.
-foreach(load_icon, ["check", "chevron-down", "chevron-right", "chevron-up", "circle-half", "copy", "file-earmark", "file-earmark-text", "folder", "fonts",
-                    "layout-sidebar", "list-nested", "search", "text-center", "text-left", "text-right"])
+foreach(load_icon, ["check", "chevron-down", "chevron-right", "chevron-up", "copy", "file-earmark", "file-earmark-text", "folder",
+                    "layout-sidebar", "search", "text-center", "text-left", "text-right", SIDEBAR_ICONS...])
 
 # The welcome page's text, to type into while the app warms up
 const page = read(WELCOME, String)
@@ -43,8 +43,9 @@ const page = read(WELCOME, String)
 # when it opens, and tells Kip which module goes with each one.
 
 const PAGES = dirname(WELCOME)
-"The text of each of the app's own pages, by file name"
-const pages = Dict(name => read(joinpath(PAGES, name), String) for name in ("welcome.md", "components.md", "widgets.jl"))
+"The text of each of the app's own pages, by file name. The model that the components page shows is here too, as the bytes of its file."
+const pages = Dict(name => read(joinpath(PAGES, name), String)
+                   for name in ("welcome.md", "components.md", "settings.md", "widgets.jl", "knot.stl"))
 
 "The `user/repo/file` that a file Kip got from GitHub has there, or nothing for any other file"
 place(path) = begin
@@ -101,6 +102,7 @@ unpack(dir) = begin
     put(was, text)
   end
   Kip.modules[realpath(joinpath(welcome, "widgets.jl"))] = Kip.modules[widgets_file]
+  pages_dir[] = welcome
   joinpath(welcome, "welcome.md")
 end
 
@@ -110,7 +112,7 @@ error. An editor only runs the blocks that are on screen, so this scrolls down
 each page a screen at a time.
 """
 check_pages(dir) =
-  for name in ("welcome.md", "components.md")
+  for name in ("welcome.md", "components.md", "settings.md")
     empty!(problems)
     e = build_editor(joinpath(dir, name))
     w = Window(e, title="check", size=(1100px, 800px))
@@ -145,6 +147,12 @@ warm_up() = begin
     release((Keys.mouse_left,)); onkey(w, KeyRelease{Keys.mouse_left}(0, w))
     frame(w)
   end
+  right_click(x, y) = begin
+    mouse(x, y)
+    hold((Keys.mouse_right,)); onkey(w, KeyPress{Keys.mouse_right}(0, w))
+    release((Keys.mouse_right,)); onkey(w, KeyRelease{Keys.mouse_right}(0, w))
+    frame(w)
+  end
   frame(w)
   # Each set of colours and each font
   for theme in (:paper, :night, :sepia), font in ("Helvetica Neue", "Charter")
@@ -168,14 +176,49 @@ warm_up() = begin
   foreach(press, (Keys.a, Keys.tab, Keys.var"2", Keys.enter, Keys.b, Keys.tab, Keys.a, Keys.enter, Keys.enter))
   # Select everything, copy nothing, make it bold and undo
   press(Keys.a, Keys.cmd); press(Keys.b, Keys.cmd); press(Keys.z, Keys.cmd); press(Keys.escape)
-  # Bigger and smaller text, the sidebar, the outline and the file finder
+  # Bigger and smaller text, the sidebar and the file finder
   press(Keys.equal, Keys.cmd); press(Keys.minus, Keys.cmd); press(Keys.var"0", Keys.cmd)
   press(Keys.backslash, Keys.cmd); press(Keys.backslash, Keys.cmd)
+  # The sidebar with the keyboard: the headings of each file, then Return on a heading and on a file
+  press(Keys.backslash, Keys.cmd, Keys.shft)
+  for _ in 1:2
+    press(Keys.right); press(Keys.down); press(Keys.right); press(Keys.down); press(Keys.left); press(Keys.left); press(Keys.down)
+  end
+  press(Keys.up); press(Keys.right); press(Keys.down); press(Keys.enter)
+  press(Keys.backslash, Keys.cmd, Keys.shft); press(Keys.up); press(Keys.enter)
+  # A click on a name in the sidebar, and on the arrow beside it
+  click(60, 88); click(19, 88)
+  # The menu of a file: open it and click away, then rename the file and change your mind
+  right_click(60, 88); click(700, 500)
+  right_click(60, 88); click(80, 104)
+  press(Keys.a); press(Keys.escape); press(Keys.escape)
+  # The menu of the page: open it and click away, then add a block of each kind from its Insert menu.
+  # Kaydown draws the menu here, 28px for each item, with Insert as its third item.
+  right_click(500, 300); click(900, 600)
+  for n in 1:14
+    right_click(500, 300); click(540, 370); click(540, 286 + 28n)
+    # Type in the new block, press Return and type again, then undo it all
+    press(Keys.a); press(Keys.enter); press(Keys.b)
+    press(Keys.z, Keys.cmd); press(Keys.z, Keys.cmd); press(Keys.z, Keys.cmd); press(Keys.z, Keys.cmd)
+  end
+  # A to-do item, then a click on its box to tick it
+  right_click(500, 300); click(540, 370); click(540, 286 + 28 * 7)
+  press(Keys.a); press(Keys.up, Keys.cmd)
+  x = e.origin[1] + 6px
+  y = findfirst(y -> todo_at(e, (x, px(y))) !== nothing, 80:4:780)
+  y === nothing || click(x.value, (80:4:780)[y])
+  press(Keys.z, Keys.cmd); press(Keys.z, Keys.cmd); press(Keys.z, Keys.cmd)
+  # Select All from the menu. Nothing here cuts, copies or pastes, so the clipboard stays as it was.
+  right_click(500, 300); click(540, 342); press(Keys.escape)
+  press(Keys.backslash, Keys.cmd)
+  frame(w)
   press(Keys.o, Keys.cmd); press(Keys.n); press(Keys.escape)
   # The page drawn for paper. A window that isn't on the screen shows no print panel.
   press(Keys.p, Keys.cmd)
+  # The settings page and back
+  press(Keys.comma, Keys.cmd); press(Keys.comma, Keys.cmd)
   # The mouse over the top bar's buttons, and a click and a drag on the page
-  foreach(x -> mouse(x, 22), (50, 550, 940, 1000, 1040, 1075))
+  foreach(x -> mouse(x, 22), (50, 550, 1000, 1075))
   press(Keys.up, Keys.cmd)
   click(400, 200); click(400, 200); click(500, 400)
   # The layout inspector
@@ -204,6 +247,10 @@ end
 "Open the file or folder named in `args`, or the welcome page"
 open_kaydown(args) = begin
   welcome = unpack(support())
+  # The window opens the files that macOS asks for: one you double-clicked to start the app, and any after that
+  Opened.listen()
+  inbox[] = Opened.files
+  Opened.wake[] = Libdl.dlsym(Libdl.dlopen(GLFW.libglfw), :glfwPostEmptyEvent)
   open_editor(any(a -> !startswith(a, "-"), args) ? args : [welcome; args])
 end
 

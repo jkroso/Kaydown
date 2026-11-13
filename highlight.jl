@@ -53,8 +53,8 @@ const DATA = Language("", "true false null yes no", comment="#")
 
 const LANGUAGES = Dict{String,Language}()
 for (names, language) in ("julia jl ui" => JULIA, "python py" => PYTHON,
-                          "javascript js jsx typescript ts tsx" => JAVASCRIPT, "rust rs" => RUST,
-                          "c cpp c++ h go java swift kotlin csharp cs zig" => C,
+                          "javascript js jsx mjs cjs typescript ts tsx" => JAVASCRIPT, "rust rs" => RUST,
+                          "c cpp c++ cc h hpp go java swift kotlin kt csharp cs zig" => C,
                           "bash sh zsh shell fish" => SHELL, "sql" => SQL, "json yaml yml toml" => DATA)
   for name in split(names)
     LANGUAGES[name] = language

@@ -9,6 +9,53 @@
 # `run_app`.
 
 using Kip
+
+# When you double-click a file, macOS starts the app and sends it a message
+# with the file to open. It doesn't pass the file as an argument. The message
+# goes to an object that GLFW makes as it starts, and that object has no
+# method for it, so macOS would say that the app can't open the file. This
+# gives every object the method, and the method keeps the files in a list.
+#
+# It's a module so that its __init__ runs when the app starts. It's above
+# `import GLFW` so that it runs before GLFW's, which is when the message comes.
+module Opened
+const libobjc = "/usr/lib/libobjc.A.dylib"
+
+"The files that macOS asked the app to open, the first one first"
+const files = String[]
+"A function of GLFW that wakes the app's window, so that it sees a new file in the list. The app sets it."
+const wake = Ref{Ptr{Cvoid}}(C_NULL)
+
+sel(name) = ccall((:sel_registerName, libobjc), Ptr{Cvoid}, (Cstring,), name)
+get(obj::Ptr{Cvoid}, name) = ccall((:objc_msgSend, libobjc), Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid}), obj, sel(name))
+
+"macOS calls this with the files to open: a list of the URLs of files"
+function note(self::Ptr{Cvoid}, cmd::Ptr{Cvoid}, app::Ptr{Cvoid}, urls::Ptr{Cvoid})::Cvoid
+  n = ccall((:objc_msgSend, libobjc), UInt, (Ptr{Cvoid}, Ptr{Cvoid}), urls, sel("count"))
+  i = UInt(0)
+  while i < n
+    url = ccall((:objc_msgSend, libobjc), Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid}, UInt), urls, sel("objectAtIndex:"), i)
+    path = get(url, "path")
+    text = path == C_NULL ? Ptr{UInt8}(C_NULL) : Ptr{UInt8}(get(path, "UTF8String"))
+    text == C_NULL || push!(files, unsafe_string(text))
+    i += 1
+  end
+  wake[] == C_NULL || ccall(wake[], Cvoid, ())
+  nothing
+end
+
+"Give every object the method that macOS calls with the files to open. It does nothing the second time."
+function listen()
+  Sys.isapple() || return
+  class = ccall((:objc_getClass, libobjc), Ptr{Cvoid}, (Cstring,), "NSObject")
+  ccall((:class_addMethod, libobjc), Bool, (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}, Cstring), class, sel("application:openURLs:"),
+        @cfunction(note, Cvoid, (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid})), "v@:@@")
+  nothing
+end
+
+__init__() = listen()
+end
+
 # The packages that wrap native libraries, loaded before UI.jl needs them
 import GLFW, Skia, Fontconfig, ModernGL, Libdl
 

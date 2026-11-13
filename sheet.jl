@@ -214,7 +214,13 @@ end
 problem(err) = begin
   err isa UndefVarError && return "$(err.var) isn't a name here"
   err isa Meta.ParseError && return "This isn't finished"
-  brief(sprint(showerror, err))
+  # Printing an error can fail too. A MethodError prints the types of its
+  # values, and Units.jl can't print a type like the one `m^2m^2area` makes.
+  try
+    brief(sprint(showerror, err))
+  catch
+    "This can't be worked out"
+  end
 end
 
 """

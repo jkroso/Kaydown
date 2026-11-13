@@ -359,18 +359,29 @@ wrap(pieces, limit::px; lh, size, left=0px, hang=left, above=0px, below=0px, kin
   Flow(lines, lh, size, above, below, kind, raw)
 end
 
-"How far into `seg` the gap after its first `k` characters is"
+"""
+How far into `seg` the gap after its first `k` characters is. In a `code` chip the text
+is inside the chip's padding, so even the gaps at its two ends are inside the chip.
+"""
 inset(seg::Seg, k::Int) = begin
-  k <= 0 && return 0px
-  (seg.atomic || k >= seg.n) && return seg.w
-  (seg.face.chip ? CHIP_X + 1px : 0px) + measure(seg.face, first(seg.text, k))
+  seg.atomic && return k <= 0 ? 0px : seg.w
+  pad = seg.face.chip ? CHIP_X + 1px : 0px
+  k <= 0 && return pad
+  k >= seg.n && return seg.w - pad
+  pad + measure(seg.face, first(seg.text, k))
 end
 
 "Where column `col` is on the screen line `vl`"
 xcol(vl::VLine, col::Int) = begin
-  for seg in vl.segs
-    col <= seg.col && return seg.x
-    col <= seg.col + seg.n && return seg.x + inset(seg, col - seg.col)
+  for (i, seg) in enumerate(vl.segs)
+    col < seg.col && return seg.x
+    col == seg.col && return seg.x + inset(seg, 0)
+    if col <= seg.col + seg.n
+      # The gap before a `code` chip is the start of its code, so the caret shows inside the chip
+      i < length(vl.segs) && col == seg.col + seg.n && (next = vl.segs[i+1]).face.chip && next.col == col &&
+        return next.x + inset(next, 0)
+      return seg.x + inset(seg, col - seg.col)
+    end
   end
   isempty(vl.segs) ? vl.x : last(vl.segs).x + last(vl.segs).w
 end

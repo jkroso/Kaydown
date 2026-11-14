@@ -1362,26 +1362,28 @@ spreadgrid(e, from::Int, to::Int) = begin
     values = get!(() -> answers(texts), e.flows, (:answers, texts))
     ncols = maximum(length, cells)
     typing(r, c) = caret !== nothing && caret[1] == rows[r] && c <= length(cells[r]) && within(cells[r][c], caret[2])
-    parts = map(enumerate(rows)) do (r, i)
-      map(1:ncols) do c
-        c <= length(cells[r]) || return Piece[]
-        cell, v = cells[r][c], values[r][c]
-        on = typing(r, c)
-        # The cell with the caret shows the spaces typed after its text
-        upto = on ? max(cell.hi, caret[2]) : cell.hi
-        isformula(texts[r][c]) || return cellpieces(e, i, b.lines[i], cell.lo, upto, base, on)
-        # A formula shows what it comes to. With the caret in its cell, it shows the formula, and each cell that it names is a chip.
-        on && return exprpieces(b.lines[i], cell.lo, upto, cellnames(length(rows), ncols), base)
-        [piece(v.failed ? "!" : v.text, cell.lo, base, atomic=true, n=cell.hi - cell.lo)]
-      end
+    # What the cell in row `r`, column `c` shows. With `on`, it's the cell with the caret.
+    shows(r, c, on) = begin
+      c <= length(cells[r]) || return Piece[]
+      i, cell, v = rows[r], cells[r][c], values[r][c]
+      # The cell with the caret shows the spaces typed after its text
+      upto = on ? max(cell.hi, caret[2]) : cell.hi
+      isformula(texts[r][c]) || return cellpieces(e, i, b.lines[i], cell.lo, upto, base, on)
+      # A formula shows what it comes to. With the caret in its cell, it shows the formula, and each cell that it names is a chip.
+      on && return exprpieces(b.lines[i], cell.lo, upto, cellnames(length(rows), ncols), base)
+      [piece(v.failed ? "!" : v.text, cell.lo, base, atomic=true, n=cell.hi - cell.lo)]
     end
+    # The columns are as wide as they are with no caret in a cell, so a column keeps its width
+    # while you edit one of its cells. A formula that's wider than its column wraps.
+    resting = [[shows(r, c, false) for c in 1:ncols] for r in eachindex(rows)]
+    parts = [[typing(r, c) ? shows(r, c, true) : resting[r][c] for c in 1:ncols] for r in eachindex(rows)]
     # Each column gets room in proportion to its longest cell, as in a table
-    natural = [clamp(maximum(row -> sum(wide, row[c], init=0px), parts, init=0px) + 2CELL_X, 60px, e.width * 0.75) for c in 1:ncols]
+    natural = [clamp(maximum(row -> sum(wide, row[c], init=0px), resting, init=0px) + 2CELL_X, 60px, e.width * 0.75) for c in 1:ncols]
     gutter = max(measure(Face(base, family=SANS, size=base.size * 0.72), string(length(rows))) + 14px, base.size * 1.9)
     space = e.width - gutter - 1px * (ncols + 2)
     # When the columns don't all fit, text wraps before a number is cut short: each column keeps
     # the room its longest word or number needs, and the columns share what's left
-    least = [min(natural[c], max(maximum(row -> maximum(unbroken, row[c], init=0px), parts, init=0px) + 2CELL_X, 36px)) for c in 1:ncols]
+    least = [min(natural[c], max(maximum(row -> maximum(unbroken, row[c], init=0px), resting, init=0px) + 2CELL_X, 36px)) for c in 1:ncols]
     widths = sum(natural) <= space ? natural .* (num(space) / num(sum(natural))) :
              sum(least) >= space ? least .* (num(space) / num(sum(least))) :
              least .+ (natural .- least) .* (num(space - sum(least)) / num(sum(natural .- least)))

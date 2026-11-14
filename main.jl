@@ -30,7 +30,8 @@
 #   - Click a file in that list that isn't Markdown to see it. Kaydown shows it
 #     and doesn't change it: the text of a file of code, a picture, a model, a
 #     sound, a video, a PDF file, a table. A file that it has no way to show is
-#     a binary file, and a button shows its bytes in hexadecimal.
+#     a binary file, and a button shows its bytes in hexadecimal. The button at
+#     the top right opens the file in the app that the Mac uses for it.
 #   - Click the icon beside a file in that list to see the file's headings and
 #     components, and click one to go to it. ⌘⇧\ gives that list the keyboard: ↑ and ↓
 #     move through it, → and ← show and hide what's under an item, Return
@@ -2776,10 +2777,10 @@ file_icon(path) = begin
   ext in CODE ? "file-earmark-code" : "file-earmark"
 end
 
-"Every icon that `file_icon` can give, and the one that the page shows for a binary file. The built app reads them all when it's made."
+"Every icon that `file_icon` can give, and those of a file that's only shown: of a binary file, and of the button that opens the file in its own app. The built app reads them all when it's made."
 const FILE_ICONS = ("file-earmark", "file-earmark-text", "file-earmark-image", "file-earmark-music", "file-earmark-play", "box",
                     "file-earmark-pdf", "file-earmark-zip", "file-earmark-spreadsheet", "file-earmark-font", "file-earmark-richtext",
-                    "file-earmark-code", "file-earmark-binary", "chevron-left", "chevron-right")
+                    "file-earmark-code", "file-earmark-binary", "box-arrow-up-right", "chevron-left", "chevron-right")
 
 "The picture kept under `key`, no taller than `most` and no wider than 420px. A picture of a page has a line round it."
 framed(key, most=260px; page=false) = begin
@@ -2867,7 +2868,8 @@ end
 #
 # A click on a file in the sidebar shows the file in the page, whatever kind of
 # file it is. Kaydown changes Markdown files and no others, so any other file
-# is only shown, and the top bar says "Read only".
+# is only shown, and the top bar says "Read only". The button beside those
+# words opens the file in the app that the Mac uses for it.
 #
 #   - A file of text shows its text. A file of code has the colours that a code
 #     block has. You can select the text, copy it and find words in it.
@@ -4525,6 +4527,7 @@ cursor(::ToolButton) = :hand
 onkey(b::ToolButton, ::KeyPress{Keys.mouse_left}) = begin
   e = editor(b)
   b.action == :panel && toggle_panel!(e)
+  b.action == :outside && open_outside!(e)
   hush!(b)
   focus(e)
 end
@@ -4538,7 +4541,10 @@ const TIP_INK = colorant"rgb(240,240,240)"   # on the dark grey that every toolt
 "What the tooltip of a button in the top bar says"
 tip(b::ToolButton) = begin
   e = editor(b)
-  b.action == :panel ? (e.panel ? "Hide sidebar  ⌘\\" : "Show sidebar  ⌘\\") : ""
+  b.action == :panel && return e.panel ? "Hide sidebar  ⌘\\" : "Show sidebar  ⌘\\"
+  b.action == :outside || return ""
+  app = opener(e.buf.path)
+  isempty(app) ? "Show in Finder" : "Open in $(app_name(app))"
 end
 tip(c::Count) = begin
   s = after(STATS, editor(c).stat)
@@ -4590,8 +4596,10 @@ describe(t::TopBar) = begin
         (dirty(b) ? (label("— edited", 13px, color=colours.faint),) : ())...)),
     Row(fixed(side), height(grow=grow), justify=Alignment.End, padding(0px, 10px, 0px, 0px),
       # A file that's only shown has no words to count. The bar says that it's only shown.
-      readonly(b) ? Box(height(28px), padding(8px, 0px), label(isempty(b.about) ? "Read only" : b.about * "  ·  Read only", 12px, color=colours.dim)) :
-                    node!(Count, e, :count)))
+      (readonly(b) ? (Box(height(28px), padding(8px, 0px), label(isempty(b.about) ? "Read only" : b.about * "  ·  Read only", 12px, color=colours.dim)),
+                      # The app that the Mac uses for the file can change it, so a button opens the file there
+                      button(e, :outside, "box-arrow-up-right")) :
+                     (node!(Count, e, :count),))...))
 end
 
 # The window has no title bar, so you move it by dragging the top bar
@@ -5393,6 +5401,30 @@ markdown_app() = begin
     type = markdown_type()
     type == C_NULL ? "" : url_path(msg(workspace(), "URLForApplicationToOpenContentType:", type))
   end
+end
+
+"""
+The app that opens the file at `path` when you double-click the file in the
+Finder: where that app is, or an empty string when macOS has no app for the file.
+"""
+opener(path) = begin
+  (Sys.isapple() && isfile(path)) || return ""
+  with_pool(() -> url_path(msg(workspace(), "URLForApplicationToOpenURL:", msg(cls("NSURL"), "fileURLWithPath:", nsstring(path)))))
+end
+
+"""
+Open the file that the page shows in the app that the Mac uses for it. A file
+that the Mac has no app for shows in the Finder.
+"""
+open_outside!(e) = begin
+  path = e.buf.path
+  isfile(path) || return e
+  if isempty(opener(path)) && Sys.isapple()
+    run(pipeline(`open -R $path`, stdout=devnull, stderr=devnull), wait=false)
+  else
+    open_url(path)
+  end
+  e
 end
 
 "The name of the app at `path`, like Kaydown for /Applications/Kaydown.app"

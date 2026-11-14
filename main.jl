@@ -24,7 +24,8 @@
 #   - Double-click selects a word, triple-click a line. ⌘-click opens a link.
 #   - ⌘F finds text in the page. Return goes to the next place that has it.
 #   - Write ![name](picture.png) on a line of its own to show a picture, or drop
-#     a file on the page from the Finder.
+#     a file on the page from the Finder. ⌘V pastes a file that you copied in
+#     the Finder the same way, and a picture that you copied, like a screenshot.
 #   - Write [^1] in a line and [^1]: on another line to make a footnote.
 #   - Right-click a word with red dots under it to put its spelling right.
 #   - The button at the top left, or ⌘\, shows the other files in the folder.
@@ -109,6 +110,7 @@
 @use "./spreadsheet" SPREADSHEET Value spreadcells spreadtexts isformula letters answers moved
 @use "./merge" changes combine follow
 @use "./agent" => Agent
+@use "./pasteboard" => Pasteboard
 @use "github.com/jkroso/URI.jl/FSPath" FSPath
 @use Colors: @colorant_str, RGBA, Colorant
 @use InteractiveUtils: clipboard
@@ -4260,7 +4262,48 @@ surround!(e, mark::String) = begin
 end
 
 copy_selection!(e) = selecting(e.buf) && clipboard(excerpt(e.buf, selection(e.buf)...))
-paste!(e) = type!(e, replace(clipboard(), "\r\n" => "\n", '\r' => '\n', '\t' => "  "))
+
+"""
+Put what the clipboard holds into the text at the caret. Files that were
+copied in the Finder go in the way a dropped file does: a picture shows as a
+picture, and a video, a sound, a PDF or any other file as a path that shows
+what's in the file. A picture that was copied as itself, like a screenshot, is
+written to a file in the document's folder first. So is a PDF, a sound or a
+video that was copied as itself. Anything else is pasted as text.
+"""
+paste!(e) = begin
+  b = e.buf
+  paths = Pasteboard.files()
+  if isempty(paths)
+    text = Sys.isapple() ? Pasteboard.text() : clipboard()
+    # A picture that's copied from a web page comes with its address as text, and the picture is what's wanted
+    found = isempty(strip(text)) || occursin(r"^\s*\w+://\S+\s*$", text) ? Pasteboard.media() : nothing
+    path = found === nothing ? nothing : keep_pasted(e, found...)
+    path === nothing && return type!(e, replace(text, "\r\n" => "\n", '\r' => '\n', '\t' => "  "))
+    paths = [path]
+  end
+  selecting(b) && type!(e, "")
+  put_files!(e, paths, settle(b, b.caret))
+end
+
+"""
+Write `bytes` that were pasted to a new file in the document's folder, and
+return its path. `ext` is the end of the file's name, like "png". Nothing if
+the document has no folder yet.
+"""
+keep_pasted(e, ext, bytes) = begin
+  dir = docdir(e)
+  isdir(dir) || return nothing
+  stem = "pasted-" * Libc.strftime("%Y%m%d-%H%M%S", time())
+  path = joinpath(dir, "$stem.$ext")
+  n = 1
+  while ispath(path)
+    path = joinpath(dir, "$stem-$(n += 1).$ext")
+  end
+  write(path, bytes)
+  dir == e.folder && list_files!(e)   # the sidebar lists the new file
+  path
+end
 
 zoom!(e, z) = (e.zoom = clamp(z, 0.6, 2.5); save_settings!(e); rerun!(e, :zoom); restyle!(e))
 
@@ -4485,21 +4528,24 @@ markdown_for(e, path) = begin
   ispicture(path) ? "![$name]($(escaped(at)))" : ismarkdown(path) ? "[$name]($(escaped(at)))" : "!`fs\"$(replace(at, '"' => "\\\""))\"`"
 end
 
-onfiledrop(e::Editor, w::Window, paths) = begin
+onfiledrop(e::Editor, w::Window, paths) = readonly(e.buf) ? nothing : put_files!(e, paths, settle(e.buf, locate(e, w.mouse)))
+
+"Put the files and folders at `paths` into the text at `at`, the way a drop there does. ⌘V does this with files that were copied."
+put_files!(e, paths, at::Pos) = begin
   paths = [rstrip(String(p), '/') for p in paths if ispath(p)]
   isempty(paths) && return
   b = e.buf
   readonly(b) && return   # a file that's only shown has no text for the path to go into
-  at = settle(b, locate(e, w.mouse))
   pictures = [markdown_for(e, p) for p in paths if isfile(p) && ispicture(p)]
   others = [markdown_for(e, p) for p in paths if !(isfile(p) && ispicture(p))]
   if !isempty(others)
     line = b.lines[at[1]]
     # What's dropped on a word goes after the word, not into it
     at = (at[1], word_at(line, at[2])[2])
-    # A space goes between what's dropped and the words on each side of it
+    # A space goes between what's dropped and the words on each side of it, but not before a full stop or a comma
     before = at[2] > 0 && !isspace(line[nextind(line, 0, at[2])]) ? " " : ""
-    after = at[2] < length(line) && !isspace(line[nextind(line, 0, at[2] + 1)]) ? " " : ""
+    next = at[2] < length(line) ? line[nextind(line, 0, at[2] + 1)] : ' '
+    after = isspace(next) || next in ".,;:!?)]}" ? "" : " "
     new = before * join(others, " ") * after
     edit!(b, at, at, new)
     at = (at[1], at[2] + length(new))
@@ -4658,7 +4704,7 @@ tip(b::ToolButton) = begin
   app = opener(e.buf.path)
   isempty(app) ? "Show in Finder" : "Open in $(app_name(app))"
 end
-tip(s::SendButton) = "Send what you changed  ⌘↩"
+tip(s::SendButton) = "Send what you changed  ⌘Return"
 tip(c::Count) = begin
   s = after(STATS, editor(c).stat)
   s == :words ? "Count words" : s == :chars ? "Count characters" : "Show reading time"

@@ -15,7 +15,7 @@ A line can point to a footnote[^note]. The footnote is a line of its own, anywhe
 
 [^note]: This is the footnote. Its line starts with the same name in square brackets, and a colon.
 
-A line that holds only a picture, like `![plan](plan.png)`, shows the picture. Drop a picture on the page from the Finder to add one. Any other file that you drop goes in as a path that you can click.
+A line that holds only a picture, like `![plan](plan.png)`, shows the picture. Drop a picture on the page from the Finder to add one. Any other file that you drop goes in as a path that you can click. ⌘V does the same with files that you copied in the Finder: a picture, a video, a sound, a PDF or any other file. It also pastes a picture that you copied as itself, like a screenshot, and keeps it as a file beside the page.
 
 ## Lists
 

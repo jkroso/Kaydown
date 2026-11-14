@@ -66,7 +66,7 @@ Meter(done=0.7)
 
 A block can use UI.jl's components and layout with no line that loads them: `Slider`, `STLViewer`, `Column`, `px` and the rest. A file path is `fs"notes.md"` and a colour is `colorant"tomato"`. The two blocks above load `widgets.jl` because it's a file of this folder.
 
-A file path shows as a breadcrumb. Click its last name to list what's in the folder, and click a file in the list to make it the path. Under a file is what's in it: a picture, its text, which you can scroll through, or a 3D model that you can drag to turn. Click `knot.stl` to see one.
+A file path shows as a breadcrumb. Click its last name to list what's in the folder, and click a file in the list to make it the path. Under a file is what's in it: a picture, its text, which you can scroll through, a 3D model that you can drag to turn, or a player for a sound or a video. Click `knot.stl` to see a model.
 
 ```ui
 fs"."
@@ -76,7 +76,7 @@ To change the code, move the caret into the block with ↑ or ↓, or hold ⌥ a
 
 Code can run in a line of text too. Write a `!` and then the code between backticks, like \!`fs"."`. This page is in the folder !`fs"."` and its colours are !`page_theme()`. A number works too: 12 × 2.4 is !`12 * 2.4`. Click a line to see its code.
 
-The page [components.md](components.md) has a live block for each of UI.jl's components: checkboxes, switches, a slider, a menu, a colour picker, a viewer for 3D models, a text field, a tree and an inspector. It shows shadows too. Hold ⌘ and click the link to open it.
+The page [components.md](components.md) has a live block for each of UI.jl's components: checkboxes, switches, a slider, a menu, a colour picker, a viewer for 3D models, a player for sound, a text field, a tree and an inspector. It shows shadows too. Hold ⌘ and click the link to open it.
 
 ## Sheets
 

@@ -29,7 +29,7 @@ building && start_packages()
 # Icons are read from UI.jl's Icons folder the first time they're drawn. Reading
 # them now keeps them in the app, so it doesn't need that folder.
 foreach(load_icon, ["check", "chevron-down", "chevron-right", "chevron-up", "copy", "file-earmark", "file-earmark-text", "folder",
-                    "layout-sidebar", "search", "text-center", "text-left", "text-right", SIDEBAR_ICONS...])
+                    "layout-sidebar", "pause-fill", "play-fill", "search", "text-center", "text-left", "text-right", SIDEBAR_ICONS...])
 
 # The welcome page's text, to type into while the app warms up
 const page = read(WELCOME, String)

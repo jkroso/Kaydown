@@ -72,6 +72,8 @@
 @use "github.com/jkroso/UI.jl/Interface/Semantic/TextInput" TextInput
 @use "github.com/jkroso/UI.jl/Interface/Semantic/ListTree" => Tree
 @use "github.com/jkroso/UI.jl/Interface/Semantic/STLViewer" STLViewer Mesh load!
+@use "github.com/jkroso/UI.jl/Interface/Semantic/Player" AudioPlayer VideoPlayer pause!
+@use "github.com/jkroso/UI.jl/Interface/media" silence!
 @use "./markdown" Kind Line Span Cell classify spans tablecells isdivider words isdone front_matter MATTER TOML_MATTER
 @use "./highlight" tokens
 @use "./sheet" SHEET Result sheetcells parts uses tally known units shown
@@ -719,6 +721,7 @@ end
 
 "Show the file at `path`. A file that's already open keeps its changes."
 open!(e, path) = begin
+  silence!()   # a sound that the last page was playing stops
   e.buf.offset = e.scroll.offset
   e.buf = get!(e.buffers, path) do
     isfile(path) ? load(path) : Buffer(path=path)
@@ -1996,8 +1999,13 @@ end
 # breadcrumb, and click an earlier name to go to that folder. A click on a
 # line of the list makes that file or folder the path, so its name joins the
 # breadcrumb. Under a path to a file is a preview of the file: a picture, the
-# model in an STL or 3MF file, or the text of a text file, which the wheel scrolls
-# through. The lines of a file of code have the colours that a code block gives them.
+# model in an STL or 3MF file, a player for a sound or a video file, or the text
+# of a text file, which the wheel scrolls through. The lines of a file of code
+# have the colours that a code block gives them.
+#
+# A sound or a video plays on while you scroll the page and type in it. It stops
+# when the path goes to another file, when the preview closes and when the window
+# shows another page.
 
 "One line of the list under a Breadcrumb: a file or a folder"
 @def mutable struct FileEntry <: SemanticUI
@@ -2017,7 +2025,9 @@ end
   # Kept so each name and each line knows when the mouse is over it
   crumbs::Dict{String,Crumb} = Dict{String,Crumb}()
   entries::Dict{String,FileEntry} = Dict{String,FileEntry}()
-  viewer::Any = nothing  # the STLViewer of the file at `at`. Kept so the model stays as it was turned.
+  # The STLViewer of the model at `at`, or the player of the sound or the video there. It's kept so
+  # that the model stays as it was turned, and so that the file plays on from one frame to the next.
+  viewer::Any = nothing
   text::Any = nothing    # the FileText of the file at `at`, or false for a file that isn't text
   read::Any = nothing    # the path of the file that `text` is for, and when the file last changed
   inline::Bool = false   # in a line of text, so its list floats under it and takes no room on the page
@@ -2068,6 +2078,7 @@ listing(dir) = begin
 end
 
 describe(l::Breadcrumb) = begin
+  l.open || hush!(l)
   names = [get!(() -> own!(l, Crumb(path=path, name=name)), l.crumbs, path) for (name, path) in steps(l.at)]
   arrow() = Icon("chevron-right", size=9px, color=colours.faint)
   # The first name and as many of the last names as fit. An … stands for the names left out.
@@ -2089,6 +2100,7 @@ const PANEL_PAD = 6px
 "What shows under an open breadcrumb: the lines of a folder, or the preview of a file"
 contents(l::Breadcrumb) = begin
   isdir(l.at) || return (preview(l, l.at),)
+  hush!(l)
   l.viewer = l.text = nothing
   names = listing(l.at)
   shown = first(names, MOST_FILES)
@@ -2171,13 +2183,27 @@ const PICTURES = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
 const PREVIEW_LINES = 12
 const MODELS = (".stl", ".3mf")   # the files of 3D models that the viewer reads
 const MODEL_HEIGHT = 260px
+# The sound and the video files that macOS plays
+const SOUNDS = (".mp3", ".m4a", ".wav", ".aif", ".aiff", ".aac", ".flac", ".caf")
+const VIDEOS = (".mp4", ".mov", ".m4v")
 
 "The viewer of the model in the STL or 3MF file at `path`, or nothing if the file can't be read as a model"
 model(l::Breadcrumb, path) = begin
   v = l.viewer
-  (v === nothing || v.path != path) && (v = l.viewer = own!(l, STLViewer(path=path, height=MODEL_HEIGHT)))
+  (v isa STLViewer && v.path == path) || (hush!(l); v = l.viewer = own!(l, STLViewer(path=path, height=MODEL_HEIGHT)))
   load!(v) isa Mesh ? v : nothing
 end
+
+"The player of the sound or the video file at `path`. `Player` is AudioPlayer or VideoPlayer."
+player(l::Breadcrumb, path, Player) = begin
+  v = l.viewer
+  (v isa Player && v.path == path) && return v
+  hush!(l)
+  l.viewer = own!(l, Player === VideoPlayer ? VideoPlayer(path=path, height=MODEL_HEIGHT) : AudioPlayer(path=path))
+end
+
+"Stop the sound or the video that the breadcrumb's player is playing"
+hush!(l::Breadcrumb) = (l.viewer isa Union{AudioPlayer,VideoPlayer} && pause!(l.viewer); l)
 
 const LINE_H = 18px          # the height of a line of a file's text
 const TEXT_PAD = 8px         # above the first line and under the last
@@ -2252,10 +2278,12 @@ codeline(line, lang) = Row(height(LINE_H),
   [Text(t.text, size=12px, family=MONO, subfamily=t.kind == :comment ? "Italic" : "", wrap=WrapMode.none,
         color=t.kind == :plain ? colours.ink : getfield(colours, t.kind)) for t in tokens(line, lang)]...)
 
-"What shows under the path of a file: the picture, the model or the start of the text, and when it last changed"
+"What shows under the path of a file: the picture, the model, the player or the start of the text, and when it last changed"
 preview(l::Breadcrumb, path) = begin
   isfile(path) || return Box(height(0px))
   ext = lowercase(splitext(path)[2])
+  # A player that was made for another file stops when the path leaves that file
+  l.viewer !== nothing && l.viewer.path != path && hush!(l)
   changed = Libc.strftime("%-d %b %Y, %H:%M", mtime(path))
   about = "Changed $changed"
   content = try
@@ -2264,6 +2292,10 @@ preview(l::Breadcrumb, path) = begin
       Image(path, fixed(w), height(w / image_aspect(path)), radius(4px))
     elseif ext in MODELS && (viewer = model(l, path)) !== nothing
       viewer
+    elseif Sys.isapple() && ext in SOUNDS
+      player(l, path, AudioPlayer)
+    elseif Sys.isapple() && ext in VIDEOS
+      player(l, path, VideoPlayer)
     else
       text = text!(l, path)
       text === nothing ? label("This file has no preview", 12px, color=colours.dim) : begin
@@ -3723,7 +3755,8 @@ const COMPONENTS = Dict(
   "TextInput" => ("Text field", "input-cursor-text"), "KeyCombo" => ("Keys", "command"),
   "Tooltip" => ("Tooltip", "chat-square-text"), "ListTree" => ("Tree", "list-nested"),
   "Inspector" => ("Inspector", "braces"), "Table" => ("Table", "table"), "Button" => ("Button", "hand-index"),
-  "ProgressBar" => ("Progress bar", "hr"), "STLViewer" => ("3D model", "box"))
+  "ProgressBar" => ("Progress bar", "hr"), "STLViewer" => ("3D model", "box"),
+  "AudioPlayer" => ("Sound", "music-note-beamed"), "VideoPlayer" => ("Video", "film"))
 const LAYOUTS = ("Box", "Row", "Column", "Stack", "Scroll", "Text", "Image")
 "Every icon that the sidebar can show. The built app reads them all when it's made."
 const SIDEBAR_ICONS = unique(["file-earmark-text", "chevron-right", "chevron-down", "calculator", "puzzle", "bounding-box",

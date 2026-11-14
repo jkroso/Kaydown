@@ -68,6 +68,16 @@ STLViewer("knot.stl")
 
 Under the model are its number of triangles and its width, depth and height, in the units of its file. The path can start from the folder of this page, as `knot.stl` does. Give the viewer a `height` or a `color` to change how it looks.
 
+## Sound and video
+
+A player plays a sound file. Click its round button to play the file and to stop it. The bars beside the button are tall where the sound is loud. Click a bar, or drag along the bars, to go to that part of the file. This one plays a sound that every Mac has.
+
+```ui
+AudioPlayer("/System/Library/Sounds/Glass.aiff")
+```
+
+`VideoPlayer("holiday.mov")` plays a video. Its picture is over the button, and a click on the picture plays it and stops it too. Once you've clicked a player, the space bar plays and stops, and ← and → go back and on by 5 seconds. One file plays at a time, and it plays on while you scroll the page. macOS plays the files, so the players take what QuickTime takes: MP3, M4A, WAV, AIFF and FLAC sound, and MP4 and MOV video.
+
 ## Shadows
 
 A container can cast a shadow. `shadow(x, y, blur)` moves it right and down, then blurs it. You can give it a colour, and `spread` makes it bigger. Change a number in the code to see what it does.

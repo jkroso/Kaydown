@@ -54,7 +54,9 @@
 #   - Let an agent like Claude Code show you a page (see agent.jl and the plugin
 #     folder). While it waits, a button at the top right sends it the lines that
 #     you changed. ⌘Return does the same. The agent can change the file while
-#     you type, and the page keeps both.
+#     you type, and the page keeps both. A bar shows for a few seconds beside
+#     each line that the agent changed, and the list of files has a dot beside
+#     a page that an agent waits for.
 #   - Click the word count to count characters or reading time instead.
 #   - ⌘+ and ⌘- change the text size by a pixel. ⌘0 puts it back.
 #   - ⌘P prints the page, or saves it as a PDF. ⌘⇧E saves it as a page of HTML.
@@ -3665,6 +3667,7 @@ draw(ctx, size, ui::ConcreteRect, d::Document) = begin
     end
   end
   fill_selection(ctx, rects)
+  draw_fresh(ctx, e, ui)
   annotate(ctx, e, ui)
   # A file that's only shown has a selection and no caret
   (b.reading || readonly(b)) && return
@@ -4663,16 +4666,30 @@ button(e, action, icon) = node!(() -> ToolButton(icon=icon, action=action), e, a
 # saves the file and tells the agent which lines you changed. ⌘Return does the
 # same. The agent can change the file while you type, and the page keeps both.
 
-"The agents that wait for the page that's showing. The folder that lists them is read twice a second."
-agents(e) = begin
-  path = e.buf.path
-  at, of, found = get(e.nodes, :agents, (0.0, "", Agent.Waiter[]))::Tuple{Float64,String,Vector{Agent.Waiter}}
-  (of == path && time() - at < 0.5) && return found
+"Every agent that waits, for any page. The folder that lists them is read twice a second."
+waiters(e) = begin
+  at, found = get(e.nodes, :agents, (0.0, Agent.Waiter[]))::Tuple{Float64,Vector{Agent.Waiter}}
+  time() - at < 0.5 && return found
   Agent.announce()
-  found = readonly(e.buf) ? Agent.Waiter[] : Agent.waiting(path)
-  e.nodes[:agents] = (time(), path, found)
+  found = Agent.waiters()
+  e.nodes[:agents] = (time(), found)
   found
 end
+
+# An agent names its page by the path that has no links in it. Each file's path of that kind is found once.
+const TRUE_PATHS = Dict{String,String}()
+truepath(path) = get!(() -> ispath(path) ? realpath(path) : abspath(path), TRUE_PATHS, path)
+
+"The agents that wait for the file at `path`"
+agents(e, path) = begin
+  ws = waiters(e)
+  (isempty(ws) || isempty(path)) && return ws[1:0]
+  at = truepath(path)
+  filter(w -> w.page == at, ws)
+end
+
+"The agents that wait for the page that's showing"
+agents(e) = readonly(e.buf) ? Agent.Waiter[] : agents(e, e.buf.path)
 
 "Save the page and tell each agent that waits for it what you changed. Nothing happens if no agent waits."
 send!(e) = begin
@@ -4798,9 +4815,12 @@ describe(l::FileLabel) = begin
     # A file that Kaydown only shows has its whole name, and it's fainter until it's the file that shows
     Box(width(grow=grow), Alignment.Start, label(basename(l.path), color=l.path == e.buf.path ? colours.ink : colours.dim,
                                                  weight=l.path == e.buf.path ? "Semibold" : ""))
+  # A page that an agent waits for has a dot in the colour of the Send button
+  awaited = ismarkdown(l.path) && !isempty(agents(e, l.path))
   Row(width(grow=grow), height(grow=grow), padding(0px, 8px, 0px, 0px), child_gap=4px, clip=true, name="File",
     mark(l, isdir(l.path) ? "folder" : ismarkdown(l.path) ? "file-earmark-text" : file_icon(l.path)),
     name,
+    (awaited ? (Box(width(6px), height(6px), radius(3px), background(colours.accent)),) : ())...,
     (changed ? (Box(width(6px), height(6px), radius(3px), background(colours.dim)),) : ())...)
 end
 
@@ -6069,6 +6089,37 @@ stay!(e, moved) = begin
   e.nodes[:hold] = (clamp(follow(moved, it.first), 1, length(e.buf.lines)), it.top - y)
 end
 
+# --- the lines that just changed on the disk ------------------------------------------------
+#
+# When something else changes the file, like an agent, a bar shows for a few
+# seconds in the margin beside each line that it changed or added, and fades.
+
+const FRESH = 4.0        # how many seconds a bar shows
+const FRESH_FADE = 1.5   # how many of them it takes to fade
+
+"Remember the lines that just changed. `moved` is what `refresh!` gave."
+fresh!(e, moved) = (e.nodes[:fresh] = (time(), e.buf.path, UnitRange{Int}[c[2] for c in moved if !isempty(c[2])]))
+
+"The runs of lines of the page that changed on the disk in the last few seconds"
+fresh(e) = begin
+  at, path, runs = get(e.nodes, :fresh, (0.0, "", UnitRange{Int}[]))::Tuple{Float64,String,Vector{UnitRange{Int}}}
+  (path == e.buf.path && time() - at < FRESH) && return runs
+  delete!(e.nodes, :fresh)
+  runs[1:0]
+end
+
+"Draw a bar in the margin beside each item on screen that shows a line that just changed"
+draw_fresh(ctx, e, ui) = begin
+  runs = fresh(e)
+  isempty(runs) && return
+  left = FRESH - (time() - e.nodes[:fresh][1])
+  ink = RGBA(colours.accent, clamp(left / FRESH_FADE, 0, 1) * 0.7)
+  for it in e.layout[e.shown]
+    any(r -> first(r) <= it.last && last(r) >= it.first, runs) || continue
+    rectangle(ctx, ui.left - 16px, ui.top + it.top, 3px, it.tall, background=ink, border=0px)
+  end
+end
+
 # --- the whole window ---------------------------------------------------------------------
 
 describe(e::Editor) = begin
@@ -6081,7 +6132,9 @@ describe(e::Editor) = begin
   receive!(e)
   await_default!(e)
   moved = refresh!(e.buf)
-  moved === nothing || stay!(e, moved)
+  moved === nothing || (stay!(e, moved); fresh!(e, moved))
+  # The bars beside the lines that just changed fade, so the window is drawn again while they show
+  isempty(fresh(e)) || redraw_in!(e, 1/30)
   find_tick!(e)
   layout!(e)
   # A live block that changed the size of the text stays where it was in the window

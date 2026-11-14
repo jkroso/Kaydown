@@ -86,7 +86,7 @@ To change the code, move the caret into the block with ↑ or ↓, or hold ⌥ a
 
 Code can run in a line of text too. Write a `!` and then the code between backticks, like \!`fs"."`. This page is in the folder !`fs"."` and its colours are !`page_theme()`. A number works too: 12 × 2.4 is !`12 * 2.4`. Click a line to see its code.
 
-The page [components.md](components.md) has a live block for each of UI.jl's components: checkboxes, switches, a slider, a menu, a colour picker, a viewer for 3D models, a player for sound, a text field, a tree and an inspector. It shows shadows too. Hold ⌘ and click the link to open it.
+The page [components.md](components.md) has a live block for each of UI.jl's components: checkboxes, switches, a slider, a menu, a colour picker, a viewer for 3D models, players for sound and video, a text field, a tree and an inspector. It shows shadows too. Hold ⌘ and click the link to open it.
 
 ## Sheets
 

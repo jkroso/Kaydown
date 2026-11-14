@@ -43,9 +43,9 @@ const page = read(WELCOME, String)
 # when it opens, and tells Kip which module goes with each one.
 
 const PAGES = dirname(WELCOME)
-"The text of each of the app's own pages, by file name. The model that the components page shows is here too, as the bytes of its file."
+"The text of each of the app's own pages, by file name. The model and the video that the components page shows are here too, as the bytes of their files."
 const pages = Dict(name => read(joinpath(PAGES, name), String)
-                   for name in ("welcome.md", "components.md", "settings.md", "widgets.jl", "knot.stl"))
+                   for name in ("welcome.md", "components.md", "settings.md", "widgets.jl", "knot.stl", "knot.mp4"))
 
 "The `user/repo/file` that a file Kip got from GitHub has there, or nothing for any other file"
 place(path) = begin

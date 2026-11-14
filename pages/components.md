@@ -76,7 +76,13 @@ A player plays a sound file. Click its round button to play the file and to stop
 AudioPlayer("/System/Library/Sounds/Glass.aiff")
 ```
 
-`VideoPlayer("holiday.mov")` plays a video. Its picture is over the button, and a click on the picture plays it and stops it too. Once you've clicked a player, the space bar plays and stops, and ← and → go back and on by 5 seconds. One file plays at a time, and it plays on while you scroll the page. macOS plays the files, so the players take what QuickTime takes: MP3, M4A, WAV, AIFF and FLAC sound, and MP4 and MOV video.
+A second player plays a video. Its picture is over the button, and a click on the picture plays the video and stops it too. This video shows the model from the section above as it turns.
+
+```ui
+VideoPlayer("knot.mp4")
+```
+
+Once you've clicked a player, the space bar plays and stops, and ← and → go back and on by 5 seconds. One file plays at a time, and it plays on while you scroll the page. Give the video player a `height` to make its picture bigger or smaller. macOS plays the files, so the players take what QuickTime takes: MP3, M4A, WAV, AIFF and FLAC sound, and MP4 and MOV video.
 
 ## Shadows
 

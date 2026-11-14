@@ -4739,7 +4739,11 @@ tip(b::ToolButton) = begin
   app = opener(e.buf.path)
   isempty(app) ? "Show in Finder" : "Open in $(app_name(app))"
 end
-tip(s::SendButton) = "Send what you changed  ⌘Return"
+tip(s::SendButton) = begin
+  e = editor(s)
+  ws = agents(e)
+  isempty(ws) ? "Nudged $(get(e.nodes, :agent, "the agent"))" : "Nudge $(first(ws).name) with what you changed  ⌘Return"
+end
 tip(c::Count) = begin
   s = after(STATS, editor(c).stat)
   s == :words ? "Count words" : s == :chars ? "Count characters" : "Show reading time"
@@ -4777,7 +4781,7 @@ button(e, action, icon) = node!(() -> ToolButton(icon=icon, action=action), e, a
 # --- a page that an agent waits for -------------------------------------------------------
 #
 # An agent like Claude Code writes a page, shows it here and waits (see
-# agent.jl). While it waits, the top bar has a button that sends the page: it
+# agent.jl). While it waits, the top bar has a button with a paper plane that sends the page: it
 # saves the file and tells the agent which lines you changed. ⌘Return does the
 # same. The agent can change the file while you type, and the page keeps both.
 
@@ -4842,10 +4846,10 @@ agent_part(e) = begin
   if !isempty(ws)
     delete!(e.nodes, :sent)
     e.nodes[:agent] = first(ws).name
-    (marks..., node!(SendButton, e, :send), Box(width(6px)))
+    (marks..., node!(SendButton, e, :send))
   elseif sent !== nothing && sent[1] == b.path && sent[2] == b.version
-    # It says so until the agent waits again, or the text changes
-    (marks..., Box(height(28px), padding(8px, 0px), label("Nudged $(sent[3])", 12px, color=colours.dim)))
+    # The button shows that the page was sent, until the agent waits again or the text changes
+    (marks..., node!(SendButton, e, :send))
   else
     marks
   end
@@ -4896,16 +4900,18 @@ end
 "The name of the agent that works on the page, as the owner of something: \"Claude's\""
 whose(e) = get(e.nodes, :agent, "the agent")::String * "'s"
 
+# The button is a paper plane, the size of the other buttons in the top bar. It's in the
+# accent colour while an agent waits. After a click it's dim and has a tick, and does nothing.
 describe(s::SendButton) = begin
   e = editor(s)
   ishovered(s) || (s.quiet = false)
-  ws = agents(e)
-  Box(height(24px), padding(10px, 0px), radius(6px), Alignment.Center, name="Send",
-      background(colours.accent),
-    label("Nudge $(isempty(ws) ? "the agent" : first(ws).name)", 12px, color=colours.bg, weight="Semibold"))
+  waits = !isempty(agents(e))
+  Box(width(30px), height(28px), radius(6px), Alignment.Center, name="Nudge",
+      background(waits && ishovered(s) ? colours.hover : clear),
+    Icon(waits ? "send-fill" : "send-check", size=15px, color=waits ? colours.accent : colours.dim))
 end
 
-cursor(::SendButton) = :hand
+cursor(s::SendButton) = isempty(agents(editor(s))) ? :arrow : :hand
 
 onkey(s::SendButton, ::KeyPress{Keys.mouse_left}) = (e = editor(s); send!(e); hush!(s); focus(e))
 

@@ -16,6 +16,8 @@
 #     last cell, and Return goes down a row. Both add a row at the end.
 #   - Click a cell of the sheet and type. Each row has a name and a Julia
 #     expression, and shows what it comes to. ⌥-click shows the sheet as code.
+#   - Click a cell of the spreadsheet and type. A cell that starts with = is a
+#     formula, like = B2 * C2 or = sum(D2:D4), and shows what it comes to.
 #   - ⌘B and ⌘I make the selection bold or italic. ⌘Z and ⌘⇧Z undo and redo.
 #   - Double-click selects a word, triple-click a line. ⌘-click opens a link.
 #   - ⌘F finds text in the page. Return goes to the next place that has it.
@@ -33,7 +35,7 @@
 #     to the Trash.
 #   - Right-click the page to cut, copy and paste, and to insert a new block
 #     where you clicked: a heading, a list, a to-do item, a table, a sheet, a
-#     code block, a live block or a divider.
+#     spreadsheet, a code block, a live block or a divider.
 #   - Start a list item with `- [ ]` to make a to-do item. Click its box to
 #     tick it.
 #   - Write !`code` in a line of text. The page runs the code and shows what
@@ -83,6 +85,7 @@
 @use "./markdown" Kind Line Span Cell classify spans tablecells isdivider words isdone front_matter MATTER TOML_MATTER
 @use "./highlight" tokens
 @use "./sheet" SHEET Result sheetcells parts uses tally known units shown
+@use "./spreadsheet" SPREADSHEET Value spreadcells spreadtexts isformula letters answers moved
 @use "github.com/jkroso/URI.jl/FSPath" FSPath
 @use Colors: @colorant_str, RGBA, Colorant
 @use InteractiveUtils: clipboard
@@ -509,8 +512,8 @@ selection(b::Buffer) = begin
   lo, hi = minmax(b.caret, b.anchor)
   lo[1] == hi[1] && return (lo, hi)
   ks = kinds(b)
-  (ks[lo[1]].kind == Kind.table || insheet(b, lo[1])) && (lo = (lo[1], 0))
-  (ks[hi[1]].kind == Kind.table || insheet(b, hi[1])) && (hi = (hi[1], length(b.lines[hi[1]])))
+  (ks[lo[1]].kind == Kind.table || insheet(b, lo[1]) || inspread(b, lo[1])) && (lo = (lo[1], 0))
+  (ks[hi[1]].kind == Kind.table || insheet(b, hi[1]) || inspread(b, hi[1])) && (hi = (hi[1], length(b.lines[hi[1]])))
   (lo, hi)
 end
 
@@ -581,7 +584,16 @@ struct Grid
   heights::Vector{px}
   cells::Vector{Vector{Cell}}  # where each cell's text is in its line
   flows::Vector{Vector{Flow}}  # one for each column, even where a row has no cell
+  # A spreadsheet is laid out as a table is, with a row of letters over it and a column of numbers on its left
+  head::px                     # how tall the row of letters is, with the line under it. A table has none.
+  left::px                     # how wide the column of numbers is, with the line beside it
+  values::Vector{Vector{Value}}   # what each cell of a spreadsheet comes to
 end
+
+Grid(rows, widths, heights, cells, flows) = Grid(rows, widths, heights, cells, flows, 0px, 0px, Vector{Value}[])
+
+"True when `g` is a spreadsheet, not a table"
+isspread(g::Grid) = g.head > 0px
 
 @def mutable struct Editor <: SemanticUI
   buf::Buffer = Buffer()
@@ -1046,6 +1058,7 @@ tablerows((s, t)) = [s; s+2:t]
 "The cells of the row that `p` is in, when that row is drawn in a grid or a sheet"
 rowcells(b::Buffer, p::Pos) = begin
   insheet(b, p[1]) && return sheetcells(b.lines[p[1]])
+  inspread(b, p[1]) && return spreadcells(b.lines[p[1]])
   run = table(b, p[1])
   (run === nothing || p[1] == run[1] + 1) ? Cell[] : tablecells(b.lines[p[1]])
 end
@@ -1070,6 +1083,8 @@ nearest cell when `by` is 0.
 settle(b::Buffer, p::Pos, by::Int=0) = begin
   run = sheet(b, p[1])
   run === nothing || return settle(b, run, p, by)
+  run = spread(b, p[1])
+  run === nothing || return settle(b, run, p, by, spreadcells)
   run = table(b, p[1])
   run === nothing && return p
   s, t = run
@@ -1184,12 +1199,12 @@ grid(e, from::Int, to::Int) = begin
 end
 
 const TABLE_GAP = 8px   # above and below a table
-tall(g::Grid) = sum(g.heights) + 1px * (length(g.heights) + 1) + 2TABLE_GAP
+tall(g::Grid) = g.head + sum(g.heights) + 1px * (length(g.heights) + 1) + 2TABLE_GAP
 
 "Where the text of row `r`, column `c` starts, from the top left of the table's item"
 cell_origin(g::Grid, r::Int, c::Int) =
-  (1px * c + sum(g.widths[1:c-1], init=0px),
-   TABLE_GAP + 1px * r + sum(g.heights[1:r-1], init=0px) + (g.heights[r] - tall(g.flows[r][c]))/2)
+  (g.left + 1px * c + sum(g.widths[1:c-1], init=0px),
+   TABLE_GAP + g.head + 1px * r + sum(g.heights[1:r-1], init=0px) + (g.heights[r] - tall(g.flows[r][c]))/2)
 
 "The column in `cell` nearest to `x` on line `k` of its flow"
 cellcol(f::Flow, k::Int, x::px, cell::Cell) =
@@ -1200,6 +1215,184 @@ gridcell(g::Grid, p::Pos) = begin
   r = findfirst(==(p[1]), g.rows)
   (r === nothing || isempty(g.cells[r])) && return nothing
   (r, nearest(g.cells[r], p[2]))
+end
+
+# --- spreadsheets ----------------------------------------------------------------------
+#
+# A code block in the language `spreadsheet` is drawn as a spreadsheet. Each
+# line of the block is a row, with a | between its cells, as in a table. A row
+# of letters is over the cells, one for each column. A column of numbers is on
+# their left, one for each row. A cell that starts with = is a formula: a Julia
+# expression that can use the other cells by name, like B2 * C2 or sum(D2:D9).
+# The cell shows what its formula comes to. While the caret is in the cell, it
+# shows the formula.
+#
+# It's laid out as a `Grid`, so the caret moves as it does in a table, and the
+# bar over the grid adds and removes a row or a column. Hold ⌥ and click the
+# spreadsheet to see it as lines of code.
+
+const SPREAD_Y = 5px   # above and below the text of a cell
+
+"""
+The lines that open and close the spreadsheet that line `i` is in, or nothing.
+A spreadsheet needs a row, and it shows as lines of code while the caret is on
+the line that opens or closes it.
+"""
+spread(b::Buffer, i::Int) = drawn(b, i, SPREADSHEET)
+
+"True when line `i` is a row of a spreadsheet"
+inspread(b::Buffer, i::Int) = begin
+  run = spread(b, i)
+  run !== nothing && run[1] < i < run[2]
+end
+
+"The lines that are the rows of the table or the spreadsheet that line `i` is in"
+gridrows(b::Buffer, i::Int) = begin
+  run = spread(b, i)
+  run === nothing ? tablerows(table(b, i)) : collect(run[1]+1:run[2]-1)
+end
+
+"The name of every cell of a spreadsheet that has `rows` rows and `cols` columns"
+cellnames(rows::Int, cols::Int) = [letters(c) * string(r) for r in 1:rows for c in 1:cols]
+
+"How wide the longest part of `p` is that can't go onto two lines: a word, a number or what a formula comes to"
+unbroken(p::Piece) =
+  p.node !== nothing ? p.node.w : p.atomic ? measure(p.face, p.text) :
+  maximum(word -> measure(p.face, word), split(p.text), init=0px) + (p.face.chip ? 2(CHIP_X + 1px) : 0px)
+
+"Lay out the spreadsheet whose code block opens on line `from` and closes on line `to`"
+spreadgrid(e, from::Int, to::Int) = begin
+  b = e.buf
+  caret = israw(b, b.caret[1]) && from < b.caret[1] < to ? b.caret : nothing
+  build() = begin
+    base = Face(body(e), size=body(e).size * 0.94)
+    lh = base.size * 1.5
+    rows = collect(from+1:to-1)
+    cells = [spreadcells(b.lines[i]) for i in rows]
+    texts = [spreadtexts(b.lines[i]) for i in rows]
+    # The cells are only worked out again when the text of one changes
+    values = get!(() -> answers(texts), e.flows, (:answers, texts))
+    ncols = maximum(length, cells)
+    typing(r, c) = caret !== nothing && caret[1] == rows[r] && c <= length(cells[r]) && within(cells[r][c], caret[2])
+    parts = map(enumerate(rows)) do (r, i)
+      map(1:ncols) do c
+        c <= length(cells[r]) || return Piece[]
+        cell, v = cells[r][c], values[r][c]
+        on = typing(r, c)
+        # The cell with the caret shows the spaces typed after its text
+        upto = on ? max(cell.hi, caret[2]) : cell.hi
+        isformula(texts[r][c]) || return cellpieces(e, i, b.lines[i], cell.lo, upto, base, on)
+        # A formula shows what it comes to. With the caret in its cell, it shows the formula, and each cell that it names is a chip.
+        on && return exprpieces(b.lines[i], cell.lo, upto, cellnames(length(rows), ncols), base)
+        [piece(v.failed ? "!" : v.text, cell.lo, base, atomic=true, n=cell.hi - cell.lo)]
+      end
+    end
+    # Each column gets room in proportion to its longest cell, as in a table
+    natural = [clamp(maximum(row -> sum(wide, row[c], init=0px), parts, init=0px) + 2CELL_X, 60px, e.width * 0.75) for c in 1:ncols]
+    gutter = max(measure(Face(base, family=SANS, size=base.size * 0.72), string(length(rows))) + 14px, base.size * 1.9)
+    space = e.width - gutter - 1px * (ncols + 2)
+    # When the columns don't all fit, text wraps before a number is cut short: each column keeps
+    # the room its longest word or number needs, and the columns share what's left
+    least = [min(natural[c], max(maximum(row -> maximum(unbroken, row[c], init=0px), parts, init=0px) + 2CELL_X, 36px)) for c in 1:ncols]
+    widths = sum(natural) <= space ? natural .* (num(space) / num(sum(natural))) :
+             sum(least) >= space ? least .* (num(space) / num(sum(least))) :
+             least .+ (natural .- least) .* (num(space - sum(least)) / num(sum(natural .- least)))
+    flows = [[align(wrap(row[c], widths[c] - 2CELL_X; lh, size=base.size, left=CELL_X), widths[c] - 2CELL_X,
+                    # A number stays on the right while you type it. A formula is on the left while its cell shows it.
+                    c <= length(cells[r]) && values[r][c].number && !(typing(r, c) && isformula(texts[r][c])) ? :right : :left)
+              for c in 1:ncols] for (r, row) in enumerate(parts)]
+    heights = [maximum(tall, row) + 2SPREAD_Y for row in flows]
+    Grid(rows, widths, heights, cells, flows, lh + 1px, gutter + 1px, values)
+  end
+  # What inline code made can change its size, so a spreadsheet with some in it is laid out again each time
+  any(text -> occursin(INLINE, text), @view b.lines[from:to]) && return build()
+  get!(build, e.flows, (:spread, from, b.lines[from:to], caret))
+end
+
+"A spreadsheet as nodes: the grid of a table, with a row of letters over it and a column of numbers on its left"
+spreadsheet(e::Editor, it::Item, g::Grid) = begin
+  b = e.buf
+  line = border(1px, :solid, colours.line; between=true)
+  size = body(e).size * 0.94
+  at = israw(b, b.caret[1]) ? gridcell(g, b.caret) : nothing
+  # The letter and the number of the caret's cell are darker
+  name(text, on) = Box(height(grow=grow), Alignment.Center, justify=Alignment.Center,
+                       label(text, size * 0.72, color=on ? colours.ink : colours.dim, weight=on ? "Semibold" : ""))
+  cell(r, c) = begin
+    v = c <= length(g.values[r]) ? g.values[r][c] : nothing
+    # A formula that went wrong shows a !, which says what went wrong while the mouse is over it
+    (v !== nothing && v.failed && at != (r, c)) || return rows(g.flows[r][c])
+    [Box(padding(CELL_X, 0px), own!(node!(Document, e, :document), Trouble(message=v.text, size=size * 0.9)))]
+  end
+  head = Row(width(grow=grow), height(g.head - 1px), Alignment.Start, line[:between], background(colours.head),
+    Box(fixed(g.left - 1px), height(grow=grow)),
+    [Box(fixed(g.widths[c]), height(grow=grow), name(letters(c), at !== nothing && at[2] == c)) for c in eachindex(g.widths)]...)
+  body_rows = [Row(width(grow=grow), height(g.heights[r]), Alignment.Start, line[:between], background(colours.bg),
+                 Box(fixed(g.left - 1px), height(grow=grow), background(colours.head), name(string(r), at !== nothing && at[1] == r)),
+                 [Column(fixed(g.widths[c]), height(grow=grow), Alignment.Start, justify=Alignment.Center, cell(r, c)...)
+                  for c in eachindex(g.widths)]...)
+               for r in eachindex(g.rows)]
+  Box(width(grow=grow), padding(0px, TABLE_GAP),
+    Column(width(grow=grow), Alignment.Start, line, name="Spreadsheet", head, body_rows...))
+end
+
+"Draw a line around the cell in row `r`, column `c` of a spreadsheet whose item has its top left corner at (x, y)"
+ring(ctx, g::Grid, (r, c), x, y) =
+  rectangle(ctx, x + g.left + 1px * c + sum(g.widths[1:c-1], init=0px) - 0.5px,
+            y + TABLE_GAP + g.head + 1px * r + sum(g.heights[1:r-1], init=0px) - 0.5px,
+            g.widths[c] + 1px, g.heights[r] + 1px, stroke=colours.accent, border=1.5px)
+
+"""
+Add or remove a row or a column of the spreadsheet the caret is in, at the
+caret. Each formula still names the same cells after it: a cell that moved has
+a new name, so the formula is written with that name.
+"""
+spreadop!(e, action::Symbol) = begin
+  b = e.buf
+  i = b.caret[1]
+  inspread(b, i) || return
+  s, t = spread(b, i)
+  rows = map(spreadtexts, b.lines[s+1:t-1])
+  n = maximum(length, rows)
+  rows = [[row; fill("", n - length(row))] for row in rows]
+  r = i - s                                           # the caret's row
+  c = nearest(spreadcells(b.lines[i]), b.caret[2])    # and its column
+  if action == :addrow
+    r += 1
+    rows = [moved.(row, 1, row=r) for row in rows]
+    insert!(rows, r, fill("", n))
+  elseif action == :delrow
+    length(rows) == 1 && return
+    deleteat!(rows, r)
+    rows = [moved.(row, -1, row=r + 1) for row in rows]
+    r = min(r, length(rows))
+  elseif action == :addcol
+    c += 1
+    rows = [moved.(row, 1, col=c) for row in rows]
+    foreach(row -> insert!(row, c, ""), rows)
+  elseif action == :delcol
+    n == 1 && return
+    foreach(row -> deleteat!(row, c), rows)
+    rows = [moved.(row, -1, col=c + 1) for row in rows]
+    c = min(c, n - 1)
+  else
+    return
+  end
+  edit!(b, (s + 1, 0), line_end(b, t - 1), join(map(tableline, rows), "\n"))
+  b.caret = b.anchor = (s + r, spreadcells(b.lines[s+r])[c].hi)
+  touch!(e)
+end
+
+"Backspace in an empty row of a spreadsheet removes the row, and the last row takes the spreadsheet with it"
+droprow!(e) = begin
+  b = e.buf
+  i = b.caret[1]
+  s, t = spread(b, i)
+  t - s == 2 && return (edit!(b, (s, 0), line_end(b, t), ""); touch!(e))
+  spreadop!(e, :delrow)
+  above = max(i - 1, s + 1)
+  b.caret = b.anchor = (above, spreadcells(b.lines[above])[end].hi)
+  touch!(e)
 end
 
 # --- sheets ----------------------------------------------------------------------------
@@ -1253,11 +1446,14 @@ The lines that open and close the sheet that line `i` is in, or nothing. A
 sheet needs a row, and it shows as lines of code while the caret is on the
 line that opens or closes it.
 """
-sheet(b::Buffer, i::Int) = begin
+sheet(b::Buffer, i::Int) = drawn(b, i, SHEET)
+
+"The lines that open and close the code block in the language `lang` that line `i` is in, when the block is drawn as a sheet or a spreadsheet"
+drawn(b::Buffer, i::Int, lang::String) = begin
   ks = kinds(b)
-  (ks[i].kind == Kind.fence || (ks[i].kind == Kind.code && ks[i].lang == SHEET)) || return nothing
+  (ks[i].kind == Kind.fence || (ks[i].kind == Kind.code && ks[i].lang == lang)) || return nothing
   s, t = codeblock(b, i)
-  (t > s + 1 && ks[s].kind == Kind.fence && ks[s].lang == SHEET && ks[t].kind == Kind.fence && ks[t].level == 1) || return nothing
+  (t > s + 1 && ks[s].kind == Kind.fence && ks[s].lang == lang && ks[t].kind == Kind.fence && ks[t].level == 1) || return nothing
   israw(b, s) || israw(b, t) ? nothing : (s, t)
 end
 
@@ -1534,15 +1730,19 @@ name_row!(e, i::Int) = begin
   touch!(e)
 end
 
-"Where the caret goes when it's sent to `p` in the sheet that runs from line `s` to line `t`. See `settle` for a table."
-settle(b::Buffer, (s, t)::Tuple{Int,Int}, p::Pos, by::Int) = begin
+"""
+Where the caret goes when it's sent to `p` in the sheet that runs from line `s`
+to line `t`. See `settle` for a table. A spreadsheet works the same way, with
+`cells` to read the cells of a row.
+"""
+settle(b::Buffer, (s, t)::Tuple{Int,Int}, p::Pos, by::Int, cells=sheetcells) = begin
   i, col = p
-  first_cell(i) = (i, sheetcells(b.lines[i])[1].lo)
-  last_cell(i) = (i, sheetcells(b.lines[i])[end].hi)
+  first_cell(i) = (i, cells(b.lines[i])[1].lo)
+  last_cell(i) = (i, cells(b.lines[i])[end].hi)
   # The lines that open and close the sheet don't show, so the caret steps over them
   i == s && return by < 0 && s > 1 ? line_end(b, s - 1) : first_cell(s + 1)
   i == t && return by > 0 && t < length(b.lines) ? (t + 1, 0) : last_cell(t - 1)
-  cs = sheetcells(b.lines[i])
+  cs = cells(b.lines[i])
   any(c -> within(c, col), cs) && return p
   if by < 0
     c = findlast(c -> c.limit < col, cs)
@@ -2787,11 +2987,11 @@ layout!(e, width=text_width(e)) = begin
         continue
       end
     end
-    # A `sheet` code block is drawn as a sheet, unless the caret is on its first or last line
-    if ks[i].kind == Kind.fence && ks[i].level == 0 && ks[i].lang == SHEET
-      run = sheet(b, i)
+    # A `sheet` code block is drawn as a sheet, and a `spreadsheet` one as a spreadsheet, unless the caret is on its first or last line
+    if ks[i].kind == Kind.fence && ks[i].level == 0 && ks[i].lang in (SHEET, SPREADSHEET)
+      run = drawn(b, i, ks[i].lang)
       if run !== nothing
-        content = sheetgrid(e, run...)
+        content = ks[i].lang == SHEET ? sheetgrid(e, run...) : spreadgrid(e, run...)
         push!(items, Item(i, run[2], top, tall(content), content))
         top += tall(content)
         i = run[2] + 1
@@ -2898,6 +3098,7 @@ describe(e::Editor, it::Item, f::Flow) = begin
 end
 
 describe(e::Editor, it::Item, g::Grid) = begin
+  isspread(g) && return spreadsheet(e, it, g)
   line = border(1px, :solid, colours.line; between=true)
   table = Column(width(grow=grow), Alignment.Start, line, name="Table",
     [Row(width(grow=grow), height(g.heights[r]), Alignment.Start, line[:between],
@@ -3105,6 +3306,7 @@ draw(ctx, size, ui::ConcreteRect, d::Document) = begin
         lo, hi = selection(b)
         y = top + TABLE_GAP
         lo[1] < it.first && hi[1] >= it.first && push!(rects, (num(ui.left), num(top), num(ui.left + 7px), num(y)))
+        y += g.head   # a spreadsheet's row of letters isn't part of the text, so it's never selected
         for (r, i) in enumerate(g.rows)
           h = g.heights[r] + (r == length(g.rows) ? 2px : 1px)
           lo[1] <= i <= hi[1] && push!(rects, (num(ui.left), num(y), num(ui.left + e.width), num(y + h)))
@@ -3139,6 +3341,7 @@ draw(ctx, size, ui::ConcreteRect, d::Document) = begin
     if it.content isa Grid
       g = it.content
       at = gridcell(g, b.caret)
+      isspread(g) && at !== nothing && b.caret[1] == b.anchor[1] && ring(ctx, g, at, ui.left, top)
       for (r, i) in enumerate(g.rows), (c, cell) in enumerate(g.cells[r])
         x, y = cell_origin(g, r, c)
         at == (r, c) && caret(ctx, e, g.flows[r][c], ui.left + x, top + y, b.caret[2])
@@ -3303,6 +3506,11 @@ press!(e, pos) = begin
     return touch!(e)
   end
   it.content isa Sheet && press!(e, it, it.content, pos) && return touch!(e)
+  if it.content isa Grid && isspread(it.content) && held(e, Keys.opt)
+    # A click on a spreadsheet with ⌥ held shows it as lines of code
+    b.caret = b.anchor = line_end(b, it.first)
+    return touch!(e)
+  end
   at = settle(b, locate(e, pos))
   t, before, count = e.clicked
   count = time() - t < 0.4 && before == at ? count % 3 + 1 : 1
@@ -3580,6 +3788,12 @@ newline!(e, ::Type{CodeBlock}) = begin
     b.caret = b.anchor = (i + 1, 0)
     return touch!(e)
   end
+  if line.kind == Kind.fence && line.level == 0 && line.lang == SPREADSHEET && col == length(b.lines[i])
+    # The line that opens a spreadsheet. Its first row starts with three cells, and the caret goes to the first.
+    type!(e, "\n|  |  |  |")
+    b.caret = b.anchor = (i + 1, 2)
+    return touch!(e)
+  end
   line.kind == Kind.fence && return type!(e, "\n")
   before = head(b.lines[i], col)
   type!(e, "\n" * match(r"^ *", before).match * (opens(before, line.lang) ? STEP : ""))
@@ -3656,10 +3870,9 @@ of the table adds a row.
 next_cell!(e, back::Bool; down=false) = begin
   b = e.buf
   i, col = b.caret
-  s, t = table(b, i)
-  rows = tablerows((s, t))
+  rows = gridrows(b, i)
   r = findfirst(==(i), rows)
-  cs = tablecells(b.lines[i])
+  cs = rowcells(b, b.caret)
   c = nearest(cs, col)
   if down
     r += 1
@@ -3672,10 +3885,11 @@ next_cell!(e, back::Bool; down=false) = begin
   end
   r < 1 && return
   if r > length(rows)
-    edit!(b, line_end(b, t), line_end(b, t), "\n|" * repeat("  |", length(tablecells(b.lines[s]))))
+    t = last(rows)
+    edit!(b, line_end(b, t), line_end(b, t), "\n|" * repeat("  |", maximum(i -> length(rowcells(b, (i, 0))), rows)))
     push!(rows, t + 1)
   end
-  cs = tablecells(b.lines[rows[r]])
+  cs = rowcells(b, (rows[r], 0))
   isempty(cs) && return move!(e, (rows[r], 0), false)
   cell = cs[c == 0 ? length(cs) : min(c, length(cs))]
   b.anchor, b.caret = (rows[r], cell.lo), (rows[r], cell.hi)
@@ -3946,6 +4160,7 @@ const BAR_H = 26px
 "Change the table the caret is in, then put the caret back in a cell"
 tableop!(e, action::Symbol) = begin
   b = e.buf
+  inspread(b, b.caret[1]) && return spreadop!(e, action)
   run = table(b, b.caret[1])
   run === nothing && return
   s, t = run
@@ -3983,6 +4198,7 @@ end
 # The three buttons that move a column's text show the usual picture of lines of text on that side
 "True when the caret is in a row of a table, under the heading row, that has no text in any cell"
 emptyrow(b::Buffer) = begin
+  inspread(b, b.caret[1]) && return !selecting(b) && all(isempty, spreadtexts(b.lines[b.caret[1]]))
   run = table(b, b.caret[1])
   run !== nothing && !selecting(b) && b.caret[1] > run[1] + 1 && all(isempty, celltexts(b.lines[b.caret[1]]))
 end
@@ -3990,6 +4206,7 @@ end
 "Backspace in an empty row removes the row and puts the caret at the end of the row above"
 backrow!(e) = begin
   b = e.buf
+  inspread(b, b.caret[1]) && return droprow!(e)
   s, _ = table(b, b.caret[1])
   i = b.caret[1]
   tableop!(e, :delrow)
@@ -4016,7 +4233,8 @@ tablebar(e) = begin
   top = TOPBAR_H + PAGE_TOP + it.top + TABLE_GAP - e.scroll.offset - BAR_H - 3px
   top >= TOPBAR_H || return ()
   bar = Row(height(BAR_H), padding(3px, 0px), radius(6px), background(colours.float), border(1px, :solid, colours.line), lifted,
-    [node!(() -> TableButton(action=a, label=l), e, (:table, a)) for (a, l) in TABLE_ACTIONS]...)
+    # A spreadsheet has no buttons that move a column's text: a number goes on the right and text on the left
+    [node!(() -> TableButton(action=a, label=l), e, (:table, a)) for (a, l) in TABLE_ACTIONS[1:(isspread(it.content) ? 4 : end)]]...)
   # The page's text is in the middle of the space beside the file panel
   w, _ = window_size(e)
   side = PANEL_W * opened(e)
@@ -4185,7 +4403,7 @@ const COMPONENTS = Dict(
   "AudioPlayer" => ("Sound", "music-note-beamed"), "VideoPlayer" => ("Video", "film"))
 const LAYOUTS = ("Box", "Row", "Column", "Stack", "Scroll", "Text", "Image")
 "Every icon that the sidebar can show. The built app reads them all when it's made."
-const SIDEBAR_ICONS = unique(["file-earmark-text", "chevron-right", "chevron-down", "calculator", "puzzle", "bounding-box",
+const SIDEBAR_ICONS = unique(["file-earmark-text", "chevron-right", "chevron-down", "calculator", "grid-3x3", "puzzle", "bounding-box",
                               ("type-h$n" for n in 1:6)..., (icon for (_, icon) in values(COMPONENTS))...])
 
 """
@@ -4211,11 +4429,13 @@ outline(lines::Vector{String}, kinds::Vector{Line}) = begin
   for (i, l) in enumerate(kinds)
     if l.kind == Kind.heading
       push!(out, Entry(i, l.level, rest(lines[i], l.prefix), "type-h$(l.level)", i))
-    elseif l.kind == Kind.fence && l.level == 0 && l.lang in (LIVE, SHEET)
+    elseif l.kind == Kind.fence && l.level == 0 && l.lang in (LIVE, SHEET, SPREADSHEET)
       # The line that closes the block, or the last line when nothing closes it
       close = something(findnext(k -> k.kind == Kind.fence, kinds, i + 1), length(lines))
       if l.lang == SHEET
         push!(out, Entry(i, 7, "Sheet", "calculator", min(i + 1, length(lines))))
+      elseif l.lang == SPREADSHEET
+        push!(out, Entry(i, 7, "Spreadsheet", "grid-3x3", min(i + 1, length(lines))))
       else
         name, icon = component(view(lines, i+1:close-1))
         # The caret goes under the block. In the block, it would show the block's code.
@@ -4651,6 +4871,7 @@ const INSERTS = [
   "-",
   ("Table",         ["|  |  |  |", "|---|---|---|", "|  |  |  |", "|  |  |  |"], (1, 2)),
   ("Sheet",         ["```$SHEET", " = ", "```"],    (2, 0)),
+  ("Spreadsheet",   ["```$SPREADSHEET", "|  |  |  |", "|  |  |  |", "|  |  |  |", "```"], (2, 2)),
   ("Code",          ["```julia", "", "```"],        (2, 0)),
   ("Live Block",    ["```$LIVE", "", "```"],        (2, 0)),
   "-",
@@ -5588,7 +5809,7 @@ breaks(e) = begin
       end
     elseif c isa Grid
       # Under the line under each row, after the second
-      y = it.top + TABLE_GAP + 1px
+      y = it.top + TABLE_GAP + c.head + 1px
       for (r, h) in enumerate(c.heights[1:end-1])
         y += h + 1px
         r > 1 && push!(out, y)

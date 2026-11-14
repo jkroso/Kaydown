@@ -104,13 +104,27 @@ Tins = ceil(litres / 4litre)
 
 Click a cell and type. Tab goes to the next cell and Return starts a row. To see the sheet as lines of code, hold ⌥ and click it.
 
+## Spreadsheets
+
+A code block in the language `spreadsheet` is a grid of cells. Each column has a letter and each row has a number, so `B2` is the second cell of the second row. A cell that starts with `=` is a formula: a Julia expression that can use the other cells by name. `D2:D4` is every cell from D2 to D4.
+
+```spreadsheet
+| Wall  | Length | Height | Area         |
+| North | 12m    | 2.4m   | = B2 * C2    |
+| East  | 8m     | 2.4m   | = B3 * C3    |
+| South | 12m    | 2.4m   | = B4 * C4    |
+| Total |        |        | = sum(D2:D4) |
+```
+
+Click a cell and type. A cell shows what its formula comes to, and it shows the formula while the caret is in it. Tab goes to the next cell and Return goes down a row. The bar over the grid adds and removes a row or a column, and each formula still names the same cells after that. To see the spreadsheet as lines of code, hold ⌥ and click it.
+
 ---
 
-The button at the top left shows the files in this folder. Click the icon beside a file to see its headings and its components, such as a slider or a sheet. Click one to go to it. Press ⌘⇧\ to use the list with the keyboard: ↑ and ↓ move through it, → and ← show and hide what's under an item, and Return opens a file or goes to a heading.
+The button at the top left shows the files in this folder. Click the icon beside a file to see its headings and its components, such as a slider, a sheet or a spreadsheet. Click one to go to it. Press ⌘⇧\ to use the list with the keyboard: ↑ and ↓ move through it, → and ← show and hide what's under an item, and Return opens a file or goes to a heading.
 
 Right-click a file in the list to rename it, copy its path or move it to the Trash.
 
-Right-click the page to cut, copy or paste. The menu's Insert item adds a new block where you clicked: a heading, a list, a to-do item, a table, a sheet, a live block and more.
+Right-click the page to cut, copy or paste. The menu's Insert item adds a new block where you clicked: a heading, a list, a to-do item, a table, a sheet, a spreadsheet, a live block and more.
 
 A file can start with front matter: lines like `title: Notes` between two lines of `---`. Kaydown shows it as a block of its own, and leaves it out of the word count.
 

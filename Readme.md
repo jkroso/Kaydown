@@ -1,6 +1,6 @@
 # Kaydown
 
-A Markdown editor for the Mac, made with [UI.jl](https://github.com/jkroso/UI.jl). It draws each line the way it will read, and you type in it. A code block in the language `ui` runs its Julia code and shows what the code makes. A code block in the language `sheet` works things out, like a small spreadsheet.
+A Markdown editor for the Mac, made with [UI.jl](https://github.com/jkroso/UI.jl). It draws each line the way it will read, and you type in it. A code block in the language `ui` runs its Julia code and shows what the code makes. A code block in the language `sheet` works things out, a row at a time. A code block in the language `spreadsheet` is a grid of cells with formulas.
 
 "Kaydown" is a working name, after Alan Kay.
 

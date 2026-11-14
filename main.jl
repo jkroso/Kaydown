@@ -60,7 +60,7 @@
 #     folder). While it waits, a button at the top right sends it the lines that
 #     you changed. ⌘Return does the same. The agent can change the file while
 #     you type, and the page keeps both. A bar shows for a few seconds beside
-#     each line that the agent changed, and a button with a highlighter in the
+#     each line that the agent changed, and a button with an eye in the
 #     top bar shows those bars again. The list of files has a dot beside
 #     a page that an agent waits for. While the list is hidden, the dot is
 #     beside the button that shows it.
@@ -4781,7 +4781,7 @@ button(e, action, icon) = node!(() -> ToolButton(icon=icon, action=action), e, a
 # --- a page that an agent waits for -------------------------------------------------------
 #
 # An agent like Claude Code writes a page, shows it here and waits (see
-# agent.jl). While it waits, the top bar has a button with a paper plane that sends the page: it
+# agent.jl). While it waits, the top bar has a button with a bell that sends the page: it
 # saves the file and tells the agent which lines you changed. ⌘Return does the
 # same. The agent can change the file while you type, and the page keeps both.
 
@@ -4842,7 +4842,7 @@ agent_part(e) = begin
   ws = agents(e)
   sent = get(e.nodes, :sent, nothing)
   # A button shows the agent's changes again, for as long as there are some
-  marks = isempty(theirs(e)) ? () : (button(e, :marks, "highlighter"), Box(width(4px)))
+  marks = isempty(theirs(e)) ? () : (button(e, :marks, "eye"), Box(width(4px)))
   if !isempty(ws)
     delete!(e.nodes, :sent)
     e.nodes[:agent] = first(ws).name
@@ -4900,15 +4900,15 @@ end
 "The name of the agent that works on the page, as the owner of something: \"Claude's\""
 whose(e) = get(e.nodes, :agent, "the agent")::String * "'s"
 
-# The button is a paper plane, the size of the other buttons in the top bar. It's in the
-# accent colour while an agent waits. After a click it's dim and has a tick, and does nothing.
+# The button is a bell, the size of the other buttons in the top bar. It's in the
+# accent colour while an agent waits. After a click it's dim, and only an outline, and does nothing.
 describe(s::SendButton) = begin
   e = editor(s)
   ishovered(s) || (s.quiet = false)
   waits = !isempty(agents(e))
   Box(width(30px), height(28px), radius(6px), Alignment.Center, name="Nudge",
       background(waits && ishovered(s) ? colours.hover : clear),
-    Icon(waits ? "send-fill" : "send-check", size=15px, color=waits ? colours.accent : colours.dim))
+    Icon(waits ? "bell-fill" : "bell", size=15px, color=waits ? colours.accent : colours.dim))
 end
 
 cursor(s::SendButton) = isempty(agents(editor(s))) ? :arrow : :hand
@@ -6477,7 +6477,7 @@ end
 #
 # When something else changes the file, like an agent, a bar shows for a few
 # seconds in the margin beside each line that it changed or added, and fades.
-# A button with a highlighter in the top bar shows the bars again, beside every
+# A button with an eye in the top bar shows the bars again, beside every
 # line that was changed since you last sent the page. They stay until you click
 # the button again.
 

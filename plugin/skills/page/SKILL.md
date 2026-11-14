@@ -5,7 +5,7 @@ description: Show the user a page in Kaydown, a Markdown app on their Mac that d
 
 # Show a page in Kaydown
 
-Kaydown is a Markdown app on the user's Mac. It draws a Markdown file as a page: a `mermaid` code block is a diagram, a table is a table, `- [ ]` is a box that the user can tick. The user can type anywhere on the page. A button in Kaydown, a paper plane at the top right called "Nudge Claude", sends you the lines that the user changed.
+Kaydown is a Markdown app on the user's Mac. It draws a Markdown file as a page: a `mermaid` code block is a diagram, a table is a table, `- [ ]` is a box that the user can tick. The user can type anywhere on the page. A button in Kaydown, a bell at the top right called "Nudge Claude", sends you the lines that the user changed.
 
 So a page does two jobs. It shows the user more than the terminal can. And it is the form that the user answers on.
 
@@ -14,7 +14,7 @@ So a page does two jobs. It shows the user more than the terminal can. And it is
 1. Write the page as a Markdown file. Its name must end in `.md`. Put it where the user says. If the user names no place, put it in a `.kaydown` folder in the project.
 2. Run `kaydown show <file>`. Kaydown opens the page in front of the other windows.
 3. Run `kaydown wait <file>` in the background (in Claude Code: the Bash tool with `run_in_background: true`). Do not poll, and do not run it in the foreground, because the user can take any length of time.
-4. Tell the user, in one or two sentences, what is on the page and what you need from them. Tell them to click the paper plane at the top right of Kaydown, or press ⌘Return, when they are done. Then end your turn.
+4. Tell the user, in one or two sentences, what is on the page and what you need from them. Tell them to click the bell at the top right of Kaydown, or press ⌘Return, when they are done. Then end your turn.
 5. When `kaydown wait` stops, its output is what the user changed. Read it, and do what it asks.
 6. If you change the page, edit the file. Kaydown shows your change in less than a second, so do not run `kaydown show` again.
 7. If the work on the page goes on, run `kaydown wait <file>` in the background again. If the work is done, do not. The Nudge button shows in Kaydown only while a `kaydown wait` runs.

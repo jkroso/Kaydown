@@ -143,9 +143,9 @@ A line that holds only a sound file shows a player for it. The line is written a
 
 ## Work with an agent
 
-An agent like Claude Code can write a page and show it to you here: a plan with a diagram, a table of options, a list of boxes to tick. While the agent waits for you, a paper plane shows at the top right. It's a button called "Nudge Claude". Change the page any way you like: tick a box, change a number, type a question on a new line. Then click the button, or press ⌘Return. Kaydown saves the page and gives the agent the lines that you changed.
+An agent like Claude Code can write a page and show it to you here: a plan with a diagram, a table of options, a list of boxes to tick. While the agent waits for you, a bell shows at the top right. It's a button called "Nudge Claude". Change the page any way you like: tick a box, change a number, type a question on a new line. Then click the button, or press ⌘Return. Kaydown saves the page and gives the agent the lines that you changed.
 
-The agent can change the page while you read it. What you're typing stays, and the agent's changes show around it. A bar shows for a few seconds beside each line that the agent changed. If you missed them, click the button with a highlighter at the top right: it shows a bar beside every line that the agent changed since you last sent the page, until you click it again. In the list of files, a dot marks a page that an agent waits for. While the list is hidden, the dot shows beside the button that opens it. [Kaydown's page on GitHub](https://github.com/jkroso/Kaydown#use-it-with-an-agent) says how to set up an agent.
+The agent can change the page while you read it. What you're typing stays, and the agent's changes show around it. A bar shows for a few seconds beside each line that the agent changed. If you missed them, click the button with an eye at the top right: it shows a bar beside every line that the agent changed since you last sent the page, until you click it again. In the list of files, a dot marks a page that an agent waits for. While the list is hidden, the dot shows beside the button that opens it. [Kaydown's page on GitHub](https://github.com/jkroso/Kaydown#use-it-with-an-agent) says how to set up an agent.
 
 ---
 

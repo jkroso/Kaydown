@@ -28,7 +28,7 @@ building && start_packages()
 
 # Icons are read from UI.jl's Icons folder the first time they're drawn. Reading
 # them now keeps them in the app, so it doesn't need that folder.
-foreach(load_icon, ["check", "chevron-down", "chevron-right", "chevron-up", "copy", "file-earmark", "file-earmark-text", "folder", "highlighter", "send-fill", "send-check",
+foreach(load_icon, ["check", "chevron-down", "chevron-right", "chevron-up", "copy", "file-earmark", "file-earmark-text", "folder", "eye", "bell-fill", "bell",
                     "layout-sidebar", "pause-fill", "play-fill", "record-fill", "search", "stop-fill", "text-center", "text-left",
                     "text-paragraph", "text-right", "x-lg", SIDEBAR_ICONS..., FILE_ICONS...])
 

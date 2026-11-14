@@ -28,6 +28,7 @@
 #   - Write [^1] in a line and [^1]: on another line to make a footnote.
 #   - Right-click a word with red dots under it to put its spelling right.
 #   - The button at the top left, or ⌘\, shows the other files in the folder.
+#     Drag the right edge of that list to make it wider or narrower.
 #     ⌘O finds a Markdown file by name.
 #   - Click a file in that list that isn't Markdown to see it. Kaydown shows it
 #     and doesn't change it: the text of a file of code, a picture, a model, a
@@ -203,7 +204,9 @@ component_theme(zoom=1.0) = Theme(size=TEXT_SIZE * zoom * LABEL, surface=colours
 use!(p::Palette) = foreach(n -> setfield!(colours, n, getfield(p, n)), fieldnames(Palette))
 
 const TOPBAR_H = 44px
-const PANEL_W = 230px
+const PANEL_W = 230px     # how wide the sidebar is until you drag its edge
+const PANEL_MIN = 160px   # the narrowest and widest that you can drag it
+const PANEL_MAX = 480px
 const PROSE_W = 780px    # the widest the text gets, before zooming, until the settings page changes it
 const PAGE_X = 32px      # the least space beside the text
 const PAGE_TOP = 28px
@@ -670,6 +673,7 @@ isspread(g::Grid) = g.head > 0px
   panel::Bool = false                   # is the sidebar showing?
   slid::Float64 = 0.0                   # when the sidebar last started to slide in or out
   slid_from::Float64 = 0.0              # how far open it was then, from 0 to 1
+  side::px = PANEL_W                    # how wide the sidebar is. Drag its right edge to change it.
   theme::Symbol = :sepia
   applied::Symbol = :none               # the theme the window was last told about
   font::String = SERIF                  # of the page's text
@@ -2028,7 +2032,7 @@ suggestbox(e) = begin
      for (j, n) in enumerate(names)]...)
   # The page's text is in the middle of the space beside the file panel
   w, _ = window_size(e)
-  side = PANEL_W * opened(e)
+  side = panel_w(e) * opened(e)
   left = side + max(PAGE_X, (w - side - e.width) / 2) + dx + x - 9px
   top = TOPBAR_H + PAGE_TOP + it.top - e.scroll.offset + row_top(s, r) + f.lh * k + 3px
   top >= TOPBAR_H || return ()
@@ -3269,7 +3273,7 @@ text_width(e) = begin
   w, _ = window_size(e)
   # While the sidebar slides, the text keeps the width it has beside the
   # sidebar, so it doesn't wrap again on each frame
-  clamp(w - (e.panel || sliding(e) ? PANEL_W : 0px) - 2PAGE_X, 240px, e.widest * e.zoom)
+  clamp(w - (e.panel || sliding(e) ? panel_w(e) : 0px) - 2PAGE_X, 240px, e.widest * e.zoom)
 end
 
 "Work out what the page shows and how tall each part is, for text that's `width` wide"
@@ -4294,6 +4298,21 @@ opened(e) = begin
   e.slid_from + (to - e.slid_from) * t
 end
 
+"The most of the window's width that the sidebar can have, so the page keeps room beside it"
+widest_panel(e) = max(PANEL_MIN, min(PANEL_MAX, px(floor(num(window_size(e)[1]) / 2))))
+
+"How wide the sidebar is when it's open. A narrow window makes it narrower than you dragged it."
+panel_w(e) = min(e.side, widest_panel(e))
+
+"Make the sidebar `w` pixels wide, or as near to that as it can be, and keep the width in the settings"
+side!(e, w) = begin
+  w = px(round(num(clamp(w, PANEL_MIN, widest_panel(e)))))
+  w == e.side && return e
+  e.side = w
+  save_settings!(e)
+  e
+end
+
 ismouse(k) = k in (Keys.mouse_left, Keys.mouse_right, Keys.mouse_middle)
 
 # The keys that do something with ⌘ while the page shows a file that's only shown: ⌘O, ⌘\, ⌘, and the
@@ -4590,7 +4609,7 @@ tablebar(e) = begin
     [node!(() -> TableButton(action=a, label=l), e, (:table, a)) for (a, l) in TABLE_ACTIONS[1:(isspread(it.content) ? 4 : end)]]...)
   # The page's text is in the middle of the space beside the file panel
   w, _ = window_size(e)
-  side = PANEL_W * opened(e)
+  side = panel_w(e) * opened(e)
   left = side + max(PAGE_X, (w - side - e.width) / 2)
   (Row(width(grow=grow), height(grow=grow), Alignment.Start, padding(top, 0px, 0px, left), bar),)
 end
@@ -4768,7 +4787,7 @@ describe(t::TopBar) = begin
   # middle of the space beside the sidebar, so it moves as the sidebar slides.
   Row(width(grow=grow), height(TOPBAR_H), name="TopBar",
     # The close, minimise and zoom buttons sit over the first 78px
-    Row(fixed(side + PANEL_W * opened(e)), height(grow=grow), padding(0px, 0px, 0px, 78px),
+    Row(fixed(side + panel_w(e) * opened(e)), height(grow=grow), padding(0px, 0px, 0px, 78px),
       button(e, :panel, "layout-sidebar")),
     Box(width(grow=grow), height(grow=grow), clip=true,
       Row(child_gap=6px,
@@ -5216,17 +5235,48 @@ headings and components.
 """
 describe(s::Sidebar) = begin
   e = editor(s)
-  shows = PANEL_W * opened(e)
+  wide = panel_w(e)
+  shows = wide * opened(e)
   tree = with_theme(() -> describe!(fill_tree!(e, file_tree(e))), panel_theme())
   Row(fixed(shows), height(grow=grow), Alignment.Start, clip=true,
-    Column(fixed(PANEL_W), height(grow=grow), Alignment.Start, background(colours.panel), name="Files",
-           border(1px, :solid, colours.line)[:right], offset_x=shows - PANEL_W,
+    Column(fixed(wide), height(grow=grow), Alignment.Start, background(colours.panel), name="Files",
+           border(1px, :solid, colours.line)[:right], offset_x=shows - wide,
       Box(width(grow=grow), height(TOPBAR_H)),   # under the top bar
       Row(width(grow=grow), height(30px), padding(16px, 0px), Alignment.Center, clip=true, name="Folder",
-        folder_trail(e, PANEL_W - 32px)...),
+        folder_trail(e, wide - 32px)...),
       reuse!(e.files_scroll,
         Column(width(grow=grow), Alignment.Start, padding(0px, 8px, 12px, 8px), tree))))
 end
+
+# --- the edge of the sidebar ----------------------------------------------------------
+#
+# Drag the line at the sidebar's right edge to make the sidebar wider or
+# narrower. A strip a few pixels wide lies over the line, so the mouse
+# catches it easily, and the cursor shows arrows that point left and right
+# over it. The sidebar keeps the width you give it, in the settings file too.
+
+const EDGE_W = 8px   # how wide the strip is. Half of it is over the sidebar and half over the page.
+
+@def mutable struct PanelEdge <: SemanticUI
+  grab::px = 0px   # how far right of the sidebar's edge the mouse was when the drag started
+end
+
+describe(::PanelEdge) = Box(width(EDGE_W), height(grow=grow), name="Edge")
+
+cursor(::PanelEdge) = :resize_x
+
+onkey(p::PanelEdge, ev::KeyPress{Keys.mouse_left}) = (p.grab = ev.window.mouse[1] - panel_w(editor(p)); handled)
+
+onmouse(p::PanelEdge, ev::MouseMove) = begin
+  held(p, Keys.mouse_left) || return
+  side!(editor(p), ev.position[1] - p.grab)
+  handled
+end
+
+"The strip over the sidebar's edge, while the sidebar is open and not sliding. It starts under the top bar."
+panel_edge(e) = e.panel && !sliding(e) ?
+  (Row(width(grow=grow), height(grow=grow), Alignment.Start, padding(TOPBAR_H, 0px, 0px, panel_w(e) - EDGE_W / 2),
+       node!(PanelEdge, e, :edge)),) : ()
 
 # --- the folder at the top of the sidebar ---------------------------------------------
 
@@ -6359,7 +6409,7 @@ describe(e::Editor) = begin
       node!(Page, e, :page)))
   popup = e.popup == :none ? () : (node!(Backdrop, e, :backdrop), finder(e))
   Stack(width(grow=grow), height(grow=grow), Alignment.Start, name="Editor",
-    body, tablebar(e)..., suggestbox(e)..., findbar(e)..., node!(TopBar, e, :topbar), popup...)
+    body, panel_edge(e)..., tablebar(e)..., suggestbox(e)..., findbar(e)..., node!(TopBar, e, :topbar), popup...)
 end
 
 # --- window -------------------------------------------------------------------------------
@@ -6396,7 +6446,7 @@ save_settings!(e) = begin
   e.remember || return
   try
     mkpath(dirname(settings_file()))
-    write(settings_file(), "theme=$(e.theme)\nfont=$(e.font)\nzoom=$(e.zoom)\nwidth=$(e.widest.value)\ncount=$(e.stat)\nspelling=$(e.spelling)\n")
+    write(settings_file(), "theme=$(e.theme)\nfont=$(e.font)\nzoom=$(e.zoom)\nwidth=$(e.widest.value)\ncount=$(e.stat)\nspelling=$(e.spelling)\nsidebar=$(e.side.value)\n")
   catch
     # A file that can't be written only means the settings last as long as the window
   end
@@ -6422,6 +6472,9 @@ load_settings!(e) = begin
       e.stat = Symbol(value)
     elseif name == "spelling"
       e.spelling = value != "false"
+    elseif name == "sidebar"
+      w = tryparse(Float64, value)
+      w === nothing || (e.side = px(round(clamp(w, num(PANEL_MIN), num(PANEL_MAX)))))
     end
   end
   e
@@ -6440,7 +6493,7 @@ open_editor(args) = begin
   "--night" in args && (e.theme = :night)
   "--paper" in args && (e.theme = :paper)
   e.remember = true
-  e.size = paper_window()
+  e.size = paper_window(screen_room(), e.side)
   window = Window(e, title="Kaydown", size=e.size)
   focus(e)
   display(window)
@@ -6470,10 +6523,11 @@ sidebar, has the shape of a sheet of A4 paper that stands up: √2 times as tall
 as it's wide. So the window is that wide plus the width of the sidebar, and the
 page keeps its shape while the sidebar is open. The page's part is
 `PAGE_AREA_W` wide, or as big as fits on a screen that isn't tall enough for that.
+`side` is how wide the sidebar is.
 """
-paper_window(room::px=screen_room()) = begin
+paper_window(room::px=screen_room(), side::px=PANEL_W) = begin
   tall = min(num(PAGE_AREA_W) * √2, num(room) - 20)   # a little space under the window
-  (px(round(tall / √2)) + PANEL_W, px(round(tall)))
+  (px(round(tall / √2)) + side, px(round(tall)))
 end
 
 # --- printing ------------------------------------------------------------------------------

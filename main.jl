@@ -56,7 +56,8 @@
 #     you changed. ⌘Return does the same. The agent can change the file while
 #     you type, and the page keeps both. A bar shows for a few seconds beside
 #     each line that the agent changed, and the list of files has a dot beside
-#     a page that an agent waits for.
+#     a page that an agent waits for. While the list is hidden, the dot is
+#     beside the button that shows it.
 #   - Click the word count to count characters or reading time instead.
 #   - ⌘+ and ⌘- change the text size by a pixel. ⌘0 puts it back.
 #   - ⌘P prints the page, or saves it as a PDF. ⌘⇧E saves it as a page of HTML.
@@ -4595,9 +4596,12 @@ describe(b::ToolButton) = begin
   e = editor(b)
   ishovered(b) || (b.quiet = false)
   on = b.action == :panel && e.panel
-  Box(width(30px), height(28px), radius(6px), Alignment.Center, name="Button",
-      background(on ? colours.active : ishovered(b) ? colours.hover : clear),
-    Icon(b.icon, size=15px, color=colours.dim))
+  box = Box(width(30px), height(28px), radius(6px), Alignment.Center, name="Button",
+            background(on ? colours.active : ishovered(b) ? colours.hover : clear),
+          Icon(b.icon, size=15px, color=colours.dim))
+  # While the sidebar is closed, a dot beside its button says that an agent waits for a page that isn't showing
+  (b.action == :panel && !e.panel && !isempty(elsewhere(e))) || return box
+  Row(child_gap=4px, box, Box(width(7px), height(7px), radius(3.5px), background(colours.accent)))
 end
 
 cursor(::ToolButton) = :hand
@@ -4619,7 +4623,13 @@ const TIP_INK = colorant"rgb(240,240,240)"   # on the dark grey that every toolt
 "What the tooltip of a button in the top bar says"
 tip(b::ToolButton) = begin
   e = editor(b)
-  b.action == :panel && return e.panel ? "Hide sidebar  ⌘\\" : "Show sidebar  ⌘\\"
+  if b.action == :panel
+    e.panel && return "Hide sidebar  ⌘\\"
+    ws = elsewhere(e)
+    # The dot beside the button is for the first of these
+    isempty(ws) && return "Show sidebar  ⌘\\"
+    return "$(uppercasefirst(first(ws).name)) waits for $(basename(first(ws).page))  ·  Show sidebar  ⌘\\"
+  end
   b.action == :outside || return ""
   app = opener(e.buf.path)
   isempty(app) ? "Show in Finder" : "Open in $(app_name(app))"
@@ -4690,6 +4700,14 @@ end
 
 "The agents that wait for the page that's showing"
 agents(e) = readonly(e.buf) ? Agent.Waiter[] : agents(e, e.buf.path)
+
+"The agents that wait for a page that isn't the one that's showing"
+elsewhere(e) = begin
+  ws = waiters(e)
+  isempty(ws) && return ws
+  at = isempty(e.buf.path) ? "" : truepath(e.buf.path)
+  filter(w -> w.page != at, ws)
+end
 
 "Save the page and tell each agent that waits for it what you changed. Nothing happens if no agent waits."
 send!(e) = begin

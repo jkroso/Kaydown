@@ -38,6 +38,7 @@ A line that holds only a picture, like `![plan](plan.png)`, shows the picture. D
 | ⌘F | Finds text in the page. Return goes to the next place that has it. |
 | ⌘P | Prints the page, or saves it as a PDF |
 | ⌘⇧E | Saves the page as a page of HTML, for a website |
+| ⌘Return | Sends the page to an agent that waits for it |
 | ⌘, | Opens the settings page. Press it again to go back. |
 | ⌘\ | Shows and hides the list of files |
 | ⌘⇧\ | Gives the list of files the keyboard. Press esc to go back to the text. |
@@ -131,6 +132,12 @@ flowchart LR
 ```
 
 Kaydown draws five kinds of diagram: `flowchart`, `sequenceDiagram`, `stateDiagram-v2`, `classDiagram` and `pie`. They're written in the language of [Mermaid](https://mermaid.js.org), so a diagram from another app shows here too. A kind that Kaydown can't draw yet shows as its code. To see the code of a diagram, hold ⌥ and click it.
+
+## Work with an agent
+
+An agent like Claude Code can write a page and show it to you here: a plan with a diagram, a table of options, a list of boxes to tick. While the agent waits for you, a button at the top right says "Send to Claude". Change the page any way you like: tick a box, change a number, type a question on a new line. Then click the button, or press ⌘Return. Kaydown saves the page and gives the agent the lines that you changed.
+
+The agent can change the page while you read it. What you're typing stays, and the agent's changes show around it. [Kaydown's page on GitHub](https://github.com/jkroso/Kaydown#use-it-with-an-agent) says how to set up an agent.
 
 ---
 

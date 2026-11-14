@@ -1,0 +1,9 @@
+{
+  "name": "kaydown",
+  "version": "0.1.0",
+  "description": "Show the user a page in Kaydown, a Markdown app for the Mac that draws diagrams, tables, tick boxes and sums. The user changes the page and sends it back.",
+  "author": { "name": "Jake Rosoman" },
+  "homepage": "https://github.com/jkroso/Kaydown",
+  "repository": "https://github.com/jkroso/Kaydown",
+  "keywords": ["markdown", "review", "diagrams", "plan"]
+}

@@ -51,6 +51,10 @@
 #   - Start a file with front matter: lines like `title: Notes` between two
 #     lines of ---, or lines like `title = "Notes"` between two lines of +++.
 #     It shows as a block of its own.
+#   - Let an agent like Claude Code show you a page (see agent.jl and the plugin
+#     folder). While it waits, a button at the top right sends it the lines that
+#     you changed. ⌘Return does the same. The agent can change the file while
+#     you type, and the page keeps both.
 #   - Click the word count to count characters or reading time instead.
 #   - ⌘+ and ⌘- change the text size by a pixel. ⌘0 puts it back.
 #   - ⌘P prints the page, or saves it as a PDF. ⌘⇧E saves it as a page of HTML.
@@ -94,6 +98,8 @@
 @use "./highlight" tokens
 @use "./sheet" SHEET Result sheetcells parts uses tally known units shown
 @use "./spreadsheet" SPREADSHEET Value spreadcells spreadtexts isformula letters answers moved
+@use "./merge" changes combine follow
+@use "./agent" => Agent
 @use "github.com/jkroso/URI.jl/FSPath" FSPath
 @use Colors: @colorant_str, RGBA, Colorant
 @use InteractiveUtils: clipboard
@@ -464,6 +470,9 @@ Base.@kwdef mutable struct Buffer
   # shown: :text shows its text, :hex shows its bytes, and :file shows a viewer of its kind.
   view::Symbol = :markdown
   about::String = ""                    # what the top bar says of a file that's only shown, like how much of it shows
+  disk::Vector{String} = [""]           # the file's text as it was last read or written
+  # The text as an agent last knew it: what you last sent it, with every change that was made to the file from outside since
+  told::Vector{String} = [""]
 end
 
 "True when the file is only shown. Kaydown changes Markdown files and no others."
@@ -474,7 +483,8 @@ const stamp = Ref(0)
 load(path) = begin
   READ[path] = mtime(path)
   ismarkdown(path) || return look(path)
-  b = Buffer(path=path, lines=text(path))
+  lines = text(path)
+  b = Buffer(path=path, lines=lines, disk=copy(lines), told=copy(lines))
   # The caret starts at the text, after any front matter, so the front matter shows as a card
   t = front_matter(b.lines)
   if t > 0
@@ -488,28 +498,43 @@ text(path) = String.(split(replace(read(path, String), "\r\n" => "\n"), '\n'))
 const READ = Dict{String,Float64}()   # when each open file was last read or written, as the disk tells it
 
 """
-Read the file again if something else changed it on the disk. A document with
-changes that aren't saved is left alone.
+Read the file again if something else changed it on the disk, like an agent
+that's working on the page with you. A document with changes that aren't saved
+keeps them, and gets the file's changes too. Where both changed the same lines,
+the document keeps its own. Returns the lines of the document that changed, as
+`changes` gives them, or nothing.
 """
 refresh!(b::Buffer) = begin
-  (isempty(b.path) || dirty(b) || !isfile(b.path)) && return
+  (isempty(b.path) || !isfile(b.path)) && return
   at = mtime(b.path)
   at == get(READ, b.path, 0.0) && return
   READ[b.path] = at
+  unsaved = false
   if readonly(b)
     # A file that's only shown is read again as it was shown: as bytes, or as its kind of file
     new = b.view == :hex ? Buffer(path=b.path, view=:hex, lines=hexlines(b.path), about=hex_about(b.path)) : look(b.path)
     b.view, b.about = new.view, new.about
     lines = new.lines
   else
-    lines = text(b.path)
+    theirs = text(b.path)
+    theirs == b.disk && return
+    # An agent knows the changes it made to the file, and none of yours until you send them
+    b.told = combine(b.disk, b.told, theirs, keep=:theirs)
+    lines = dirty(b) ? combine(b.disk, b.lines, theirs) : theirs
+    b.disk = theirs
+    unsaved = lines != theirs
   end
-  lines == b.lines && return
-  b.lines = lines
-  empty!(b.undo); empty!(b.redo)
-  b.saved = b.version += 1
-  clamp_to(p) = (i = clamp(p[1], 1, length(lines)); (i, clamp(p[2], 0, length(lines[i]))))
-  b.caret, b.anchor = clamp_to(b.caret), clamp_to(b.anchor)
+  moved = changes(b.lines, lines)
+  if !isempty(moved)
+    b.lines = lines
+    empty!(b.undo); empty!(b.redo)
+    b.version = (stamp[] += 1)
+    # The caret stays on its line, wherever that line is now
+    place(p) = (i = clamp(follow(moved, p[1]), 1, length(lines)); (i, clamp(p[2], 0, length(lines[i]))))
+    b.caret, b.anchor = place(b.caret), place(b.anchor)
+  end
+  unsaved || (b.saved = b.version)
+  isempty(moved) ? nothing : moved
 end
 
 kinds(b::Buffer) = begin
@@ -586,8 +611,10 @@ redo!(b::Buffer) = isempty(b.redo) || (push!(b.undo, snapshot(b)); restore!(b, p
 save!(b::Buffer) = begin
   # The lines of a file that's only shown can be a part of the file, or its bytes, so they're never written
   (isempty(b.path) || readonly(b)) && return
+  refresh!(b)   # a change that something else made to the file a moment ago is kept
   write(b.path, join(b.lines, "\n"))
   READ[b.path] = mtime(b.path)
+  b.disk = copy(b.lines)
   b.saved = b.version
 end
 
@@ -678,6 +705,11 @@ end
   label::String = ""
 end
 @def mutable struct Count <: SemanticUI       # the word count in the top bar
+  rect::NTuple{4,px} = (0px, 0px, 0px, 0px)
+  quiet::Bool = false
+end
+"The button in the top bar that sends the page to the agent that's waiting for it"
+@def mutable struct SendButton <: SemanticUI
   rect::NTuple{4,px} = (0px, 0px, 0px, 0px)
   quiet::Bool = false
 end
@@ -4318,6 +4350,8 @@ onkey(e::Editor, ev::KeyPress{K}) where K = begin
     toggle_inspector!(w)
   elseif cmd && K == Keys.s
     save!(b)
+  elseif cmd && K == Keys.enter && !isempty(agents(e))
+    send!(e)   # to the agent that waits for the page
   elseif cmd && K == Keys.z
     shift ? redo!(b) : undo!(b)
     touch!(e)
@@ -4576,7 +4610,7 @@ end
 # Each button in the top bar says what it does while the mouse is over it. A
 # click hides what it says until the mouse leaves the button.
 
-const Tipped = Union{ToolButton,Count}
+const Tipped = Union{ToolButton,Count,SendButton}
 const TIP_INK = colorant"rgb(240,240,240)"   # on the dark grey that every tooltip has
 
 "What the tooltip of a button in the top bar says"
@@ -4587,6 +4621,7 @@ tip(b::ToolButton) = begin
   app = opener(e.buf.path)
   isempty(app) ? "Show in Finder" : "Open in $(app_name(app))"
 end
+tip(s::SendButton) = "Send what you changed  ⌘↩"
 tip(c::Count) = begin
   s = after(STATS, editor(c).stat)
   s == :words ? "Count words" : s == :chars ? "Count characters" : "Show reading time"
@@ -4621,6 +4656,70 @@ onkey(c::Count, ::KeyPress{Keys.mouse_left}) = (next_stat!(editor(c)); hush!(c))
 
 button(e, action, icon) = node!(() -> ToolButton(icon=icon, action=action), e, action)
 
+# --- a page that an agent waits for -------------------------------------------------------
+#
+# An agent like Claude Code writes a page, shows it here and waits (see
+# agent.jl). While it waits, the top bar has a button that sends the page: it
+# saves the file and tells the agent which lines you changed. ⌘Return does the
+# same. The agent can change the file while you type, and the page keeps both.
+
+"The agents that wait for the page that's showing. The folder that lists them is read twice a second."
+agents(e) = begin
+  path = e.buf.path
+  at, of, found = get(e.nodes, :agents, (0.0, "", Agent.Waiter[]))::Tuple{Float64,String,Vector{Agent.Waiter}}
+  (of == path && time() - at < 0.5) && return found
+  Agent.announce()
+  found = readonly(e.buf) ? Agent.Waiter[] : Agent.waiting(path)
+  e.nodes[:agents] = (time(), path, found)
+  found
+end
+
+"Save the page and tell each agent that waits for it what you changed. Nothing happens if no agent waits."
+send!(e) = begin
+  b = e.buf
+  delete!(e.nodes, :agents)
+  ws = agents(e)
+  isempty(ws) && return
+  save!(b)
+  lo, hi = selection(b)
+  text = Agent.report(b.path, b.told, b.lines, lo[1], selecting(b) ? excerpt(b, lo, hi) : "")
+  foreach(w -> Agent.send(w, text), ws)
+  # The agent knows the page as it is now
+  b.told = copy(b.lines)
+  e.nodes[:sent] = (b.path, b.version, first(ws).name)
+  delete!(e.nodes, :agents)
+  nothing
+end
+
+"What the top bar shows of the agent: a button while one waits, and a few words after you sent the page"
+agent_part(e) = begin
+  b = e.buf
+  ws = agents(e)
+  sent = get(e.nodes, :sent, nothing)
+  if !isempty(ws)
+    delete!(e.nodes, :sent)
+    (node!(SendButton, e, :send), Box(width(6px)))
+  elseif sent !== nothing && sent[1] == b.path && sent[2] == b.version
+    # It says so until the agent waits again, or the text changes
+    (Box(height(28px), padding(8px, 0px), label("Sent to $(sent[3])", 12px, color=colours.dim)),)
+  else
+    ()
+  end
+end
+
+describe(s::SendButton) = begin
+  e = editor(s)
+  ishovered(s) || (s.quiet = false)
+  ws = agents(e)
+  Box(height(24px), padding(10px, 0px), radius(6px), Alignment.Center, name="Send",
+      background(colours.accent),
+    label("Send to $(isempty(ws) ? "the agent" : first(ws).name)", 12px, color=colours.bg, weight="Semibold"))
+end
+
+cursor(::SendButton) = :hand
+
+onkey(s::SendButton, ::KeyPress{Keys.mouse_left}) = (e = editor(s); send!(e); hush!(s); focus(e))
+
 describe(t::TopBar) = begin
   e = editor(t)
   b = e.buf
@@ -4640,7 +4739,7 @@ describe(t::TopBar) = begin
       (readonly(b) ? (Box(height(28px), padding(8px, 0px), label(isempty(b.about) ? "Read only" : b.about * "  ·  Read only", 12px, color=colours.dim)),
                       # The app that the Mac uses for the file can change it, so a button opens the file there
                       button(e, :outside, "box-arrow-up-right")) :
-                     (node!(Count, e, :count),))...))
+                     (agent_part(e)..., node!(Count, e, :count)))...))
 end
 
 # The window has no title bar, so you move it by dragging the top bar
@@ -5957,6 +6056,19 @@ export_html!(e, w) = begin
   nothing
 end
 
+"""
+The file changed on the disk, and `moved` is the lines that changed. Keep the
+line at the top of the window where it is, so the text you're reading doesn't
+jump when an agent adds lines above it.
+"""
+stay!(e, moved) = begin
+  y = e.scroll.offset
+  i = findfirst(it -> it.top + it.tall > y, e.layout)
+  i === nothing && return
+  it = e.layout[i]
+  e.nodes[:hold] = (clamp(follow(moved, it.first), 1, length(e.buf.lines)), it.top - y)
+end
+
 # --- the whole window ---------------------------------------------------------------------
 
 describe(e::Editor) = begin
@@ -5968,7 +6080,8 @@ describe(e::Editor) = begin
   end
   receive!(e)
   await_default!(e)
-  refresh!(e.buf)
+  moved = refresh!(e.buf)
+  moved === nothing || stay!(e, moved)
   find_tick!(e)
   layout!(e)
   # A live block that changed the size of the text stays where it was in the window
@@ -6069,6 +6182,7 @@ file or a folder, and `--paper` or `--night` to choose the colours for this wind
 open_editor(args) = begin
   # macOS can pass its own -options to an app it opens, so skip anything with a dash
   paths = filter(a -> !startswith(a, "-"), args)
+  Agent.announce()   # an agent's script knows from now on that this Kaydown can send it a page
   e = build_editor(isempty(paths) ? WELCOME : paths[1])
   load_settings!(e)
   "--night" in args && (e.theme = :night)

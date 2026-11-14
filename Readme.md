@@ -15,6 +15,26 @@ julia --project=. main.jl ~/notes        # opens a file or a folder
 
 `pages/welcome.md` shows what the editor does. `pages/components.md` has a live block for each of UI.jl's components.
 
+## Use it with an agent
+
+An agent like Claude Code can show you a page in Kaydown and read what you change in it. The agent writes a Markdown file, opens it in Kaydown and waits. You read the page, tick a box or type a note, and press "Send to Claude" at the top right, or ⌘Return. The agent gets the lines that you changed. The agent can change the page while you read it, and Kaydown keeps what you're typing.
+
+The `plugin` folder is a plugin for Claude Code. It has a skill that tells Claude when and how to show a page, and a command, `kaydown`, that the skill runs. To install it, type these in Claude Code:
+
+```
+/plugin marketplace add jkroso/Kaydown
+/plugin install kaydown@kaydown
+```
+
+For another agent, put `plugin/bin` on your `PATH` and give the agent `plugin/skills/page/SKILL.md` to read.
+
+```sh
+kaydown show plan.md    # opens the page in Kaydown
+kaydown wait plan.md    # waits until you press Send, then prints the lines that you changed
+```
+
+The top of `agent.jl` says how the command and Kaydown talk to each other.
+
 ## Change it
 
 Kaydown loads UI.jl by its GitHub path. To use your own copy of UI.jl, link it once:

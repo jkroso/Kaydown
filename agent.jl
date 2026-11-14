@@ -1,0 +1,124 @@
+# A page that an agent and you work on together. An agent is a program like
+# Claude Code that writes a Markdown file, shows it to you in Kaydown and
+# waits. You read the page, change it, and send it back.
+#
+# The agent waits by running `kaydown wait page.md` (the script is in
+# plugin/bin). That script and Kaydown talk through files in one folder:
+#
+#     ~/Library/Application Support/Kaydown/agents/
+#       4711.wait   the script wrote it. 4711 is the script's process. Its first
+#                   line is the page's path, and its second is the agent's name.
+#       4711.seen   Kaydown wrote it, to say that it knows the script is waiting
+#       812.app     Kaydown wrote it as it opened. 812 is Kaydown's process. While
+#                   that runs, the script keeps waiting for a Kaydown that's busy,
+#                   like one that waits for you to answer a question from macOS.
+#       4711.sent   Kaydown wrote it when you sent the page. It holds what you
+#                   changed. The script prints it and stops.
+#
+#     waiting("/notes/plan.md")   # the agents that wait for that page
+#     send(waiter, text)          # give one of them what you changed
+#     report(path, told, lines)   # what you changed, as the agent reads it
+
+@use "./merge" unified
+
+"A test names a folder of its own here, to keep out of the real one"
+const place = Ref("")
+
+"The folder that the script and Kaydown talk through"
+folder() = isempty(place[]) ? joinpath(homedir(), "Library", "Application Support", "Kaydown", "agents") : place[]
+
+"An agent that's waiting for you to send a page"
+struct Waiter
+  file::String   # its .wait file
+  page::String   # the page it waits for
+  name::String   # what to call the agent, like "Claude"
+end
+
+"""
+Say that this Kaydown is open and can send a page to an agent, with a file
+that's named for its process. It does nothing the second time.
+"""
+announce(dir=folder()) = begin
+  file = joinpath(dir, "$(getpid()).app")
+  isfile(file) && return
+  try
+    mkpath(dir)
+    touch(file)
+  catch
+  end
+  nothing
+end
+
+"True while process `pid` runs"
+running(pid::Integer) = ccall(:kill, Cint, (Cint, Cint), pid, 0) == 0
+
+"""
+Every agent that's waiting, for any page. Each one is told that Kaydown has
+seen it. The files of a script that has stopped are removed.
+"""
+waiters(dir=folder()) = begin
+  out = Waiter[]
+  isdir(dir) || return out
+  for name in readdir(dir)
+    file = joinpath(dir, name)
+    # Each file's name starts with the process of the script that it's for
+    pid = tryparse(Int, first(split(name, '.')))
+    pid === nothing && continue
+    running(pid) || (rm(file, force=true); continue)
+    endswith(name, ".wait") || continue
+    lines = try readlines(file) catch; String[] end
+    isempty(lines) && continue
+    isfile(mark(file, "seen")) || try touch(mark(file, "seen")) catch end
+    push!(out, Waiter(file, lines[1], length(lines) > 1 && !isempty(lines[2]) ? lines[2] : "the agent"))
+  end
+  out
+end
+
+"The file beside a .wait file that ends in `kind`"
+mark(file, kind) = chop(file, tail=4) * kind
+
+"The agents that wait for the page at `path`"
+waiting(path, dir=folder()) = begin
+  isempty(path) && return Waiter[]
+  all = waiters(dir)
+  isempty(all) && return all
+  real = ispath(path) ? realpath(path) : abspath(path)
+  filter(w -> w.page == real, all)
+end
+
+"Give `w` the text `text`. Its script prints the text and stops waiting."
+send(w::Waiter, text) = begin
+  # The script reads the file as soon as it's there, so it gets its name when it's whole
+  part = mark(w.file, "part")
+  write(part, text)
+  mv(part, mark(w.file, "sent"), force=true)
+  # It waits no longer. The script removes its other files as it stops.
+  rm(w.file, force=true)
+end
+
+"""
+What the agent reads when you send the page at `path`: the lines you changed
+since the text that the agent last knew, `told`. `lines` is the page as it is
+now. `selected` is the text that's selected, if any, and `line` is the line
+that it starts on.
+"""
+report(path, told, lines, line::Int=0, selected="") = begin
+  io = IOBuffer()
+  println(io, "The user sent ", path, " from Kaydown.")
+  println(io)
+  diff = unified(told, lines)
+  if isempty(diff)
+    println(io, "The user changed nothing in it.")
+  else
+    println(io, "What the user changed since your last version of the file (- is your line, + is the user's):")
+    println(io)
+    print(io, diff)
+  end
+  if !isempty(selected)
+    println(io)
+    println(io, "The user selected this text, at line ", line, ":")
+    println(io)
+    println(io, selected)
+  end
+  String(take!(io))
+end

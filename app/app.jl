@@ -11,7 +11,7 @@
 
 include("start.jl")
 
-@use ".." build_editor open_editor WELCOME restyle! problems pages_dir SIDEBAR_ICONS FILE_ICONS todo_at inbox
+@use ".." build_editor open_editor WELCOME restyle! problems pages_dir SIDEBAR_ICONS FILE_ICONS todo_at inbox Agent
 @use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse
 @use "github.com/jkroso/Font.jl/units" px
 @use "github.com/jkroso/UI.jl/Interface/abstract" focus
@@ -225,6 +225,23 @@ warm_up() = begin
   click(400, 200); click(400, 200); click(500, 400)
   # The layout inspector
   press(Keys.i, Keys.cmd, Keys.opt); press(Keys.i, Keys.cmd, Keys.opt)
+  # Something else changes the file while the page has a change that isn't saved, and the page keeps both
+  press(Keys.down, Keys.cmd); press(Keys.enter)
+  file = e.buf.path
+  write(file, "A line from outside\n\n" * read(file, String))
+  frame(w)
+  e.buf.lines[1] == "A line from outside" || error("The page didn't take a change that was made to its file")
+  # An agent waits for the page, and ⌘Return sends it. This process stands in for the agent's
+  # script, and the files that the two talk through go in a folder of their own.
+  Agent.place[] = mktempdir()
+  write(joinpath(Agent.place[], "$(getpid()).wait"), realpath(file) * "\nthe agent\n")
+  delete!(e.nodes, :agents)
+  frame(w)
+  press(Keys.enter, Keys.cmd)
+  isfile(joinpath(Agent.place[], "$(getpid()).sent")) || error("The page wasn't sent to the agent that waited for it")
+  rm(Agent.place[], recursive=true)
+  Agent.place[] = ""
+  delete!(e.nodes, :agents)
   rm(dir, recursive=true)
 end
 

@@ -84,6 +84,14 @@ VideoPlayer("knot.mp4")
 
 Once you've clicked a player, the space bar plays and stops, and ← and → go back and on by 5 seconds. One file plays at a time, and it plays on while you scroll the page. Give the video player a `height` to make its picture bigger or smaller. macOS plays the files, so the players take what QuickTime takes: MP3, M4A, WAV, AIFF and FLAC sound, and MP4 and MOV video.
 
+A recorder records from the microphone into a file. Click its red button to start, and click it again to stop. While it records, the bars show how loud the sound is. Then it's a player for what it recorded. This one records into `memo.m4a`, beside this page. If that file is there already, the recorder is a player from the start, so delete the file to record again.
+
+```ui
+AudioRecorder("memo.m4a")
+```
+
+The first time a recorder starts, macOS asks whether the app may use the microphone. The recording goes on until you stop it, even if you go to another page.
+
 ## Diagrams
 
 `Mermaid` draws a diagram from a few lines of text. The first line says what kind of diagram it is, and the lines after it say what's in it. This one shows who says what to whom, from the top down.

@@ -42,7 +42,10 @@
 #     to the Trash.
 #   - Right-click the page to cut, copy and paste, and to insert a new block
 #     where you clicked: a heading, a list, a to-do item, a table, a sheet, a
-#     spreadsheet, a code block, a live block or a divider.
+#     spreadsheet, a code block, a live block, a recording or a divider.
+#   - A line that holds only a sound file, like ![Recording](memo.m4a), shows
+#     a player. Insert › Recording records one from the microphone. A button
+#     under the player writes down what's said, in a paragraph under it.
 #   - Start a list item with `- [ ]` to make a to-do item. Click its box to
 #     tick it.
 #   - Write !`code` in a line of text. The page runs the code and shows what
@@ -91,11 +94,13 @@
 @use "github.com/jkroso/UI.jl/Interface/Semantic/ListTree" => Tree
 @use "github.com/jkroso/UI.jl/Interface/Semantic/STLViewer" STLViewer Mesh load!
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Player" AudioPlayer VideoPlayer pause!
+@use "github.com/jkroso/UI.jl/Interface/Semantic/Recorder" AudioRecorder record! stop! plays
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Mermaid" Mermaid problem
-@use "github.com/jkroso/UI.jl/Interface/media" silence!
+@use "github.com/jkroso/UI.jl/Interface/media" silence! recording
 @use "github.com/jkroso/UI.jl/Interface/Semantic/ThreeMF" => ThreeMF
 @use "./pictures" picture natural thumbnail pdf_pages pdf_page
 @use "./spelling" misspelt guesses learn!
+@use "./transcribe" Transcription check! finished
 @use "./html" html footnotes NOTE escape
 @use "./markdown" Kind Line Span Cell classify spans tablecells isdivider words isdone front_matter MATTER TOML_MATTER
 @use "./highlight" tokens
@@ -4856,7 +4861,8 @@ const COMPONENTS = Dict(
   "Tooltip" => ("Tooltip", "chat-square-text"), "ListTree" => ("Tree", "list-nested"),
   "Inspector" => ("Inspector", "braces"), "Table" => ("Table", "table"), "Button" => ("Button", "hand-index"),
   "ProgressBar" => ("Progress bar", "hr"), "STLViewer" => ("3D model", "box"),
-  "AudioPlayer" => ("Sound", "music-note-beamed"), "VideoPlayer" => ("Video", "film"), "Mermaid" => ("Diagram", "diagram-3"))
+  "AudioPlayer" => ("Sound", "music-note-beamed"), "VideoPlayer" => ("Video", "film"), "AudioRecorder" => ("Recorder", "mic"),
+  "Mermaid" => ("Diagram", "diagram-3"))
 const LAYOUTS = ("Box", "Row", "Column", "Stack", "Scroll", "Text", "Image")
 "Every icon that the sidebar can show. The built app reads them all when it's made."
 const SIDEBAR_ICONS = unique(["file-earmark-text", "chevron-right", "chevron-down", "calculator", "grid-3x3", "puzzle", "bounding-box",
@@ -5334,6 +5340,9 @@ const INSERTS = [
   ("Code",          ["```julia", "", "```"],        (2, 0)),
   ("Live Block",    ["```$LIVE", "", "```"],        (2, 0)),
   ("Diagram",       ["```$DIAGRAM", "flowchart LR", "  A[Start] --> B[End]", "```"], (3, 2)),
+  # This one records from the microphone into a new file, and the line shows the recorder. The caret goes
+  # to an empty line under it, so that you can type while it records.
+  ("Recording",     ["![Recording]()", "", ""],     (3, 0)),
   "-",
   # The caret goes to an empty line under the divider
   ("Divider",       ["---", "", ""],                (3, 0)),
@@ -5429,7 +5438,8 @@ page_act!(e, i::Int, j::Int=0) = begin
     w = window_of(e)
     w === nothing || export_html!(e, w)
   elseif name == "Insert" && j in eachindex(INSERTS) && INSERTS[j] isa Tuple
-    INSERTS[j][1] == "Front Matter" ? add_front_matter!(e) : add_block!(e, INSERTS[j][2], INSERTS[j][3])
+    block = INSERTS[j][1]
+    block == "Front Matter" ? add_front_matter!(e) : block == "Recording" ? add_recording!(e) : add_block!(e, INSERTS[j][2], INSERTS[j][3])
   end
   nothing
 end
@@ -5741,6 +5751,9 @@ picture_item(e, i) = begin
   m = match(PICTURE_LINE, e.buf.lines[i])
   m === nothing && return nothing
   src = unescaped(String(m[2]))
+  # A sound file shows a player
+  sound = sound_file(docdir(e), e.buf.lines[i])
+  sound === nothing || return sound_item(e, sound)
   path = startswith(src, r"https?://") ? fetched(e, src) : abspath(docdir(e), expanduser(src))
   key = path === nothing ? nothing : picture_key(path)
   key === nothing && return nothing
@@ -5754,6 +5767,173 @@ picture_item(e, i) = begin
   node.line, node.key, node.w, node.h = i, key, w, h
   own!(node!(Document, e, :document), node)
   Live(node, h + 2LIVE_GAP)
+end
+
+# --- sound in the text -------------------------------------------------------------------
+#
+# A line that holds only a sound file, written as a picture is, like
+# ![Recording](recording-2026-11-14-1642.m4a), shows a player for the file. The
+# line's own text shows again while the caret is on it.
+#
+# Insert › Recording records from the microphone into a new file beside the
+# document, and adds a line for the file. The line shows a recorder until you
+# click its button to stop. The recording goes on while another file shows. If
+# the line goes from the document, as it does when you undo the Insert, the
+# recording stops.
+#
+# Under the player, a button writes down what's said in the file. macOS does it
+# on the Mac, and the words go into a paragraph under the line. You can type
+# while it works. See transcribe.jl.
+
+"A line of the document that holds only a sound file"
+@def mutable struct SoundLine <: SemanticUI
+  path::String = ""
+end
+
+"The button under a sound file's player that writes down what's said in the file"
+@def mutable struct TranscribeButton <: SemanticUI
+  path::String = ""
+end
+
+# The recorder of each sound file that a line has shown. They're kept while
+# Kaydown runs, so that a recording goes on while another file shows.
+const recorders = Dict{String,AudioRecorder}()
+# The transcription of each sound file that has had one, by the file's path
+const transcriptions = Dict{String,Transcription}()
+# The sound files whose words are in a document now
+const transcribed = Set{String}()
+
+"The recorder of the sound file at `path`. It plays the file while it isn't recording."
+recorder(path) = get!(() -> AudioRecorder(path=path), recorders, path)
+
+"The sound file on the Mac that the line `text` holds, if it holds only that, or nothing. `dir` is the document's folder."
+sound_file(dir, text) = begin
+  occursin("![", text) || return nothing
+  m = match(PICTURE_LINE, text)
+  m === nothing && return nothing
+  src = unescaped(String(m[2]))
+  (startswith(src, r"https?://") || !(lowercase(splitext(src)[2]) in SOUNDS)) && return nothing
+  abspath(dir, expanduser(src))
+end
+
+"The line of the page that holds only the sound file at `path`, or nothing"
+sound_line(e, path) = findfirst(text -> sound_file(docdir(e), text) == path, e.buf.lines)
+
+"What a line that holds only the sound file at `path` shows, or nothing if there's no file and no recorder for it to show"
+sound_item(e, path) = begin
+  Sys.isapple() || return nothing
+  r = recorder(path)
+  (plays(r) || recording(r) || r.waiting || !isempty(r.problem)) || return nothing
+  node = node!(() -> SoundLine(path=path), e, (:sound, path))
+  own!(node!(Document, e, :document), node)
+  # Lay it out once to learn how tall it is
+  concrete = describe(Column(fixed(e.width), Alignment.Start, geometry(node)), (e.width, 9999px))
+  Live(node, concrete.height + 2LIVE_GAP)
+end
+
+describe(s::SoundLine) = begin
+  e = editor(s)
+  r = recorder(s.path)
+  # The recorder outlasts the line's node, which can be made again
+  r.parent === s || setfield!(r, :parent, s)
+  # It's a component, so it gets the colours and the text size that a live block gives one
+  with_theme(component_theme(e.zoom)) do
+    plays(r) || return Column(width(grow=grow), Alignment.Start, r)
+    button = node!(() -> TranscribeButton(path=s.path), e, (:transcribe, s.path))
+    button.parent === s || setfield!(button, :parent, s)
+    t = get(transcriptions, s.path, nothing)
+    # What went wrong the last time, or that there were no words
+    note = t === nothing || !finished(t) ? "" : t.text == "" ? "No words were heard in it" : t.problem
+    Column(width(grow=grow), Alignment.Start, child_gap=6px, r,
+      Row(Alignment.Center, child_gap=10px, button, (isempty(note) ? () : (label(note, 12px, color=colours.dim),))...))
+  end
+end
+
+# A click beside the player puts the caret on the line, so that the line shows as it's written
+onkey(s::SoundLine, ::KeyPress{Keys.mouse_left}) = begin
+  i = sound_line(editor(s), s.path)
+  i === nothing ? handled : edit_matter!(s, i)
+end
+
+"Is the file at `path` being transcribed now?"
+transcribing(path) = (t = get(transcriptions, path, nothing); t !== nothing && !finished(t))
+
+describe(b::TranscribeButton) = begin
+  t = get(transcriptions, b.path, nothing)
+  busy = transcribing(b.path)
+  words = !busy ? (b.path in transcribed ? "Transcribe again" : "Transcribe") :
+          t.downloading ? "Downloading what macOS needs to transcribe…" : "Transcribing… $(round(Int, 100t.done))%"
+  Box(height(26px), padding(10px, 0px), radius(6px), background(busy ? colours.hover : ishovered(b) ? colours.active : colours.hover),
+    Row(Alignment.Center, child_gap=6px,
+      Icon("text-paragraph", size=13px, color=colours.dim),
+      label(words, 12px, color=busy ? colours.dim : colours.ink)))
+end
+
+cursor(b::TranscribeButton) = transcribing(b.path) ? :arrow : :hand
+
+onkey(b::TranscribeButton, ::KeyPress{Keys.mouse_left}) = begin
+  if !transcribing(b.path)
+    transcriptions[b.path] = Transcription(b.path)
+    delete!(transcribed, b.path)
+  end
+  handled
+end
+
+"Record from the microphone into a new file beside the document, and add a line for the file under the caret"
+add_recording!(e) = begin
+  dir = docdir(e)
+  isempty(dir) && (dir = joinpath(homedir(), "Documents"))
+  when = Libc.strftime("%Y-%m-%d-%H%M", time())
+  name(n) = "recording-$when$(n == 1 ? "" : "-$n").m4a"
+  n = 1
+  while ispath(joinpath(dir, name(n))) || haskey(recorders, joinpath(dir, name(n)))
+    n += 1
+  end
+  path = joinpath(dir, name(n))
+  record!(recorder(path))
+  # A document that has no file of its own names the recording by its whole path
+  src = isempty(e.buf.path) ? replace(path, ' ' => "%20") : name(n)
+  add_block!(e, ["![Recording]($src)", "", ""], (3, 0))
+end
+
+"Put `words` in a paragraph under line `i`, with an empty line on each side of it. The caret stays where it was in the text."
+add_words!(e, i, words) = begin
+  b = e.buf
+  caret, anchor = b.caret, b.anchor
+  below = i < length(b.lines) && !isempty(strip(b.lines[i+1]))
+  text = "\n\n" * words * (below ? "\n" : "")
+  edit!(b, line_end(b, i), line_end(b, i), text)
+  n = count(==('\n'), text)
+  moved(p) = p[1] > i ? (p[1] + n, p[2]) : p
+  b.caret, b.anchor = moved(caret), moved(anchor)
+  e
+end
+
+"""
+What happens to sound in each frame. A recording whose line has gone from every
+document stops. A transcription that has finished puts its words under its
+file's line, once the page shows a document that has the line.
+"""
+sound_tick!(e) = begin
+  for (path, r) in recorders
+    (recording(r) || r.waiting) || continue
+    docs = unique!(Buffer[e.buf; collect(values(e.buffers))])
+    holds(b) = (dir = isempty(b.path) ? e.folder : dirname(b.path); any(text -> sound_file(dir, text) == path, b.lines))
+    any(holds, docs) || stop!(r)
+  end
+  for (path, t) in transcriptions
+    path in transcribed && continue
+    if !check!(t)
+      redraw_in!(e, 0.25)   # to show how far it has got
+      continue
+    end
+    t.text === nothing && continue   # it failed, and the button says why
+    readonly(e.buf) && continue      # a file that's only shown can't take the words
+    i = sound_line(e, path)
+    i === nothing && continue        # the document that shows now hasn't got the line
+    isempty(t.text) || add_words!(e, i, t.text)
+    push!(transcribed, path)
+  end
 end
 
 # --- footnotes ---------------------------------------------------------------------------
@@ -6154,6 +6334,7 @@ describe(e::Editor) = begin
   # The bars beside the lines that just changed fade, so the window is drawn again while they show
   isempty(fresh(e)) || redraw_in!(e, 1/30)
   find_tick!(e)
+  sound_tick!(e)
   layout!(e)
   # A live block that changed the size of the text stays where it was in the window
   hold = pop!(e.nodes, :hold, nothing)

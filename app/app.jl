@@ -11,8 +11,8 @@
 
 include("start.jl")
 
-@use ".." build_editor open_editor WELCOME restyle! problems pages_dir SIDEBAR_ICONS FILE_ICONS todo_at inbox Agent
-@use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse
+@use ".." build_editor open_editor WELCOME restyle! problems pages_dir SIDEBAR_ICONS FILE_ICONS todo_at inbox Agent INSERTS
+@use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse Typed ontype
 @use "github.com/jkroso/Font.jl/units" px
 @use "github.com/jkroso/UI.jl/Interface/abstract" focus
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Icon" load_icon
@@ -29,7 +29,8 @@ building && start_packages()
 # Icons are read from UI.jl's Icons folder the first time they're drawn. Reading
 # them now keeps them in the app, so it doesn't need that folder.
 foreach(load_icon, ["check", "chevron-down", "chevron-right", "chevron-up", "copy", "file-earmark", "file-earmark-text", "folder",
-                    "layout-sidebar", "pause-fill", "play-fill", "search", "text-center", "text-left", "text-right", "x-lg", SIDEBAR_ICONS..., FILE_ICONS...])
+                    "layout-sidebar", "pause-fill", "play-fill", "record-fill", "search", "stop-fill", "text-center", "text-left",
+                    "text-paragraph", "text-right", "x-lg", SIDEBAR_ICONS..., FILE_ICONS...])
 
 # The welcome page's text, to type into while the app warms up
 const page = read(WELCOME, String)
@@ -43,9 +44,9 @@ const page = read(WELCOME, String)
 # when it opens, and tells Kip which module goes with each one.
 
 const PAGES = dirname(WELCOME)
-"The text of each of the app's own pages, by file name. The model and the video that the components page shows are here too, as the bytes of their files."
+"The text of each of the app's own pages, by file name. The model, the video and the recording that the pages show are here too, as the bytes of their files."
 const pages = Dict(name => read(joinpath(PAGES, name), String)
-                   for name in ("welcome.md", "components.md", "settings.md", "widgets.jl", "knot.stl", "knot.mp4"))
+                   for name in ("welcome.md", "components.md", "settings.md", "widgets.jl", "knot.stl", "knot.mp4", "hello.m4a"))
 
 "The `user/repo/file` that a file Kip got from GitHub has there, or nothing for any other file"
 place(path) = begin
@@ -195,14 +196,22 @@ warm_up() = begin
   right_click(60, 88); click(80, 104)
   press(Keys.a); press(Keys.escape); press(Keys.escape)
   # The menu of the page: open it and click away, then add a block of each kind from its Insert menu.
-  # Kaydown draws the menu here, 28px for each item, with Insert as its fifth item.
+  # Kaydown draws the menu here, 28px for each item, with Insert as its fifth item. A recording is
+  # left out, since it would record from the microphone while the app is built.
   right_click(500, 300); click(900, 600)
-  for n in 1:16
+  blocks = [x[1] for x in INSERTS if x isa Tuple]
+  for n in eachindex(blocks)
+    blocks[n] == "Recording" && continue
     right_click(500, 300); click(540, 426); click(540, 286 + 28n)
     # Type in the new block, press Return and type again, then undo it all
     press(Keys.a); press(Keys.enter); press(Keys.b)
     press(Keys.z, Keys.cmd); press(Keys.z, Keys.cmd); press(Keys.z, Keys.cmd); press(Keys.z, Keys.cmd)
   end
+  # A line that holds a sound file shows a player, with a button that transcribes it. Every Mac has this sound.
+  press(Keys.down, Keys.cmd); press(Keys.enter)
+  foreach(c -> ontype(e, Typed(c, w)), "![A sound](/System/Library/Sounds/Glass.aiff)")
+  press(Keys.enter)
+  press(Keys.z, Keys.cmd); press(Keys.z, Keys.cmd)
   # A to-do item, then a click on its box to tick it
   right_click(500, 300); click(540, 426); click(540, 286 + 28 * 7)
   press(Keys.a); press(Keys.up, Keys.cmd)

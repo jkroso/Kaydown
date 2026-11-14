@@ -116,10 +116,11 @@ end
 Build `entry` into build/`name`.app, with the program in Contents/MacOS/`program`.
 `id` is its bundle identifier and `version` its version, like "1.2.0". `threads` sets how many threads the app runs
 with, in the form of Julia's `--threads` option. `icon` is a PNG 1024 pixels
-square to show for the app. `plist` holds more keys for its Info.plist. Returns
-the path to the app.
+square to show for the app. `plist` holds more keys for its Info.plist. `helpers`
+are the paths of other programs to put in Contents/MacOS beside the app's own.
+Returns the path to the app.
 """
-build_app(; name, program, id, entry, version="1.0", threads=nothing, icon=nothing, plist="") = begin
+build_app(; name, program, id, entry, version="1.0", threads=nothing, icon=nothing, plist="", helpers=String[]) = begin
   bundle = joinpath(out, program)
   app = joinpath(out, name * ".app")
   contents = joinpath(app, "Contents")
@@ -151,6 +152,7 @@ build_app(; name, program, id, entry, version="1.0", threads=nothing, icon=nothi
     mv(joinpath(bundle, part), joinpath(contents, part == "bin" ? "MacOS" : part))
   end
   rm(bundle)
+  foreach(h -> cp(h, joinpath(contents, "MacOS", basename(h))), helpers)
   if icon !== nothing
     mkpath(joinpath(contents, "Resources"))
     make_icns(icon, joinpath(contents, "Resources", "AppIcon.icns"))
@@ -208,7 +210,7 @@ here. With a Developer ID certificate, other Macs open it too, once Apple has
 notarised it. Apple only notarises an app if each program and library in it is
 signed, with a time stamp and the hardened runtime. entitlements.plist lists
 what the hardened runtime must still allow: Julia compiles code while the app
-runs.
+runs, and the app records from the microphone.
 """
 sign(app) = begin
   signer == "-" && return run(`codesign --force --deep --sign - $app`)

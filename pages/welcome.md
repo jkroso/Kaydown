@@ -133,6 +133,14 @@ flowchart LR
 
 Kaydown draws five kinds of diagram: `flowchart`, `sequenceDiagram`, `stateDiagram-v2`, `classDiagram` and `pie`. They're written in the language of [Mermaid](https://mermaid.js.org), so a diagram from another app shows here too. A kind that Kaydown can't draw yet shows as its code. To see the code of a diagram, hold ⌥ and click it.
 
+## Recordings
+
+To record from your Mac's microphone, right-click the page and choose Insert › Recording. Kaydown starts to record at once, into a new file beside this one. Bars show how loud the sound is, and you can type while it records. Click the red button to stop. The first time, macOS asks whether Kaydown may use the microphone.
+
+A line that holds only a sound file shows a player for it. The line is written as a picture is, like `![A recording](hello.m4a)`. Click Transcribe under the player, and macOS writes down what's said in the file. The words go into a paragraph under the player, and you can change them as you would any text. macOS does this on your Mac, so the sound stays there. It needs macOS 26 or later.
+
+![A recording](hello.m4a)
+
 ## Work with an agent
 
 An agent like Claude Code can write a page and show it to you here: a plan with a diagram, a table of options, a list of boxes to tick. While the agent waits for you, a button at the top right says "Send to Claude". Change the page any way you like: tick a box, change a number, type a question on a new line. Then click the button, or press ⌘Return. Kaydown saves the page and gives the agent the lines that you changed.

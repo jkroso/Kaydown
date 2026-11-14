@@ -1,6 +1,6 @@
 # Kaydown
 
-A Markdown editor for the Mac, made with [UI.jl](https://github.com/jkroso/UI.jl). It draws each line the way it will read, and you type in it. A code block in the language `ui` runs its Julia code and shows what the code makes. A code block in the language `sheet` works things out, a row at a time. A code block in the language `spreadsheet` is a grid of cells with formulas. A code block in the language `mermaid` shows a diagram, like a flowchart.
+A Markdown editor for the Mac, made with [UI.jl](https://github.com/jkroso/UI.jl). It draws each line the way it will read, and you type in it. A code block in the language `ui` runs its Julia code and shows what the code makes. A code block in the language `sheet` works things out, a row at a time. A code block in the language `spreadsheet` is a grid of cells with formulas. A code block in the language `mermaid` shows a diagram, like a flowchart. A line that holds only a sound file shows a player, and the page's Insert menu records one from the microphone. A button under the player writes down what's said in it, on the Mac.
 
 "Kaydown" is a working name, after Alan Kay.
 
@@ -43,6 +43,8 @@ Kaydown loads UI.jl by its GitHub path. To use your own copy of UI.jl, link it o
 using Kip
 Kip.link("/path/to/UI.jl")
 ```
+
+To write down what's said in a recording, Kaydown runs `transcribe.swift`, which uses the speech recognition in macOS 26 and later. Run from the source, Kaydown compiles it the first time, so it needs Swift, which comes with Xcode's command line tools. The app has it compiled already.
 
 UI.jl has a script that runs an app and reloads each file when you save it:
 

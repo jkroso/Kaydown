@@ -4270,6 +4270,10 @@ picture, and a video, a sound, a PDF or any other file as a path that shows
 what's in the file. A picture that was copied as itself, like a screenshot, is
 written to a file in the document's folder first. So is a PDF, a sound or a
 video that was copied as itself. Anything else is pasted as text.
+
+A file in a folder for temporary files is copied to the document's folder,
+and the copy is what goes in. An app that takes screenshots puts its picture
+on the clipboard as a file like that, and macOS removes the file later.
 """
 paste!(e) = begin
   b = e.buf
@@ -4282,6 +4286,7 @@ paste!(e) = begin
     path === nothing && return type!(e, replace(text, "\r\n" => "\n", '\r' => '\n', '\t' => "  "))
     paths = [path]
   end
+  paths = [passing(e, p) ? something(keep_copy(e, p), p) : p for p in paths]
   selecting(b) && type!(e, "")
   put_files!(e, paths, settle(b, b.caret))
 end
@@ -4294,15 +4299,39 @@ the document has no folder yet.
 keep_pasted(e, ext, bytes) = begin
   dir = docdir(e)
   isdir(dir) || return nothing
-  stem = "pasted-" * Libc.strftime("%Y%m%d-%H%M%S", time())
-  path = joinpath(dir, "$stem.$ext")
-  n = 1
-  while ispath(path)
-    path = joinpath(dir, "$stem-$(n += 1).$ext")
-  end
+  path = unused(dir, "pasted-" * Libc.strftime("%Y%m%d-%H%M%S", time()), ".$ext")
   write(path, bytes)
   dir == e.folder && list_files!(e)   # the sidebar lists the new file
   path
+end
+
+"A path in `dir` that no file has yet: `stem` and `ext`, with a number after the stem if that name is taken"
+unused(dir, stem, ext) = begin
+  path = joinpath(dir, stem * ext)
+  n = 1
+  while ispath(path)
+    path = joinpath(dir, "$stem-$(n += 1)$ext")
+  end
+  path
+end
+
+# The folders that macOS keeps temporary files in, and empties by itself
+const PASSING = ("/private/var/folders/", "/var/folders/", "/private/tmp/", "/tmp/")
+
+"True when the file at `path` is a temporary one, which macOS removes later. A file in the document's own folder is never one."
+passing(e, path) = isfile(path) && dirname(path) != docdir(e) && any(p -> startswith(path, p), PASSING)
+
+"""
+Copy the file at `path` to the document's folder, under its own name, and
+return the copy's path. Nothing if the document has no folder yet.
+"""
+keep_copy(e, path) = begin
+  dir = docdir(e)
+  isdir(dir) || return nothing
+  copy = unused(dir, splitext(basename(path))...)
+  cp(path, copy)
+  dir == e.folder && list_files!(e)
+  copy
 end
 
 zoom!(e, z) = (e.zoom = clamp(z, 0.6, 2.5); save_settings!(e); rerun!(e, :zoom); restyle!(e))

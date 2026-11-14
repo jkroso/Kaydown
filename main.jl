@@ -77,7 +77,8 @@
 # on screen, a `draw` method that adds the caret and selection over a node,
 # italic and bold fonts by name, a colour for each part of a line of code, a
 # `Stack` to float the file finder over the page, and
-# `hide_titlebar!` for a window without a title bar.
+# `hide_titlebar!` for a window without a title bar, with
+# `place_window_buttons!` to line its close, minimise and zoom buttons up with the top bar.
 
 @use "github.com/jkroso/Prospects.jl" @def
 @use "github.com/jkroso/MiniFB.jl/skia" measure_text rectangle rounded_rectangle sk_color
@@ -91,7 +92,7 @@
 @use "github.com/jkroso/UI.jl/Interface/fonts" skia_font register_font
 @use "github.com/jkroso/UI.jl/Interface/image" image_aspect image_source
 @use "github.com/jkroso/UI.jl/Interface/inspector" toggle_inspector!
-@use "github.com/jkroso/UI.jl/Interface/window" hide_titlebar! drag_window! set_dark! nswindow system_menu
+@use "github.com/jkroso/UI.jl/Interface/window" hide_titlebar! place_window_buttons! drag_window! set_dark! nswindow system_menu
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Icon" Icon
 @use "github.com/jkroso/UI.jl/Interface/Semantic/TextInput" TextInput
 @use "github.com/jkroso/UI.jl/Interface/Semantic/ListTree" => Tree
@@ -4915,8 +4916,8 @@ describe(t::TopBar) = begin
   # The top bar lies over the top of the sidebar. The file's name is in the
   # middle of the space beside the sidebar, so it moves as the sidebar slides.
   Row(width(grow=grow), height(TOPBAR_H), name="TopBar",
-    # The close, minimise and zoom buttons sit over the first 78px
-    Row(fixed(side + panel_w(e) * opened(e)), height(grow=grow), padding(0px, 0px, 0px, 78px),
+    # The close, minimise and zoom buttons sit over the first 84px
+    Row(fixed(side + panel_w(e) * opened(e)), height(grow=grow), padding(0px, 0px, 0px, 84px),
       button(e, :panel, "layout-sidebar")),
     Box(width(grow=grow), height(grow=grow), clip=true,
       Row(child_gap=6px,
@@ -6633,7 +6634,8 @@ open_editor(args) = begin
   display(window)
 end
 
-onopen(::Editor, w::Window) = hide_titlebar!(w)
+# The close, minimise and zoom buttons line up with the sidebar's button, in the middle of the top bar
+onopen(::Editor, w::Window) = place_window_buttons!(hide_titlebar!(w), TOPBAR_H / 2, TOPBAR_H / 2)
 
 const PAGE_AREA_W = 850px   # the width of the page's part of a new window: room for the page at the width it starts with, and the space beside it
 

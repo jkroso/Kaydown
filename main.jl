@@ -18,6 +18,8 @@
 #     expression, and shows what it comes to. ⌥-click shows the sheet as code.
 #   - Click a cell of the spreadsheet and type. A cell that starts with = is a
 #     formula, like = B2 * C2 or = sum(D2:D4), and shows what it comes to.
+#   - Write a code block in the language `mermaid` to show a diagram: a
+#     flowchart, a sequence diagram and so on. ⌥-click shows it as code.
 #   - ⌘B and ⌘I make the selection bold or italic. ⌘Z and ⌘⇧Z undo and redo.
 #   - Double-click selects a word, triple-click a line. ⌘-click opens a link.
 #   - ⌘F finds text in the page. Return goes to the next place that has it.
@@ -82,6 +84,7 @@
 @use "github.com/jkroso/UI.jl/Interface/Semantic/ListTree" => Tree
 @use "github.com/jkroso/UI.jl/Interface/Semantic/STLViewer" STLViewer Mesh load!
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Player" AudioPlayer VideoPlayer pause!
+@use "github.com/jkroso/UI.jl/Interface/Semantic/Mermaid" Mermaid problem
 @use "github.com/jkroso/UI.jl/Interface/media" silence!
 @use "github.com/jkroso/UI.jl/Interface/Semantic/ThreeMF" => ThreeMF
 @use "./pictures" picture natural thumbnail pdf_pages pdf_page
@@ -3095,6 +3098,33 @@ live(e, code::String) = begin
   Live(node, concrete.height + 2LIVE_GAP)
 end
 
+# --- diagrams -----------------------------------------------------------------------
+#
+# A code block in the language `mermaid` shows the diagram that its code
+# describes: a flowchart, a sequence diagram, a state diagram, a class diagram
+# or a pie chart. UI.jl's Mermaid component reads the code and draws it. Put
+# the caret in the block, or click it with ⌥ held, to see its code.
+
+const DIAGRAM = "mermaid"
+
+"True when `code` is the code of a diagram that can be drawn"
+isdiagram(code::AbstractString) = problem(code) === nothing
+
+"What the `mermaid` block with this code shows: its diagram, or nothing if the code can't be drawn as one"
+diagram(e, code::String) = begin
+  isdiagram(code) || return nothing
+  # A Shown gives the diagram the page's colours and font, as it does for what a live block makes
+  node = get!(e.nodes, (:diagram, code)) do
+    shown = Shown(value=Mermaid(code))
+    own!(shown, shown.value)
+    shown
+  end
+  own!(node!(Document, e, :document), node)
+  # Lay it out once to learn how tall it is
+  concrete = describe(Column(fixed(e.width), Alignment.Start, geometry(node)), (e.width, 9999px))
+  Live(node, concrete.height + 2LIVE_GAP)
+end
+
 # --- front matter as a card ---------------------------------------------------------
 #
 # While the caret isn't in it, front matter shows as a card: a small FRONTMATTER
@@ -3237,6 +3267,17 @@ layout!(e, width=text_width(e)) = begin
       t = codeblock(b, i)[2]
       if t > i && ks[t].kind == Kind.fence && ks[t].level == 1
         content = live(e, join(b.lines[i+1:t-1], "\n"))
+        push!(items, Item(i, t, top, content.tall, content))
+        top += content.tall
+        i = t + 1
+        continue
+      end
+    end
+    # A `mermaid` code block shows its diagram, unless the caret is in it. Code that can't be drawn as a diagram shows as code.
+    if ks[i].kind == Kind.fence && ks[i].level == 0 && ks[i].lang == DIAGRAM && !incode(b, i)
+      t = codeblock(b, i)[2]
+      content = t > i && ks[t].kind == Kind.fence && ks[t].level == 1 ? diagram(e, join(b.lines[i+1:t-1], "\n")) : nothing
+      if content !== nothing
         push!(items, Item(i, t, top, content.tall, content))
         top += content.tall
         i = t + 1
@@ -3972,7 +4013,7 @@ pass(b::Buffer, p::Pos, by::Int) = begin
   s, t = codeblock(b, i)
   s <= b.anchor[1] <= t && return p
   closed = t > s && ks[t].kind == Kind.fence && ks[t].level == 1
-  if closed && ks[s].lang == LIVE
+  if closed && (ks[s].lang == LIVE || (ks[s].lang == DIAGRAM && isdiagram(join(b.lines[s+1:t-1], "\n"))))
     i = by < 0 ? s - 1 : t + 1
   elseif ks[i].kind == Kind.fence
     i += by
@@ -4678,7 +4719,7 @@ const COMPONENTS = Dict(
   "Tooltip" => ("Tooltip", "chat-square-text"), "ListTree" => ("Tree", "list-nested"),
   "Inspector" => ("Inspector", "braces"), "Table" => ("Table", "table"), "Button" => ("Button", "hand-index"),
   "ProgressBar" => ("Progress bar", "hr"), "STLViewer" => ("3D model", "box"),
-  "AudioPlayer" => ("Sound", "music-note-beamed"), "VideoPlayer" => ("Video", "film"))
+  "AudioPlayer" => ("Sound", "music-note-beamed"), "VideoPlayer" => ("Video", "film"), "Mermaid" => ("Diagram", "diagram-3"))
 const LAYOUTS = ("Box", "Row", "Column", "Stack", "Scroll", "Text", "Image")
 "Every icon that the sidebar can show. The built app reads them all when it's made."
 const SIDEBAR_ICONS = unique(["file-earmark-text", "chevron-right", "chevron-down", "calculator", "grid-3x3", "puzzle", "bounding-box",
@@ -4707,13 +4748,17 @@ outline(lines::Vector{String}, kinds::Vector{Line}) = begin
   for (i, l) in enumerate(kinds)
     if l.kind == Kind.heading
       push!(out, Entry(i, l.level, rest(lines[i], l.prefix), "type-h$(l.level)", i))
-    elseif l.kind == Kind.fence && l.level == 0 && l.lang in (LIVE, SHEET, SPREADSHEET)
+    elseif l.kind == Kind.fence && l.level == 0 && l.lang in (LIVE, SHEET, SPREADSHEET, DIAGRAM)
       # The line that closes the block, or the last line when nothing closes it
       close = something(findnext(k -> k.kind == Kind.fence, kinds, i + 1), length(lines))
       if l.lang == SHEET
         push!(out, Entry(i, 7, "Sheet", "calculator", min(i + 1, length(lines))))
       elseif l.lang == SPREADSHEET
         push!(out, Entry(i, 7, "Spreadsheet", "grid-3x3", min(i + 1, length(lines))))
+      elseif l.lang == DIAGRAM
+        # Code that can't be drawn as a diagram is a code block like any other.
+        # The caret goes under the block. In the block, it would show the block's code.
+        isdiagram(join(view(lines, i+1:close-1), "\n")) && push!(out, Entry(i, 7, "Diagram", "diagram-3", min(close + 1, length(lines))))
       else
         name, icon = component(view(lines, i+1:close-1))
         # The caret goes under the block. In the block, it would show the block's code.
@@ -5151,6 +5196,7 @@ const INSERTS = [
   ("Spreadsheet",   ["```$SPREADSHEET", "|  |  |  |", "|  |  |  |", "|  |  |  |", "```"], (2, 2)),
   ("Code",          ["```julia", "", "```"],        (2, 0)),
   ("Live Block",    ["```$LIVE", "", "```"],        (2, 0)),
+  ("Diagram",       ["```$DIAGRAM", "flowchart LR", "  A[Start] --> B[End]", "```"], (3, 2)),
   "-",
   # The caret goes to an empty line under the divider
   ("Divider",       ["---", "", ""],                (3, 0)),

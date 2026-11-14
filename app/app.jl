@@ -197,7 +197,7 @@ warm_up() = begin
   # The menu of the page: open it and click away, then add a block of each kind from its Insert menu.
   # Kaydown draws the menu here, 28px for each item, with Insert as its fifth item.
   right_click(500, 300); click(900, 600)
-  for n in 1:15
+  for n in 1:16
     right_click(500, 300); click(540, 426); click(540, 286 + 28n)
     # Type in the new block, press Return and type again, then undo it all
     press(Keys.a); press(Keys.enter); press(Keys.b)

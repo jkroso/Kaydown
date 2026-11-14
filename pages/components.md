@@ -84,6 +84,22 @@ VideoPlayer("knot.mp4")
 
 Once you've clicked a player, the space bar plays and stops, and ← and → go back and on by 5 seconds. One file plays at a time, and it plays on while you scroll the page. Give the video player a `height` to make its picture bigger or smaller. macOS plays the files, so the players take what QuickTime takes: MP3, M4A, WAV, AIFF and FLAC sound, and MP4 and MOV video.
 
+## Diagrams
+
+`Mermaid` draws a diagram from a few lines of text. The first line says what kind of diagram it is, and the lines after it say what's in it. This one shows who says what to whom, from the top down.
+
+```ui
+Mermaid("""
+  sequenceDiagram
+    actor You
+    participant Page
+    You->>Page: Type a line
+    Page-->>You: Show the diagram
+  """)
+```
+
+It draws five kinds: `flowchart`, `sequenceDiagram`, `stateDiagram-v2`, `classDiagram` and `pie`. A diagram takes the page's font and colours. A page needs no `ui` block for a diagram, because a code block in the language `mermaid` shows one too. The page [welcome.md](welcome.md) has an example.
+
 ## Shadows
 
 A container can cast a shadow. `shadow(x, y, blur)` moves it right and down, then blurs it. You can give it a colour, and `spread` makes it bigger. Change a number in the code to see what it does.

@@ -61,7 +61,7 @@
 @use "github.com/jkroso/MiniFB.jl"...
 @use "github.com/jkroso/UI.jl/Interface/Geometric"...
 @use "github.com/jkroso/UI.jl/Interface/Specific"...
-@use "github.com/jkroso/UI.jl/Interface/abstract" SemanticUI GeometricUI WrapMode Theme with_theme adopt_theme! light describe describe! reuse! detach! add_child! window_of focus handled
+@use "github.com/jkroso/UI.jl/Interface/abstract" SemanticUI GeometricUI WrapMode Theme with_theme adopt_theme! light describe describe! reuse! detach! add_child! window_of focus handled carry!
 @use "github.com/jkroso/UI.jl/Interface/draw" ui draw ishovered cursor open_url viewport show_tooltip! hide_tooltip! hittest show_menu! hide_menu! redraw_in! rect popup! close_popup!
 @use "github.com/jkroso/UI.jl/Interface/objc" libobjc cls sel msg nsstring jstring with_pool send
 @use "github.com/jkroso/UI.jl/Interface/fonts" skia_font register_font
@@ -441,6 +441,8 @@ Base.@kwdef mutable struct Buffer
   kinds_at::Int = -1
   words::Int = 0
   chars::Int = 0
+  # After Escape the caret is hidden, and every line shows as it reads, until a click puts the caret back
+  reading::Bool = false
 end
 
 const stamp = Ref(0)
@@ -962,12 +964,13 @@ doesn't reach out of the block. A selection that goes through a block leaves it
 as it reads.
 """
 incode(b::Buffer, i::Int) = begin
+  b.reading && return false
   s, t = codeblock(b, i)
   s <= b.caret[1] <= t && s <= b.anchor[1] <= t
 end
 
 "True when line `i` shows its markup: it has the caret, and the selection doesn't reach another line"
-israw(b::Buffer, i::Int) = i == b.caret[1] == b.anchor[1]
+israw(b::Buffer, i::Int) = !b.reading && i == b.caret[1] == b.anchor[1]
 
 "Lay out line `i` of the document"
 flow(e, i::Int, raw::Bool=israw(e.buf, i)) = begin
@@ -1672,6 +1675,7 @@ suggesting(e) = get!(() -> Ref{Any}((at=(0, 0), chosen=1, hidden=(0, 0))), e.nod
 
 "The list of names to show now: the line, the column where the name starts, the names and which one is chosen. Or nothing."
 suggestion(e) = begin
+  e.buf.reading && return nothing
   found = offered(e)
   found === nothing && return nothing
   i, start, names = found
@@ -1818,7 +1822,12 @@ default_app!(e) = begin
 end
 
 "Run again the live blocks that asked for `setting`"
-rerun!(e, setting::Symbol) = foreach(key -> delete!(e.nodes, key), pop!(e.nodes, (:readers, setting), ()))
+rerun!(e, setting::Symbol) = foreach(pop!(e.nodes, (:readers, setting), ())) do key
+  # What the block made before is kept until it runs again, so that what it makes then can
+  # carry on from it, like a chooser whose choice was clicked sliding to it
+  old = pop!(e.nodes, key, nothing)
+  old === nothing || (e.nodes[(:replaced, key)] = old)
+end
 
 """
 Wrap the page's text again, for a live block that changed a setting. The block
@@ -2318,9 +2327,12 @@ end
 
 "What the live block with this code shows"
 live(e, code::String) = begin
-  node = get!(e.nodes, (:live, e.buf.path, code)) do
+  key = (:live, e.buf.path, code)
+  node = get!(e.nodes, key) do
     shown = Shown(value=evaluate(e, code))
     shown.value isa SemanticUI && own!(shown, shown.value)
+    old = pop!(e.nodes, (:replaced, key), nothing)
+    old isa Shown && carry!(shown.value, old.value)
     shown
   end
   own!(node!(Document, e, :document), node)
@@ -2807,6 +2819,7 @@ draw(ctx, size, ui::ConcreteRect, d::Document) = begin
     end
   end
   fill_selection(ctx, rects)
+  b.reading && return
   for it in e.layout[e.shown]
     top = ui.top + it.top
     if it.content isa Grid
@@ -2880,6 +2893,7 @@ held(node, key) = (w = window_of(node); w !== nothing && key in w.keys)
 
 "The caret moved or the text changed, so show the caret"
 touch!(e; keep_goal=false) = begin
+  e.buf.reading = false
   e.blink = time()
   e.reveal = true
   keep_goal || (e.goal = nothing)
@@ -2992,6 +3006,30 @@ press!(e, pos) = begin
     held(e, Keys.shft) || (b.anchor = at)
   end
   touch!(e)
+end
+
+"""
+How far a key scrolls the page while it's read, or nothing for a key that doesn't
+scroll it: ↑ and ↓ a little, Page Up, Page Down and Space a screen less a little, so a
+line or two stays in sight, and Home, End, ⌘↑ and ⌘↓ to the top or the bottom.
+"""
+read_step(e, K, cmd, shift) = begin
+  screen = e.scroll.viewport - 40px
+  K == Keys.up ? (cmd ? px(-Inf) : -50px) :
+  K == Keys.down ? (cmd ? px(Inf) : 50px) :
+  cmd ? nothing :
+  K == Keys.pageup ? -screen :
+  K == Keys.pagedown ? screen :
+  K == Keys.space ? (shift ? -screen : screen) :
+  K == Keys.home ? px(-Inf) :
+  K == Keys._end ? px(Inf) : nothing
+end
+
+"Scroll the page by `by`, as far as it goes"
+scroll_page!(e, by) = begin
+  s = e.scroll
+  s.offset = clamp(s.offset + by, 0px, max(0px, s.content_height - s.viewport))
+  e
 end
 
 "True when `a` is `b` or holds it"
@@ -3436,9 +3474,22 @@ onkey(e::Editor, ev::KeyPress{K}) where K = begin
   e.popup == :finder && return finder_key!(e, K)
   # The list of names under a sheet's expression takes ↑, ↓, Return, Tab and esc
   !cmd && !opt && !shift && suggest_key!(e, K) && return nothing
+  # While the page is read, there's no caret to move, so the keys that would move it scroll the
+  # page. A key that would change the text does nothing. Any other command with ⌘ still works,
+  # and one that moves the caret, like undo, puts it back.
+  if b.reading
+    step = read_step(e, K, cmd, shift)
+    step === nothing || return (scroll_page!(e, step); nothing)
+    cmd || return nothing
+  end
   if K == Keys.escape
-    e.popup = :none
-    b.anchor = b.caret
+    # Escape closes a popup. With none open, it hides the caret and every line shows as it reads.
+    if e.popup != :none
+      e.popup = :none
+    else
+      b.anchor = b.caret
+      b.reading = true
+    end
   elseif cmd && opt && K == Keys.i
     toggle_inspector!(w)
   elseif cmd && K == Keys.s
@@ -3584,7 +3635,7 @@ onkey(t::TableButton, ::KeyPress{Keys.mouse_left}) = (e = editor(t); tableop!(e,
 "The bar over the table the caret is in, placed in the window. Nothing when the caret isn't in a table."
 tablebar(e) = begin
   b = e.buf
-  (b.caret[1] == b.anchor[1] && !isempty(e.layout)) || return ()
+  (!b.reading && b.caret[1] == b.anchor[1] && !isempty(e.layout)) || return ()
   it = item(e, b.caret[1])
   it.content isa Grid || return ()
   top = TOPBAR_H + PAGE_TOP + it.top + TABLE_GAP - e.scroll.offset - BAR_H - 3px
@@ -3852,6 +3903,7 @@ choose!(e, item) = begin
   e.nodes[:chose] = true
   (l isa EntryLabel && l.line > 0) || return
   b = e.buf
+  b.reading = false
   line = clamp(l.caret, 1, length(b.lines))
   b.caret = b.anchor = settle(b, (line, length(b.lines[line])))
   # Put its first line near the top of the window rather than just on screen.
@@ -4238,6 +4290,7 @@ const PAGE_MENU = ["Cut", "Copy", "Paste", "-", "Select All", "-", "Insert" => [
 cut!(e) = copy_selection!(e) === false || type!(e, "")
 select_all!(e) = begin
   b = e.buf
+  b.reading = false   # a selection shows the caret's end of it
   b.anchor, b.caret = (1, 0), line_end(b, length(b.lines))
   e
 end

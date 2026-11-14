@@ -41,7 +41,7 @@ Click the box to open its menu. The font you pick becomes the font of the page's
 
 ```ui
 fonts = ["Charter", "Helvetica Neue", "Menlo", "Lucida Grande"]
-Box(width(240px), Dropdown(options=fonts, selected=something(findfirst(==(page_font()), fonts), 1),
+Box(width(240px), Dropdown(options=fonts, families=fonts, selected=something(findfirst(==(page_font()), fonts), 1),
                            onchange=dropdown -> page_font!(fonts[dropdown.selected])))
 ```
 

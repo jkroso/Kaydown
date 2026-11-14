@@ -14,7 +14,7 @@ RadioGroup(labels=names, selected=findfirst(==(page_theme()), names),
 
 ```ui
 fonts = unique([page_font(), "Charter", "Helvetica Neue", "Georgia", "Palatino", "Lucida Grande", "Menlo"])
-Box(width(240px), Dropdown(options=fonts, selected=1, onchange=dropdown -> page_font!(fonts[dropdown.selected])))
+Box(width(240px), Dropdown(options=fonts, families=fonts, selected=1, onchange=dropdown -> page_font!(fonts[dropdown.selected])))
 ```
 
 ## Text size

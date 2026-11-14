@@ -25,8 +25,12 @@
 #     a file on the page from the Finder.
 #   - Write [^1] in a line and [^1]: on another line to make a footnote.
 #   - Right-click a word with red dots under it to put its spelling right.
-#   - The button at the top left, or ⌘\, shows the other Markdown files in the
-#     folder. ⌘O finds one by name.
+#   - The button at the top left, or ⌘\, shows the other files in the folder.
+#     ⌘O finds a Markdown file by name.
+#   - Click a file in that list that isn't Markdown to see it. Kaydown shows it
+#     and doesn't change it: the text of a file of code, a picture, a model, a
+#     sound, a video, a PDF file, a table. A file that it has no way to show is
+#     a binary file, and a button shows its bytes in hexadecimal.
 #   - Click the icon beside a file in that list to see the file's headings and
 #     components, and click one to go to it. ⌘⇧\ gives that list the keyboard: ↑ and ↓
 #     move through it, → and ← show and hide what's under an item, Return
@@ -452,12 +456,20 @@ Base.@kwdef mutable struct Buffer
   chars::Int = 0
   # After Escape the caret is hidden, and every line shows as it reads, until a click puts the caret back
   reading::Bool = false
+  # How the file shows. A Markdown file is a document that you change. Any other file is only
+  # shown: :text shows its text, :hex shows its bytes, and :file shows a viewer of its kind.
+  view::Symbol = :markdown
+  about::String = ""                    # what the top bar says of a file that's only shown, like how much of it shows
 end
+
+"True when the file is only shown. Kaydown changes Markdown files and no others."
+readonly(b::Buffer) = b.view != :markdown
 
 const stamp = Ref(0)
 
 load(path) = begin
   READ[path] = mtime(path)
+  ismarkdown(path) || return look(path)
   b = Buffer(path=path, lines=text(path))
   # The caret starts at the text, after any front matter, so the front matter shows as a card
   t = front_matter(b.lines)
@@ -480,7 +492,14 @@ refresh!(b::Buffer) = begin
   at = mtime(b.path)
   at == get(READ, b.path, 0.0) && return
   READ[b.path] = at
-  lines = text(b.path)
+  if readonly(b)
+    # A file that's only shown is read again as it was shown: as bytes, or as its kind of file
+    new = b.view == :hex ? Buffer(path=b.path, view=:hex, lines=hexlines(b.path), about=hex_about(b.path)) : look(b.path)
+    b.view, b.about = new.view, new.about
+    lines = new.lines
+  else
+    lines = text(b.path)
+  end
   lines == b.lines && return
   b.lines = lines
   empty!(b.undo); empty!(b.redo)
@@ -490,7 +509,13 @@ refresh!(b::Buffer) = begin
 end
 
 kinds(b::Buffer) = begin
-  if b.kinds_at != b.version
+  if b.kinds_at != b.version && readonly(b)
+    # Each line of a file that's only shown is a line of code, in the language that the end of the file's name gives
+    lang = b.view == :hex ? HEX : String(lstrip(lowercase(splitext(b.path)[2]), '.'))
+    b.kinds = fill(Line(Kind.code, 0, 0, lang), length(b.lines))
+    b.words = b.chars = 0
+    b.kinds_at = b.version
+  elseif b.kinds_at != b.version
     b.kinds = classify(b.lines)
     # Front matter says things about the document, so the counts leave it out
     counted = @view b.lines[front_matter(b.lines)+1:end]
@@ -510,7 +535,7 @@ lines takes the whole of each row of a table or a sheet that it touches.
 """
 selection(b::Buffer) = begin
   lo, hi = minmax(b.caret, b.anchor)
-  lo[1] == hi[1] && return (lo, hi)
+  (lo[1] == hi[1] || readonly(b)) && return (lo, hi)
   ks = kinds(b)
   (ks[lo[1]].kind == Kind.table || insheet(b, lo[1]) || inspread(b, lo[1])) && (lo = (lo[1], 0))
   (ks[hi[1]].kind == Kind.table || insheet(b, hi[1]) || inspread(b, hi[1])) && (hi = (hi[1], length(b.lines[hi[1]])))
@@ -535,6 +560,7 @@ end
 
 "Replace the text from `lo` to `hi` with `new`, and put the caret after it"
 edit!(b::Buffer, lo::Pos, hi::Pos, new::AbstractString; typing=false) = begin
+  readonly(b) && return b   # nothing changes a file that's only shown
   # Letters typed one after another undo together
   if !(typing && time() - b.typed < 1 && !isempty(b.undo))
     push!(b.undo, snapshot(b))
@@ -554,7 +580,8 @@ undo!(b::Buffer) = isempty(b.undo) || (push!(b.redo, snapshot(b)); restore!(b, p
 redo!(b::Buffer) = isempty(b.redo) || (push!(b.undo, snapshot(b)); restore!(b, pop!(b.redo)))
 
 save!(b::Buffer) = begin
-  isempty(b.path) && return
+  # The lines of a file that's only shown can be a part of the file, or its bytes, so they're never written
+  (isempty(b.path) || readonly(b)) && return
   write(b.path, join(b.lines, "\n"))
   READ[b.path] = mtime(b.path)
   b.saved = b.version
@@ -734,7 +761,7 @@ end
 list_files!(e) = begin
   names = isdir(e.folder) ? readdir(e.folder) : String[]
   paths = [joinpath(e.folder, n) for n in sort!(names, by=lowercase) if !startswith(n, '.')]
-  # The sidebar lists the folders, then each file. Kaydown shows the Markdown files, and the Mac opens the others.
+  # The sidebar lists the folders, then each file. The file finder lists the Markdown files.
   files = filter(isfile, paths)
   e.listed = [filter(isdir, paths); files]
   e.files = filter(ismarkdown, files)
@@ -838,6 +865,13 @@ pieces(e, text::String, line::Line, raw::Bool, i::Int=0) = begin
       isempty(m[1]) || push!(out, piece(String(m[1]), 0, base))
       push!(out, piece(String(m[2]), length(m[1]), Face(base, color=colours.dim)))
       isempty(m[3]) || push!(out, piece(String(m[3]), length(m[1]) + length(m[2]), base))
+    end
+    return out
+  elseif k == Kind.code && line.lang == HEX
+    # In a line of a file's bytes, the place in the file is faint and the bytes as characters are dim
+    n = ncodeunits(text)
+    for (lo, hi, colour) in ((0, HEX_BYTES, colours.faint), (HEX_BYTES, HEX_CHARS, base.color), (HEX_CHARS, n, colours.dim))
+      lo < n && push!(out, piece(text[lo+1:min(hi, n)], lo, Face(base, color=colour)))
     end
     return out
   elseif k == Kind.code
@@ -2606,12 +2640,14 @@ tabled(path) = begin
 end
 
 "The rows of a CSV file as a table. Its first row is its headings."
-tableview(t::FileTable) = scrolled(t.scroll, length(t.rows), ROW_H) do r
+tableview(t::FileTable) = scrolled(r -> tablerow(t, r), t.scroll, length(t.rows), ROW_H)
+
+"Row `r` of a CSV file's table"
+tablerow(t::FileTable, r) =
   Row(height(ROW_H), Alignment.Start, radius(3px), background(r == 1 ? colours.head : iseven(r) ? clear : colours.stripe),
     [Box(fixed(w), height(ROW_H), padding(10px, 0px), Alignment.Start, clip=true,
          label(c <= length(t.rows[r]) ? t.rows[r][c] : "", 12px, weight=r == 1 ? "Semibold" : ""))
      for (c, w) in enumerate(t.widths)]...)
-end
 
 # --- a Markdown file as it reads ---------------------------------------------------------------
 
@@ -2675,17 +2711,18 @@ const PAGE_W = 420px   # how wide a page of a PDF file shows
   path::String = ""
   page::Int = 1
   count::Int = 0
+  wide::px = PAGE_W   # how wide a page shows
 end
 
 describe(p::Pages) = begin
   # Twice as many pixels as px, so that the page is sharp on a screen with 2 pixels to the px
-  key = pdf_page(p.path, p.page, round(Int, 2num(PAGE_W)))
+  key = pdf_page(p.path, p.page, round(Int, 2num(p.wide)))
   key === nothing && return label("This page can't be shown", 12px, color=colours.dim)
   shape = image_aspect(key)
   arrow(name, on) = Icon(name, size=11px, color=on ? colours.dim : colours.faint)
   Column(Alignment.Start, child_gap=6px,
-    Image(key, fixed(PAGE_W), height(PAGE_W / shape), radius(3px), border(1px, :solid, colours.line)),
-    (p.count > 1 ? (Row(fixed(PAGE_W), height(22px), justify=Alignment.Center, child_gap=10px,
+    Image(key, fixed(p.wide), height(p.wide / shape), radius(3px), border(1px, :solid, colours.line)),
+    (p.count > 1 ? (Row(fixed(p.wide), height(22px), justify=Alignment.Center, child_gap=10px,
        arrow("chevron-left", p.page > 1), label("Page $(p.page) of $(p.count)", 12px, color=colours.dim),
        arrow("chevron-right", p.page < p.count)),) : ())...)
 end
@@ -2698,7 +2735,7 @@ turn!(p::Pages, by) = (p.page = clamp(p.page + by, 1, max(1, p.count)); handled)
 onkey(p::Pages, ev::KeyPress{Keys.mouse_left}) = begin
   focus(p)
   r = rect(p)
-  r === nothing ? handled : turn!(p, ev.window.mouse[1] < r.left + PAGE_W / 2 ? -1 : 1)
+  r === nothing ? handled : turn!(p, ev.window.mouse[1] < r.left + p.wide / 2 ? -1 : 1)
 end
 # The arrow keys turn the pages too, once a click has given them the keyboard
 onkey(p::Pages, ::KeyPress{Keys.left}) = turn!(p, -1)
@@ -2739,10 +2776,10 @@ file_icon(path) = begin
   ext in CODE ? "file-earmark-code" : "file-earmark"
 end
 
-"Every icon that `file_icon` can give. The built app reads them all when it's made."
+"Every icon that `file_icon` can give, and the one that the page shows for a binary file. The built app reads them all when it's made."
 const FILE_ICONS = ("file-earmark", "file-earmark-text", "file-earmark-image", "file-earmark-music", "file-earmark-play", "box",
                     "file-earmark-pdf", "file-earmark-zip", "file-earmark-spreadsheet", "file-earmark-font", "file-earmark-richtext",
-                    "file-earmark-code", "chevron-left", "chevron-right")
+                    "file-earmark-code", "file-earmark-binary", "chevron-left", "chevron-right")
 
 "The picture kept under `key`, no taller than `most` and no wider than 420px. A picture of a page has a line round it."
 framed(key, most=260px; page=false) = begin
@@ -2824,6 +2861,220 @@ cursor(::FileEntry) = :hand
 
 onkey(r::FileEntry, ::KeyPress{Keys.mouse_left}) = begin
   (r.parent::Breadcrumb).at = r.path
+end
+
+# --- a file that isn't Markdown, in the page -------------------------------------------------
+#
+# A click on a file in the sidebar shows the file in the page, whatever kind of
+# file it is. Kaydown changes Markdown files and no others, so any other file
+# is only shown, and the top bar says "Read only".
+#
+#   - A file of text shows its text. A file of code has the colours that a code
+#     block has. You can select the text, copy it and find words in it.
+#   - A picture, a model, a sound, a video, a PDF file, a CSV file, a Word file
+#     and a font show as they do under a file path, as big as the page has room for.
+#   - A zip shows the list of the files in it.
+#   - Any other file is a binary file. The page says so, and a button there
+#     shows the file's bytes in hexadecimal.
+
+const MOST_LINE = 2000     # characters. A longer line of a file's text stops there.
+const HEX = "hex"          # the language of the lines that show a file's bytes
+const HEX_BYTES = 10       # the column of such a line where the bytes start, after their place in the file
+const HEX_CHARS = 60       # the column where the same bytes start as characters
+const MOST_HEX = 160_000   # bytes. The lines of a longer file stop there.
+
+"True when a file whose name ends with `ext` has a viewer of its own, so it doesn't show as text"
+viewed(ext) = ext in PICTURES || ext in MAC_PICTURES || ext in MODELS || ext in SOUNDS || ext in VIDEOS || ext == ".pdf" ||
+              ext in TABLES || ext in DOCUMENTS || ext in FONTS
+
+"A line of a file's text as the page shows it: a tab is two spaces, and a very long line stops with an …"
+shown_line(line) = begin
+  s = replace(line, '\t' => "  ")
+  length(s) > MOST_LINE ? first(s, MOST_LINE) * "…" : String(s)
+end
+
+"The buffer that shows the file at `path`, which isn't Markdown"
+look(path) = begin
+  ext = lowercase(splitext(path)[2])
+  if ext in ZIPS
+    list = try zipped(path) catch; nothing end
+    n = list === nothing ? 0 : length(list.lines)
+    list === nothing || return Buffer(path=path, view=:text, lines=list.lines, about="$(commas(n)) file$(n == 1 ? "" : "s")")
+  elseif !viewed(ext)
+    found = try reading(path, tidy=false) catch; nothing end
+    if found !== nothing
+      lines, more = found
+      return Buffer(path=path, view=:text, lines=map(shown_line, lines),
+                    about=more ? "First $(bytes(MOST_TEXT)) of $(bytes(filesize(path)))" : "")
+    end
+  end
+  Buffer(path=path, view=:file)
+end
+
+"""
+The bytes of the file at `path` as lines of text. Each line has the place of
+its first byte in the file, then 16 bytes in hexadecimal, then the same bytes
+as characters. A byte that isn't a character of plain text shows as a dot.
+"""
+hexlines(path) = begin
+  data = open(io -> read(io, MOST_HEX), path)
+  hex(row) = join((string(x, base=16, pad=2) for x in row), ' ')
+  map(0:16:max(0, length(data) - 1)) do at
+    row = data[at+1:min(at + 16, end)]
+    rpad(string(at, base=16, pad=8), HEX_BYTES) * rpad(hex(row[1:min(8, end)]) * "  " * hex(row[9:end]), HEX_CHARS - HEX_BYTES) *
+      String([0x20 <= x < 0x7f ? Char(x) : '.' for x in row])
+  end
+end
+
+"What the top bar says of the bytes of the file at `path`: how many of them show, when not all do"
+hex_about(path) = filesize(path) > MOST_HEX ? "First $(bytes(MOST_HEX)) of $(bytes(filesize(path)))" : ""
+
+"Show the bytes of the file that the page shows, in hexadecimal"
+hex!(e) = begin
+  b = e.buf
+  (readonly(b) && isfile(b.path)) || return e
+  b.lines, b.about, b.view = hexlines(b.path), hex_about(b.path), :hex
+  b.caret = b.anchor = (1, 0)
+  b.saved = b.version += 1
+  e.scroll.offset = 0px
+  focus(e)
+  e
+end
+
+"""
+The lines of a file that shows as text, laid out. Each is a line of code. The
+whole page is code, so the lines have no background of their own and start at
+the edge of the page.
+"""
+text_items(e, b::Buffer) = begin
+  ks = kinds(b)
+  size = face(e, ks[1]).size
+  lh = body(e).size * 1.5
+  items = Vector{Item}(undef, length(b.lines))
+  top = 0px
+  for (i, text) in enumerate(b.lines)
+    f = wrap(pieces(e, text, ks[i], false, i), e.width; lh, size)
+    items[i] = Item(i, i, top, tall(f), f)
+    top += tall(f)
+  end
+  items
+end
+
+"What the page shows for a file that doesn't show as text: a viewer of its kind, or words that say it's a binary file"
+@def mutable struct FileView <: SemanticUI
+  path::String = ""
+  viewer::Any = nothing   # the STLViewer, the player or the Pages of the file, kept from one frame to the next
+  table::Any = nothing    # the rows of a CSV file, with when the file had last changed when they were read
+  button::Any = nothing   # the HexButton of a binary file
+end
+
+"The button under the words that say a file is binary. A click shows the file's bytes."
+@def mutable struct HexButton <: SemanticUI end
+
+describe(b::HexButton) = Box(height(30px), padding(14px, 0px), radius(6px), background(ishovered(b) ? colours.active : colours.hover),
+                             label("View as hexadecimal", 13px))
+cursor(::HexButton) = :hand
+onkey(b::HexButton, ::KeyPress{Keys.mouse_left}) = (hex!(editor(b)); handled)
+
+cursor(::FileView) = :arrow
+
+"The one item of the page of a file that shows in a viewer"
+file_item(e, b::Buffer) = begin
+  v = node!(() -> FileView(path=b.path), e, (:fileview, b.path))
+  # Lay it out once to learn how tall it is
+  concrete = describe(Column(fixed(e.width), Alignment.Start, geometry(v)), (e.width, 9999px))
+  high = concrete.height + 2LIVE_GAP
+  Item(1, 1, 0px, high, Live(v, high))
+end
+
+"The picture kept under `key`, `wide` across, and no wider than the page's text"
+fitted(e, key, wide; line=false) = begin
+  source = image_source(key)
+  w = min(e.width, px(wide))
+  h = w * source.height / source.width
+  line ? Image(key, fixed(w), height(h), radius(3px), border(1px, :solid, colours.line)) : Image(key, fixed(w), height(h), radius(4px))
+end
+
+"""
+What shows the file of `v`, or nothing if Kaydown has nothing that shows it.
+`note(words)` adds words to the line that says how big the file is.
+"""
+viewer(v::FileView, e, note) = begin
+  path = v.path
+  ext = lowercase(splitext(path)[2])
+  mac = Sys.isapple()
+  _, h = window_size(e)
+  room = clamp(h - TOPBAR_H - PAGE_TOP - 150px, 240px, 800px)   # how tall a model or a video shows
+  # What's made for the file is kept, so the model stays as it was turned and the file plays on
+  made(make, T) = v.viewer isa T ? v.viewer : (v.viewer = own!(v, make()))
+  if ext in PICTURES || ext in MAC_PICTURES
+    key = picture_key(path)
+    key === nothing && return nothing
+    source = image_source(key)
+    # A picture of pixels is a pixel to the px. One that macOS read, like an SVG, is the size that macOS says it is.
+    size = something(natural(key), (source.width, source.height))
+    note("$(round(Int, size[1])) × $(round(Int, size[2]))")
+    return fitted(e, key, size[1])
+  elseif ext in MODELS
+    m = made(() -> STLViewer(path=path), STLViewer)
+    m.height = room
+    return load!(m) isa Mesh ? m : nothing
+  elseif mac && ext in SOUNDS
+    return made(() -> AudioPlayer(path=path), AudioPlayer)
+  elseif mac && ext in VIDEOS
+    p = made(() -> VideoPlayer(path=path), VideoPlayer)
+    p.height = room
+    return p
+  elseif mac && ext == ".pdf"
+    p = made(() -> Pages(path=path, count=pdf_pages(path)), Pages)
+    p.count == 0 && return nothing
+    p.wide = e.width
+    return p
+  elseif ext in TABLES
+    at = mtime(path)
+    (v.table === nothing || v.table[1] != at) && (v.table = (at, tabled(path)))
+    t = v.table[2]
+    t === nothing && return nothing
+    n = length(t.rows)
+    note(t.more ? "the first $(commas(n - 1)) rows" : "$(commas(n - 1)) row$(n == 2 ? "" : "s")")
+    # Only the rows that are in the window are made, so a long table costs no more than a short one
+    lo = clamp(floor(Int, (e.scroll.offset - PAGE_TOP) / ROW_H) - 4, 0, n)
+    hi = min(n, lo + ceil(Int, h / ROW_H) + 8)
+    return Column(width(grow=grow), Alignment.Start, clip=true,
+      spacer(ROW_H * lo), [tablerow(t, r) for r in lo+1:hi]..., spacer(ROW_H * (n - hi)))
+  end
+  # The picture that the Finder shows: the first page of a Word file, the letters of a font,
+  # and what it has for many kinds of file that have no viewer here
+  key = thumbnail(path)
+  key === nothing && return nothing
+  fitted(e, key, image_source(key).width / 2, line=ext in DOCUMENTS)   # the picture has two pixels to the px
+end
+
+describe(v::FileView) = begin
+  e = editor(v)
+  # A Text on its own would take the whole width and start at the left, so each is in a box that the column centres
+  words(parts) = Column(width(grow=grow), padding(90px, 0px, 30px, 0px), child_gap=10px, [p isa Text ? Box(p) : p for p in parts]...)
+  isfile(v.path) || return words((label("$(basename(v.path)) isn't there any more", 15px),))
+  about = bytes(filesize(v.path)) * "  ·  Changed " * Libc.strftime("%-d %b %Y, %H:%M", mtime(v.path))
+  filesize(v.path) == 0 && return words((label("$(basename(v.path)) is empty", 15px), label(about, 12px, color=colours.dim)))
+  # A model and a player are components, so they get the colours and the text size that a live block gives them
+  with_theme(component_theme(e.zoom)) do
+    content = try
+      viewer(v, e, more -> (about *= "  ·  " * more))
+    catch
+      nothing
+    end
+    line = label(about, 12px, color=colours.dim)
+    if content === nothing
+      # Nothing shows this file, so the page says what it is, and its bytes are a click away
+      v.button === nothing && (v.button = own!(v, HexButton()))
+      return words((Icon("file-earmark-binary", size=34px, color=colours.faint), label("$(basename(v.path)) is a binary file", 15px),
+                    line, Box(height(4px)), v.button))
+    end
+    # A table can be long, so the line about it is over it. Anything else has the line under it.
+    lowercase(splitext(v.path)[2]) in TABLES ? Column(width(grow=grow), Alignment.Start, child_gap=10px, line, content) :
+                                               Column(width(grow=grow), child_gap=10px, content, Box(line))
+  end
 end
 
 "What the live block with this code shows"
@@ -2954,6 +3205,9 @@ layout!(e, width=text_width(e)) = begin
   b = e.buf
   ks = kinds(b)
   width == e.width || (e.width = width; empty!(e.flows))
+  # A file that's only shown is one viewer, or lines of text that are laid out once and kept
+  b.view == :file && return e.layout = [file_item(e, b)]
+  readonly(b) && return e.layout = get!(() -> text_items(e, b), e.flows, (:shown, b.path, b.version))
   items = Item[]
   top = 0px
   i = 1
@@ -3029,6 +3283,7 @@ item(e, i::Int) = e.layout[something(findfirst(it -> it.first <= i <= it.last, e
 
 "Scroll so the caret is on screen"
 reveal!(e) = begin
+  e.buf.view == :file && return   # a viewer has no caret
   it = item(e, e.buf.caret[1])
   top, bottom = it.top, it.top + it.tall
   if it.content isa Flow
@@ -3171,6 +3426,7 @@ end
 # With ⌘ held, a click on a link opens it, so the mouse shows a hand there
 cursor(d::Document) = begin
   e = editor(d)
+  e.buf.view == :file && return :arrow   # a viewer has no text to select
   w = window_of(e)
   w === nothing && return :ibeam
   # A click on a to-do item's box ticks it
@@ -3335,7 +3591,8 @@ draw(ctx, size, ui::ConcreteRect, d::Document) = begin
   end
   fill_selection(ctx, rects)
   annotate(ctx, e, ui)
-  b.reading && return
+  # A file that's only shown has a selection and no caret
+  (b.reading || readonly(b)) && return
   for it in e.layout[e.shown]
     top = ui.top + it.top
     if it.content isa Grid
@@ -3955,6 +4212,11 @@ end
 
 ismouse(k) = k in (Keys.mouse_left, Keys.mouse_right, Keys.mouse_middle)
 
+# The keys that do something with ⌘ while the page shows a file that's only shown: ⌘O, ⌘\, ⌘, and the
+# keys that change the size of the text. A file that shows as text takes ⌘A, ⌘C, ⌘F and ⌘G too.
+const READ_KEYS = (Keys.o, Keys.backslash, Keys.comma, Keys.equal, Keys.minus, getproperty(Keys, Symbol(0)))
+const TEXT_KEYS = (Keys.a, Keys.c, Keys.f, Keys.g)
+
 onkey(e::Editor, ev::KeyPress{K}) where K = begin
   # A key that the sidebar's tree took, like Return on a heading, comes here next. It isn't for the text.
   pop!(e.nodes, :chose, false) && return
@@ -3990,10 +4252,14 @@ onkey(e::Editor, ev::KeyPress{K}) where K = begin
   # While the page is read, there's no caret to move, so the keys that would move it scroll the
   # page. A key that would change the text does nothing. Any other command with ⌘ still works,
   # and one that moves the caret, like undo, puts it back.
-  if b.reading
+  if b.reading || readonly(b)
     step = read_step(e, K, cmd, shift)
     step === nothing || return (scroll_page!(e, step); nothing)
-    cmd || return nothing
+    cmd || K == Keys.escape || return nothing
+  end
+  # A file that's only shown takes the commands that don't change it. Its text can be selected, copied and searched.
+  if readonly(b) && K != Keys.escape && !(cmd && opt && K == Keys.i)
+    K in READ_KEYS || (b.view != :file && K in TEXT_KEYS) || return nothing
   end
   if K == Keys.escape && finding(e)
     close_find!(e)
@@ -4084,8 +4350,8 @@ ontype(e::Editor, ev::Typed) = begin
   c = ev.char
   # macOS has characters of its own for keys like the arrows, which aren't text
   (iscntrl(c) || '\uf700' <= c <= '\uf8ff') && return nothing
-  # While the page is read, a key that would change the text does nothing
-  e.buf.reading && return nothing
+  # While the page is read, a key that would change the text does nothing. A file that's only shown is never changed.
+  (e.buf.reading || readonly(e.buf)) && return nothing
   type!(e, string(c), typing=true)
   handled
 end
@@ -4118,6 +4384,7 @@ onfiledrop(e::Editor, w::Window, paths) = begin
   paths = [rstrip(String(p), '/') for p in paths if ispath(p)]
   isempty(paths) && return
   b = e.buf
+  readonly(b) && return   # a file that's only shown has no text for the path to go into
   at = settle(b, locate(e, w.mouse))
   pictures = [markdown_for(e, p) for p in paths if isfile(p) && ispicture(p)]
   others = [markdown_for(e, p) for p in paths if !(isfile(p) && ispicture(p))]
@@ -4322,7 +4589,9 @@ describe(t::TopBar) = begin
         label(name(b), 13px, color=colours.dim),
         (dirty(b) ? (label("— edited", 13px, color=colours.faint),) : ())...)),
     Row(fixed(side), height(grow=grow), justify=Alignment.End, padding(0px, 10px, 0px, 0px),
-      node!(Count, e, :count)))
+      # A file that's only shown has no words to count. The bar says that it's only shown.
+      readonly(b) ? Box(height(28px), padding(8px, 0px), label(isempty(b.about) ? "Read only" : b.about * "  ·  Read only", 12px, color=colours.dim)) :
+                    node!(Count, e, :count)))
 end
 
 # The window has no title bar, so you move it by dragging the top bar
@@ -4378,10 +4647,11 @@ describe(l::FileLabel) = begin
     isdir(l.path) ? Box(width(grow=grow), Alignment.Start, label(basename(l.path))) :
     ismarkdown(l.path) ?
     Box(width(grow=grow), Alignment.Start, label(title(l.path), weight=l.path == e.buf.path ? "Semibold" : "")) :
-    # A file that Kaydown doesn't show has its whole name, and it's fainter
-    Box(width(grow=grow), Alignment.Start, label(basename(l.path), color=colours.dim))
+    # A file that Kaydown only shows has its whole name, and it's fainter until it's the file that shows
+    Box(width(grow=grow), Alignment.Start, label(basename(l.path), color=l.path == e.buf.path ? colours.ink : colours.dim,
+                                                 weight=l.path == e.buf.path ? "Semibold" : ""))
   Row(width(grow=grow), height(grow=grow), padding(0px, 8px, 0px, 0px), child_gap=4px, clip=true, name="File",
-    mark(l, isdir(l.path) ? "folder" : ismarkdown(l.path) ? "file-earmark-text" : "file-earmark"),
+    mark(l, isdir(l.path) ? "folder" : ismarkdown(l.path) ? "file-earmark-text" : file_icon(l.path)),
     name,
     (changed ? (Box(width(6px), height(6px), radius(3px), background(colours.dim)),) : ())...)
 end
@@ -4480,17 +4750,15 @@ items(parent; hidden=false, out=Tree.TreeItem[]) = begin
 end
 
 """
-A click on the name of a file opens the file. A file that isn't Markdown opens
-in the app that the Mac uses for it, and a folder shows its own folders and files. A click on a heading or a
+A click on the name of a file shows the file in the page. A file that isn't
+Markdown is only shown: the page doesn't change it. A folder shows its own folders and files. A click on a heading or a
 component goes to it, and opens its file first if another file is showing.
 Return does the same for the item the keyboard is on. Each gives the keyboard
 to the text.
 """
 choose!(e, item) = begin
   l = item.firstchild
-  # Kaydown doesn't show a file that isn't Markdown, so the app that the Mac uses for it opens it
   l isa FileLabel && isdir(l.path) && return (go_folder!(e, l.path); e.nodes[:chose] = true; nothing)
-  l isa FileLabel && !ismarkdown(l.path) && return (open_url(l.path); e.nodes[:chose] = true; nothing)
   # A group's name shows what's in the group. Only its icon hides that.
   item isa Tree.ItemGroup && (item.collapsed = false)
   l.path == e.buf.path || open!(e, l.path)
@@ -4562,7 +4830,7 @@ fill_tree!(e, tree) = begin
     for p in e.listed
       add_child!(tree, get(kept, p) do
         delete!(e.nodes, (:outline, p))   # a new group has no headings in it yet
-        # A file that Kaydown doesn't show has nothing in it to list
+        # A file that isn't Markdown has no headings to list
         isfile(p) && ismarkdown(p) ? Tree.ItemGroup(FileLabel(path=p)) : Tree.Item(FileLabel(path=p))
       end)
     end
@@ -4728,6 +4996,7 @@ trash!(e, path) = begin
   delete!(READ, path)
   delete!(e.nodes, (:read, path))
   delete!(e.nodes, (:outline, path))
+  delete!(e.nodes, (:fileview, path))
   list_files!(e)
   if e.buf.path == path
     open!(e, isempty(e.files) ? joinpath(e.folder, "Untitled.md") : e.files[min(at, end)])
@@ -4993,6 +5262,7 @@ end
 "Show the page's menu at the mouse"
 page_menu!(e, w) = begin
   b = e.buf
+  b.view == :file && return nothing   # a viewer has no text to copy or to find
   e.popup = :none
   focus(e)
   at = settle(b, locate(e, w.mouse))
@@ -5013,6 +5283,8 @@ page_menu!(e, w) = begin
   wrong !== nothing && isempty(fixes) && push!(off, 1)
   selecting(b) || push!(off, n + 1, n + 2)
   front_matter(b.lines) == 0 || push!(off, (n + length(PAGE_MENU), length(INSERTS)))
+  # Each item that would change the text is grey for a file that's only shown
+  readonly(b) && append!(off, n .+ findall(x -> (x isa Pair ? first(x) : x) in ("Cut", "Paste", "Export as HTML…", "Insert"), PAGE_MENU))
   items = Any[spell..., PAGE_MENU...]
   system_menu(w, items, act; off) || drawn_menu!(w, items, act; off)
   nothing
@@ -5591,6 +5863,7 @@ end
 
 "Write the document as a page of HTML, to the file that you choose"
 export_html!(e, w) = begin
+  readonly(e.buf) && return nothing   # only a Markdown file is a page
   # A window that isn't on the screen, like one a test makes, has no panel to ask with
   (Sys.isapple() && !isempty(w.glfw)) || return nothing
   path = save_panel(e, title(e.buf.path) * ".html")
@@ -5988,7 +6261,7 @@ print_listener() = begin
 end
 
 "Print the page: show the Mac's print panel with the page drawn for paper"
-print!(e, w) = print_panel!(e, w, print_pdf(e), splitext(name(e.buf))[1])
+print!(e, w) = readonly(e.buf) ? nothing : print_panel!(e, w, print_pdf(e), splitext(name(e.buf))[1])   # only a Markdown file is a page
 
 if abspath(PROGRAM_FILE) == @__FILE__
   open_editor(ARGS)

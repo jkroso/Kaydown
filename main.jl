@@ -60,7 +60,8 @@
 #     folder). While it waits, a button at the top right sends it the lines that
 #     you changed. ⌘Return does the same. The agent can change the file while
 #     you type, and the page keeps both. A bar shows for a few seconds beside
-#     each line that the agent changed, and the list of files has a dot beside
+#     each line that the agent changed, and a button with a highlighter in the
+#     top bar shows those bars again. The list of files has a dot beside
 #     a page that an agent waits for. While the list is hidden, the dot is
 #     beside the button that shows it.
 #   - Click the word count to count characters or reading time instead.
@@ -486,6 +487,7 @@ Base.@kwdef mutable struct Buffer
   disk::Vector{String} = [""]           # the file's text as it was last read or written
   # The text as an agent last knew it: what you last sent it, with every change that was made to the file from outside since
   told::Vector{String} = [""]
+  sent::Vector{String} = [""]           # the text as it was when you last sent it to an agent, or when the file was opened
 end
 
 "True when the file is only shown. Kaydown changes Markdown files and no others."
@@ -498,6 +500,7 @@ load(path) = begin
   ismarkdown(path) || return look(path)
   lines = text(path)
   b = Buffer(path=path, lines=lines, disk=copy(lines), told=copy(lines))
+  b.sent = b.told   # nothing has changed from outside yet
   # The caret starts at the text, after any front matter, so the front matter shows as a card
   t = front_matter(b.lines)
   if t > 0
@@ -4694,7 +4697,7 @@ end
 describe(b::ToolButton) = begin
   e = editor(b)
   ishovered(b) || (b.quiet = false)
-  on = b.action == :panel && e.panel
+  on = (b.action == :panel && e.panel) || (b.action == :marks && marking(e))
   box = Box(width(30px), height(28px), radius(6px), Alignment.Center, name="Button",
             background(on ? colours.active : ishovered(b) ? colours.hover : clear),
           Icon(b.icon, size=15px, color=colours.dim))
@@ -4709,6 +4712,7 @@ onkey(b::ToolButton, ::KeyPress{Keys.mouse_left}) = begin
   e = editor(b)
   b.action == :panel && toggle_panel!(e)
   b.action == :outside && open_outside!(e)
+  b.action == :marks && toggle_marks!(e)
   hush!(b)
   focus(e)
 end
@@ -4729,6 +4733,7 @@ tip(b::ToolButton) = begin
     isempty(ws) && return "Show sidebar  ⌘\\"
     return "$(uppercasefirst(first(ws).name)) waits for $(basename(first(ws).page))  ·  Show sidebar  ⌘\\"
   end
+  b.action == :marks && return marking(e) ? "Hide $(whose(e)) changes" : "Show $(whose(e)) changes"
   b.action == :outside || return ""
   app = opener(e.buf.path)
   isempty(app) ? "Show in Finder" : "Open in $(app_name(app))"
@@ -4818,8 +4823,9 @@ send!(e) = begin
   lo, hi = selection(b)
   text = Agent.report(b.path, b.told, b.lines, lo[1], selecting(b) ? excerpt(b, lo, hi) : "")
   foreach(w -> Agent.send(w, text), ws)
-  # The agent knows the page as it is now
-  b.told = copy(b.lines)
+  # The agent knows the page as it is now, and none of the lines are its changes any more
+  b.sent = b.told = copy(b.lines)
+  delete!(e.nodes, :marking)
   e.nodes[:sent] = (b.path, b.version, first(ws).name)
   delete!(e.nodes, :agents)
   nothing
@@ -4830,16 +4836,64 @@ agent_part(e) = begin
   b = e.buf
   ws = agents(e)
   sent = get(e.nodes, :sent, nothing)
+  # A button shows the agent's changes again, for as long as there are some
+  marks = isempty(theirs(e)) ? () : (button(e, :marks, "highlighter"), Box(width(4px)))
   if !isempty(ws)
     delete!(e.nodes, :sent)
-    (node!(SendButton, e, :send), Box(width(6px)))
+    e.nodes[:agent] = first(ws).name
+    (marks..., node!(SendButton, e, :send), Box(width(6px)))
   elseif sent !== nothing && sent[1] == b.path && sent[2] == b.version
     # It says so until the agent waits again, or the text changes
-    (Box(height(28px), padding(8px, 0px), label("Nudged $(sent[3])", 12px, color=colours.dim)),)
+    (marks..., Box(height(28px), padding(8px, 0px), label("Nudged $(sent[3])", 12px, color=colours.dim)))
   else
-    ()
+    marks
   end
 end
+
+"""
+The runs of lines of the page that were changed from outside, by an agent,
+since you last sent the page, or since it was opened. Lines that were removed
+leave nothing to show.
+"""
+theirs(e) = begin
+  b = e.buf
+  none = UnitRange{Int}[]
+  (readonly(b) || b.sent === b.told) && return none
+  # They're worked out again when the text changes, or what the agent knows
+  key = (objectid(b.sent), objectid(b.told), b.version)
+  kept = get(e.nodes, :theirs, nothing)
+  kept !== nothing && kept[1] == key && return kept[2]::Vector{UnitRange{Int}}
+  mine = changes(b.told, b.lines)   # your own changes since, which move the agent's lines down or up
+  runs = UnitRange{Int}[]
+  for (_, new) in changes(b.sent, b.told)
+    isempty(new) && continue
+    lo, hi = follow(mine, first(new)), follow(mine, last(new))
+    push!(runs, min(lo, hi):max(lo, hi))
+  end
+  e.nodes[:theirs] = (key, runs)
+  runs
+end
+
+"True while the bars beside the agent's changes stay on the page that's showing"
+marking(e) = get(e.nodes, :marking, "") == e.buf.path
+
+"Show the bars beside the agent's changes until this is called again. The page goes to the first change if none is on screen."
+toggle_marks!(e) = begin
+  marking(e) && return delete!(e.nodes, :marking)
+  e.nodes[:marking] = e.buf.path
+  runs = theirs(e)
+  (isempty(runs) || isempty(e.layout)) && return
+  touches(it) = any(r -> first(r) <= it.last && last(r) >= it.first, runs)
+  _, h = window_size(e)
+  seen = filter(it -> it.top + it.tall > e.scroll.offset && it.top < e.scroll.offset + h - TOPBAR_H - PAGE_TOP, e.layout)
+  any(touches, seen) && return
+  i = findfirst(touches, e.layout)
+  i === nothing || (e.scroll.offset = max(0px, e.layout[i].top - 80px))
+  nothing
+end
+
+"The name of the agent that works on the page, as the owner of something: \"Claude's\""
+whose(e) = get(e.nodes, :agent, "the agent")::String * "'s"
 
 describe(s::SendButton) = begin
   e = editor(s)
@@ -6416,6 +6470,9 @@ end
 #
 # When something else changes the file, like an agent, a bar shows for a few
 # seconds in the margin beside each line that it changed or added, and fades.
+# A button with a highlighter in the top bar shows the bars again, beside every
+# line that was changed since you last sent the page. They stay until you click
+# the button again.
 
 const FRESH = 4.0        # how many seconds a bar shows
 const FRESH_FADE = 1.5   # how many of them it takes to fade
@@ -6433,10 +6490,12 @@ end
 
 "Draw a bar in the margin beside each item on screen that shows a line that just changed"
 draw_fresh(ctx, e, ui) = begin
-  runs = fresh(e)
+  # The button in the top bar keeps the bars of all the agent's changes on the page. They don't fade.
+  kept = marking(e) ? theirs(e) : UnitRange{Int}[]
+  runs = isempty(kept) ? fresh(e) : kept
   isempty(runs) && return
-  left = FRESH - (time() - e.nodes[:fresh][1])
-  ink = RGBA(colours.accent, clamp(left / FRESH_FADE, 0, 1) * 0.7)
+  strength = isempty(kept) ? clamp((FRESH - (time() - e.nodes[:fresh][1])) / FRESH_FADE, 0, 1) : 1.0
+  ink = RGBA(colours.accent, strength * 0.7)
   for it in e.layout[e.shown]
     any(r -> first(r) <= it.last && last(r) >= it.first, runs) || continue
     rectangle(ctx, ui.left - 16px, ui.top + it.top, 3px, it.tall, background=ink, border=0px)

@@ -4835,7 +4835,7 @@ agent_part(e) = begin
     (node!(SendButton, e, :send), Box(width(6px)))
   elseif sent !== nothing && sent[1] == b.path && sent[2] == b.version
     # It says so until the agent waits again, or the text changes
-    (Box(height(28px), padding(8px, 0px), label("Sent to $(sent[3])", 12px, color=colours.dim)),)
+    (Box(height(28px), padding(8px, 0px), label("Nudged $(sent[3])", 12px, color=colours.dim)),)
   else
     ()
   end
@@ -4847,7 +4847,7 @@ describe(s::SendButton) = begin
   ws = agents(e)
   Box(height(24px), padding(10px, 0px), radius(6px), Alignment.Center, name="Send",
       background(colours.accent),
-    label("Send to $(isempty(ws) ? "the agent" : first(ws).name)", 12px, color=colours.bg, weight="Semibold"))
+    label("Nudge $(isempty(ws) ? "the agent" : first(ws).name)", 12px, color=colours.bg, weight="Semibold"))
 end
 
 cursor(::SendButton) = :hand
@@ -4932,7 +4932,7 @@ describe(l::FileLabel) = begin
     # A file that Kaydown only shows has its whole name, and it's fainter until it's the file that shows
     Box(width(grow=grow), Alignment.Start, label(basename(l.path), color=l.path == e.buf.path ? colours.ink : colours.dim,
                                                  weight=l.path == e.buf.path ? "Semibold" : ""))
-  # A page that an agent waits for has a dot in the colour of the Send button
+  # A page that an agent waits for has a dot in the colour of the Nudge button
   awaited = ismarkdown(l.path) && !isempty(agents(e, l.path))
   Row(width(grow=grow), height(grow=grow), padding(0px, 8px, 0px, 0px), child_gap=4px, clip=true, name="File",
     mark(l, isdir(l.path) ? "folder" : ismarkdown(l.path) ? "file-earmark-text" : file_icon(l.path)),

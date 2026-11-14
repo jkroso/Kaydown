@@ -18,9 +18,9 @@ Usage:
       Open it in Kaydown, in front of the other windows.
 
   kaydown wait <file.md> [--as <name>] [--timeout <seconds>]
-      Wait until the user presses "Send" in Kaydown. Then print the lines that
+      Wait until the user presses "Nudge" in Kaydown. Then print the lines that
       the user changed in the file, and stop.
-      --as <name>          What Kaydown calls you on its Send button.
+      --as <name>          What Kaydown calls you on its Nudge button.
       --timeout <seconds>  Stop waiting after this long. The exit code is then 2.
 
 Exit codes: 0 done, 1 an error, 2 the time ran out, 3 Kaydown can't take part.

@@ -9,6 +9,14 @@ You can write in **bold**, in *italic* or in ***both***. Use backticks for `code
 > A line that starts with > is a quote.
 > It can run over several lines.
 
+A word that the Mac's dictionary doesn't have, like teh, gets a line of red dots under it. Right-click the word to choose the word you meant. Press ⌘F to find text in the page.
+
+A line can point to a footnote[^note]. The footnote is a line of its own, anywhere in the file, and the page gives each footnote a number. Hold ⌘ and click the number to go to the footnote.
+
+[^note]: This is the footnote. Its line starts with the same name in square brackets, and a colon.
+
+A line that holds only a picture, like `![plan](plan.png)`, shows the picture. Drop a picture on the page from the Finder to add one. Any other file that you drop goes in as a path that you can click.
+
 ## Lists
 
 1. Press Return at the end of this line. The next number is typed for you.
@@ -27,7 +35,9 @@ You can write in **bold**, in *italic* or in ***both***. Use backticks for `code
 | Keys | What they do |
 |------|--------------|
 | ⌘O | Finds a file in this folder by name |
+| ⌘F | Finds text in the page. Return goes to the next place that has it. |
 | ⌘P | Prints the page, or saves it as a PDF |
+| ⌘⇧E | Saves the page as a page of HTML, for a website |
 | ⌘, | Opens the settings page. Press it again to go back. |
 | ⌘\ | Shows and hides the list of files |
 | ⌘⇧\ | Gives the list of files the keyboard. Press esc to go back to the text. |
@@ -66,7 +76,7 @@ Meter(done=0.7)
 
 A block can use UI.jl's components and layout with no line that loads them: `Slider`, `STLViewer`, `Column`, `px` and the rest. A file path is `fs"notes.md"` and a colour is `colorant"tomato"`. The two blocks above load `widgets.jl` because it's a file of this folder.
 
-A file path shows as a breadcrumb. Click its last name to list what's in the folder, and click a file in the list to make it the path. Under a file is what's in it: a picture, its text, which you can scroll through, a 3D model that you can drag to turn, or a player for a sound or a video. Click `knot.stl` to see a model.
+A file path shows as a breadcrumb. Click its last name to list what's in the folder, and click a file in the list to make it the path. Under a file is what's in it: a picture, its text, which you can scroll through, a 3D model that you can drag to turn, a player for a sound or a video, the pages of a PDF, a CSV file as a table, or the picture that the Finder shows for a file like a Word file. Click `knot.stl` to see a model.
 
 ```ui
 fs"."

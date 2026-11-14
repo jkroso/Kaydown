@@ -11,7 +11,7 @@
 
 include("start.jl")
 
-@use ".." build_editor open_editor WELCOME restyle! problems pages_dir SIDEBAR_ICONS todo_at inbox
+@use ".." build_editor open_editor WELCOME restyle! problems pages_dir SIDEBAR_ICONS FILE_ICONS todo_at inbox
 @use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse
 @use "github.com/jkroso/Font.jl/units" px
 @use "github.com/jkroso/UI.jl/Interface/abstract" focus
@@ -29,7 +29,7 @@ building && start_packages()
 # Icons are read from UI.jl's Icons folder the first time they're drawn. Reading
 # them now keeps them in the app, so it doesn't need that folder.
 foreach(load_icon, ["check", "chevron-down", "chevron-right", "chevron-up", "copy", "file-earmark", "file-earmark-text", "folder",
-                    "layout-sidebar", "pause-fill", "play-fill", "search", "text-center", "text-left", "text-right", SIDEBAR_ICONS...])
+                    "layout-sidebar", "pause-fill", "play-fill", "search", "text-center", "text-left", "text-right", "x-lg", SIDEBAR_ICONS..., FILE_ICONS...])
 
 # The welcome page's text, to type into while the app warms up
 const page = read(WELCOME, String)
@@ -135,6 +135,8 @@ warm_up() = begin
   write(joinpath(dir, "welcome.md"), page)
   write(joinpath(dir, "notes.md"), "# Notes\n\nSome text.\n")
   e = build_editor(joinpath(dir, "welcome.md"))
+  # A word that's spelt wrong adds items to the page's menu, and the clicks below count on where its items are
+  e.spelling = false
   w = Window(e, title="warm up", size=(1100px, 800px))
   focus(e)
   hold(keys) = foreach(k -> (w.keys |= k), keys)
@@ -193,16 +195,16 @@ warm_up() = begin
   right_click(60, 88); click(80, 104)
   press(Keys.a); press(Keys.escape); press(Keys.escape)
   # The menu of the page: open it and click away, then add a block of each kind from its Insert menu.
-  # Kaydown draws the menu here, 28px for each item, with Insert as its third item.
+  # Kaydown draws the menu here, 28px for each item, with Insert as its fifth item.
   right_click(500, 300); click(900, 600)
   for n in 1:14
-    right_click(500, 300); click(540, 370); click(540, 286 + 28n)
+    right_click(500, 300); click(540, 426); click(540, 286 + 28n)
     # Type in the new block, press Return and type again, then undo it all
     press(Keys.a); press(Keys.enter); press(Keys.b)
     press(Keys.z, Keys.cmd); press(Keys.z, Keys.cmd); press(Keys.z, Keys.cmd); press(Keys.z, Keys.cmd)
   end
   # A to-do item, then a click on its box to tick it
-  right_click(500, 300); click(540, 370); click(540, 286 + 28 * 7)
+  right_click(500, 300); click(540, 426); click(540, 286 + 28 * 7)
   press(Keys.a); press(Keys.up, Keys.cmd)
   x = e.origin[1] + 6px
   y = findfirst(y -> todo_at(e, (x, px(y))) !== nothing, 80:4:780)

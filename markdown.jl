@@ -203,6 +203,17 @@ function scan!(out, chars, from, to, style::Style, offset)
         plain = i = j + 1
         continue
       end
+    elseif c == '[' && next == '^'
+      # [^name] points to a footnote. The name is the text of a link to "^name", which the page shows as a number.
+      j = find(chars, "]", i + 2, to)
+      if j > i + 2 && !any(isspace, chars[i+2:j-1])
+        name = String(chars[i+2:j-1])
+        emit(plain, i - 1); emit(i, i + 1, markup=true)
+        emit(i + 2, j - 1, s=Style(style.bold, style.italic, style.strike, "^" * name))
+        emit(j, j, markup=true)
+        plain = i = j + 1
+        continue
+      end
     elseif c == '['
       j = find(chars, "](", i + 1, to)
       k = j == 0 ? 0 : find(chars, ")", j + 2, to)

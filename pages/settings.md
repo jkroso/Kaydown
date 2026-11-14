@@ -45,6 +45,14 @@ RadioGroup(labels=counts, selected=findfirst(==(page_count()), counts),
 
 The top right of the window shows the one you choose. A click on it there changes it too.
 
+## Spelling
+
+```ui
+Checkbox(label="Check spelling", checked=page_spelling(), onchange=box -> page_spelling!(box.checked))
+```
+
+With this on, a word that the Mac's dictionary doesn't have gets a line of red dots under it. Right-click the word to see the words it may have been meant to be, or to teach the dictionary the word. Code isn't checked.
+
 ## Default app
 
 ```ui

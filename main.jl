@@ -6409,8 +6409,9 @@ end
 #
 # ⌘⇧E, and Export as HTML in the page's menu, write the document as a page of
 # HTML that a browser can show. A sheet goes in as a table of its names and
-# what they come to. A live block goes in as its code, and inline code goes in
-# as the text it made, when it made text.
+# what they come to. A diagram goes in as a picture in SVG, drawn as the editor
+# draws it. A live block goes in as its code, and inline code goes in as the
+# text it made, when it made text.
 
 "The sheet between lines `s` and `t`, as an HTML table, or nothing while the sheet shows as code"
 sheet_html(e, s, t) = begin
@@ -6426,11 +6427,62 @@ sheet_html(e, s, t) = begin
   "<table>\n" * join(rows, "\n") * "\n</table>"
 end
 
+# Skia's SVG canvas draws text as shapes with this flag, so it needs no font where it's shown
+const SVG_TEXT_AS_SHAPES = UInt32(1)
+
+"""
+The diagram that `code` describes, as a picture in SVG, or nothing if the code
+can't be drawn as a diagram. It has the Sepia colours, which the page of HTML
+has too, and it's as big as it is in the editor at its usual size. Its text is
+drawn as shapes, so it looks the same on a computer that hasn't got the font.
+"""
+diagram_svg(code::AbstractString) = begin
+  isdiagram(code) || return nothing
+  was = deepcopy(colours)
+  use!(SEPIA)
+  stream = Skia.sk_dynamic_memory_wstream_new()
+  try
+    m = Mermaid(code)
+    geo = with_theme(component_theme()) do
+      convert(GeometricUI, m)
+    end
+    made = m.made === nothing ? nothing : m.made[2]
+    (made === nothing || made isa Exception) && return nothing
+    w, h = ceil(Int, made.w), ceil(Int, made.h)
+    (w > 0 && h > 0) || return nothing
+    size = (px(w), px(h))
+    scene = describe(Column(fixed(px(w)), Alignment.Start, geo), size)
+    bounds = Ref(Skia.sk_rect_t(0f0, 0f0, Float32(w), Float32(h)))
+    canvas = GC.@preserve bounds Skia.sk_surface_make_canvas_svg(Base.unsafe_convert(Ptr{Skia.sk_rect_t}, bounds),
+                                                                 Skia.sk_dynamic_memory_wstream_as_wstream(stream), SVG_TEXT_AS_SHAPES)
+    draw(canvas, size, scene)
+    # Skia writes the end of the SVG when the canvas is deleted. Its C functions can't delete
+    # a canvas, so the canvas's C++ destructor does it.
+    ccall((:_ZN8SkCanvasD0Ev, Skia.libskia), Cvoid, (Ptr{Cvoid},), canvas)
+    bytes = Vector{UInt8}(undef, Skia.sk_dynamic_memory_wstream_bytes_written(stream))
+    Skia.sk_dynamic_memory_wstream_read(stream, bytes, Csize_t(0), Csize_t(length(bytes)))
+    # In a page of HTML the SVG needs no line that says it's XML. A viewBox lets a narrow window show it smaller.
+    svg = replace(String(bytes), r"^<\?xml[^>]*>\s*" => "")
+    replace(svg, "<svg " => "<svg viewBox=\"0 0 $w $h\" role=\"img\" ", count=1)
+  finally
+    Skia.sk_dynamic_memory_wstream_delete(stream)
+    use!(was)
+  end
+end
+
+"The `mermaid` code block from line `s` to line `t` as HTML: its diagram, or nothing to show its code, as the editor does when the block isn't closed or can't be drawn"
+diagram_html(e, s, t) = begin
+  ks = kinds(e.buf)
+  t > s && ks[t].kind == Kind.fence && ks[t].level == 1 || return nothing
+  svg = diagram_svg(join(e.buf.lines[s+1:t-1], "\n"))
+  svg === nothing ? nothing : "<div class=\"diagram\">\n$svg</div>"
+end
+
 "The document as a page of HTML"
 page_html(e) = begin
   b = e.buf
   html(b.lines, title=title(b.path),
-       block=(lang, s, t) -> lang == SHEET ? sheet_html(e, s, t) : nothing,
+       block=(lang, s, t) -> lang == SHEET ? sheet_html(e, s, t) : lang == DIAGRAM ? diagram_html(e, s, t) : nothing,
        value=code -> (made = get(e.nodes, (:inline, b.path, code, 1), nothing); made isa Tuple && !made[2] ? made[1] : nothing))
 end
 

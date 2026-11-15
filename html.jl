@@ -98,6 +98,8 @@ table { border-collapse: collapse; margin: 1em 0; }
 th, td { border: 1px solid #d8d0bd; padding: 0.35em 0.8em; text-align: left; }
 th { background: #f1ede2; }
 img { max-width: 100%; }
+.diagram { margin: 1em 0; }
+.diagram svg { display: block; max-width: 100%; height: auto; }
 hr { border: 0; border-top: 1px solid #d8d0bd; margin: 2em 0; }
 li.todo { list-style: none; margin-left: -1.4em; }
 .footnotes { font-size: 0.88em; color: #6b6259; border-top: 1px solid #d8d0bd; margin-top: 3em; }

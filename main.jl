@@ -3223,8 +3223,9 @@ end
 #     measure with nothing drawn and no item can take a unit of another kind,
 #     and that changes what it measures.
 #   - A count takes a mark for each click. A length and an area take a corner for
-#     each click: click twice, or press Return, to end one. An area also ends
-#     with a click on its first corner.
+#     each click. To end one, click the Done button beside its last corner,
+#     click twice, or press Return. An area also ends with a click on its
+#     first corner.
 #   - With the arrow, click a mark or a line to select it, drag a corner to move
 #     it, and press Delete to take it away. Drag the plan to move it.
 #   - ⌘ and the scroll wheel make the plan bigger and smaller. Once you've
@@ -3257,7 +3258,7 @@ const PLAN_TOOLS = (:select => ("cursor", "Select and move  V", 'v'), :count => 
 "Every icon that a takeoff can show. The built app reads them all when it's made."
 const PLAN_ICONS = ["cursor", "plus-circle", "vector-pen", "pentagon", "rulers", "chevron-left", "chevron-right", "zoom-out", "zoom-in",
                     "aspect-ratio", "file-earmark-pdf", "x-lg", "plus-lg", "map", "person", "receipt", "arrows-fullscreen", "fullscreen-exit",
-                    "chevron-up", "chevron-down"]
+                    "chevron-up", "chevron-down", "check"]
 
 "True when the page's theme is a dark one"
 dark_page() = RGBA(colours.bg).r < 0.5
@@ -4117,13 +4118,83 @@ draw_shapes(ctx, v::TakeoffView) = begin
   # What's being drawn runs on to the mouse
   kind = v.tool
   colour = kind == :scale ? colours.accent : hue(v.current > 0 && t.measures[v.current].kind == kind ? v.current : length(t.measures) + 1)
-  points = v.mouse === nothing || v.asking !== nothing ? copy(v.draft) : [v.draft; [v.mouse]]
+  # With the mouse over the Done button, it shows what a click there leaves
+  done = over_done(v)
+  points = v.mouse === nothing || v.asking !== nothing || done ? copy(v.draft) : [v.draft; [v.mouse]]
   ps = [window_point(v, p) for p in points]
   trace(ctx, ps, colour, 2, fill=kind == :area && length(ps) > 2 ? RGBA(colour, 0.15) : nothing, closed=kind == :area && length(ps) > 2)
   foreach(p -> dot(ctx, p, 3, colour), ps[1:length(v.draft)])
   # In the unit of the measure that it's for
   unit = v.current > 0 && t.measures[v.current].kind == kind ? Plans.unit(t.measures[v.current]) : Plans.own_unit(kind)
   kind == :scale || tag(ctx, ps[end], size_text(v, kind, Plans.Shape(t.page, points), unit))
+  draw_done(ctx, v, done)
+end
+
+# --- the button that ends a line or an outline -------------------------------------------
+#
+# While a length or an area is being drawn, a Done button shows beside its last
+# corner, as soon as it has corners enough to end. A click on the button ends
+# the line or the outline, as Return does, and puts no corner down. The button
+# is behind the last corner and to one side of the line that led to it. The
+# next corner is seldom put there, so the button is seldom in its way.
+
+const DONE_W, DONE_H = 64.0, 24.0   # px. How wide and how tall the Done button is.
+const DONE_GAP = 10.0               # px between the button and the line that led to the last corner
+
+"""
+Where the Done button is in the window: its left, its top, its width and its
+height. It's nothing while there's no line or outline with corners enough to end.
+"""
+done_box(v::TakeoffView) = begin
+  (v.tool in (:length, :area) && v.zoom > 0) || return nothing
+  n = length(v.draft)
+  n >= (v.tool == :length ? 2 : 3) || return nothing
+  (x, y), (x0, y0) = window_point(v, v.draft[n]), window_point(v, v.draft[n-1])
+  far = hypot(x - x0, y - y0)
+  # The way the line went to its last corner
+  ux, uy = far > 0 ? ((x - x0) / far, (y - y0) / far) : (1.0, 0.0)
+  # The button's place on one side of the line. Its front is level with the corner, and its near edge is DONE_GAP from the line.
+  place(nx, ny) = begin
+    back = (abs(ux) * DONE_W + abs(uy) * DONE_H) / 2
+    off = (abs(nx) * DONE_W + abs(ny) * DONE_H) / 2 + DONE_GAP
+    (x - ux * back + nx * off - DONE_W / 2, y - uy * back + ny * off - DONE_H / 2)
+  end
+  left, top, wide, tall = v.box
+  fits((bx, by)) = bx >= left && by >= top && bx + DONE_W <= left + wide && by + DONE_H <= top + tall
+  # The side that's lower in the window, or the right one of two that are level. The other side if only that one is in the view.
+  nx, ny = ux > 0 || (ux == 0 && uy < 0) ? (-uy, ux) : (uy, -ux)
+  at = place(nx, ny)
+  other = place(-nx, -ny)
+  fits(at) || !fits(other) || (at = other)
+  # A corner that's out of sight still has its button in sight
+  (clamp(at[1], left, max(left, left + wide - DONE_W)), clamp(at[2], top, max(top, top + tall - DONE_H)), DONE_W, DONE_H)
+end
+
+"True when the place `(x, y)` of the window is on the Done button"
+on_done(v::TakeoffView, x, y) = begin
+  b = done_box(v)
+  b !== nothing && b[1] <= x <= b[1] + b[3] && b[2] <= y <= b[2] + b[4]
+end
+
+"True when the mouse is over the Done button"
+over_done(v::TakeoffView) = (w = window_of(v); w !== nothing && on_done(v, num(w.mouse[1]), num(w.mouse[2])))
+
+"What the Done button's tooltip says"
+done_tip(v::TakeoffView) = (v.tool == :area ? "End the outline" : "End the line") * "  Return"
+
+"Draw the Done button. It's lighter while the mouse is over it."
+draw_done(ctx, v::TakeoffView, over::Bool) = begin
+  b = done_box(v)
+  b === nothing && return
+  size = (px(b[3]), px(b[4]))
+  white = colorant"white"
+  button = Box(fixed(size[1]), height(size[2]), radius(size[2] / 2), Alignment.Center, border(1.5px, :solid, white),
+               background(over ? RGBA(0.3, 0.3, 0.3, 0.95) : RGBA(0.12, 0.12, 0.12, 0.9)),
+               Row(Alignment.Center, child_gap=4px, Icon("check", size=12px, color=white), label("Done", 12px, color=white, weight="Semibold")))
+  Skia.sk_canvas_save(ctx)
+  Skia.sk_canvas_translate(ctx, Float32(b[1]), Float32(b[2]))
+  draw(ctx, size, describe(button, size))
+  Skia.sk_canvas_restore(ctx)
 end
 
 describe(a::PlanArea) = begin
@@ -4182,7 +4253,7 @@ end
 # With the select tool, a hand over something that a click selects, and an arrow over the paper
 cursor(a::PlanArea) = begin
   v = a.of
-  plan_size(v) === nothing ? :hand : v.tool == :select ? (v.grab !== nothing || over_shape(v) ? :hand : :arrow) : :crosshair
+  plan_size(v) === nothing || over_done(v) ? :hand : v.tool == :select ? (v.grab !== nothing || over_shape(v) ? :hand : :arrow) : :crosshair
 end
 
 # --- the mouse and the keys on the plan --------------------------------------------------
@@ -4280,6 +4351,8 @@ onkey(a::PlanArea, ev::KeyPress{Keys.mouse_left}) = begin
   plan_size(v) === nothing && return choose_plan!(v, w)
   v.zoom > 0 || return handled
   x, y = num(w.mouse[1]), num(w.mouse[2])
+  # A click on the Done button ends what's being drawn, and puts no corner down
+  on_done(v, x, y) && return (hide_tooltip!(w); finish_shape!(v))
   p = page_point(v, x, y)
   at, cx, cy = v.clicked
   twice = time() - at < 0.35 && hypot(x - cx, y - cy) < 4
@@ -4319,6 +4392,8 @@ onmouse(a::PlanArea, ev::MouseMove) = begin
   v.zoom > 0 || return nothing
   x, y = num(ev.position[1]), num(ev.position[2])
   v.mouse = page_point(v, x, y)
+  # The Done button says what it does, and the key that does the same
+  on_done(v, x, y) && show_tooltip!(ev.window, tip_label(done_tip(v)), px.(done_box(v))..., placement=:bottom, gap=6px)
   g = v.grab
   g === nothing && return handled
   Keys.mouse_left in ev.window.keys || (drop!(v); return handled)

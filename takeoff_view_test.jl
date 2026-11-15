@@ -563,6 +563,58 @@ end
   @test v.zoom ≈ K.fit_zoom(v, K.plan_size(v))
 end
 
+@testset "the Done button ends a line and an outline" begin
+  drawn(kind) = sum(length(m.shapes) for m in v.data.measures if m.kind == kind; init=0)
+  newest(kind) = last(last(m for m in v.data.measures if m.kind == kind && !isempty(m.shapes)).shapes)
+  inview(b) = b[1] >= v.box[1] && b[2] >= v.box[2] && b[1] + b[3] <= v.box[1] + v.box[3] && b[2] + b[4] <= v.box[2] + v.box[4]
+  middle(b) = (b[1] + b[3] / 2, b[2] + b[4] / 2)
+  button((:tool, :length))
+  n = drawn(:length)
+  @test K.done_box(v) === nothing
+  plan_click(2, 7)
+  @test K.done_box(v) === nothing   # one corner is no line
+  plan_click(4, 7)
+  b = K.done_box(v)
+  @test b !== nothing && inview(b)
+  # The line went to the right. The button is behind its last corner and under the line, so it's in the way of neither.
+  x, y = K.window_point(v, house(4, 7))
+  @test !K.on_done(v, x, y)
+  @test b[1] + b[3] <= x + 0.01 && b[2] >= y + K.DONE_GAP - 0.01
+  # A third corner, straight up from the second. The button goes behind that corner: under it, and to the right of the line.
+  plan_click(4, 9)
+  b = K.done_box(v)
+  x, y = K.window_point(v, house(4, 9))
+  @test inview(b) && b[2] >= y - 0.01 && b[1] >= x + K.DONE_GAP - 0.01
+  # With the mouse over the button, the cursor is a hand and a tooltip names the key that does the same
+  at(middle(b)); frames()
+  @test K.cursor(v.parts[:area]) == :hand
+  @test length(popups(w)) == 1
+  # A click on it ends the line with the three corners. It puts no fourth corner down.
+  sleep(0.4); click(middle(b))
+  @test isempty(v.draft) && drawn(:length) == n + 1
+  @test length(newest(:length).points) == 3
+  @test K.done_box(v) === nothing && isempty(popups(w))
+  @test v.tool == :length   # the tool stays, for the next line
+
+  # An outline needs three corners
+  button((:tool, :area))
+  n = drawn(:area)
+  plan_click(1, 1); plan_click(3, 1)
+  @test K.done_box(v) === nothing
+  plan_click(3, 3)
+  b = K.done_box(v)
+  @test b !== nothing && inview(b)
+  sleep(0.4); click(middle(b))
+  @test isempty(v.draft) && drawn(:area) == n + 1
+  @test length(newest(:area).points) == 3
+
+  # A count and the scale have no line to end
+  button((:tool, :scale))
+  plan_click(1, 5); @test K.done_box(v) === nothing
+  key(Keys.escape); key(Keys.escape)
+  @test v.tool == :select && K.done_box(v) === nothing
+end
+
 @testset "what's written reads back" begin
   again = P.takeoff(block())
   @test P.written(again) == block()

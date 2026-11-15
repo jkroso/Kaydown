@@ -218,8 +218,14 @@ const META = Dict{String,Any}("io.modelcontextprotocol/protocolVersion" => PROTO
 
 running(s::Server=server) = s.process !== nothing && !process_exited(s.process)
 
+"True once Julia has been told to stop Centient's program when Kaydown quits"
+const hooked = Ref(false)
+
 "Start the program with `cmd`. It's false when it can't be started."
 start!(s::Server, cmd::Cmd) = begin
+  # Julia is told when the first program starts, and not when this file loads. An app that's
+  # being built loads this file, and Julia takes no such hook then.
+  hooked[] || (hooked[] = true; atexit(() -> stop!(server)))
   stop!(s)
   dir = mktempdir()
   s.out, s.err = joinpath(dir, "answers"), joinpath(dir, "log")
@@ -365,7 +371,5 @@ check!(s::Server=server) = begin
   end
   !isempty(s.waiting)
 end
-
-atexit(() -> stop!(server))
 
 export available, ask, check!, finished, failed, stop!, running, Request, server, json, parse_json

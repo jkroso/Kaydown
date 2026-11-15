@@ -133,6 +133,36 @@ flowchart LR
 
 Kaydown draws five kinds of diagram: `flowchart`, `sequenceDiagram`, `stateDiagram-v2`, `classDiagram` and `pie`. They're written in the language of [Mermaid](https://mermaid.js.org), so a diagram from another app shows here too. A kind that Kaydown can't draw yet shows as its code. To see the code of a diagram, hold ⌥ and click it.
 
+## Takeoffs
+
+A code block in the language `takeoff` shows a plan that you measure from: a page of a PDF file, or a picture. Drop the file on the block, or click the block to choose it. This one has the plan of a small house, with its power points and lights counted, a run of cable measured and the kitchen floor measured.
+
+```takeoff
+plan: plan.pdf
+page: 1
+scale: 1:100
+
+count | Double power point
+  164.2,483.5 164.2,268.1 308.7,449.5 235.0,242.6 331.4,494.9 436.3,494.9 382.4,364.5 331.4,245.4 436.3,245.4 459.0,494.9
+  586.5,426.9 586.5,353.1 461.8,324.8 529.8,245.4 586.5,245.4
+count | Ceiling light
+  235.0,415.5 382.4,475.0 382.4,324.8 521.3,469.4 481.7,307.8 558.2,307.8
+length | Cable to the kitchen | +10%
+  161.3,500.6 314.4,500.6 314.4,398.5 382.4,398.5
+area | Kitchen floor tiles
+  322.9,503.4 444.8,503.4 444.8,356.0 322.9,356.0
+```
+
+The buttons at the top left are the tools. With the arrow, click a mark or a line to select it, drag a corner to move it, and press Delete to take it away. The next three tools count, measure a length and measure an area for the measure that's chosen in the list. A count takes a mark for each click. A length and an area take a corner for each click, and Return ends one. The ruler sets the scale from a length that you know: click its two ends and type how long it is. Pinch on the trackpad, or hold ⌘ and scroll, to make the plan bigger or smaller. A plan that's bigger than its view moves when you drag it. The button with four arrows makes the block fill the window, and Esc puts it back in the page.
+
+Under the plan is the table of measures. **Add a measure** starts a new one. Click a measure to choose it and the tool that draws for it, and click its name to change it. A new measure is what the tool you choose makes it: a count, a length or an area. The `+0%` adds a share for waste.
+
+The headings of the table sort and search it. Click **Amount** or **Cost** to sort from low to high, again for high to low, and once more for the order that the block is written in. Click **Measure** or **Item** for a menu with two orders and a field that searches the column. Return keeps the search, and Esc puts back the one before.
+
+If [Centient](https://centient.com.au) is on your Mac, each measure can have an item from Centient's catalogue, and the list shows its price. The search for an item looks in your own items first. Press ⌥ in the empty field, or click the foot of the list, for the suppliers whose catalogues Centient holds. Choose one, and the search goes on in its catalogue. The item's unit chooses the tool for a new measure: a length for an item sold by the metre, an area for one sold by the square metre, and a count for the rest. Choose the customer at the bottom left, and **Make quote in Centient** makes a quote there with a line for each measure. Centient doesn't have to be open.
+
+Every change goes into the block's lines, so the file holds the whole takeoff. To see the lines, hold ⌥ and click the block.
+
 ## Recordings
 
 To record from your Mac's microphone, right-click the page and choose Insert › Recording. Kaydown starts to record at once, into a new file beside this one. Bars show how loud the sound is, and you can type while it records. Click the red button to stop. The first time, macOS asks whether Kaydown may use the microphone.
@@ -155,7 +185,7 @@ Click a file in the list that isn't Markdown to see it in the page. Kaydown show
 
 Right-click a file in the list to rename it, copy its path or move it to the Trash.
 
-Right-click the page to cut, copy or paste. The menu's Insert item adds a new block where you clicked: a heading, a list, a to-do item, a table, a sheet, a spreadsheet, a diagram, a live block and more.
+Right-click the page to cut, copy or paste. The menu's Insert item adds a new block where you clicked: a heading, a list, a to-do item, a table, a sheet, a spreadsheet, a diagram, a takeoff, a live block and more.
 
 A file can start with front matter: lines like `title: Notes` between two lines of `---`. Kaydown shows it as a block of its own, and leaves it out of the word count.
 

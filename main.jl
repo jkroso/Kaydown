@@ -20,6 +20,9 @@
 #     formula, like = B2 * C2 or = sum(D2:D4), and shows what it comes to.
 #   - Write a code block in the language `mermaid` to show a diagram: a
 #     flowchart, a sequence diagram and so on. ⌥-click shows it as code.
+#   - Write a code block in the language `takeoff` to measure from a plan: drop
+#     a PDF file on it, count fittings, measure lengths and areas, choose each
+#     item from Centient's catalogue and make a quote in Centient.
 #   - ⌘B and ⌘I make the selection bold or italic. ⌘Z and ⌘⇧Z undo and redo.
 #   - Double-click selects a word, triple-click a line. ⌘-click opens a link.
 #   - ⌘F finds text in the page. Return goes to the next place that has it.
@@ -44,7 +47,7 @@
 #     to the Trash.
 #   - Right-click the page to cut, copy and paste, and to insert a new block
 #     where you clicked: a heading, a list, a to-do item, a table, a sheet, a
-#     spreadsheet, a code block, a live block, a recording or a divider.
+#     spreadsheet, a code block, a live block, a takeoff, a recording or a divider.
 #   - A line that holds only a sound file, like ![Recording](memo.m4a), shows
 #     a player. Insert › Recording records one from the microphone. A button
 #     under the player writes down what's said, in a paragraph under it.
@@ -83,11 +86,11 @@
 @use "github.com/jkroso/Prospects.jl" @def
 @use "github.com/jkroso/MiniFB.jl/skia" measure_text rectangle rounded_rectangle sk_color
 @use Skia
-@use "github.com/jkroso/MiniFB.jl"... onfiledrop
+@use "github.com/jkroso/MiniFB.jl"... onfiledrop onscroll
 @use "github.com/jkroso/UI.jl/Interface/Geometric"...
 @use "github.com/jkroso/UI.jl/Interface/Specific"...
 @use "github.com/jkroso/UI.jl/Interface/abstract" SemanticUI GeometricUI WrapMode Theme with_theme adopt_theme! light describe describe! reuse! detach! add_child! window_of focus handled carry!
-@use "github.com/jkroso/UI.jl/Interface/draw" ui draw ishovered cursor open_url viewport show_tooltip! hide_tooltip! hittest show_menu! hide_menu! redraw_in! rect popup! close_popup!
+@use "github.com/jkroso/UI.jl/Interface/draw" ui draw ishovered cursor open_url viewport show_tooltip! hide_tooltip! hittest show_menu! hide_menu! redraw_in! rect popup! close_popup! MouseScroll Pinch onpinch placed! with_clip with_round_clip
 @use "github.com/jkroso/UI.jl/Interface/objc" libobjc cls sel msg nsstring jstring with_pool send
 @use "github.com/jkroso/UI.jl/Interface/fonts" skia_font register_font
 @use "github.com/jkroso/UI.jl/Interface/image" image_aspect image_source
@@ -102,7 +105,7 @@
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Mermaid" Mermaid problem
 @use "github.com/jkroso/UI.jl/Interface/media" silence! recording
 @use "github.com/jkroso/UI.jl/Interface/Semantic/ThreeMF" => ThreeMF
-@use "./pictures" picture natural thumbnail pdf_pages pdf_page
+@use "./pictures" picture natural thumbnail pdf_pages pdf_page pdf_size pdf_part
 @use "./spelling" misspelt guesses learn!
 @use "./transcribe" Transcription check! finished
 @use "./html" html footnotes NOTE escape
@@ -113,6 +116,8 @@
 @use "./merge" changes combine follow
 @use "./agent" => Agent
 @use "./pasteboard" => Pasteboard
+@use "./takeoff" => Plans
+@use "./centient" => Centient
 @use "github.com/jkroso/URI.jl/FSPath" FSPath
 @use Colors: @colorant_str, RGBA, Colorant
 @use InteractiveUtils: clipboard
@@ -3177,6 +3182,1784 @@ diagram(e, code::String) = begin
   Live(node, concrete.height + 2LIVE_GAP)
 end
 
+# --- takeoffs ---------------------------------------------------------------------------
+#
+# A code block in the language `takeoff` shows a plan that you measure from: a
+# page of a PDF file, or a picture. takeoff.jl says how the block is written.
+# Put the caret in the block, or click it with ⌥ held, to see its lines.
+#
+#   - Drop a PDF file or a picture on the block, or click it, to choose the plan.
+#   - Set the scale: type it, like 1:100, or choose the ruler, click the two ends
+#     of a length that you know and type how long it is.
+#   - Add a measure starts one. Choose its item from Centient's catalogue, then
+#     click on the plan. The item's unit says what the measure is and chooses the
+#     tool: a length for an item sold by the metre, an area for one sold by the
+#     square metre, and a count for the rest. A measure with nothing drawn yet
+#     and no item is what the tool you choose makes it. A click on a measure in
+#     the list chooses its tool too.
+#   - What a search of Centient finds shows in a list that floats beside the
+#     text field. The search for an item looks in one catalogue at a time: the
+#     business's own items, or a supplier's that ⌥ lets you choose. The headings of the table of measures sort and search it.
+#   - A count takes a mark for each click. A length and an area take a corner for
+#     each click: click twice, or press Return, to end one. An area also ends
+#     with a click on its first corner.
+#   - With the arrow, click a mark or a line to select it, drag a corner to move
+#     it, and press Delete to take it away. Drag the plan to move it.
+#   - ⌘ and the scroll wheel make the plan bigger and smaller. Once you've
+#     clicked the plan, two fingers move it. A plan that shows whole stays put.
+#   - The button with four arrows makes the block fill the window, with the list
+#     of measures beside the plan or under it. Esc puts it back in the page.
+#   - V, C, L, A and S choose the tools. Esc drops what's half drawn. ⌘Z takes
+#     the last change back.
+#   - Choose the customer, then Make quote in Centient. Centient makes a quote
+#     with a line for each measure, priced from its catalogue.
+#
+# Every change is written into the block's lines, so the file holds the whole
+# takeoff. The catalogue, the contacts and the quote come from Centient through
+# its MCP server, which centient.jl starts. Centient's app needn't be open.
+
+const TAKEOFF = Plans.TAKEOFF
+const PLAN_LEAST = 220px      # how tall the plan's view is at the least
+const REACH = 7.0             # px. A corner or a line that's this near the mouse is under it.
+const NEAR = 24.0             # the most px to a point of the page: as big as the plan gets
+const SETTLED = 0.15          # seconds after the plan last moved until a plan that's slow to draw is drawn sharp
+const QUICK = 0.012           # seconds. A plan that's drawn in less is drawn sharp while it moves.
+const MOST_FOUND = 8          # the lines of the list under a search
+const SIDE_W = 380px          # how wide the list of measures is beside a plan that fills the window
+const HUES = (colorant"rgb(222,72,58)", colorant"rgb(38,120,214)", colorant"rgb(30,150,90)", colorant"rgb(232,140,24)",
+              colorant"rgb(140,84,208)", colorant"rgb(18,160,170)", colorant"rgb(214,70,150)", colorant"rgb(128,104,72)")
+"The tools of a takeoff, in the order of their buttons: the icon of each, what it says of itself, and the letter that chooses it"
+const PLAN_TOOLS = (:select => ("cursor", "Select and move  V", 'v'), :count => ("plus-circle", "Count  C", 'c'),
+                    :length => ("vector-pen", "Measure a length  L", 'l'), :area => ("pentagon", "Measure an area  A", 'a'),
+                    :scale => ("rulers", "Set the scale from a length that you know  S", 's'))
+"Every icon that a takeoff can show. The built app reads them all when it's made."
+const PLAN_ICONS = ["cursor", "plus-circle", "vector-pen", "pentagon", "rulers", "chevron-left", "chevron-right", "zoom-out", "zoom-in",
+                    "aspect-ratio", "file-earmark-pdf", "x-lg", "plus-lg", "map", "person", "receipt", "arrows-fullscreen", "fullscreen-exit",
+                    "chevron-up", "chevron-down"]
+
+"True when the page's theme is a dark one"
+dark_page() = RGBA(colours.bg).r < 0.5
+"""
+What's behind the plan's paper, round the table of measures and at the foot of
+a takeoff: the theme's colour for things that float over the page, which is a
+little lighter than the page. In a dark page it's the page's own colour.
+"""
+takeoff_back() = dark_page() ? colours.bg : colours.float
+
+"The colour of the measure at place `i` in the list"
+hue(i) = HUES[mod1(i, length(HUES))]
+
+"The part of a page of a PDF plan that a takeoff shows, as a picture that Skia draws. It's kept until the view moves."
+mutable struct Sharp
+  of::Any                         # what it's a picture of
+  image::Ptr{Skia.sk_image_t}
+  cost::Float64                   # seconds that the last one took to draw
+end
+
+"What a `takeoff` block shows: the plan, the tools and the list of measures"
+@def mutable struct TakeoffView <: SemanticUI
+  n::Int = 0                              # its place among the page's takeoffs
+  first::Int = 0                          # the lines of its block, when the page was last laid out
+  last::Int = 0
+  data::Plans.Takeoff = Plans.Takeoff()
+  lines::Vector{String} = String[]        # the lines that `data` was read from
+  tool::Symbol = :select
+  current::Int = 0                        # the measure that the tools draw for: its place in the list, or 0
+  picked::Any = nothing                   # what's selected on the plan: the place of its measure and its shape, and of its point if it's one corner
+  draft::Vector{Plans.Point} = Plans.Point[]   # the corners so far of what's being drawn
+  zoom::Float64 = 0.0                     # px to a point of the page. 0 fits the page in the view.
+  at::Plans.Point = (0.0, 0.0)            # the point of the page at the view's top left
+  box::NTuple{4,Float64} = (0.0, 0.0, 0.0, 0.0)   # where the view was last drawn in the window: its left, top, width and height
+  fitted::Any = nothing                   # the file and the page that the zoom is for
+  mouse::Any = nothing                    # the point of the page under the mouse
+  grab::Any = nothing                     # a drag: of the plan, or of a corner
+  clicked::NTuple{3,Float64} = (0.0, 0.0, 0.0)   # when and where the plan was last clicked
+  moved::Float64 = 0.0                    # when the view last moved
+  asking::Any = nothing                   # what the text field is for: (:name, i), (:item, i), (:extra, i), (:scale,), (:length, a, b) or (:customer,)
+  query::String = ""                      # the words that were last searched for
+  typed::Float64 = 0.0                    # when the words in the text field last changed
+  search::Any = nothing                   # the search that Centient hasn't answered yet
+  rows::Vector{Any} = Any[]               # what the last search found
+  pick::Int = 1                           # the row of them that Return takes
+  known::Dict{String,Any} = Dict{String,Any}()   # what Centient says of each item: its name, its unit, its price
+  lookup::Any = nothing                   # the request for those that Centient hasn't answered yet
+  quoting::Any = nothing                  # the request for a quote that Centient hasn't answered yet
+  said::String = ""                       # what the foot of the block says
+  wrong::Bool = false                     # it says what went wrong
+  parts::Dict{Any,Any} = Dict{Any,Any}()  # its buttons, rows and text field, kept between frames
+  sharp::Sharp = Sharp(nothing, C_NULL, 1.0)
+  full::Bool = false                      # it fills the window, over the page
+  beside::Bool = false                    # it fills the window with its list of measures beside the plan, not under it
+  tall::px = 0px                          # how tall it was in the page when it was last laid out there
+  pinned::px = 0px                        # how far the page was scrolled when it filled the window
+  sort::Any = nothing                     # the column that the table of measures is sorted by, and which way: (:cost, :desc)
+  filters::Dict{Symbol,String} = Dict{Symbol,String}()   # the words that a column's text must have for the table to show a measure
+  order::Vector{Int} = Int[]              # the measures that the table shows, in the order that it shows them
+end
+
+"The part of a takeoff that shows the plan"
+@def mutable struct PlanArea <: SemanticUI
+  of::Any = nothing
+end
+"A button of a takeoff: a tool, a page arrow, the button that makes the quote"
+@def mutable struct PlanButton <: SemanticUI
+  of::Any = nothing
+  action::Any = :none
+  icon::String = ""
+  words::String = ""
+  tip::String = ""
+  off::Bool = false                           # it does nothing now, and shows that
+  rect::NTuple{4,px} = (0px, 0px, 0px, 0px)   # where it was last drawn, to put its tooltip under it
+  quiet::Bool = false                         # clicked, so no tooltip until the mouse leaves it
+end
+"A measure in a takeoff's list"
+@def mutable struct MeasureRow <: SemanticUI
+  of::Any = nothing
+  i::Int = 0
+end
+"A part of a measure's row that a click changes: its name, its item, or what it adds for waste"
+@def mutable struct MeasureCell <: SemanticUI
+  of::Any = nothing
+  i::Int = 0
+  what::Symbol = :name
+end
+"The heading of a column of the table of measures. A click sorts by the column, or opens a menu that sorts and searches it."
+@def mutable struct ColumnHead <: SemanticUI
+  of::Any = nothing
+  key::Symbol = :name
+  rect::NTuple{4,px} = (0px, 0px, 0px, 0px)   # where it was last drawn, to put its tooltip under it
+end
+"The menu of a column of text: its two orders and a field to search it. It floats under the heading, as it does in Centient's lists."
+@def mutable struct ColumnMenu <: SemanticUI
+  of::Any = nothing
+  key::Symbol = :name
+  side::Symbol = :bottom   # the side of the heading that it's on
+end
+"One of the two orders in the menu of a column"
+@def mutable struct SortRow <: SemanticUI
+  of::Any = nothing
+  key::Symbol = :name
+  dir::Symbol = :asc
+end
+"A line of the list that a search shows: an item of Centient's catalogue, or a contact"
+@def mutable struct FoundRow <: SemanticUI
+  of::Any = nothing
+  k::Int = 0
+end
+"The foot of the list of items: the catalogue that the list shows. A click on it shows another."
+@def mutable struct CatalogueFoot <: SemanticUI
+  of::Any = nothing
+end
+"""
+The list of what a search found. It floats beside the text field with an arrow
+that points at the field, the way the lists in Centient's own forms do.
+"""
+@def mutable struct FoundList <: SemanticUI
+  of::Any = nothing
+  side::Symbol = :bottom   # the side of the text field that it's on
+  rows::Any = nothing      # what it showed last. A new list starts at its top.
+  pick::Int = 0            # the row that was picked when it was last drawn. A row that the keys pick is brought in sight.
+  popup::Any = nothing     # what UI.jl floats it in
+  settled::Bool = false    # its side of the text field is chosen, and it keeps that side while it's open
+end
+
+"A part of `v` that's kept between frames"
+part!(make, v::TakeoffView, key) = begin
+  node = get!(make, v.parts, key)
+  node.parent === nothing && setfield!(node, :parent, v)
+  node
+end
+
+"The text field of a takeoff. One field does for the name of a measure, a search, the scale and the rest."
+plan_input(v::TakeoffView) = part!(v, :input) do
+  TextInput(placeholder="", font_family=SANS, font_size=13px,
+            look=(_, text) -> Row(width(grow=grow), height(grow=grow), clip=true, text))
+end
+
+# --- the plan's file ---------------------------------------------------------------------
+
+"The file of the plan, or \"\" when the block names none that's there"
+plan_path(v::TakeoffView) = begin
+  isempty(v.data.plan) && return ""
+  path = abspath(docdir(editor(v)), expanduser(unescaped(v.data.plan)))
+  isfile(path) ? path : ""
+end
+
+ispdf(path) = lowercase(splitext(path)[2]) == ".pdf"
+
+"How many pages the plan has"
+plan_pages(v::TakeoffView) = (path = plan_path(v); isempty(path) ? 0 : ispdf(path) ? pdf_pages(path) : 1)
+
+"""
+How wide and how tall the page that shows is, in points, or nothing when there's
+no plan to show. A picture has a point for each of its pixels.
+"""
+plan_size(v::TakeoffView) = begin
+  path = plan_path(v)
+  isempty(path) && return nothing
+  ispdf(path) && return pdf_size(path, v.data.page)
+  key = picture_key(path)
+  key === nothing && return nothing
+  source = image_source(key)
+  (Float64(source.width), Float64(source.height))
+end
+
+"How tall the plan's view is in a block that's `w` wide: tall enough for the whole page, and no taller than leaves room for the list"
+plan_h(v::TakeoffView, w::px) = begin
+  s = plan_size(v)
+  s === nothing && return 180px
+  _, tall = window_size(editor(v))
+  clamp((w - 2px(PAPER_EDGE)) * s[2] / s[1] + 2px(PAPER_EDGE), PLAN_LEAST, max(PLAN_LEAST, tall - 280px))
+end
+
+"Make the file at `path` the plan"
+plan!(v::TakeoffView, path) = begin
+  v.data.plan = named(editor(v), path)
+  v.data.page = 1
+  v.zoom = 0.0
+  empty!(v.draft)
+  commit!(v)
+end
+
+"Ask which file holds the plan, with macOS's own panel"
+choose_plan!(v::TakeoffView, w) = begin
+  # A window that isn't on the screen, like one a test makes, has no panel to ask with
+  (Sys.isapple() && !isempty(w.glfw)) || return handled
+  path = with_pool() do
+    panel = msg(cls("NSOpenPanel"), "openPanel")
+    msg(panel, "setDirectoryURL:", msg(cls("NSURL"), "fileURLWithPath:", nsstring(docdir(editor(v)))))
+    # 1 is the panel's Open button
+    ccall((:objc_msgSend, libobjc), Int, (Ptr{Cvoid}, Ptr{Cvoid}), panel, sel("runModal")) == 1 || return nothing
+    jstring(msg(msg(panel, "URL"), "path"))
+  end
+  # The panel took the mouse, so the window never heard its button come up
+  Keys.mouse_left in w.keys && (w.keys ⊻= Keys.mouse_left)
+  path === nothing || plan!(v, path)
+  handled
+end
+
+"The takeoff under the mouse, or nothing"
+takeoff_at(e, w) = begin
+  x, y = w.mouse
+  for node in values(e.nodes)
+    node isa TakeoffView || continue
+    r = rect(node)
+    r !== nothing && r.left <= x < r.left + r.width && r.top <= y < r.top + r.height && return node
+  end
+  nothing
+end
+
+# --- the block's lines -------------------------------------------------------------------
+
+"The first and the last line of the `n`th takeoff block of `b`, or nothing"
+takeoff_lines(b::Buffer, n::Int) = begin
+  ks = kinds(b)
+  seen = 0
+  for i in eachindex(ks)
+    (ks[i].kind == Kind.fence && ks[i].level == 0 && ks[i].lang == TAKEOFF) || continue
+    (seen += 1) == n || continue
+    t = codeblock(b, i)[2]
+    return t > i && ks[t].kind == Kind.fence && ks[t].level == 1 ? (i, t) : nothing
+  end
+  nothing
+end
+
+"Read the takeoff again from the lines of its block, if they've changed"
+reread!(v::TakeoffView, lines) = begin
+  lines == v.lines && return v
+  v.lines = lines
+  v.data = Plans.takeoff(lines)
+  v.current = min(v.current, length(v.data.measures))
+  v.picked = nothing
+  v
+end
+
+"""
+Write the takeoff into its block. The caret stays where it was in the text, and
+⌘Z takes the change back. If the block's lines aren't the ones that the takeoff
+was read from, something else changed them, and the takeoff is read again.
+"""
+commit!(v::TakeoffView) = begin
+  b = editor(v).buf
+  readonly(b) && return v
+  span = takeoff_lines(b, v.n)
+  span === nothing && return v
+  i, t = span
+  v.first, v.last = i, t
+  b.lines[i+1:t-1] == v.lines || return reread!(v, b.lines[i+1:t-1])
+  new = Plans.written(v.data)
+  new == v.lines && return v
+  caret, anchor = b.caret, b.anchor
+  edit!(b, line_end(b, i), line_end(b, t - 1), isempty(new) ? "" : "\n" * join(new, "\n"))
+  by = length(new) - length(v.lines)
+  moved(p) = p[1] >= t ? (p[1] + by, p[2]) : p[1] > i ? (i, 0) : p
+  b.caret, b.anchor = moved(caret), moved(anchor)
+  v.last += by
+  v.lines = new
+  v
+end
+
+"What the `takeoff` block from line `i` to line `t` shows. `n` is its place among the page's takeoffs."
+takeoff_item(e, i, t, n) = begin
+  v = get!(() -> TakeoffView(n=n), e.nodes, (:takeoff, e.buf.path, n))
+  own!(node!(Document, e, :document), v)
+  v.first, v.last = i, t
+  reread!(v, e.buf.lines[i+1:t-1])
+  # A takeoff that fills the window is drawn over the page, and its room in the page stays empty
+  v.full && return Live(Box(width(grow=grow), height(v.tall)), v.tall + 2LIVE_GAP)
+  # Lay it out once to learn how tall it is
+  concrete = describe(Column(fixed(e.width), Alignment.Start, geometry(v)), (e.width, 9999px))
+  v.tall = concrete.height
+  Live(v, v.tall + 2LIVE_GAP)
+end
+
+# --- Centient ----------------------------------------------------------------------------
+
+"What Centient says of the item that `ref` names, or nothing if it hasn't said yet"
+known(v::TakeoffView, ref) = isempty(ref) ? nothing : get(v.known, ref, nothing)
+
+"Ask Centient for the items of the takeoff that it hasn't told of yet. The plan's view asks when it's drawn, so a takeoff that's out of sight asks nothing."
+lookup!(v::TakeoffView) = begin
+  v.lookup === nothing || return
+  refs = unique!([m.item for m in v.data.measures if !isempty(m.item) && !haskey(v.known, m.item)])
+  (isempty(refs) || !Centient.available()) && return
+  # An item that Centient doesn't have is asked for once
+  foreach(ref -> v.known[ref] = nothing, refs)
+  v.lookup = Centient.ask("lookup_items", Dict("refs" => refs))
+  nothing
+end
+
+"A sentence at the foot of the block. `wrong` shows it as something that went wrong."
+say!(v::TakeoffView, words, wrong=false) = (v.said = String(words); v.wrong = wrong; handled)
+
+"An amount of money: \$1,234.50"
+dollars(x::Real) = begin
+  cents = round(Int, 100x)
+  (cents < 0 ? "-" : "") * "\$" * commas(abs(cents) ÷ 100) * "." * lpad(abs(cents) % 100, 2, '0')
+end
+
+"The unit of a quote's line for a measure of this kind, as Centient names it"
+quote_unit(kind::Symbol) = kind == :count ? "Piece" : kind == :length ? "m" : "m²"
+
+"Ask Centient for a quote with a line for each measure"
+make_quote!(v::TakeoffView) = begin
+  v.quoting === nothing || return handled
+  t = v.data
+  Centient.available() || return say!(v, "Centient isn't on this Mac, so Kaydown can't make the quote", true)
+  isempty(t.customer) && return say!(v, "Choose the customer first", true)
+  lines = Any[]
+  for m in t.measures
+    amount = Plans.amount(t, m)
+    amount === nothing && return say!(v, "Set the scale first, so that $(isempty(m.name) ? "each length" : m.name) has a size", true)
+    amount > 0 || continue
+    push!(lines, Dict{String,Any}("ref" => m.item, "quantity" => round(amount, digits=2), "unit" => quote_unit(m.kind), "note" => m.name))
+  end
+  isempty(lines) && return say!(v, "Nothing is measured yet", true)
+  plan = isempty(t.plan) ? "" : " of " * basename(t.plan)
+  v.quoting = Centient.ask("create_quote", Dict{String,Any}("customer" => t.customer, "notes" => "From a takeoff$plan in Kaydown", "lines" => lines))
+  say!(v, "Making the quote in Centient…")
+end
+
+"""
+What happens to a takeoff in each frame, before the page is laid out: a drag
+that ended is written down, the text field that lost the keyboard closes, and
+Centient's answers are taken.
+"""
+tick!(v::TakeoffView) = begin
+  w = window_of(v)
+  v.grab !== nothing && !held(v, Keys.mouse_left) && drop!(v)
+  # A click somewhere else took the keyboard from the text field
+  v.asking !== nothing && w !== nothing && w.focus !== plan_input(v) && settle_asking!(v)
+  waiting = false
+  # A column shows what its search finds while you type
+  v.asking !== nothing && v.asking[1] == :filter && filter!(v, v.asking[2], plan_input(v).text)
+  if v.asking !== nothing && v.asking[1] in (:item, :customer)
+    words = String(strip(plan_input(v).text))
+    words == v.query || (v.query = words; v.typed = time(); v.pick = 1)
+    # The search waits until the typing stops for a moment
+    if v.typed > 0 && time() - v.typed > 0.2
+      v.typed = 0.0
+      from = ITEM_FROM[]
+      v.search = v.asking[1] == :customer ? Centient.ask("find_contacts", Dict("query" => words)) :
+                 from[1] == :suppliers    ? Centient.ask("list_catalogues", Dict("query" => words)) :
+                 Centient.ask("search_catalogue", Dict("query" => words, "catalogue" => from[1] == :own ? "own" : from[2]))
+    end
+    waiting = v.typed > 0
+  end
+  Centient.check!()
+  r = v.search
+  if r !== nothing && Centient.finished(r)
+    v.search = nothing
+    if Centient.failed(r)
+      v.rows = Any[]
+      say!(v, r.problem, true)
+    else
+      v.rows = collect(Any, get(r.value, r.tool == "find_contacts" ? "contacts" : r.tool == "list_catalogues" ? "catalogues" : "items", Any[]))
+      v.pick = clamp(v.pick, 1, max(1, length(v.rows)))
+    end
+  end
+  r = v.lookup
+  if r !== nothing && Centient.finished(r)
+    v.lookup = nothing
+    Centient.failed(r) || foreach(row -> v.known[row["ref"]] = row, get(r.value, "items", Any[]))
+  end
+  r = v.quoting
+  if r !== nothing && Centient.finished(r)
+    v.quoting = nothing
+    if Centient.failed(r)
+      say!(v, r.problem, true)
+    else
+      v.data.made = string(get(r.value, "number", ""))
+      company = Centient.server.company
+      say!(v, "Centient has quote $(v.data.made) for $(dollars(get(r.value, "total", 0.0))) with GST" * (isempty(company) ? "" : ", in $company"))
+      commit!(v)
+    end
+  end
+  # While Centient works, the window looks again soon
+  (waiting || v.search !== nothing || v.lookup !== nothing || v.quoting !== nothing) && redraw_in!(v, 0.1)
+  v
+end
+
+"Do what each takeoff of the page that shows needs in this frame"
+takeoff_tick!(e) = for (key, node) in collect(e.nodes)
+  (node isa TakeoffView && key[2] == e.buf.path) || continue
+  tick!(node)
+  node.full || continue
+  # A takeoff whose block has gone goes back to the page. Under one that fills the window, the page stays where it was.
+  takeoff_lines(e.buf, node.n) === nothing ? (node.full = false) : (e.scroll.offset = node.pinned)
+end
+
+# --- the text field ----------------------------------------------------------------------
+
+"Close the text field, if it shows. What's typed in it is kept, but nothing is chosen from a list."
+settle_asking!(v::TakeoffView) = v.asking === nothing ? handled : v.asking[1] in (:item, :customer) ? stop_asking!(v) : answer!(v)
+
+"Show the text field for `what`, with `text` in it and selected"
+ask!(v::TakeoffView, what, text="", placeholder="") = begin
+  settle_asking!(v)
+  i = plan_input(v)
+  i.color = colours.ink
+  i.text, i.placeholder = String(text), String(placeholder)
+  i.anchor, i.cursor = 0, length(i.text)
+  v.asking = what
+  v.rows, v.pick, v.search = Any[], 1, nothing
+  v.query, v.typed = "\0", 0.0   # no words yet, so the first look at the field starts a search
+  v.said, v.wrong = "", false
+  focus(i)
+  if what[1] == :item
+    # The list starts on the catalogue that an item was last chosen from, and not on the list of suppliers
+    ITEM_FROM[][1] == :suppliers && (ITEM_FROM[] = (:own,))
+    i.placeholder = "⌥ to toggle catalogue"
+  end
+  what[1] in (:item, :customer) && Centient.available() && show_found!(v)
+  handled
+end
+
+"Take the text field away. The keyboard goes back to the plan."
+stop_asking!(v::TakeoffView) = begin
+  v.asking = nothing
+  v.rows, v.search = Any[], nothing
+  w = window_of(v)
+  w === nothing || (close_popup!(w, FOUND_KEY); close_popup!(w, HEAD_KEY))
+  w !== nothing && w.focus === plan_input(v) && focus(part!(() -> PlanArea(of=v), v, :area))
+  handled
+end
+
+"The number of metres that `text` says: 3.6, 3.6m or 3600mm. It's nothing when it says none."
+metres_typed(text) = begin
+  m = match(r"^\s*(\d+(?:\.\d+)?)\s*(mm|cm|m)?\s*$", lowercase(text))
+  m === nothing && return nothing
+  n = parse(Float64, m[1]) * (m[2] == "mm" ? 0.001 : m[2] == "cm" ? 0.01 : 1.0)
+  n > 0 ? n : nothing
+end
+
+"Give page `page` the scale `n`. A plan's first scale is for all its pages. After that, a page gets a scale of its own."
+scale!(v::TakeoffView, n) = begin
+  t = v.data
+  page = t.page
+  key = isempty(t.scales) || plan_pages(v) <= 1 || (length(t.scales) == 1 && haskey(t.scales, 0) && page == 1) ? 0 : page
+  t.scales[key] = round(n, digits=1)
+  commit!(v)
+end
+
+"Take row `k` of what a search found"
+choose_row!(v::TakeoffView, k::Int) = begin
+  a = v.asking
+  (a === nothing || !(1 <= k <= length(v.rows))) && return stop_asking!(v)
+  row = v.rows[k]
+  # A supplier in the list of suppliers opens its catalogue. The search goes on there.
+  a[1] == :item && haskey(row, "slug") && return browse!(v, (:catalogue, string(row["slug"]), string(row["name"])))
+  if a[1] == :customer
+    v.data.customer = string(row["name"])
+  elseif a[2] <= length(v.data.measures)
+    m = v.data.measures[a[2]]
+    was = known(v, m.item)
+    # A measure that still has the name it was made with, or its old item's name, takes the new item's name
+    (isempty(m.name) || occursin(FIRST_NAME, m.name) || (was !== nothing && m.name == was["name"])) &&
+      (m.name = replace(string(row["name"]), '|' => '/'))
+    m.item = string(row["ref"])
+    v.known[m.item] = row
+    # The item's unit says what the measure is, and the tool for it is ready to draw
+    kind = Plans.kind_for(get(row, "unit", nothing))
+    isempty(m.shapes) && (m.kind = kind)
+    stop_asking!(v)
+    commit!(v)
+    v.current = a[2]
+    tool!(v, m.kind)
+    m.kind == kind || say!(v, "Centient's price for $(row["name"]) is for $(sold_by(row)), and this measure is $(KIND_WORDS[m.kind])", true)
+    return handled
+  end
+  stop_asking!(v)
+  commit!(v)
+  handled
+end
+
+"Do what the text field was for with what's typed in it"
+answer!(v::TakeoffView) = begin
+  a = v.asking
+  a === nothing && return handled
+  text = String(strip(plan_input(v).text))
+  t = v.data
+  # A column's search changes what the table shows, and nothing in the block
+  a[1] == :filter && return (filter!(v, a[2], text); stop_asking!(v))
+  if a[1] in (:item, :customer)
+    isempty(v.rows) || return choose_row!(v, v.pick)
+    # Nothing to choose from. An empty field takes the item away, and a customer is kept as it's typed.
+    a[1] == :item && isempty(text) && a[2] <= length(t.measures) && (t.measures[a[2]].item = "")
+    a[1] == :customer && !isempty(text) && (t.customer = text)
+  elseif a[1] == :name
+    a[2] <= length(t.measures) && !isempty(text) && (t.measures[a[2]].name = replace(text, '|' => '/'))
+  elseif a[1] == :extra
+    n = tryparse(Float64, strip(replace(text, '%' => "", '+' => "")))
+    a[2] <= length(t.measures) && (t.measures[a[2]].extra = n === nothing ? 0.0 : clamp(n, 0, 1000) / 100)
+  elseif a[1] == :scale
+    n = Plans.scale(text)
+    n === nothing ? say!(v, "A scale is written like 1:100", true) : scale!(v, n)
+  elseif a[1] == :length
+    real = metres_typed(text)
+    n = real === nothing ? nothing : Plans.scale(a[2], a[3], real)
+    n === nothing ? say!(v, "Type the length in metres, like 3.6", true) : scale!(v, n)
+    empty!(v.draft)
+    v.tool = :select
+  end
+  stop_asking!(v)
+  commit!(v)
+  handled
+end
+
+# The keys of the text field that the field has no use for come here
+onkey(v::TakeoffView, ::KeyPress{Keys.enter}) = v.asking === nothing ? nothing : answer!(v)
+onkey(v::TakeoffView, ::KeyPress{Keys.escape}) = begin
+  v.asking === nothing && return nothing
+  v.asking[1] == :length && (empty!(v.draft); v.tool = :select)
+  stop_asking!(v)
+end
+# ⌥ in an empty search for an item changes the catalogue that the list shows
+onkey(v::TakeoffView, ::KeyPress{Keys.opt}) = begin
+  a = v.asking
+  (a !== nothing && a[1] == :item && Centient.available() && isempty(strip(plan_input(v).text))) || return nothing
+  toggle_catalogue!(v)
+end
+onkey(v::TakeoffView, ::KeyPress{Keys.down}) = v.asking === nothing ? nothing : (v.pick = min(v.pick + 1, max(1, length(v.rows))); handled)
+onkey(v::TakeoffView, ::KeyPress{Keys.up}) = v.asking === nothing ? nothing : (v.pick = max(v.pick - 1, 1); handled)
+
+# --- the view of the plan ----------------------------------------------------------------
+
+"The point of the page that's at a place in the window"
+page_point(v::TakeoffView, x, y) = (v.at[1] + (x - v.box[1]) / v.zoom, v.at[2] + (y - v.box[2]) / v.zoom)
+
+"The place in the window of a point of the page"
+window_point(v::TakeoffView, p) = (v.box[1] + (p[1] - v.at[1]) * v.zoom, v.box[2] + (p[2] - v.at[2]) * v.zoom)
+
+"The px of white that the view keeps round the paper, so that the paper's edge and its shadow show"
+const PAPER_EDGE = 14.0
+
+"How many px to a point fits the whole page in the view, with white round it"
+fit_zoom(v::TakeoffView, s) = max(min((v.box[3] - 2PAPER_EDGE) / s[1], (v.box[4] - 2PAPER_EDGE) / s[2]), 1e-3)
+
+"Show the whole page, in the middle of the view"
+fit!(v::TakeoffView, s) = begin
+  v.zoom = fit_zoom(v, s)
+  v.at = ((s[1] - v.box[3] / v.zoom) / 2, (s[2] - v.box[4] / v.zoom) / 2)
+  v
+end
+
+"""
+Keep the page in the view. Where the page is narrower than the view, it stays
+in the middle, and so it does where it's shorter. So the plan only moves once
+it's bigger than the view, and then no further than its edges, with the
+white that the view keeps round the paper. `s` is the page's size in points.
+"""
+hold!(v::TakeoffView, s) = begin
+  w, h = v.box[3] / v.zoom, v.box[4] / v.zoom
+  e = PAPER_EDGE / v.zoom
+  v.at = (s[1] <= w ? (s[1] - w) / 2 : clamp(v.at[1], -e, s[1] - w + e),
+          s[2] <= h ? (s[2] - h) / 2 : clamp(v.at[2], -e, s[2] - h + e))
+  v
+end
+
+"Note that the view moved just now, and keep the page in it"
+moved!(v::TakeoffView) = begin
+  v.moved = time()
+  s = plan_size(v)
+  s === nothing ? v : hold!(v, s)
+end
+
+"Make the plan `by` times as big. The point of the page at the place `(x, y)` in the window stays there."
+zoom_plan!(v::TakeoffView, by, x, y) = begin
+  s = plan_size(v)
+  (s === nothing || v.zoom <= 0) && return handled
+  p = page_point(v, x, y)
+  v.zoom = clamp(v.zoom * by, fit_zoom(v, s), NEAR)   # never smaller than the whole page
+  v.at = (p[1] - (x - v.box[1]) / v.zoom, p[2] - (y - v.box[2]) / v.zoom)
+  moved!(v)
+  handled
+end
+
+"Go on by `by` pages"
+page!(v::TakeoffView, by) = begin
+  page = clamp(v.data.page + by, 1, max(1, plan_pages(v)))
+  page == v.data.page && return handled
+  v.data.page = page
+  v.zoom = 0.0
+  v.picked = nothing
+  empty!(v.draft)
+  commit!(v)
+  handled
+end
+
+# --- drawing -----------------------------------------------------------------------------
+
+"How many of the screen's pixels a px is wide on the canvas `ctx`"
+density(ctx) = begin
+  m = Ref(Skia.sk_matrix_t(1f0, 0f0, 0f0, 0f0, 1f0, 0f0, 0f0, 0f0, 1f0))
+  Skia.sk_canvas_get_total_matrix(ctx, m)
+  sqrt(abs(m[].scaleX * m[].scaleY - m[].skewX * m[].skewY))
+end
+
+const plan_sampling = Skia.sk_sampling_options_t(0, false, Skia.sk_cubic_resampler_t(0f0, 0f0),
+                                                 Skia.SK_FILTER_MODE_LINEAR, Skia.SK_MIPMAP_MODE_NONE)
+
+"Draw the part `from` of a picture of Skia's into the part `to` of the window. Each is a left, a top, a width and a height."
+paint_picture(ctx, image, from, to) = begin
+  a = Ref(Skia.sk_rect_t(Float32(from[1]), Float32(from[2]), Float32(from[1] + from[3]), Float32(from[2] + from[4])))
+  b = Ref(Skia.sk_rect_t(Float32(to[1]), Float32(to[2]), Float32(to[1] + to[3]), Float32(to[2] + to[4])))
+  paint = Skia.sk_paint_new()
+  Skia.sk_paint_set_antialias(paint, true)
+  Skia.sk_canvas_draw_image_rect(ctx, image, a, b, Ref(plan_sampling), paint, Skia.SRC_RECT_CONSTRAINT_FAST)
+  Skia.sk_paint_delete(paint)
+end
+
+"The part of a page of a PDF plan that the view shows, drawn at the screen's own pixels and kept until the view moves"
+sharpen!(v::TakeoffView, path, of, k, x, y, w, h) = sharpen!(v.sharp, path, v.data.page, of, k, x, y, w, h)
+
+"""
+The part of page `page` of the PDF file at `path` that's `w` by `h` pixels and
+starts `x` and `y` pixels into the page drawn `k` pixels to the point. It's kept
+in `p` while `of`, what it's a picture of, stays the same.
+"""
+sharpen!(p::Sharp, path, page, of, k, x, y, w, h) = begin
+  p.of == of && return p.image
+  started = time()
+  pixels = pdf_part(path, page, k, x, y, w, h)
+  p.image == C_NULL || Skia.sk_image_unref(p.image)
+  p.image, p.of = C_NULL, of
+  pixels === nothing && return C_NULL
+  info = Ref(Skia.sk_image_info_t(C_NULL, Skia.SK_COLOR_TYPE_BGRA_8888, Skia.SK_ALPHA_TYPE_PREMUL, w, h))
+  GC.@preserve info pixels begin
+    data = Skia.sk_data_new_with_copy(pointer(pixels), UInt64(4w * h))
+    p.image = Skia.sk_image_new_raster_data(info, data, Csize_t(4w))
+    Skia.sk_data_unref(data)
+  end
+  p.cost = time() - started
+  p.image
+end
+
+"How round the corners of the plan's paper are, in px"
+const PAPER_ROUND = 3.0
+
+"""
+Draw the plan's paper, with what shows where it ends on the white behind it:
+a soft shadow under it and a thin line round it. Its corners are a little round.
+"""
+paper!(ctx, (x, y, w, h)) = begin
+  shape(grow, down) = begin
+    path = Skia.sk_path_new()
+    rect = Ref(Skia.sk_rect_t(Float32(x - grow), Float32(y - grow + down), Float32(x + w + grow), Float32(y + h + grow + down)))
+    Skia.sk_path_add_rounded_rect(path, rect, Float32(PAPER_ROUND + grow), Float32(PAPER_ROUND + grow), Skia.SK_PATH_DIRECTION_CW)
+    path
+  end
+  fill(path, paint) = (Skia.sk_canvas_draw_path(ctx, path, paint); Skia.sk_paint_delete(paint); Skia.sk_path_delete(path))
+  shadow = ink(RGBA(0, 0, 0, 0.2))
+  blur = Skia.sk_maskfilter_new_blur_with_flags(Skia.SK_BLUR_STYLE_NORMAL, 6f0, true)
+  Skia.sk_paint_set_maskfilter(shadow, blur)
+  fill(shape(0, 2), shadow)
+  Skia.sk_maskfilter_unref(blur)
+  # The line is outside the paper, so the plan doesn't cover it
+  fill(shape(0.5, 0), ink(RGBA(0, 0, 0, 0.16), 1))
+  fill(shape(0, 0), ink(colorant"white"))
+end
+
+"Draw the page of the plan that shows. `s` is its size in points."
+draw_plan(ctx, v::TakeoffView, s) = begin
+  left, top, wide, tall = v.box
+  path = plan_path(v)
+  # Where the paper is in the window
+  x, y = window_point(v, (0.0, 0.0))
+  paper = (x, y, s[1] * v.zoom, s[2] * v.zoom)
+  paper!(ctx, paper)
+  # What's on the paper is cut off at the paper's round corners
+  with_round_clip(() -> plan_ink(ctx, v, s, path, paper), ctx, px(paper[1]), px(paper[2]), px(paper[3]), px(paper[4]), px(PAPER_ROUND))
+end
+
+"Draw what's on the paper: the picture, or the part of the PDF page that's in the view"
+plan_ink(ctx, v::TakeoffView, s, path, paper) = begin
+  left, top, wide, tall = v.box
+  if !ispdf(path)
+    key = picture_key(path)
+    key === nothing || paint_picture(ctx, image_source(key).raw, (0, 0, s[1], s[2]), paper)
+    return
+  end
+  # Never fewer than 2 pixels to the px, so that the plan is sharp on paper too
+  d = clamp(density(ctx), 2, 3)
+  w, h = round(Int, wide * d), round(Int, tall * d)
+  (w < 1 || h < 1) && return
+  k = v.zoom * d   # the screen's pixels to a point of the page
+  of = (path, mtime(path), v.data.page, k, v.at, w, h)
+  p = v.sharp
+  # A plan that takes long to draw shows a rougher picture of the whole page while it moves
+  if p.of != of && p.cost > QUICK && time() - v.moved < SETTLED
+    rough = pdf_page(path, v.data.page, 2000)
+    rough === nothing || paint_picture(ctx, image_source(rough).raw, (0, 0, image_source(rough).width, image_source(rough).height), paper)
+    redraw_in!(v, SETTLED)
+    return
+  end
+  image = sharpen!(v, path, of, k, v.at[1] * k, v.at[2] * k, w, h)
+  image == C_NULL && return
+  # The picture is of the whole view, with white where the paper ends. The paper's edge cuts it off.
+  paint_picture(ctx, image, (0, 0, w, h), (left, top, wide, tall))
+end
+
+"A paint for lines `wide` px wide, or for filling when `wide` is 0"
+ink(colour, wide=0.0) = begin
+  paint = Skia.sk_paint_new()
+  Skia.sk_paint_set_antialias(paint, true)
+  Skia.sk_paint_set_color(paint, sk_color(colour))
+  Skia.sk_paint_set_style(paint, wide > 0 ? Skia.SK_PAINT_STYLE_STROKE : Skia.SK_PAINT_STYLE_FILL)
+  if wide > 0
+    Skia.sk_paint_set_stroke_width(paint, Float32(wide))
+    Skia.sk_paint_set_stroke_join(paint, Skia.SK_STROKE_JOIN_ROUND)
+    Skia.sk_paint_set_stroke_cap(paint, Skia.SK_STROKE_CAP_ROUND)
+  end
+  paint
+end
+
+"Draw a line through the places `ps`. `fill` colours what's inside it. `closed` joins its end to its start."
+trace(ctx, ps, colour, wide; fill=nothing, closed=false) = begin
+  length(ps) < 2 && return
+  shape = Skia.sk_path_new()
+  for (i, (x, y)) in enumerate(ps)
+    i == 1 ? Skia.sk_path_move_to(shape, Float32(x), Float32(y)) : Skia.sk_path_line_to(shape, Float32(x), Float32(y))
+  end
+  closed && Skia.sk_path_close(shape)
+  if fill !== nothing
+    paint = ink(fill)
+    Skia.sk_canvas_draw_path(ctx, shape, paint)
+    Skia.sk_paint_delete(paint)
+  end
+  paint = ink(colour, wide)
+  Skia.sk_canvas_draw_path(ctx, shape, paint)
+  Skia.sk_paint_delete(paint)
+  Skia.sk_path_delete(shape)
+end
+
+"Draw a dot of radius `r` at the place `(x, y)`, with a white edge"
+dot(ctx, (x, y), r, colour) = begin
+  for (radius, c) in ((r + 1.5, colorant"white"), (r, colour))
+    paint = ink(c)
+    Skia.sk_canvas_draw_circle(ctx, Float32(x), Float32(y), Float32(radius), paint)
+    Skia.sk_paint_delete(paint)
+  end
+end
+
+"Write `words` in a small dark box beside the place `(x, y)`"
+tag(ctx, (x, y), words) = begin
+  isempty(words) && return
+  face = Face(SANS, "Semibold", 11px, colorant"white", false)
+  wide = num(measure(face, words))
+  rounded_rectangle(ctx, px(x + 10), px(y - 22), px(wide + 12), 18px, 4px, background=RGBA(0.12, 0.12, 0.12, 0.85))
+  paint = ink(colorant"white")
+  blob = Skia.sk_textblob_make_from_string(words, skia_font(face.family, face.size, face.style).raw, Skia.SK_TEXT_ENCODING_UTF8)
+  Skia.sk_canvas_draw_text_blob(ctx, blob, Float32(x + 16), Float32(y - 9), paint)
+  Skia.sk_textblob_unref(blob)
+  Skia.sk_paint_delete(paint)
+end
+
+"What a shape of this kind comes to, as the plan shows it beside the shape, or \"\" when its page has no scale"
+size_text(v::TakeoffView, kind, shape) = begin
+  a = Plans.amount(v.data, kind, shape)
+  a === nothing ? "" : Plans.shown(kind, a)
+end
+
+"Draw what's measured on the page that shows, and what's being drawn"
+draw_shapes(ctx, v::TakeoffView) = begin
+  t = v.data
+  for (i, m) in enumerate(t.measures), (j, s) in enumerate(m.shapes)
+    s.page == t.page || continue
+    colour = hue(i)
+    on = v.picked !== nothing && v.picked[1] == i && v.picked[2] == j
+    ps = [window_point(v, p) for p in s.points]
+    if m.kind == :count
+      for (k, p) in enumerate(ps)
+        dot(ctx, p, on && length(v.picked) == 3 && v.picked[3] == k ? 7.5 : 5, colour)
+      end
+      continue
+    end
+    area = m.kind == :area
+    trace(ctx, ps, colour, on ? 4 : 2.5, fill=area ? RGBA(colour, 0.22) : nothing, closed=area)
+    # The corners show on the measure that the tools draw for, so that you can take hold of one
+    (on || v.current == i) && foreach(p -> dot(ctx, p, on ? 4 : 3, colour), ps)
+    on && tag(ctx, ps[end], size_text(v, m.kind, s))
+  end
+  isempty(v.draft) && return
+  # What's being drawn runs on to the mouse
+  kind = v.tool
+  colour = kind == :scale ? colours.accent : hue(v.current > 0 && t.measures[v.current].kind == kind ? v.current : length(t.measures) + 1)
+  points = v.mouse === nothing || v.asking !== nothing ? copy(v.draft) : [v.draft; [v.mouse]]
+  ps = [window_point(v, p) for p in points]
+  trace(ctx, ps, colour, 2, fill=kind == :area && length(ps) > 2 ? RGBA(colour, 0.15) : nothing, closed=kind == :area && length(ps) > 2)
+  foreach(p -> dot(ctx, p, 3, colour), ps[1:length(v.draft)])
+  kind == :scale || tag(ctx, ps[end], size_text(v, kind, Plans.Shape(t.page, points)))
+end
+
+describe(a::PlanArea) = begin
+  v = a.of
+  # In the window, the plan takes all the room that the tools leave
+  h = v.full ? height(grow=grow) : height(plan_h(v, editor(v).width - 2px))
+  plan_size(v) === nothing || return Box(width(grow=grow), h, background(takeoff_back()))
+  words = isempty(v.data.plan) ? "Drop a plan here, or click to choose one: a PDF file or a picture" :
+                                 "$(v.data.plan) isn't a plan that Kaydown can show. Click to choose another."
+  Column(width(grow=grow), h, justify=Alignment.Center, child_gap=10px, background(colours.stripe),
+    Icon("map", size=26px, color=colours.faint), Box(label(words, 13px, color=colours.dim)))
+end
+
+draw(ctx, size, ui::ConcreteRect, a::PlanArea) = begin
+  v = a.of
+  was = v.box
+  v.box = (num(ui.left), num(ui.top), num(ui.width), num(ui.height))
+  s = plan_size(v)
+  s === nothing && return
+  # A new file or a new page is shown whole
+  shown = (plan_path(v), v.data.page)
+  if v.zoom <= 0 || v.fitted != shown
+    fit!(v, s)
+    v.fitted = shown
+  elseif was[3] > 0 && (was[3] != v.box[3] || was[4] != v.box[4])
+    # The view changed its size, as it does when the window does, when it fills the window and on paper.
+    # A view that showed the whole page still does. A view that was bigger shows the same part of the plan.
+    if v.zoom <= 1.0001min(was[3] / s[1], was[4] / s[2])
+      fit!(v, s)
+    else
+      middle = (v.at[1] + was[3] / 2v.zoom, v.at[2] + was[4] / 2v.zoom)
+      v.zoom = max(v.zoom * v.box[3] / was[3], fit_zoom(v, s))
+      v.at = (middle[1] - v.box[3] / 2v.zoom, middle[2] - v.box[4] / 2v.zoom)
+      hold!(v, s)
+    end
+  end
+  lookup!(v)
+  with_clip(ctx, ui.left, ui.top, ui.width, ui.height) do
+    draw_plan(ctx, v, s)
+    draw_shapes(ctx, v)
+  end
+end
+
+cursor(a::PlanArea) = begin
+  v = a.of
+  plan_size(v) === nothing ? :hand : v.tool == :select ? (v.grab === nothing ? :arrow : :hand) : :crosshair
+end
+
+# --- the mouse and the keys on the plan --------------------------------------------------
+
+"The name that a new measure of this kind starts with: Count 1, Length 2"
+first_name(v::TakeoffView, kind) = "$(uppercasefirst(string(kind))) $(count(m -> m.kind == kind, v.data.measures) + 1)"
+const FIRST_NAME = r"^(Count|Length|Area) \d+$"
+const KIND_WORDS = Dict(:count => "a count", :length => "a length", :area => "an area")
+
+"What an item's price is for, in words: each one, each m, each m²"
+sold_by(row) = begin
+  unit = string(something(get(row, "unit", nothing), ""))
+  unit in ("", "Piece", "each") ? "each one" : "each " * unit
+end
+
+"Make a measure that has nothing drawn yet one of `kind`. A name that it was made with follows its kind."
+kind!(v::TakeoffView, m, kind::Symbol) = begin
+  (m.kind == kind || !isempty(m.shapes)) && return m
+  occursin(FIRST_NAME, m.name) && (m.name = first_name(v, kind))
+  m.kind = kind
+  m
+end
+
+"The measure of this kind that the tools draw for. If the current measure is of another kind, a new one starts."
+measure!(v::TakeoffView, kind::Symbol) = begin
+  ms = v.data.measures
+  1 <= v.current <= length(ms) && ms[v.current].kind == kind && return ms[v.current]
+  push!(ms, Plans.Measure(kind, first_name(v, kind)))
+  v.current = length(ms)
+  last(ms)
+end
+
+"End the line or the outline that's being drawn. One with too few corners is dropped."
+finish_shape!(v::TakeoffView) = begin
+  kind = v.tool
+  if kind in (:length, :area) && length(v.draft) >= (kind == :length ? 2 : 3)
+    push!(measure!(v, kind).shapes, Plans.Shape(v.data.page, copy(v.draft)))
+    empty!(v.draft)
+    commit!(v)
+  end
+  empty!(v.draft)
+  handled
+end
+
+"""
+Choose a tool. A tool that measures draws for the measure that's chosen in the
+list. If that measure is of another kind, it becomes the tool's kind when
+nothing is drawn for it yet and it has no item. If not, the tool draws for the
+last measure of its kind.
+"""
+tool!(v::TakeoffView, tool::Symbol) = begin
+  v.tool = tool
+  empty!(v.draft)
+  v.picked = nothing
+  ms = v.data.measures
+  if tool in Plans.KINDS && !(1 <= v.current <= length(ms) && ms[v.current].kind == tool)
+    m = 1 <= v.current <= length(ms) ? ms[v.current] : nothing
+    if m !== nothing && isempty(m.shapes) && isempty(m.item)
+      kind!(v, m, tool)
+      commit!(v)
+    else
+      v.current = something(findlast(m -> m.kind == tool, ms), 0)
+    end
+  end
+  handled
+end
+
+"A drag ended. A corner that moved is written down."
+drop!(v::TakeoffView) = begin
+  g = v.grab
+  v.grab = nothing
+  g !== nothing && g[1] == :corner && g[3] && commit!(v)
+  v
+end
+
+"Take away what's selected on the plan: a mark, a corner, or a whole line or outline"
+remove_picked!(v::TakeoffView) = begin
+  p = v.picked
+  p === nothing && return handled
+  m = v.data.measures[p[1]]
+  if length(p) == 3
+    Plans.remove!(m, p[2], p[3])
+  else
+    deleteat!(m.shapes, p[2])
+  end
+  v.picked = nothing
+  commit!(v)
+  handled
+end
+
+onkey(a::PlanArea, ev::KeyPress{Keys.mouse_left}) = begin
+  v, w = a.of, ev.window
+  focus(a)
+  plan_size(v) === nothing && return choose_plan!(v, w)
+  v.zoom > 0 || return handled
+  x, y = num(w.mouse[1]), num(w.mouse[2])
+  p = page_point(v, x, y)
+  at, cx, cy = v.clicked
+  twice = time() - at < 0.35 && hypot(x - cx, y - cy) < 4
+  v.clicked = (time(), x, y)
+  reach = REACH / v.zoom
+  page = v.data.page
+  if v.tool == :count
+    Plans.mark!(measure!(v, :count), page, p)
+    commit!(v)
+  elseif v.tool in (:length, :area)
+    closes = v.tool == :area && length(v.draft) >= 3 && hypot(v.draft[1][1] - p[1], v.draft[1][2] - p[2]) <= reach
+    # The first click of two put the last corner down
+    (twice && !isempty(v.draft)) || closes ? finish_shape!(v) : push!(v.draft, p)
+  elseif v.tool == :scale
+    length(v.draft) >= 2 && empty!(v.draft)
+    push!(v.draft, p)
+    length(v.draft) == 2 && ask!(v, (:length, v.draft[1], v.draft[2]), "", "metres")
+  else
+    corner = Plans.corner(v.data, page, p, reach)
+    if corner !== nothing
+      v.picked, v.current = corner, corner[1]
+      v.grab = (:corner, corner, false)
+    else
+      v.picked = Plans.shape(v.data, page, p, reach)
+      v.picked === nothing || (v.current = v.picked[1])
+      v.grab = (:pan, (x, y), v.at)
+    end
+  end
+  handled
+end
+
+# A right-click ends what's being drawn
+onkey(a::PlanArea, ::KeyPress{Keys.mouse_right}) = isempty(a.of.draft) ? nothing : finish_shape!(a.of)
+
+onmouse(a::PlanArea, ev::MouseMove) = begin
+  v = a.of
+  v.zoom > 0 || return nothing
+  x, y = num(ev.position[1]), num(ev.position[2])
+  v.mouse = page_point(v, x, y)
+  g = v.grab
+  g === nothing && return handled
+  Keys.mouse_left in ev.window.keys || (drop!(v); return handled)
+  if g[1] == :pan
+    (x0, y0), at = g[2], g[3]
+    v.at = (at[1] - (x - x0) / v.zoom, at[2] - (y - y0) / v.zoom)
+    moved!(v)
+  else
+    i, j, k = g[2]
+    v.data.measures[i].shapes[j].points[k] = v.mouse
+    v.grab = (:corner, g[2], true)
+  end
+  handled   # the drag is the plan's, so the page's text doesn't select
+end
+
+# Scrolling with ⌘ held makes the plan bigger or smaller, round the mouse. Once a click has given the
+# plan the keyboard, scrolling without ⌘ moves the plan. Before that, it scrolls the page that the plan is on.
+# A plan that fills the window has no page to scroll, so scrolling always moves it.
+onscroll(a::PlanArea, ev::MouseScroll) = begin
+  v, w = a.of, ev.window
+  v.zoom > 0 || return nothing
+  Keys.cmd in w.keys && return zoom_plan!(v, exp(num(ev.delta[2]) / 10), num(w.mouse[1]), num(w.mouse[2]))
+  (w.focus === a || v.full) || return nothing
+  v.at = (v.at[1] - 30num(ev.delta[1]) / v.zoom, v.at[2] - 30num(ev.delta[2]) / v.zoom)
+  moved!(v)
+  handled
+end
+
+# Two fingers that move apart or together on the trackpad make the plan bigger or smaller, round the mouse
+onpinch(a::PlanArea, ev::Pinch) = begin
+  v, w = a.of, ev.window
+  v.zoom > 0 || return nothing
+  zoom_plan!(v, ev.scale, num(w.mouse[1]), num(w.mouse[2]))
+end
+
+onkey(a::PlanArea, ::KeyPress{Keys.enter}) = finish_shape!(a.of)
+onkey(a::PlanArea, ::KeyPress{Keys.escape}) = begin
+  v = a.of
+  # Esc drops what's half drawn, then puts the arrow back, then puts a takeoff that fills the window
+  # back in the page, then gives the keyboard back to the text
+  isempty(v.draft) || return (empty!(v.draft); handled)
+  v.tool == :select ? (v.full ? full!(v, false) : nothing) : tool!(v, :select)
+end
+onkey(a::PlanArea, ::KeyPress{K}) where K = begin
+  v = a.of
+  if K in (Keys.backspace, Keys.delete)
+    # While something is being drawn, Delete takes its last corner back
+    return isempty(v.draft) ? remove_picked!(v) : (pop!(v.draft); handled)
+  elseif K == Keys.z && held(a, Keys.cmd)
+    b = editor(v).buf
+    held(a, Keys.shft) ? redo!(b) : undo!(b)
+    return handled
+  end
+  nothing
+end
+
+ontype(a::PlanArea, ev::Typed) = begin
+  Keys.cmd in ev.window.keys && return nothing
+  i = findfirst(((_, (_, _, letter)),) -> letter == lowercase(ev.char), PLAN_TOOLS)
+  i === nothing ? nothing : tool!(a.of, PLAN_TOOLS[i][1])
+end
+
+# --- the buttons -------------------------------------------------------------------------
+
+"The button of `v` that's kept under `key`, with what it does and shows now"
+button!(v::TakeoffView, key, action; icon="", words="", tip="", off=false) = begin
+  b = part!(() -> PlanButton(of=v), v, (:button, key))
+  b.action, b.icon, b.words, b.tip, b.off = action, icon, words, tip, off
+  b
+end
+
+describe(b::PlanButton) = begin
+  v = b.of
+  ishovered(b) || (b.quiet = false)
+  on = b.action isa Tuple && b.action[1] == :tool && v.tool == b.action[2]
+  main = b.action == :quote
+  colour = b.off ? colours.faint : on ? colours.accent : colours.dim
+  Box(height(26px), padding(7px, 0px), radius(6px), Alignment.Center, name="Button",
+      background(main && !b.off ? (ishovered(b) ? colours.active : colours.hover) : on ? colours.active : ishovered(b) && !b.off ? colours.hover : clear),
+    Row(Alignment.Center, child_gap=5px,
+      (isempty(b.icon) ? () : (Icon(b.icon, size=14px, color=colour),))...,
+      (isempty(b.words) ? () : (label(b.words, 12px, color=b.off ? colours.faint : colours.ink),))...))
+end
+
+cursor(b::PlanButton) = b.off ? :arrow : :hand
+
+draw(ctx, size, ui::ConcreteRect, b::PlanButton) = (b.rect = (ui.left, ui.top, ui.width, ui.height); nothing)
+
+onmouse(b::PlanButton, ev::MouseMove) = begin
+  (b.quiet || isempty(b.tip)) && return
+  show_tooltip!(ev.window, Box(padding(8px, 5px), label(b.tip, 12px, color=TIP_INK)), b.rect..., placement=:bottom, gap=6px)
+end
+
+onkey(b::PlanButton, ev::KeyPress{Keys.mouse_left}) = begin
+  b.quiet = true
+  hide_tooltip!(ev.window)
+  b.off ? handled : act!(b.of, b.action, ev.window)
+end
+
+"Make the takeoff fill the window, or put it back in the page"
+full!(v::TakeoffView, on::Bool) = begin
+  e = editor(v)
+  # One takeoff at a time fills the window
+  on && foreach(node -> node isa TakeoffView && (node.full = false), values(e.nodes))
+  v.full = on
+  v.pinned = e.scroll.offset
+  focus(part!(() -> PlanArea(of=v), v, :area))
+  handled
+end
+
+"The takeoff of the page that fills the window, or nothing"
+full_takeoff(e) = begin
+  for (key, node) in e.nodes
+    node isa TakeoffView && node.full && key[2] == e.buf.path && return node
+  end
+  nothing
+end
+
+"The takeoff that fills the window, over the page and the sidebar and under the top bar"
+takeoff_over(e) = begin
+  v = full_takeoff(e)
+  v === nothing ? () : (Box(width(grow=grow), height(grow=grow), padding(TOPBAR_H, 0px, 0px, 0px), background(colours.bg), geometry(v)),)
+end
+
+"Do what a button of a takeoff does"
+act!(v::TakeoffView, action, w) = begin
+  settle_asking!(v)
+  a = action isa Tuple ? action[1] : action
+  t = v.data
+  if a == :tool
+    tool!(v, action[2])
+  elseif a == :page
+    page!(v, action[2])
+  elseif a == :zoom
+    zoom_plan!(v, action[2], v.box[1] + v.box[3] / 2, v.box[2] + v.box[4] / 2)
+  elseif a == :fit
+    v.zoom = 0.0
+  elseif a == :full
+    full!(v, !v.full)
+  elseif a == :scale
+    s = Plans.scale(t, t.page)
+    ask!(v, (:scale,), s === nothing ? "1:100" : Plans.scale_text(s))
+  elseif a == :choose
+    choose_plan!(v, w)
+  elseif a == :add
+    # It starts as what the tool in use measures, or as a count. Its item's unit, or the next tool, can change that.
+    kind = v.tool in Plans.KINDS ? v.tool : :count
+    empty!(v.filters)   # a search of the table could hide the new measure
+    push!(t.measures, Plans.Measure(kind, first_name(v, kind)))
+    v.current = length(t.measures)
+    tool!(v, kind)
+    commit!(v)
+    # The item comes first. The measure takes its name, and its unit says what the measure is.
+    Centient.available() && ask!(v, (:item, v.current))
+  elseif a == :delete && action[2] <= length(t.measures)
+    deleteat!(t.measures, action[2])
+    v.current = v.current == action[2] ? 0 : v.current > action[2] ? v.current - 1 : v.current
+    v.picked = nothing
+    commit!(v)
+  elseif a == :customer
+    Centient.available() ? ask!(v, (:customer,), "", "Search Centient's contacts") :
+                           ask!(v, (:customer,), t.customer, "The customer's name")
+  elseif a == :quote
+    make_quote!(v)
+  end
+  handled
+end
+
+# --- the list of measures ----------------------------------------------------------------
+
+"The text field in a box, where the thing that it changes was"
+field(v::TakeoffView, wide=width(grow=grow)) =
+  Box(wide, height(24px), padding(6px, 0px), radius(5px), border(1px, :solid, colours.accent), background(colours.bg), plan_input(v))
+
+"The mark beside a measure's name, in its colour: a dot for a count, a line for a length, a square for an area"
+swatch(kind::Symbol, colour) =
+  Box(width(14px), height(14px), Alignment.Center,
+    kind == :count ? Box(width(10px), height(10px), radius(5px), background(colour)) :
+    kind == :length ? Box(width(14px), height(3px), radius(1.5px), background(colour)) :
+                      Box(width(11px), height(11px), radius(2px), background(RGBA(colour, 0.3)), border(1.5px, :solid, colour)))
+
+"A price as a row of the list shows it: \$22.00 / m, or \$5.97 each"
+price_text(row) = begin
+  unit = string(something(get(row, "unit", nothing), ""))
+  dollars(row["price"]) * (unit in ("", "Piece", "each") ? " each" : " / " * unit)
+end
+
+describe(c::MeasureCell) = begin
+  v, i = c.of, c.i
+  i <= length(v.data.measures) || return Box(width(0px))
+  m = v.data.measures[i]
+  wide = c.what == :extra ? fixed(52px) : width(grow=grow)
+  v.asking == (c.what, i) && return field(v, wide)
+  words(s, colour) = Row(wide, height(grow=grow), Alignment.Center, clip=true, label(s, 13px, color=colour))
+  c.what == :name && return words(m.name, colours.ink)
+  c.what == :extra && return words(m.extra > 0 ? "+" * Plans.number(100m.extra) * "%" : "+0%", m.extra > 0 ? colours.ink : colours.faint)
+  # On a Mac with no Centient there's no catalogue to choose from, so the place for the item is empty
+  isempty(m.item) && return words(Centient.available() ? "Choose an item" : "", colours.accent)
+  row = known(v, m.item)
+  # An item that has the measure's name shows where it's from, and any other item shows its own name
+  row === nothing ? words(m.item, colours.dim) :
+  row["name"] == m.name ? words(string(row["source"]), colours.dim) : words(string(row["name"]) * "  ·  " * string(row["source"]), colours.dim)
+end
+
+cursor(c::MeasureCell) = c.what == :item && !Centient.available() ? :arrow : :hand
+
+onkey(c::MeasureCell, ::KeyPress{Keys.mouse_left}) = begin
+  v, i = c.of, c.i
+  i <= length(v.data.measures) || return handled
+  m = v.data.measures[i]
+  # The first click on a row chooses it. A click on the row that's chosen changes the part that's clicked.
+  (v.current == i || (c.what == :item && isempty(m.item))) || return choose_measure!(v, i)
+  v.current = i
+  c.what == :name && return ask!(v, (:name, i), m.name)
+  c.what == :extra && return ask!(v, (:extra, i), m.extra > 0 ? Plans.number(100m.extra) : "", "%")
+  Centient.available() ? ask!(v, (:item, i)) : choose_measure!(v, i)
+end
+
+describe(r::MeasureRow) = begin
+  v, i = r.of, r.i
+  i <= length(v.data.measures) || return Box(height(0px))
+  m = v.data.measures[i]
+  cell(what) = part!(() -> MeasureCell(of=v, i=i, what=what), v, (:cell, i, what))
+  amount = Plans.amount(v.data, m)
+  row = known(v, m.item)
+  # A Text on its own would take all of the row, so each is in a box that the row puts at its right
+  # It's as tall as the row, so that what cuts a long text off at the side doesn't cut the tail of a comma or a g
+  right(wide, s, colour) = Row(fixed(wide), height(grow=grow), Alignment.Center, justify=Alignment.End, clip=true, Box(label(s, 13px, color=colour)))
+  back = background(v.current == i ? colours.active : ishovered(r) ? colours.hover : clear)
+  # The first row has a line that doesn't show, so that its words are where the other rows' are
+  line = (border(1px, :solid, !isempty(v.order) && v.order[1] == i ? clear : colours.line)[:top],)
+  size = right(86px, amount === nothing ? "No scale" : Plans.shown(m.kind, amount), amount === nothing ? colours.accent : colours.ink)
+  cost = right(88px, row === nothing || amount === nothing ? "" : dollars(amount * row["price"]), colours.ink)
+  remove = button!(v, (:delete, i), (:delete, i), icon="x-lg", tip="Remove this measure")
+  # The panel beside a plan that fills the window is narrow, so a measure has two lines there
+  v.beside && return Column(width(grow=grow), Alignment.Start, padding(10px, 4px), name="Measure", back, line...,
+    Row(width(grow=grow), height(26px), child_gap=8px, Alignment.Center, swatch(m.kind, hue(i)), cell(:name), size),
+    Row(width(grow=grow), height(26px), child_gap=8px, Alignment.Center, Box(width(14px)), cell(:item), cell(:extra), cost, remove))
+  Row(width(grow=grow), height(32px), padding(10px, 0px), child_gap=10px, Alignment.Center, name="Measure", back, line...,
+    swatch(m.kind, hue(i)), cell(:name), cell(:item), cell(:extra), size,
+    # A narrow block has no room for the price of one, so it shows what the measure comes to and no more
+    (has_price(v) ? (right(96px, row === nothing ? "" : price_text(row), colours.dim),) : ())...,
+    cost, remove)
+end
+
+cursor(::MeasureRow) = :hand
+
+"Make measure `i` the one that the tools draw for, and choose the tool of its kind"
+choose_measure!(v::TakeoffView, i::Int) = begin
+  i <= length(v.data.measures) || return handled
+  v.current = i
+  tool!(v, v.data.measures[i].kind)
+end
+
+onkey(r::MeasureRow, ::KeyPress{Keys.mouse_left}) = choose_measure!(r.of, r.i)
+
+# --- the list that a search shows --------------------------------------------------------
+#
+# What a search finds shows in a list that floats beside the text field. It
+# looks like the lists in Centient's own forms: a cream box with an arrow that
+# points at the field, and in it a card with a line for each thing found. The
+# up and down arrows pick a line, and so does the mouse. Return or a click
+# takes it. Esc closes the list, and so does a click somewhere else.
+
+const FOUND_KEY = :takeoff_found
+"The colours of the list: Centient's cream in a light page, and the page's own in a dark one"
+found_colours() = dark_page() ?
+  (frame=colours.float, pick=colours.active, ink=colours.ink, dim=colours.dim, line=colorant"rgb(86,86,94)", rule=colours.line) :
+  (frame=colorant"rgb(233,224,202)", pick=colorant"rgb(224,212,185)", ink=colorant"rgb(27,23,16)", dim=colorant"rgb(110,104,88)",
+   line=colorant"rgb(176,164,136)", rule=colorant"rgb(221,212,192)")
+
+# The search for an item looks in one catalogue at a time, as Centient's own
+# item field does. It starts in the business's own items. ⌥ in an empty field,
+# or a click on the foot of the list, shows the suppliers whose catalogues
+# Centient holds. A supplier chosen there opens its catalogue, and the search
+# goes on in that. ⌥ again goes back to the suppliers, and from the suppliers
+# to the business's own items. The next search starts where an item was last
+# chosen from.
+
+"""
+The catalogue that the search for an item looks in: `(:own,)` for the
+business's own items, `(:suppliers,)` for the list of suppliers to choose a
+catalogue from, or `(:catalogue, slug, name)` for one supplier's.
+"""
+const ITEM_FROM = Ref{Any}((:own,))
+
+"Look in another catalogue. The words that were typed go, and a search of the new one starts now."
+browse!(v::TakeoffView, from) = begin
+  ITEM_FROM[] = from
+  i = plan_input(v)
+  i.text = ""
+  i.anchor, i.cursor = 0, 0
+  v.rows, v.search, v.pick = Any[], nothing, 1
+  v.query, v.typed = "", time() - 1
+  handled
+end
+
+"Go from the business's own items to the list of suppliers, and from the list or a supplier's catalogue back"
+toggle_catalogue!(v::TakeoffView) = browse!(v, ITEM_FROM[][1] == :catalogue ? (:suppliers,) : ITEM_FROM[][1] == :suppliers ? (:own,) : (:suppliers,))
+
+"What the foot of the list says of the catalogue that it shows"
+catalogue_words() = (from = ITEM_FROM[]; from[1] == :own ? "Our catalogue" : from[1] == :suppliers ? "Pick a catalogue" : from[3])
+
+"True when the list shows suppliers to choose from, and false when it shows items"
+lists_suppliers(v::TakeoffView) = v.asking !== nothing && v.asking[1] == :item && ITEM_FROM[][1] == :suppliers
+
+"How tall a line of the list is. An item has a second line under its name. A contact or a supplier has its name and no more."
+found_h(v::TakeoffView) = v.asking == (:customer,) || lists_suppliers(v) ? 34px : 50px
+
+"Show the list of what the search finds, beside the text field"
+show_found!(v::TakeoffView) = begin
+  w = window_of(v)
+  w === nothing && return
+  e = editor(v)
+  wide = min(v.asking == (:customer,) ? 340px : 460px, window_size(e)[1] - 16px)
+  list = FoundList(of=v)
+  v.parts[:found_list] = list
+  # The keys stay with the text field, and a click outside the list is the app's, as it is with no list
+  list.popup = popup!(w, list, anchor=plan_input(v), placement=:bottom, gap=FOUND_GAP, width=wide, key=FOUND_KEY, modal=false,
+                      onclose=() -> stop_asking!(v), theme=component_theme(e.zoom))
+end
+
+const FOUND_GAP = 9px   # between the text field and the list, with the list's arrow in it
+
+"""
+Choose the side of the text field that the list is on, once for each time it
+opens. The list goes under the field when the longest list fits there, and
+if not, on the side with more room. A short list, like the one line that shows
+while Centient searches, is then on the side that the long list will be on, so
+the list doesn't jump from one side to the other.
+"""
+settle_side!(l::FoundList) = begin
+  (l.settled || l.popup === nothing) && return
+  v = l.of
+  r = rect(plan_input(v))
+  r === nothing && return
+  item = v.asking !== nothing && v.asking[1] == :item
+  # The longest list: its rows, the edges round them, and the foot that names the catalogue
+  longest = MOST_FOUND * (item ? 50px : 34px) + 14px + (item ? 28px : 0px)
+  over, under = r.top - FOUND_GAP, window_size(editor(v))[2] - r.top - r.height - FOUND_GAP
+  l.popup.placement = under >= longest || under >= over ? :bottom : :top
+  l.settled = true
+end
+
+placed!(l::FoundList, side) = (l.side = side; nothing)
+
+describe(r::FoundRow) = begin
+  v = r.of
+  r.k <= length(v.rows) || return Box(height(0px))
+  row = v.rows[r.k]
+  c = found_colours()
+  picked = v.pick == r.k
+  ref = string(get(row, "ref", ""))
+  # Under an item of the business is what it says of it. Under a supplier's product is the supplier's code for it.
+  under = isempty(ref) ? "" : startswith(ref, "item ") ? string(something(get(row, "description", nothing), "")) : String(last(split(ref, ' ', limit=2)))
+  # At the right is an item's price, and how many products a supplier's catalogue has
+  right = !isempty(ref) ? price_text(row) : haskey(row, "slug") ? commas(round(Int, get(row, "products", 0))) * " products" : ""
+  # A thin line parts two rows, but not the picked row from the ones beside it. A row with no line has one in its
+  # own colour, so that its words don't move by the line's height when the pick comes to it or leaves it.
+  back = picked ? c.pick : c.frame
+  Row(width(grow=grow), height(found_h(v)), padding(12px, 0px), child_gap=10px, Alignment.Center, background(back),
+      border(1px, :solid, r.k == 1 || picked || v.pick == r.k - 1 ? back : c.rule)[:top],
+    # As tall as the row, so that what cuts a long name off at the side doesn't cut the tails of its g, p and y
+    Column(width(grow=grow), height(grow=grow), Alignment.Start, justify=Alignment.Center, child_gap=6px, clip=true,
+      label(string(row["name"]), 13px, color=c.ink),
+      (isempty(under) ? () : (label(under, 11px, color=c.dim),))...),
+    (isempty(right) ? () : (Box(label(right, 12px, color=c.dim)),))...)
+end
+
+cursor(::FoundRow) = :hand
+onkey(r::FoundRow, ::KeyPress{Keys.mouse_left}) = choose_row!(r.of, r.k)
+# The mouse picks the row that it's over, as the arrow keys do
+onmouse(r::FoundRow, ::MouseMove) = begin
+  v = r.of
+  v.pick = r.k
+  list = get(v.parts, :found_list, nothing)
+  list === nothing || (list.pick = r.k)   # it's in sight already, so the list doesn't scroll to it
+  handled
+end
+
+describe(l::FoundList) = begin
+  v = l.of
+  settle_side!(l)
+  c = found_colours()
+  high, n = found_h(v), length(v.rows)
+  scroll = get!(() -> Scroll(width(grow=grow)), v.parts, :found_scroll)
+  l.rows === v.rows || (l.rows = v.rows; l.pick = 0; scroll.offset = 0px)
+  item = v.asking !== nothing && v.asking[1] == :item
+  body = if n == 0
+    words = v.search !== nothing || v.typed > 0 ? "Searching Centient…" :
+            !isempty(v.query) && v.query != "\0" ? "Centient has nothing that matches" :
+            lists_suppliers(v) ? "Centient holds no supplier's catalogue" : item ? "Nothing here yet" : "Type to search"
+    Row(width(grow=grow), height(34px), padding(12px, 0px), Alignment.Center, background(c.frame), label(words, 12px, color=c.dim))
+  else
+    # Half a row at the bottom says that the list goes on
+    scroll.height = height(min(n * high, MOST_FOUND * high - high / 2))
+    l.pick == v.pick || (l.pick = v.pick; scroll_into_view!(scroll, high * (v.pick - 1), high * v.pick))
+    reuse!(scroll, Column(width(grow=grow), Alignment.Start, [part!(() -> FoundRow(of=v, k=k), v, (:found, k)) for k in 1:n]...))
+  end
+  Box(width(grow=grow), padding(6px), radius(8px), background(c.frame), border(1px, :solid, c.line),
+      shadow(0, 6, 16, RGBA(60 / 255, 45 / 255, 20 / 255, 0.2)), name="Found",
+    Column(width(grow=grow), Alignment.Start, child_gap=4px,
+      Column(width(grow=grow), Alignment.Start, radius(5px), border(1px, :solid, c.line), background(c.frame), clip=true, body),
+      (item ? (part!(() -> CatalogueFoot(of=v), v, :catalogue_foot),) : ())...))
+end
+
+# The foot of the list of items says which catalogue it shows. A click on it does what ⌥ does.
+describe(f::CatalogueFoot) = begin
+  c = found_colours()
+  Row(width(grow=grow), height(24px), padding(8px, 0px), radius(5px), child_gap=8px, Alignment.Center, background(ishovered(f) ? c.pick : c.frame),
+    Row(width(grow=grow), height(grow=grow), Alignment.Center, clip=true, label(catalogue_words(), 12px, color=c.ink, weight="Semibold")),
+    Box(label("⌥ to toggle catalogue", 11px, color=c.dim)))
+end
+cursor(::CatalogueFoot) = :hand
+onmouse(::CatalogueFoot, ::MouseMove) = handled
+onkey(f::CatalogueFoot, ::KeyPress{Keys.mouse_left}) = toggle_catalogue!(f.of)
+
+"""
+Draw the arrow of a floating box `ui`, on its edge that faces what it's for.
+`side` is the side of that thing that the box is on, and `aim` is the thing's
+rectangle. The arrow covers the box's border where it joins.
+"""
+caret(ctx, ui::ConcreteRect, side, aim) = begin
+  aim === nothing && return
+  c = found_colours()
+  left, top, wide, high = num(ui.left), num(ui.top), num(ui.width), num(ui.height)
+  x = clamp(num(aim.left + aim.width / 2), left + 16, max(left + 16, left + wide - 16))
+  base, tip = side == :top ? (top + high - 1, top + high + 6) : (top + 1, top - 6)
+  trace(ctx, [(x - 7, base), (x, tip), (x + 7, base)], c.line, 1; fill=c.frame)
+end
+
+draw(ctx, size, ui::ConcreteRect, l::FoundList) = caret(ctx, ui, l.side, rect(plan_input(l.of)))
+
+# --- the columns of the table ------------------------------------------------------------
+#
+# The headings of the table of measures work as the headings of Centient's
+# lists do. A click on a heading of numbers sorts by it: low to high, then high
+# to low, then the order that the block is written in. A click on a heading of
+# text opens a menu with its two orders and a field that searches the column.
+# Return keeps the search, and Esc puts back the one before. A heading whose
+# column is searched is in the accent colour. Sorting and searching change what
+# the table shows, and nothing in the block or in the quote.
+
+const HEAD_KEY = :takeoff_column
+"The columns of the table that sort: the heading of each, and whether it holds text"
+const COLUMNS = (name=("Measure", true), item=("Item", true), extra=("Waste", false), amount=("Amount", false),
+                 price=("Price", false), cost=("Cost", false))
+"What the two orders of a column are called"
+order_words(text::Bool) = text ? ("A–Z", "Z–A") : ("Low → High", "High → Low")
+
+"The item of a measure in words: its name and the catalogue that it's from"
+item_words(v::TakeoffView, m) = begin
+  isempty(m.item) && return ""
+  row = known(v, m.item)
+  row === nothing ? m.item : string(row["name"], "  ·  ", row["source"])
+end
+
+"What measure `i` has in the column `key`, as the thing that the column sorts by"
+column_value(v::TakeoffView, i, key) = begin
+  m = v.data.measures[i]
+  key == :name && return lowercase(m.name)
+  key == :item && return lowercase(item_words(v, m))
+  key == :extra && return m.extra
+  amount, row = Plans.amount(v.data, m), known(v, m.item)
+  key == :amount ? something(amount, -1.0) :
+  key == :price  ? (row === nothing ? -1.0 : Float64(row["price"])) :
+                   (row === nothing || amount === nothing ? -1.0 : amount * row["price"])
+end
+
+"Search the column `key` for `words`. No words takes its search away."
+filter!(v::TakeoffView, key::Symbol, words) = begin
+  words = String(strip(words))
+  isempty(words) ? delete!(v.filters, key) : (v.filters[key] = words)
+  v
+end
+
+"The measures that the table shows, in the order that it shows them: those that the searches keep, sorted by the column that's chosen"
+shown_measures(v::TakeoffView) = begin
+  ms = v.data.measures
+  has(i, key, words) = occursin(lowercase(words), key == :name ? lowercase(ms[i].name) : lowercase(item_words(v, ms[i])))
+  keep = [i for i in eachindex(ms) if all(((key, words),) -> has(i, key, words), v.filters)]
+  v.sort === nothing ? keep : sort!(keep, by=i -> column_value(v, i, v.sort[1]), rev=v.sort[2] == :desc)
+end
+
+"The heading of the column `key`"
+head(v::TakeoffView, key::Symbol) = part!(() -> ColumnHead(of=v, key=key), v, (:head, key))
+
+"The order that a click on a heading of numbers gives next. It's nothing for the order that the block is written in."
+next_order(v::TakeoffView, key) = v.sort === nothing || v.sort[1] != key ? :asc : v.sort[2] == :asc ? :desc : nothing
+
+describe(h::ColumnHead) = begin
+  v = h.of
+  words, text = COLUMNS[h.key]
+  dir = v.sort !== nothing && v.sort[1] == h.key ? v.sort[2] : nothing
+  open = v.asking !== nothing && v.asking[1] == :filter && v.asking[2] == h.key
+  lit = ishovered(h) || open
+  colour = haskey(v.filters, h.key) ? colours.accent : lit || dir !== nothing ? colours.ink : colours.dim
+  # The arrow of the order that it has. With none, the mouse over it shows what a click gives.
+  will = text ? :desc : next_order(v, h.key)
+  mark = dir !== nothing ? (Icon(dir == :asc ? "chevron-up" : "chevron-down", size=9px, color=colours.ink),) :
+         lit && will !== nothing ? (Icon(will == :asc ? "chevron-up" : "chevron-down", size=9px, color=colours.faint),) : ()
+  parts = (label(words, 11px, color=colour), mark...)
+  Row(height(20px), child_gap=4px, Alignment.Center, name="Heading", (text ? parts : reverse(parts))...)
+end
+
+cursor(::ColumnHead) = :hand
+draw(ctx, size, ui::ConcreteRect, h::ColumnHead) = (h.rect = (ui.left, ui.top, ui.width, ui.height); nothing)
+
+# A heading of numbers says what a click on it does
+onmouse(h::ColumnHead, ev::MouseMove) = begin
+  COLUMNS[h.key][2] && return
+  will = next_order(h.of, h.key)
+  low, high = order_words(false)
+  words = will == :asc ? low : will == :desc ? high : "The order they're written in"
+  show_tooltip!(ev.window, Box(padding(8px, 5px), label(words, 12px, color=TIP_INK)), h.rect..., placement=:bottom, gap=6px)
+end
+
+onkey(h::ColumnHead, ev::KeyPress{Keys.mouse_left}) = begin
+  v = h.of
+  hide_tooltip!(ev.window)
+  settle_asking!(v)
+  COLUMNS[h.key][2] || return (will = next_order(v, h.key); v.sort = will === nothing ? nothing : (h.key, will); handled)
+  # The menu's field starts with the column's search, which Esc puts back
+  was = get(v.filters, h.key, "")
+  ask!(v, (:filter, h.key, was), was, "Contains…")
+  menu = ColumnMenu(of=v, key=h.key)
+  v.parts[:column_menu] = menu
+  # A click outside the menu closes it and keeps what's typed
+  popup!(ev.window, menu, anchor=h, placement=:bottom, gap=9px, width=210px, key=HEAD_KEY,
+         onclose=() -> settle_asking!(v), theme=component_theme(editor(v).zoom))
+  handled
+end
+
+placed!(m::ColumnMenu, side) = (m.side = side; nothing)
+
+describe(r::SortRow) = begin
+  v, c = r.of, found_colours()
+  on = v.sort == (r.key, r.dir)
+  words = order_words(COLUMNS[r.key][2])[r.dir == :asc ? 1 : 2]
+  Row(width(grow=grow), height(28px), padding(8px, 0px), radius(6px), child_gap=8px, Alignment.Center,
+      background(on || ishovered(r) ? c.pick : c.frame),
+    Icon(r.dir == :asc ? "chevron-up" : "chevron-down", size=10px, color=on ? c.ink : c.dim),
+    label(words, 13px, color=on ? c.ink : c.dim, weight=on ? "Semibold" : ""))
+end
+
+cursor(::SortRow) = :hand
+onmouse(::SortRow, ::MouseMove) = handled
+# A click on the order that the table has takes it away
+onkey(r::SortRow, ::KeyPress{Keys.mouse_left}) = (v = r.of; v.sort = v.sort == (r.key, r.dir) ? nothing : (r.key, r.dir); handled)
+
+describe(m::ColumnMenu) = begin
+  v, c = m.of, found_colours()
+  section(words) = Row(width(grow=grow), height(22px), padding(8px, 0px), Alignment.Center, label(words, 10px, color=c.dim, weight="Semibold"))
+  order(dir) = part!(() -> SortRow(of=v, key=m.key, dir=dir), v, (:sort, m.key, dir))
+  Box(width(grow=grow), padding(6px), radius(8px), background(c.frame), border(1px, :solid, c.line),
+      shadow(0, 6, 16, RGBA(60 / 255, 45 / 255, 20 / 255, 0.2)), name="Column menu",
+    Column(width(grow=grow), Alignment.Start,
+      section("SORT"), order(:asc), order(:desc),
+      Box(width(grow=grow), height(13px), Alignment.Center, Box(width(grow=grow), height(1px), background(c.rule))),
+      section("FILTER FOR"),
+      Box(width(grow=grow), padding(4px, 2px),
+        Box(width(grow=grow), height(28px), padding(8px, 0px), radius(6px), border(1px, :solid, c.line), background(c.frame), plan_input(v)))))
+end
+
+draw(ctx, size, ui::ConcreteRect, m::ColumnMenu) = caret(ctx, ui, m.side, rect(head(m.of, m.key)))
+
+# The menu sees a key before its text field does. Return keeps the search, and Esc puts back the one before.
+onkey(m::ColumnMenu, ::KeyPress{Keys.enter}) = answer!(m.of)
+onkey(m::ColumnMenu, ::KeyPress{Keys.escape}) = begin
+  v = m.of
+  a = v.asking
+  a !== nothing && a[1] == :filter && filter!(v, a[2], a[3])
+  stop_asking!(v)
+end
+
+# --- the whole block ---------------------------------------------------------------------
+
+"A thin line between two groups of buttons"
+rule() = Box(width(9px), height(16px), Alignment.Center, Box(width(1px), height(16px), background(colours.line)))
+
+toolbar(v::TakeoffView) = begin
+  t = v.data
+  n = plan_pages(v)
+  s = Plans.scale(t, t.page)
+  file = isempty(t.plan) ? "Choose a plan" : basename(t.plan)
+  Row(width(grow=grow), height(38px), padding(6px, 0px), child_gap=2px, Alignment.Center, background(colours.block),
+    [button!(v, (:tool, tool), (:tool, tool), icon=icon, tip=tip) for (tool, (icon, tip, _)) in PLAN_TOOLS]...,
+    rule(),
+    button!(v, :scale, :scale, words=s === nothing ? "Set the scale" : Plans.scale_text(s), tip="Type the scale of this page, like 1:100"),
+    (n > 1 ? (rule(), button!(v, :back, (:page, -1), icon="chevron-left", tip="The page before", off=t.page <= 1),
+              label("Page $(t.page) of $n", 12px, color=colours.dim),
+              button!(v, :next, (:page, 1), icon="chevron-right", tip="The next page", off=t.page >= n)) : ())...,
+    Box(width(grow=grow)),
+    button!(v, :smaller, (:zoom, 1 / 1.4), icon="zoom-out", tip="Smaller"),
+    button!(v, :bigger, (:zoom, 1.4), icon="zoom-in", tip="Bigger  pinch, or ⌘ and scroll"),
+    button!(v, :fit, :fit, icon="aspect-ratio", tip="Show the whole page"),
+    button!(v, :full, :full, icon=v.full ? "fullscreen-exit" : "arrows-fullscreen", tip=v.full ? "Back to the page  esc" : "Fill the window"),
+    rule(),
+    button!(v, :plan, :choose, icon="file-earmark-pdf", words=length(file) > 28 ? first(file, 27) * "…" : file, tip="Choose the plan's file"))
+end
+
+"The line under the tools that asks for the scale, or for the length of the line that was drawn"
+prompt(v::TakeoffView) = begin
+  a = v.asking
+  (a !== nothing && a[1] in (:scale, :length)) || return ()
+  words, hint = a[1] == :scale ? ("The scale of this page", "like 1:100, then Return") :
+                                 ("How long is the line that you drew?", "in metres, like 3.6, or 3600mm, then Return")
+  (Row(width(grow=grow), height(36px), padding(12px, 0px), child_gap=10px, Alignment.Center, background(colours.float),
+     label(words, 12px), field(v, fixed(110px)), label(hint, 12px, color=colours.dim)),)
+end
+
+"True when the table of measures has room for the price of one of each item"
+has_price(v::TakeoffView) = editor(v).width >= 720px
+
+"""
+The headings of the table of measures. Each is as wide as the cells under it.
+The panel beside a plan has two lines for each measure, so it has three
+headings and no more: the measure, its item and its cost.
+"""
+table_head(v::TakeoffView) = begin
+  left(key) = Row(width(grow=grow), height(grow=grow), Alignment.Center, clip=true, (key === nothing ? () : (head(v, key),))...)
+  right(wide, key) = Row(wide, height(grow=grow), Alignment.Center, justify=Alignment.End, clip=true, (key === nothing ? () : (head(v, key),))...)
+  # With no Centient on the Mac there are no items, so the columns for them have no headings
+  ours(key) = Centient.available() ? key : nothing
+  look = (width(grow=grow), height(26px), Alignment.Center, background(colours.head), border(1px, :solid, colours.line)[:bottom])
+  v.beside && return Row(look..., padding(10px, 0px), child_gap=8px, name="Headings",
+    Box(width(14px)), left(:name), left(ours(:item)), right(fixed(88px), ours(:cost)), Box(width(28px)))
+  Row(look..., padding(10px, 0px), child_gap=10px, name="Headings",
+    Box(width(14px)), left(:name), left(ours(:item)), Row(fixed(52px), height(grow=grow), Alignment.Center, head(v, :extra)),
+    right(fixed(86px), :amount), (has_price(v) ? (right(fixed(96px), ours(:price)),) : ())..., right(fixed(88px), ours(:cost)),
+    Box(width(28px)))   # over the buttons that remove a measure
+end
+
+"""
+The table of measures, in a box of its own with round corners: the headings,
+then `rows`, then the button that adds a measure. `tall` makes it fill the
+height that it's given.
+"""
+table(v::TakeoffView, rows; tall=false) =
+  Box(width(grow=grow), (tall ? (height(grow=grow),) : ())..., padding(10px, 8px),
+    Column(width(grow=grow), (tall ? (height(grow=grow),) : ())..., Alignment.Start, radius(8px), border(1px, :solid, colours.line),
+           background(colours.bg), clip=true, name="Measures",
+      table_head(v), rows, adders(v)))
+
+"The button at the foot of the table that starts a new measure"
+adders(v::TakeoffView) =
+  Row(width(grow=grow), height(36px), padding(6px, 0px), child_gap=2px, Alignment.Center, border(1px, :solid, colours.line)[:top],
+    button!(v, :add, :add, icon="plus-lg", words="Add a measure",
+            tip=Centient.available() ? "Choose an item. Its unit chooses the tool: count, length or area." :
+                                       "Then choose a tool: count, length or area"))
+
+"The rows of the table of measures: those that the columns' searches keep, in the order of the column that's sorted"
+measure_rows(v::TakeoffView) = begin
+  v.order = shown_measures(v)
+  isempty(v.order) && !isempty(v.data.measures) &&
+    return Any[Row(width(grow=grow), height(32px), padding(34px, 0px), Alignment.Center, label("No measure has that", 12px, color=colours.dim))]
+  Any[part!(() -> MeasureRow(of=v, i=i), v, (:row, i)) for i in v.order]
+end
+
+"The line at the foot of the block: the customer, what the measures come to, and the button that makes the quote"
+foot(v::TakeoffView) = begin
+  t = v.data
+  total, priced = 0.0, false
+  for m in t.measures
+    amount, row = Plans.amount(t, m), known(v, m.item)
+    (amount === nothing || row === nothing) && continue
+    total += amount * row["price"]
+    priced = true
+  end
+  asking = v.asking == (:customer,)
+  busy = v.quoting !== nothing
+  said = isempty(v.said) ? (isempty(t.made) ? "" : "Quote $(t.made)") : v.said
+  colour = v.wrong ? colours.accent : colours.dim
+  customer = asking ? field(v, v.beside ? width(grow=grow) : fixed(220px)) :
+             button!(v, :customer, :customer, words=isempty(t.customer) ? "Choose the customer" : t.customer, tip="Who the quote is for")
+  maker = button!(v, :quote, :quote, icon="receipt", words=busy ? "Making the quote…" : isempty(t.made) ? "Make quote in Centient" : "Make another quote",
+                  tip=Centient.available() ? "Centient makes a quote with a line for each measure" : "Centient isn't on this Mac",
+                  off=busy || isempty(t.measures) || !Centient.available())
+  line = border(1px, :solid, colours.line)[:top]
+  # In the panel beside a plan that fills the window, each part of the foot has a line of its own
+  v.beside && return Column(width(grow=grow), Alignment.Start, padding(10px, 8px), child_gap=6px, line,
+    Row(width(grow=grow), height(28px), child_gap=8px, Alignment.Center, Icon("person", size=14px, color=colours.dim), customer),
+    (priced ? (Row(width(grow=grow), height(22px), Alignment.Center, Box(label("At catalogue prices", 12px, color=colours.dim)),
+                   Box(width(grow=grow)), Box(label(dollars(total), 13px, weight="Semibold"))),) : ())...,
+    (isempty(said) ? () : (Box(width(grow=grow), Alignment.Start, Text(said, size=12px, family=SANS, color=colour, wrap=WrapMode.words)),))...,
+    Row(width(grow=grow), justify=Alignment.End, maker))
+  Row(width(grow=grow), height(42px), padding(10px, 0px), child_gap=8px, Alignment.Center, line,
+    Icon("person", size=14px, color=colours.dim), customer,
+    Row(width(grow=grow), clip=true, justify=Alignment.End, Box(label(said, 12px, color=colour))),
+    # The catalogue's prices, before the GST and the margins that Centient adds to a quote
+    (priced ? (label("At catalogue prices", 12px, color=colours.dim), label(dollars(total), 13px, weight="Semibold")) : ())...,
+    maker)
+end
+
+"How tall the list of measures is, with what a search found under one of them"
+list_h(v::TakeoffView) = 32px * max(1, length(v.order))
+
+"The most of the window's height that the list of measures takes under a plan that fills the window"
+const LIST_SHARE = 0.4
+
+"""
+True when the list of measures goes beside a plan that fills the window, and
+false when it goes under it. It goes where it leaves the page bigger: beside a
+wide window's plan, and under a tall window's.
+"""
+goes_beside(v::TakeoffView) = begin
+  w, h = num.(window_size(editor(v)))
+  h -= num(TOPBAR_H) + 38   # the top bar and the tools
+  s = plan_size(v)
+  s === nothing && return w > h
+  side = min(num(SIDE_W), 0.45w)
+  # Under the plan are the table, with its headings, its rows and the button that adds a measure, and the foot
+  under = min(32.0 * length(v.data.measures), LIST_SHARE * h) + 26 + 36 + 18 + 42
+  min((w - side) / s[1], h / s[2]) >= min(w / s[1], (h - under) / s[2])
+end
+
+describe(v::TakeoffView) = begin
+  e = editor(v)
+  plan_input(v).color = colours.ink
+  area = part!(() -> PlanArea(of=v), v, :area)
+  v.beside = v.full && goes_beside(v)
+  with_theme(component_theme(e.zoom)) do
+    # Only the tools have a colour of their own behind them. The rest is on white, and the plan's paper has a shadow.
+    v.full || return Column(width(grow=grow), Alignment.Start, radius(8px), border(1px, :solid, colours.line), background(takeoff_back()),
+                            clip=true, name="Takeoff",
+      toolbar(v), prompt(v)..., area,
+      table(v, Column(width(grow=grow), Alignment.Start, measure_rows(v)...)),
+      foot(v))
+    # In the window, the plan is as big as it can be. The wheel scrolls through a list of measures that's longer than its room.
+    list = get!(() -> Scroll(width(grow=grow), height(grow=grow)), v.parts, :list)
+    rows = Column(width(grow=grow), Alignment.Start, measure_rows(v)...)
+    if v.beside
+      list.height = height(grow=grow)
+      return Row(width(grow=grow), height(grow=grow), Alignment.Start, background(takeoff_back()), name="Takeoff",
+        Column(width(grow=grow), height(grow=grow), Alignment.Start, toolbar(v), prompt(v)..., area),
+        Column(fixed(min(SIDE_W, window_size(e)[1] * 0.45)), height(grow=grow), Alignment.Start, border(1px, :solid, colours.line)[:left],
+          table(v, reuse!(list, rows), tall=true), foot(v)))
+    end
+    list.height = height(min(list_h(v), (window_size(e)[2] - TOPBAR_H - 38px) * LIST_SHARE))
+    Column(width(grow=grow), height(grow=grow), Alignment.Start, background(takeoff_back()), name="Takeoff",
+      toolbar(v), prompt(v)..., area, table(v, reuse!(list, rows)), foot(v))
+  end
+end
+
+cursor(::TakeoffView) = :arrow
+# A click beside a button is the block's, and takes the keyboard from the text field
+onkey(v::TakeoffView, ::KeyPress{Keys.mouse_left}) = (focus(part!(() -> PlanArea(of=v), v, :area)); handled)
+onmouse(v::TakeoffView, ::MouseMove) = held(v, Keys.mouse_left) ? handled : nothing
+
 # --- front matter as a card ---------------------------------------------------------
 #
 # While the caret isn't in it, front matter shows as a card: a small FRONTMATTER
@@ -3296,6 +5079,7 @@ layout!(e, width=text_width(e)) = begin
   top = 0px
   i = 1
   n = length(b.lines)
+  plans = 0   # how many takeoff blocks there have been so far
   while i <= n
     j = i
     if ks[i].kind == Kind.table
@@ -3309,6 +5093,18 @@ layout!(e, width=text_width(e)) = begin
       if t > 1
         content = matter_card(e, t)
         push!(items, Item(1, t, top, content.tall, content))
+        top += content.tall
+        i = t + 1
+        continue
+      end
+    end
+    # A `takeoff` code block shows its plan and its measures, unless the caret is in it
+    if ks[i].kind == Kind.fence && ks[i].level == 0 && ks[i].lang == TAKEOFF
+      plans += 1   # each takeoff keeps its view by its place among the page's takeoffs
+      t = codeblock(b, i)[2]
+      if !incode(b, i) && t > i && ks[t].kind == Kind.fence && ks[t].level == 1
+        content = takeoff_item(e, i, t, plans)
+        push!(items, Item(i, t, top, content.tall, content))
         top += content.tall
         i = t + 1
         continue
@@ -4563,7 +6359,14 @@ markdown_for(e, path) = begin
   ispicture(path) ? "![$name]($(escaped(at)))" : ismarkdown(path) ? "[$name]($(escaped(at)))" : "!`fs\"$(replace(at, '"' => "\\\""))\"`"
 end
 
-onfiledrop(e::Editor, w::Window, paths) = readonly(e.buf) ? nothing : put_files!(e, paths, settle(e.buf, locate(e, w.mouse)))
+onfiledrop(e::Editor, w::Window, paths) = begin
+  readonly(e.buf) && return nothing
+  # A PDF file or a picture that's dropped on a takeoff is its plan
+  v = takeoff_at(e, w)
+  plan = v === nothing ? nothing : findfirst(p -> isfile(p) && (ispdf(p) || ispicture(p)), paths)
+  plan === nothing || return plan!(v, rstrip(String(paths[plan]), '/'))
+  put_files!(e, paths, settle(e.buf, locate(e, w.mouse)))
+end
 
 "Put the files and folders at `paths` into the text at `at`, the way a drop there does. ⌘V does this with files that were copied."
 put_files!(e, paths, at::Pos) = begin
@@ -5022,7 +6825,7 @@ const COMPONENTS = Dict(
   "Mermaid" => ("Diagram", "diagram-3"))
 const LAYOUTS = ("Box", "Row", "Column", "Stack", "Scroll", "Text", "Image")
 "Every icon that the sidebar can show. The built app reads them all when it's made."
-const SIDEBAR_ICONS = unique(["file-earmark-text", "chevron-right", "chevron-down", "calculator", "grid-3x3", "puzzle", "bounding-box",
+const SIDEBAR_ICONS = unique(["file-earmark-text", "chevron-right", "chevron-down", "calculator", "grid-3x3", "puzzle", "bounding-box", "rulers",
                               ("type-h$n" for n in 1:6)..., (icon for (_, icon) in values(COMPONENTS))...])
 
 """
@@ -5048,13 +6851,16 @@ outline(lines::Vector{String}, kinds::Vector{Line}) = begin
   for (i, l) in enumerate(kinds)
     if l.kind == Kind.heading
       push!(out, Entry(i, l.level, rest(lines[i], l.prefix), "type-h$(l.level)", i))
-    elseif l.kind == Kind.fence && l.level == 0 && l.lang in (LIVE, SHEET, SPREADSHEET, DIAGRAM)
+    elseif l.kind == Kind.fence && l.level == 0 && l.lang in (LIVE, SHEET, SPREADSHEET, DIAGRAM, TAKEOFF)
       # The line that closes the block, or the last line when nothing closes it
       close = something(findnext(k -> k.kind == Kind.fence, kinds, i + 1), length(lines))
       if l.lang == SHEET
         push!(out, Entry(i, 7, "Sheet", "calculator", min(i + 1, length(lines))))
       elseif l.lang == SPREADSHEET
         push!(out, Entry(i, 7, "Spreadsheet", "grid-3x3", min(i + 1, length(lines))))
+      elseif l.lang == TAKEOFF
+        # The caret goes under the block. In the block, it would show the block's lines.
+        push!(out, Entry(i, 7, "Takeoff", "rulers", min(close + 1, length(lines))))
       elseif l.lang == DIAGRAM
         # Code that can't be drawn as a diagram is a code block like any other.
         # The caret goes under the block. In the block, it would show the block's code.
@@ -5528,6 +7334,8 @@ const INSERTS = [
   ("Code",          ["```julia", "", "```"],        (2, 0)),
   ("Live Block",    ["```$LIVE", "", "```"],        (2, 0)),
   ("Diagram",       ["```$DIAGRAM", "flowchart LR", "  A[Start] --> B[End]", "```"], (3, 2)),
+  # The caret goes to an empty line under the block. In the block, it would show the block's lines.
+  ("Takeoff",       ["```$TAKEOFF", "```", "", ""], (4, 0)),
   # This one records from the microphone into a new file, and the line shows the recorder. The caret goes
   # to an empty line under it, so that you can type while it records.
   ("Recording",     ["![Recording]()", "", ""],     (3, 0)),
@@ -6427,6 +8235,20 @@ sheet_html(e, s, t) = begin
   "<table>\n" * join(rows, "\n") * "\n</table>"
 end
 
+"The `takeoff` code block from line `s` to line `t` as HTML: a table of what's measured and what each measure comes to"
+takeoff_html(e, s, t) = begin
+  data = Plans.takeoff(e.buf.lines[s+1:t-1])
+  isempty(data.measures) && return nothing
+  rows = map(data.measures) do m
+    amount = Plans.amount(data, m)
+    "<tr><td>$(escape(m.name))</td><td>$(amount === nothing ? "" : escape(Plans.shown(m.kind, amount)))</td></tr>"
+  end
+  about = join(filter(!isempty, [isempty(data.plan) ? "" : "Measured from " * escape(basename(data.plan)),
+                                 isempty(data.customer) ? "" : "for " * escape(data.customer),
+                                 isempty(data.made) ? "" : "quote " * escape(data.made)]), ", ")
+  (isempty(about) ? "" : "<p>$about</p>\n") * "<table>\n" * join(rows, "\n") * "\n</table>"
+end
+
 # Skia's SVG canvas draws text as shapes with this flag, so it needs no font where it's shown
 const SVG_TEXT_AS_SHAPES = UInt32(1)
 
@@ -6482,7 +8304,8 @@ end
 page_html(e) = begin
   b = e.buf
   html(b.lines, title=title(b.path),
-       block=(lang, s, t) -> lang == SHEET ? sheet_html(e, s, t) : lang == DIAGRAM ? diagram_html(e, s, t) : nothing,
+       block=(lang, s, t) -> lang == SHEET ? sheet_html(e, s, t) : lang == TAKEOFF ? takeoff_html(e, s, t) :
+                             lang == DIAGRAM ? diagram_html(e, s, t) : nothing,
        value=code -> (made = get(e.nodes, (:inline, b.path, code, 1), nothing); made isa Tuple && !made[2] ? made[1] : nothing))
 end
 
@@ -6580,6 +8403,7 @@ describe(e::Editor) = begin
   isempty(fresh(e)) || redraw_in!(e, 1/30)
   find_tick!(e)
   sound_tick!(e)
+  takeoff_tick!(e)
   layout!(e)
   # A live block that changed the size of the text stays where it was in the window
   hold = pop!(e.nodes, :hold, nothing)
@@ -6604,7 +8428,7 @@ describe(e::Editor) = begin
       node!(Page, e, :page)))
   popup = e.popup == :none ? () : (node!(Backdrop, e, :backdrop), finder(e))
   Stack(width(grow=grow), height(grow=grow), Alignment.Start, name="Editor",
-    body, panel_edge(e)..., tablebar(e)..., suggestbox(e)..., findbar(e)..., node!(TopBar, e, :topbar), popup...)
+    body, panel_edge(e)..., tablebar(e)..., suggestbox(e)..., findbar(e)..., takeoff_over(e)..., node!(TopBar, e, :topbar), popup...)
 end
 
 # --- window -------------------------------------------------------------------------------

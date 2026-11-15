@@ -153,4 +153,76 @@ pdf_page(path::AbstractString, n::Integer, wide::Integer) = keep(stamp("pdf", pa
   image
 end
 
-export picture, natural, thumbnail, pdf_pages, pdf_page
+# The PDF files that a takeoff shows, kept open while they don't change, so that a part of a page is quick to draw.
+# Each has when its file last changed and macOS's document.
+const open_pdfs = Dict{String,Tuple{Float64,Object}}()
+
+"macOS's document for the PDF file at `path`, or C_NULL if it isn't a PDF file that macOS can read. It's kept, so don't release it."
+pdf(path::AbstractString) = begin
+  path = abspath(path)
+  at = mtime(path)
+  kept = get(open_pdfs, path, nothing)
+  kept !== nothing && kept[1] == at && return kept[2]
+  kept === nothing || release(kept[2])
+  doc = Sys.isapple() && isfile(path) ? with_pool(() -> ccall((:CGPDFDocumentCreateWithURL, CoreGraphics), Object, (Object,), fileurl(path))) : C_NULL
+  open_pdfs[path] = (at, doc)
+  doc
+end
+
+"Page `n` of a PDF document, how wide and how tall it shows in points, and whether it's turned on its side. It's nothing when there's no such page."
+pdf_box(doc::Object, n::Integer) = begin
+  doc == C_NULL && return nothing
+  page = ccall((:CGPDFDocumentGetPage, CoreGraphics), Object, (Object, Csize_t), doc, n)
+  page == C_NULL && return nothing
+  _, _, w, h = ccall((:CGPDFPageGetBoxRect, CoreGraphics), Rect, (Object, Int32), page, 1)
+  ccall((:CGPDFPageGetRotationAngle, CoreGraphics), Int32, (Object,), page) % 180 == 0 || ((w, h) = (h, w))
+  (w > 0 && h > 0) ? (page, w, h) : nothing
+end
+
+"How wide and how tall page `n` of the PDF file at `path` is, in points: 72 to an inch of paper. It's nothing when there's no such page."
+pdf_size(path::AbstractString, n::Integer) = begin
+  found = pdf_box(pdf(path), n)
+  found === nothing ? nothing : (found[2], found[3])
+end
+
+"""
+A part of page `n` of the PDF file at `path`, as pixels. The page is drawn `k`
+pixels to the point, on white paper. The part starts `x` pixels from the left
+of that drawing and `y` from its top, and is `w` pixels wide and `h` tall. Each
+pixel is a number with blue in its lowest byte, then green, red and alpha. It's
+nothing when the page can't be drawn.
+"""
+pdf_part(path::AbstractString, n::Integer, k::Real, x::Real, y::Real, w::Integer, h::Integer) = begin
+  (w > 0 && h > 0 && k > 0) || return nothing
+  found = pdf_box(pdf(path), n)
+  found === nothing && return nothing
+  page, pw, ph = found
+  with_pool() do
+    colours = ccall((:CGColorSpaceCreateDeviceRGB, CoreGraphics), Object, ())
+    # 8 bits for each of blue, green, red and alpha, in that order. 2 says that alpha is in the highest byte, and 8192 that the low byte comes first.
+    paper = ccall((:CGBitmapContextCreate, CoreGraphics), Object, (Object, Csize_t, Csize_t, Csize_t, Csize_t, Object, UInt32),
+                  C_NULL, w, h, 8, 0, colours, 2 | 8192)
+    release(colours)
+    paper == C_NULL && return nothing
+    ccall((:CGContextSetRGBFillColor, CoreGraphics), Cvoid, (Object, Float64, Float64, Float64, Float64), paper, 1.0, 1.0, 1.0, 1.0)
+    ccall((:CGContextFillRect, CoreGraphics), Cvoid, (Object, Rect), paper, (0.0, 0.0, Float64(w), Float64(h)))
+    # macOS measures up from the bottom, so the part's bottom edge is what's put at the bottom of the pixels
+    ccall((:CGContextTranslateCTM, CoreGraphics), Cvoid, (Object, Float64, Float64), paper, -Float64(x), h + Float64(y) - ph * k)
+    ccall((:CGContextScaleCTM, CoreGraphics), Cvoid, (Object, Float64, Float64), paper, Float64(k), Float64(k))
+    place = ccall((:CGPDFPageGetDrawingTransform, CoreGraphics), NTuple{6,Float64}, (Object, Int32, Rect, Int32, Bool),
+                  page, 1, (0.0, 0.0, pw, ph), 0, true)
+    ccall((:CGContextConcatCTM, CoreGraphics), Cvoid, (Object, NTuple{6,Float64}), paper, place)
+    ccall((:CGContextDrawPDFPage, CoreGraphics), Cvoid, (Object, Object), paper, page)
+    from = Ptr{UInt32}(ccall((:CGBitmapContextGetData, CoreGraphics), Ptr{Cvoid}, (Object,), paper))
+    row = Int(ccall((:CGBitmapContextGetBytesPerRow, CoreGraphics), Csize_t, (Object,), paper)) ÷ 4
+    out = Vector{UInt32}(undef, w * h)
+    # A row of macOS's pixels can be longer than the part is wide
+    for r in 0:h-1
+      unsafe_copyto!(pointer(out, r * w + 1), from + 4r * row, w)
+    end
+    release(paper)
+    out
+  end
+end
+
+export picture, natural, thumbnail, pdf_pages, pdf_page, pdf_size, pdf_part

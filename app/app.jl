@@ -11,7 +11,7 @@
 
 include("start.jl")
 
-@use ".." build_editor open_editor WELCOME restyle! problems pages_dir SIDEBAR_ICONS FILE_ICONS todo_at inbox Agent INSERTS
+@use ".." build_editor open_editor WELCOME restyle! problems pages_dir SIDEBAR_ICONS FILE_ICONS todo_at inbox Agent INSERTS PLAN_ICONS
 @use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse Typed ontype
 @use "github.com/jkroso/Font.jl/units" px
 @use "github.com/jkroso/UI.jl/Interface/abstract" focus
@@ -30,7 +30,7 @@ building && start_packages()
 # them now keeps them in the app, so it doesn't need that folder.
 foreach(load_icon, ["check", "chevron-down", "chevron-right", "chevron-up", "copy", "file-earmark", "file-earmark-text", "folder", "eye", "bell-fill", "bell",
                     "layout-sidebar", "pause-fill", "play-fill", "record-fill", "search", "stop-fill", "text-center", "text-left",
-                    "text-paragraph", "text-right", "x-lg", SIDEBAR_ICONS..., FILE_ICONS...])
+                    "text-paragraph", "text-right", "x-lg", SIDEBAR_ICONS..., FILE_ICONS..., PLAN_ICONS...])
 
 # The welcome page's text, to type into while the app warms up
 const page = read(WELCOME, String)
@@ -44,9 +44,9 @@ const page = read(WELCOME, String)
 # when it opens, and tells Kip which module goes with each one.
 
 const PAGES = dirname(WELCOME)
-"The text of each of the app's own pages, by file name. The model, the video and the recording that the pages show are here too, as the bytes of their files."
+"The text of each of the app's own pages, by file name. The model, the video, the recording and the plan that the pages show are here too, as the bytes of their files."
 const pages = Dict(name => read(joinpath(PAGES, name), String)
-                   for name in ("welcome.md", "components.md", "settings.md", "widgets.jl", "knot.stl", "knot.mp4", "hello.m4a"))
+                   for name in ("welcome.md", "components.md", "settings.md", "widgets.jl", "knot.stl", "knot.mp4", "hello.m4a", "plan.pdf"))
 
 "The `user/repo/file` that a file Kip got from GitHub has there, or nothing for any other file"
 place(path) = begin

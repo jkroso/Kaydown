@@ -1,6 +1,6 @@
 # Kaydown
 
-A Markdown editor for the Mac, made with [UI.jl](https://github.com/jkroso/UI.jl). It draws each line the way it will read, and you type in it. A code block in the language `ui` runs its Julia code and shows what the code makes. A code block in the language `sheet` works things out, a row at a time. A code block in the language `spreadsheet` is a grid of cells with formulas. A code block in the language `mermaid` shows a diagram, like a flowchart. A line that holds only a sound file shows a player, and the page's Insert menu records one from the microphone. A button under the player writes down what's said in it, on the Mac.
+A Markdown editor for the Mac, made with [UI.jl](https://github.com/jkroso/UI.jl). It draws each line the way it will read, and you type in it. A code block in the language `ui` runs its Julia code and shows what the code makes. A code block in the language `sheet` works things out, a row at a time. A code block in the language `spreadsheet` is a grid of cells with formulas. A code block in the language `mermaid` shows a diagram, like a flowchart. A code block in the language `takeoff` shows a building plan that you measure from, and makes a quote from what you measure. A line that holds only a sound file shows a player, and the page's Insert menu records one from the microphone. A button under the player writes down what's said in it, on the Mac.
 
 "Kaydown" is a working name, after Alan Kay.
 
@@ -34,6 +34,28 @@ kaydown wait plan.md    # waits until you press Nudge Claude, then prints the li
 ```
 
 The top of `agent.jl` says how the command and Kaydown talk to each other.
+
+## Measure from a plan
+
+A code block in the language `takeoff` shows a page of a PDF file, or a picture. Drop the file on the block. Set the scale, then count fittings, measure lengths and measure areas with the tools at the top left of the block. The table under the plan shows what each measure comes to, and its headings sort and search it. A button makes the block fill the window, so that the plan is as big as it can be. `pages/welcome.md` has one to try, and `takeoff.jl` says how the block is written.
+
+Kaydown works with [Centient](https://centient.com.au) if it's on your Mac. Each measure can have an item from Centient, with its price: one of your own items, or a product from a supplier's catalogue that you choose with ⌥. The item's unit says what a new measure is, and chooses the tool: a length for an item sold by the metre, an area for one sold by the square metre, and a count for the rest. **Make quote in Centient** makes a quote in Centient's books with a line for each measure. Centient's app doesn't have to be open.
+
+Kaydown doesn't read Centient's books itself. It starts Centient's MCP server, `sidecar/mcp_server.jl` in Centient's folder, and that program runs Centient's own commands. `centient.jl` says where Kaydown looks for it. To use a Centient that's somewhere else, set `CENTIENT_SIDECAR` to its `sidecar` folder.
+
+A window of Centient that's open doesn't show the new quote until it loads its list of sales again.
+
+## Test it
+
+```sh
+julia --project=. takeoff_test.jl        # how a takeoff is read, written and worked out
+julia --project=. centient_test.jl       # how Kaydown talks to Centient's server
+julia --project=. takeoff_view_test.jl   # the block itself, in a window that isn't on the screen
+julia --project=. merge_test.jl
+julia --project=. pasteboard_test.jl
+```
+
+The first three need no Centient. `centient_fake.jl` answers in its place.
 
 ## Change it
 

@@ -93,7 +93,7 @@
 @use "github.com/jkroso/UI.jl/Interface/Geometric"...
 @use "github.com/jkroso/UI.jl/Interface/Specific"...
 @use "github.com/jkroso/UI.jl/Interface/abstract" SemanticUI GeometricUI WrapMode Theme with_theme adopt_theme! light describe describe! reuse! detach! add_child! window_of focus handled carry!
-@use "github.com/jkroso/UI.jl/Interface/draw" ui draw ishovered cursor open_url viewport show_tooltip! hide_tooltip! hittest show_menu! hide_menu! redraw_in! rect popup! close_popup! MouseScroll Pinch onpinch placed! with_clip with_round_clip
+@use "github.com/jkroso/UI.jl/Interface/draw" ui draw ishovered cursor open_url viewport show_tooltip! hide_tooltip! hittest show_menu! hide_menu! redraw_in! rect popup! close_popup! MouseScroll Pinch onpinch placed! with_clip with_round_clip clipboard!
 @use "github.com/jkroso/UI.jl/Interface/objc" libobjc cls sel msg nsstring jstring with_pool send
 @use "github.com/jkroso/UI.jl/Interface/fonts" skia_font register_font
 @use "github.com/jkroso/UI.jl/Interface/image" image_aspect image_source has_image
@@ -110,7 +110,7 @@
 @use "github.com/jkroso/UI.jl/Interface/Semantic/ThreeMF" => ThreeMF
 @use "./pictures" picture natural thumbnail pdf_pages pdf_page pdf_size pdf_part
 @use "./spelling" misspelt guesses learn!
-@use "./transcribe" Transcription check! finished
+@use "./transcribe" Transcription check! finished phrases words_between
 @use "./html" html footnotes NOTE escape
 @use "./markdown" Kind Line Span Cell classify spans tablecells isdivider words isdone front_matter MATTER TOML_MATTER
 @use "./highlight" tokens
@@ -1750,7 +1750,7 @@ end
 draw(ctx, size, ui::ConcreteRect, t::Trouble) = (t.rect = (ui.left, ui.top, ui.width, ui.height); nothing)
 
 onmouse(t::Trouble, ev::MouseMove) =
-  show_tooltip!(ev.window, Box(padding(8px, 5px), label(t.message, 12px, color=TIP_INK)), t.rect..., placement=:bottom, gap=6px)
+  show_tooltip!(ev.window, tip_label(t.message), t.rect..., placement=:bottom, gap=6px)
 
 """
 The boxes that cover the selected part of a sheet whose top left corner is at
@@ -4403,7 +4403,7 @@ draw(ctx, size, ui::ConcreteRect, b::PlanButton) = (b.rect = (ui.left, ui.top, u
 
 onmouse(b::PlanButton, ev::MouseMove) = begin
   (b.quiet || isempty(b.tip)) && return
-  show_tooltip!(ev.window, Box(padding(8px, 5px), label(b.tip, 12px, color=TIP_INK)), b.rect..., placement=:bottom, gap=6px)
+  show_tooltip!(ev.window, tip_label(b.tip), b.rect..., placement=:bottom, gap=6px)
 end
 
 onkey(b::PlanButton, ev::KeyPress{Keys.mouse_left}) = begin
@@ -4552,7 +4552,7 @@ end
 
 # Words that are cut short show whole under the cell
 onmouse(c::MeasureCell, ev::MouseMove) = isempty(c.full) ? nothing :
-  show_tooltip!(ev.window, Box(padding(8px, 5px), label(c.full, 12px, color=TIP_INK)), c.rect..., placement=:bottom, gap=6px)
+  show_tooltip!(ev.window, tip_label(c.full), c.rect..., placement=:bottom, gap=6px)
 
 onkey(c::MeasureCell, ::KeyPress{Keys.mouse_left}) = begin
   v, i = c.of, c.i
@@ -5059,7 +5059,7 @@ onmouse(h::ColumnHead, ev::MouseMove) = begin
   will = next_order(h.of, h.key)
   low, high = order_words(false)
   words = will == :asc ? low : will == :desc ? high : "The order they're written in"
-  show_tooltip!(ev.window, Box(padding(8px, 5px), label(words, 12px, color=TIP_INK)), head_words(h.of, h.key).rect...,
+  show_tooltip!(ev.window, tip_label(words), head_words(h.of, h.key).rect...,
                 placement=:bottom, gap=6px)
 end
 
@@ -5359,7 +5359,8 @@ its button beside it.
   what::Any = nothing      # what fills the window. See ZoomView.
   content::Any = nothing   # what shows in the page
   sizing::Any = ()         # how wide it is
-  button::Any = nothing    # its FillButton, once it has shown
+  button::Any = nothing       # its FillButton, once it has shown
+  transcript::Any = nothing   # a video's TranscriptButton, once it has shown
 end
 
 "The button beside the top right corner of a Fillable that makes it fill the window"
@@ -5439,9 +5440,17 @@ fill_spot(e, r) = begin
   (right - 2FILL_GAP - FILL_SIDE, top + FILL_GAP)
 end
 
+"The video player that `f` shows, or nothing when it shows something else"
+video_of(f::Fillable) = f.what !== nothing && f.what[1] == :node && f.what[2] isa VideoPlayer ? f.what[2] : nothing
+
+"How tall the buttons beside `f` are: a video has the button that shows what was said in it under the first"
+buttons_tall(f::Fillable) = video_of(f) === nothing ? FILL_SIDE : 2FILL_SIDE + FILL_GAP
+
 """
 The button that makes the picture under the mouse fill the window, beside it.
-It shows while the mouse is over the picture or the button, or between them.
+A video has a button under that one, which shows what was said in the video.
+They show while the mouse is over the picture or the buttons, or between them,
+and while the drop-down of what was said is open.
 """
 fill_over(e) = begin
   (zooming(e) === nothing && full_takeoff(e) === nothing && e.popup == :none) || return ()
@@ -5454,14 +5463,24 @@ fill_over(e) = begin
     r = rect(f)
     r === nothing && continue
     s = fill_spot(e, r)
+    if f.transcript !== nothing && f.transcript.open
+      best, spot = f, s
+      break
+    end
     num(min(r.left, s[1])) <= x < num(max(r.left + r.width, s[1] + FILL_SIDE)) || continue
-    num(min(r.top, s[2])) <= y < num(max(r.top + r.height, s[2] + FILL_SIDE)) || continue
+    num(min(r.top, s[2])) <= y < num(max(r.top + r.height, s[2] + buttons_tall(f))) || continue
     area = num(r.width) * num(r.height)
     area < least && ((best, spot, least) = (f, s, area))
   end
   best === nothing && return ()
   b = best.button === nothing ? (best.button = own!(best, FillButton())) : best.button
-  (Row(width(grow=grow), height(grow=grow), Alignment.Start, padding(spot[2], 0px, 0px, spot[1]), b),)
+  buttons = Any[b]
+  if video_of(best) !== nothing
+    best.transcript === nothing && (best.transcript = own!(best, TranscriptButton()))
+    push!(buttons, best.transcript)
+  end
+  (Row(width(grow=grow), height(grow=grow), Alignment.Start, padding(spot[2], 0px, 0px, spot[1]),
+     Column(Alignment.Start, child_gap=FILL_GAP, buttons...)),)
 end
 
 describe(b::FillButton) = begin
@@ -5477,7 +5496,9 @@ draw(ctx, size, ui::ConcreteRect, b::FillButton) = (b.rect = (ui.left, ui.top, u
 onmouse(b::FillButton, ev::MouseMove) = begin
   b.quiet && return handled
   tip = b.parent.what[1] == :node ? "Fill the window" : "Fill the window  pinch"
-  show_tooltip!(ev.window, Box(padding(8px, 5px), label(tip, 12px, color=TIP_INK)), b.rect..., placement=:bottom, gap=6px)
+  # A video's tooltip goes beside the button, so that it doesn't cover the button under it
+  show_tooltip!(ev.window, tip_label(tip), b.rect...,
+                placement=video_of(b.parent) === nothing ? :bottom : :right, gap=6px)
   handled
 end
 
@@ -7391,6 +7412,9 @@ end
 const Tipped = Union{ToolButton,Count,SendButton}
 const TIP_INK = colorant"rgb(240,240,240)"   # on the dark grey that every tooltip has
 
+"What a tooltip shows: `words`, with room around them"
+tip_label(words) = Box(padding(10px, 7px), label(words, 12px, color=TIP_INK))
+
 "What the tooltip of a button in the top bar says"
 tip(b::ToolButton) = begin
   e = editor(b)
@@ -7420,7 +7444,7 @@ draw(ctx, size, ui::ConcreteRect, b::Tipped) = (b.rect = (ui.left, ui.top, ui.wi
 
 onmouse(b::Tipped, ev::MouseMove) = begin
   b.quiet && return
-  show_tooltip!(ev.window, Box(padding(8px, 5px), label(tip(b), 12px, color=TIP_INK)), b.rect...,
+  show_tooltip!(ev.window, tip_label(tip(b)), b.rect...,
                 placement=:bottom, gap=6px)
 end
 
@@ -8682,6 +8706,162 @@ video_item(e, src) = begin
   # Lay it out once to learn how tall it is
   concrete = describe(Column(fixed(e.width), Alignment.Start, geometry(node)), (e.width, 9999px))
   Live(node, concrete.height + 2LIVE_GAP)
+end
+
+# --- what was said in a video ------------------------------------------------------------
+#
+# While the mouse is over a video, a button under the one that makes it fill the
+# window opens a drop-down of what was said in the video. The drop-down has a
+# button that copies the words to the clipboard. The first time, macOS writes
+# down what's said in the file, as it does for a sound file. See transcribe.jl.
+# A few minutes of video take it a second or two, and the drop-down says how far
+# it has got. A line that names part of a file, like walk.mov#t=61,86, shows what
+# was said in that part. Each file is transcribed once while Kaydown runs, so the
+# parts of a file share it.
+
+const TRANSCRIPT_W = 520px      # the widest the drop-down is
+const TRANSCRIPT_HIGH = 320px   # the tallest that its words are before they scroll
+const TRANSCRIPT_PAD = 14px     # inside its edge
+const COPIED_FOR = 1.5          # how many seconds the copy button says "Copied"
+
+"The button beside a video, under its FillButton, that opens the drop-down of what was said in the video"
+@def mutable struct TranscriptButton <: SemanticUI
+  open::Bool = false                          # is its drop-down open?
+  rect::NTuple{4,px} = (0px, 0px, 0px, 0px)   # where it was last drawn, to put its tooltip beside it
+  quiet::Bool = false                         # clicked, so no tooltip until the mouse leaves it
+end
+
+"The drop-down of a TranscriptButton: what was said in the video, and a button that copies it"
+@def mutable struct Transcript <: SemanticUI
+  player::Any = nothing   # the VideoPlayer
+  wide::px = TRANSCRIPT_W # how wide it is
+  copy::Any = nothing     # its CopyButton
+  scroll::Scroll = Scroll(width(grow=grow))
+end
+
+"The button in a Transcript that copies the words to the clipboard"
+@def mutable struct CopyButton <: SemanticUI
+  text::String = ""       # what it copies
+  copied::Float64 = 0.0   # when it last copied, so that it says so for a moment
+end
+
+# The transcription of each video file that has had one, by the file's path,
+# with when the file last changed before it started
+const video_words = Dict{String,Tuple{Float64,Transcription}}()
+
+"""
+Start to transcribe the video file at `path`, unless it has been or it's being
+done. A file that has changed since, and one that couldn't be done, start again.
+"""
+transcribe_video!(path) = begin
+  stamp = mtime(path)
+  had = get(video_words, path, nothing)
+  had !== nothing && had[1] == stamp && !(finished(had[2]) && had[2].text === nothing) && return had[2]
+  video_words[path] = (stamp, Transcription(path, times=true))
+  video_words[path][2]
+end
+
+"""
+What the drop-down of the video player `p` shows: the words said in the part of
+the file that it plays, or no words and a note that says why there are none,
+like how far macOS has got. `busy` is true while macOS works.
+"""
+transcript_of(p::VideoPlayer) = begin
+  had = get(video_words, p.path, nothing)
+  had === nothing && return (words="", note="", busy=false)
+  t = had[2]
+  if !check!(t)
+    note = t.downloading ? "Downloading what macOS needs to transcribe…" : "Transcribing… $(round(Int, 100t.done))%"
+    return (words="", note=note, busy=true)
+  end
+  t.text === nothing && return (words="", note=t.problem, busy=false)
+  words = words_between(phrases(t), p.from, p.to)
+  whole = p.from == 0 && p.to == Inf
+  (words=words, note=isempty(words) ? "No words were heard in $(whole ? "the" : "this part of the") video." : "", busy=false)
+end
+
+"How wide the drop-down of what was said in a video is in the page of `e`"
+transcript_w(e) = min(e.width, TRANSCRIPT_W)
+
+describe(b::TranscriptButton) = begin
+  ishovered(b) || (b.quiet = false)
+  Box(width(FILL_SIDE), height(FILL_SIDE), radius(6px), Alignment.Center, justify=Alignment.Center, name="Button",
+      background(b.open || ishovered(b) ? colours.hover : colours.float), border(1px, :solid, colours.line),
+    Icon("text-paragraph", size=12px, color=colours.dim))
+end
+
+cursor(::TranscriptButton) = :hand
+draw(ctx, size, ui::ConcreteRect, b::TranscriptButton) = (b.rect = (ui.left, ui.top, ui.width, ui.height); nothing)
+
+onmouse(b::TranscriptButton, ev::MouseMove) = begin
+  (b.quiet || b.open) && return handled
+  show_tooltip!(ev.window, tip_label("Show transcription"), b.rect...,
+                placement=:right, gap=6px)
+  handled
+end
+
+# While the drop-down is open, a click on the button is outside the drop-down, so it closes it
+onkey(b::TranscriptButton, ev::KeyPress{Keys.mouse_left}) = begin
+  b.quiet = true
+  hide_tooltip!(ev.window)
+  e, p = editor(b), video_of(b.parent)
+  p === nothing && return handled
+  transcribe_video!(p.path)
+  b.open = true
+  t = Transcript(player=p, wide=transcript_w(e))
+  t.copy = own!(t, CopyButton())
+  popup!(ev.window, t, anchor=b, gap=6px, width=t.wide, key=:transcript,
+         onclose=() -> (b.open = false), theme=component_theme(e.zoom))
+  handled
+end
+
+"""
+`text` as a Text for each of its paragraphs, `wide` wide. A Text's box ends at
+the foot of its last line's letters, so room under them keeps the tails of
+letters like p and y from being cut off. For the same reason, the gap between
+two paragraphs is a line's height and a little more.
+"""
+said_text(text, wide; color=colours.ink) =
+  Column(fixed(wide), Alignment.Start, padding(0px, 0px, 6px, 0px), child_gap=20px,
+    [Text(String(p), size=14px, family=SANS, color=color) for p in split(text, "\n\n")]...)
+
+describe(t::Transcript) = begin
+  words, note, busy = transcript_of(t.player)
+  # Look again soon, to show how far it has got
+  busy && redraw_in!(t, 0.25)
+  t.copy.text = words
+  wide = t.wide - 2TRANSCRIPT_PAD
+  body = if isempty(words)
+    said_text(note, wide, color=colours.dim)
+  else
+    # Words that are taller than TRANSCRIPT_HIGH scroll
+    t.scroll.height = height(min(describe(said_text(words, wide), (wide, 9999px)).height, TRANSCRIPT_HIGH))
+    reuse!(t.scroll, said_text(words, wide))
+  end
+  Column(width(grow=grow), Alignment.Start, padding(TRANSCRIPT_PAD), radius(8px), background(colours.block),
+         border(1px, :solid, colours.line), lifted, child_gap=10px, name="Transcript",
+    Row(width(grow=grow), height(24px), Alignment.Center,
+      Box(width(grow=grow), label("Transcription", 12px, color=colours.dim, weight="Semibold")),
+      (isempty(words) ? () : (t.copy,))...),
+    body)
+end
+
+describe(c::CopyButton) = begin
+  done = time() - c.copied < COPIED_FOR
+  Box(height(24px), padding(8px, 0px), radius(6px), background(ishovered(c) ? colours.active : colours.hover),
+    Row(Alignment.Center, child_gap=5px,
+      Icon(done ? "check" : "copy", size=12px, color=colours.dim),
+      label(done ? "Copied" : "Copy to clipboard", 12px)))
+end
+
+cursor(::CopyButton) = :hand
+
+onkey(c::CopyButton, ev::KeyPress{Keys.mouse_left}) = begin
+  clipboard!(ev.window, c.text)
+  c.copied = time()
+  # So that it goes back to saying "Copy to clipboard"
+  redraw_in!(c, COPIED_FOR + 0.05)
+  handled
 end
 
 # --- sound in the text -------------------------------------------------------------------

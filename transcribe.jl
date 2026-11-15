@@ -1,11 +1,18 @@
-# Writes down what's said in a sound file. transcribe.swift does the work, as a
-# program of its own, because macOS only offers its speech recognition to Swift.
-# It runs on the Mac, so the sound stays there.
+# Writes down what's said in a sound file, or in the sound of a video file.
+# transcribe.swift does the work, as a program of its own, because macOS only
+# offers its speech recognition to Swift. It runs on the Mac, so the sound stays
+# there.
 #
 #     t = Transcription("memo.m4a")   # starts it
 #     check!(t)                       # call it now and then. It's true once it has finished.
 #     t.done, t.downloading           # how far it has got
 #     t.text, t.problem               # once it has finished
+#
+# With `times=true`, the text says when each phrase was said, so that you can
+# take the words of part of the file:
+#
+#     t = Transcription("walk.mov", times=true)
+#     check!(t) && words_between(phrases(t), 61, 86)   # what was said from 1:01 to 1:26
 #
 # The Kaydown app has the program in it, beside its own program. When Kaydown
 # runs from its source, it compiles transcribe.swift the first time it's needed,
@@ -34,20 +41,22 @@ compile(out) = run(`swiftc -O -parse-as-library -target $(target()) $SOURCE -o $
 """
 The command that transcribes `file`: the program in the app, or the one compiled
 from the source. If that isn't compiled yet, the command compiles it first.
+`flags` go to the program before the file, like "--times".
 """
-command(file) = begin
+command(file, flags::String...) = begin
+  args = [flags..., file]
   app = bundled()
-  app === nothing || return `$app $file`
+  app === nothing || return `$app $args`
   dir = joinpath(homedir(), "Library", "Caches", "Kaydown")
   # A change to the source makes a program of a new name
   program = joinpath(dir, "transcribe-" * string(hash(read(SOURCE)), base=16))
-  isfile(program) && return `$program $file`
+  isfile(program) && return `$program $args`
   mkpath(dir)
   # A program compiled from older source isn't needed
   foreach(f -> startswith(f, "transcribe-") && rm(joinpath(dir, f), force=true), readdir(dir))
   # It's compiled to another name and renamed once it's whole, so a program that's there is always whole
-  script = """swiftc -O -parse-as-library -target $(target()) "\$1" -o "\$2.part" && mv "\$2.part" "\$2" && exec "\$2" "\$3" """
-  `sh -c $script sh $SOURCE $program $file`
+  script = """swiftc -O -parse-as-library -target $(target()) "\$1" -o "\$2.part" && mv "\$2.part" "\$2" && p="\$2" && shift 2 && exec "\$p" "\$@" """
+  `sh -c $script sh $SOURCE $program $args`
 end
 
 mutable struct Transcription
@@ -61,11 +70,12 @@ mutable struct Transcription
   problem::String                # why it couldn't, if it couldn't
 end
 
-Transcription(file::AbstractString) = begin
+"Start to transcribe `file`. With `times=true`, the text says when each phrase was said: see `phrases`."
+Transcription(file::AbstractString; times=false) = begin
   dir = mktempdir()
   t = Transcription(abspath(file), nothing, joinpath(dir, "text"), joinpath(dir, "progress"), 0.0, false, nothing, "")
   try
-    t.process = run(pipeline(command(t.file), stdout=t.out, stderr=t.err), wait=false)
+    t.process = run(pipeline(times ? command(t.file, "--times") : command(t.file), stdout=t.out, stderr=t.err), wait=false)
   catch
     t.problem = "Kaydown couldn't start to transcribe the file"
   end
@@ -98,3 +108,40 @@ end
 
 "Stop it before it finishes"
 cancel!(t::Transcription) = (finished(t) || (kill(t.process); t.problem = "Stopped"); t)
+
+"""
+The phrases of a transcription that was started with `times=true`, once it has
+finished: for each, the second of the file where it starts, the second where it
+ends, and its words.
+"""
+phrases(t::Transcription) = begin
+  out = Tuple{Float64,Float64,String}[]
+  t.text === nothing && return out
+  for line in split(t.text, '\n')
+    parts = split(line, '\t', limit=3)
+    length(parts) == 3 || continue
+    from, to = tryparse(Float64, parts[1]), tryparse(Float64, parts[2])
+    (from === nothing || to === nothing || isempty(strip(parts[3]))) && continue
+    push!(out, (from, to, String(strip(parts[3]))))
+  end
+  out
+end
+
+"How many seconds without words start a new paragraph, as transcribe.swift has it"
+const PAUSE = 2.0
+
+"""
+What was said between second `from` and second `to` of the file that
+`phrases` come from: each phrase whose middle is in that time. A pause of
+`PAUSE` seconds or more starts a new paragraph, with an empty line before it.
+"""
+words_between(phrases, from, to) = begin
+  text, last = "", -Inf
+  for (s, e, words) in phrases
+    from <= (s + e) / 2 < to || continue
+    text *= isempty(text) ? "" : s - last >= PAUSE ? "\n\n" : " "
+    text *= words
+    last = e
+  end
+  text
+end

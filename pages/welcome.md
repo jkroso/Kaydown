@@ -17,6 +17,8 @@ A line can point to a footnote[^note]. The footnote is a line of its own, anywhe
 
 A line that holds only a picture, like `![plan](plan.png)`, shows the picture. Drop a picture on the page from the Finder to add one. Any other file that you drop goes in as a path that you can click. ⌘V does the same with files that you copied in the Finder: a picture, a video, a sound, a PDF or any other file. It also pastes a picture that you copied as itself, like a screenshot, and keeps it as a file beside the page.
 
+A line that holds only a video file shows a player for it, like `![The kitchen](walk.mov)`. To play only part of the video, add the seconds where the part starts and stops to the end of the file's name. `![The kitchen](walk.mov#t=61,86)` starts at 1:01 and stops at 1:26. Leave out the second number to play on to the end.
+
 ## Lists
 
 1. Press Return at the end of this line. The next number is typed for you.

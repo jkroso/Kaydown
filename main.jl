@@ -8328,9 +8328,11 @@ picture_item(e, i) = begin
   m = match(PICTURE_LINE, e.buf.lines[i])
   m === nothing && return nothing
   src = unescaped(String(m[2]))
-  # A sound file shows a player
+  # A sound file shows a player, and so does a video file
   sound = sound_file(docdir(e), e.buf.lines[i])
   sound === nothing || return sound_item(e, sound)
+  video = video_item(e, src)
+  video === nothing || return video
   path = startswith(src, r"https?://") ? fetched(e, src) : abspath(docdir(e), expanduser(src))
   key = path === nothing ? nothing : picture_key(path)
   key === nothing && return nothing
@@ -8344,6 +8346,60 @@ picture_item(e, i) = begin
   node.line, node.key, node.w, node.h = i, key, w, h
   own!(node!(Document, e, :document), node)
   Live(node, h + 2LIVE_GAP)
+end
+
+# --- video in the text -------------------------------------------------------------------
+#
+# A line that holds only a video file, written as a picture is, like
+# ![The kitchen](walk.mov), shows a player for the file. A link that ends like
+# walk.mov#t=61,86 names part of the file: from 61 seconds after its start to
+# 86. The player starts at 61 and stops at 86, and its track is that part of the
+# file. walk.mov#t=61 goes on to the end of the file. A time can be written as a
+# clock shows it too, like 1:01. A browser reads the link the same way.
+
+"""
+The file that a link names, and the part of the file that the link's `#t=`
+names, in seconds from the file's start. `"walk.mov#t=61,86"` gives
+`("walk.mov", 61.0, 86.0)`. With no `#t=` it's all of the file: 0 to Inf.
+"""
+media_part(src) = begin
+  file, after = occursin('#', src) ? split(src, '#', limit=2) : (src, "")
+  from, to = 0.0, Inf
+  for pair in split(after, '&')
+    startswith(pair, "t=") || continue
+    times = split(replace(pair[3:end], r"^npt:" => ""), ',', limit=2)
+    start = clock_time(times[1])
+    start === nothing || (from = max(start, 0.0))
+    stop = length(times) == 2 ? clock_time(times[2]) : nothing
+    stop === nothing || stop <= from || (to = stop)
+  end
+  (String(file), from, to)
+end
+
+"A time written as seconds, like 61.5, or as a clock shows it, like 1:01.5 or 0:01:01, in seconds. It's nothing if the text isn't a time."
+clock_time(text) = begin
+  n = map(part -> tryparse(Float64, part), split(text, ':'))
+  (length(n) > 3 || any(isnothing, n)) && return nothing
+  foldl((total, x) -> total * 60 + x, n)
+end
+
+"What a line shows when it holds only the video file `src`: a player of the file, or of the part of it that `src` names. It's nothing if the file isn't there."
+video_item(e, src) = begin
+  Sys.isapple() || return nothing
+  file, from, to = media_part(src)
+  (startswith(file, r"https?://") || !(lowercase(splitext(file)[2]) in VIDEOS)) && return nothing
+  path = abspath(docdir(e), expanduser(file))
+  isfile(path) || return nothing
+  # A Shown gives the player the page's colours, and the button that makes it fill the window, as it does for what a live block makes
+  node = get!(e.nodes, (:video, path, from, to)) do
+    shown = Shown(value=VideoPlayer(path=path, from=from, to=to))
+    own!(shown, shown.value)
+    shown
+  end
+  own!(node!(Document, e, :document), node)
+  # Lay it out once to learn how tall it is
+  concrete = describe(Column(fixed(e.width), Alignment.Start, geometry(node)), (e.width, 9999px))
+  Live(node, concrete.height + 2LIVE_GAP)
 end
 
 # --- sound in the text -------------------------------------------------------------------

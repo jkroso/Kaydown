@@ -31,11 +31,26 @@ inline(d::Document, text::AbstractString) = begin
   # A picture isn't one of the editor's spans, so the text between the pictures is read as spans
   for m in eachmatch(PICTURE, text)
     styled!(out, d, SubString(text, at, prevind(text, m.offset)))
-    print(out, "<img src=\"", escape(m[2]), "\" alt=\"", escape(m[1]), "\">")
+    print(out, embed(m[2], m[1]))
     at = m.offset + ncodeunits(m.match)
   end
   styled!(out, d, SubString(text, at))
   String(take!(out))
+end
+
+const VIDEO_FILES = (".mp4", ".mov", ".m4v")
+const SOUND_FILES = (".mp3", ".m4a", ".wav", ".aif", ".aiff", ".aac", ".flac", ".caf")
+
+"""
+The HTML of what a picture's Markdown names: a player for a video or a sound
+file, and a picture for anything else. A browser plays only the part of the
+file that a `#t=61,86` at the end of `src` names, as the editor does.
+"""
+embed(src, alt) = begin
+  ext = lowercase(splitext(first(split(src, r"[?#]")))[2])
+  tag = ext in VIDEO_FILES ? "video" : ext in SOUND_FILES ? "audio" : nothing
+  tag === nothing && return "<img src=\"" * escape(src) * "\" alt=\"" * escape(alt) * "\">"
+  "<$tag controls preload=\"metadata\" src=\"$(escape(src))\" title=\"$(escape(alt))\"></$tag>"
 end
 
 styled!(out, d::Document, text::AbstractString) = for s in spans(text)
@@ -97,7 +112,8 @@ blockquote { margin: 1em 0; padding-left: 1em; border-left: 3px solid #d8d0bd; c
 table { border-collapse: collapse; margin: 1em 0; }
 th, td { border: 1px solid #d8d0bd; padding: 0.35em 0.8em; text-align: left; }
 th { background: #f1ede2; }
-img { max-width: 100%; }
+img, video { max-width: 100%; }
+video { display: block; max-height: 70vh; }
 .diagram { margin: 1em 0; }
 .diagram svg { display: block; max-width: 100%; height: auto; }
 hr { border: 0; border-top: 1px solid #d8d0bd; margin: 2em 0; }

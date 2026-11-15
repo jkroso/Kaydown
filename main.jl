@@ -4297,10 +4297,9 @@ describe(b::PlanButton) = begin
   v = b.of
   ishovered(b) || (b.quiet = false)
   on = b.action isa Tuple && b.action[1] == :tool && v.tool == b.action[2]
-  main = b.action == :quote
   colour = b.off ? colours.faint : on ? colours.accent : colours.dim
   Box(height(26px), padding(7px, 0px), radius(6px), Alignment.Center, name="Button",
-      background(main && !b.off ? (ishovered(b) ? colours.active : colours.hover) : on ? colours.active : ishovered(b) && !b.off ? colours.hover : clear),
+      background(on ? colours.active : ishovered(b) && !b.off ? colours.hover : clear),
     Row(Alignment.Center, child_gap=5px,
       (isempty(b.icon) ? () : (Icon(b.icon, size=14px, color=colour),))...,
       (isempty(b.words) ? () : (label(b.words, 12px, color=b.off ? colours.faint : colours.ink),))...))

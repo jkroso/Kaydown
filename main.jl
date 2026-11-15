@@ -9120,9 +9120,9 @@ end
 # the line goes from the document, as it does when you undo the Insert, the
 # recording stops.
 #
-# Under the player, a button writes down what's said in the file. macOS does it
-# on the Mac, and the words go into a paragraph under the line. You can type
-# while it works. See transcribe.jl.
+# While the mouse is over the player, a button under it writes down what's said
+# in the file. macOS does it on the Mac, and the words go into a paragraph under
+# the line. You can type while it works. See transcribe.jl.
 
 "A line of the document that holds only a sound file"
 @def mutable struct SoundLine <: SemanticUI
@@ -9133,6 +9133,8 @@ end
 @def mutable struct TranscribeButton <: SemanticUI
   path::String = ""
 end
+
+const TRANSCRIBE_H = 26px   # how tall the Transcribe button is
 
 # The recorder of each sound file that a line has shown. They're kept while
 # Kaydown runs, so that a recording goes on while another file shows.
@@ -9178,6 +9180,10 @@ describe(s::SoundLine) = begin
   # It's a component, so it gets the colours and the text size that a live block gives one
   with_theme(component_theme(e.zoom)) do
     plays(r) || return Column(width(grow=grow), Alignment.Start, r)
+    # The button shows while the mouse is over the line, and while macOS works.
+    # Its room stays empty at other times, so the text under the line doesn't move.
+    (ishovered(s) || transcribing(s.path)) ||
+      return Column(width(grow=grow), Alignment.Start, child_gap=6px, r, Box(height(TRANSCRIBE_H)))
     button = node!(() -> TranscribeButton(path=s.path), e, (:transcribe, s.path))
     button.parent === s || setfield!(button, :parent, s)
     t = get(transcriptions, s.path, nothing)
@@ -9202,7 +9208,7 @@ describe(b::TranscribeButton) = begin
   busy = transcribing(b.path)
   words = !busy ? (b.path in transcribed ? "Transcribe again" : "Transcribe") :
           t.downloading ? "Downloading what macOS needs to transcribe…" : "Transcribing… $(round(Int, 100t.done))%"
-  Box(height(26px), padding(10px, 0px), radius(6px), background(busy ? colours.hover : ishovered(b) ? colours.active : colours.hover),
+  Box(height(TRANSCRIBE_H), padding(10px, 0px), radius(6px), background(busy ? colours.hover : ishovered(b) ? colours.active : colours.hover),
     Row(Alignment.Center, child_gap=6px,
       Icon("text-paragraph", size=13px, color=colours.dim),
       label(words, 12px, color=busy ? colours.dim : colours.ink)))

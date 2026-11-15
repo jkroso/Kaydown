@@ -171,7 +171,7 @@ Every change goes into the block's lines, so the file holds the whole takeoff. T
 
 To record from your Mac's microphone, right-click the page and choose Insert › Recording. Kaydown starts to record at once, into a new file beside this one. Bars show how loud the sound is, and you can type while it records. Click the red button to stop. The first time, macOS asks whether Kaydown may use the microphone.
 
-A line that holds only a sound file shows a player for it. The line is written as a picture is, like `![A recording](hello.m4a)`. Click Transcribe under the player, and macOS writes down what's said in the file. The words go into a paragraph under the player, and you can change them as you would any text. macOS does this on your Mac, so the sound stays there. It needs macOS 26 or later.
+A line that holds only a sound file shows a player for it. The line is written as a picture is, like `![A recording](hello.m4a)`. Move the mouse over the player and click Transcribe under it, and macOS writes down what's said in the file. The words go into a paragraph under the player, and you can change them as you would any text. macOS does this on your Mac, so the sound stays there. It needs macOS 26 or later.
 
 ![A recording](hello.m4a)
 

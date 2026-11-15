@@ -60,8 +60,8 @@ const site = "http://host:9330/walkthrough/projects/3f9c"
 end
 
 @testset "what the front matter sets a key to" begin
-  yaml = ["---", "property: 97/26 Antill Street, Dickson ACT 2602", "progress: \"$site/tasks?key=ab12\"", "---", "", "# A page", "purpose: not this"]
-  @test K.matter_value(yaml, "property") == "97/26 Antill Street, Dickson ACT 2602"
+  yaml = ["---", "property: 12/40 Wattle Street, Dickson ACT 2602", "progress: \"$site/tasks?key=ab12\"", "---", "", "# A page", "purpose: not this"]
+  @test K.matter_value(yaml, "property") == "12/40 Wattle Street, Dickson ACT 2602"
   @test K.matter_value(yaml, "progress") == "$site/tasks?key=ab12"
   @test K.matter_value(yaml, "purpose") === nothing
   @test K.matter_value(["+++", "progress = '$site/tasks'", "+++"], "progress") == "$site/tasks"
@@ -69,10 +69,10 @@ end
 end
 
 @testset "what the button says of Centient's answer" begin
-  made = Dict{String,Any}("job" => 12.0, "title" => "97/26 Antill Street", "tasks" => 1.0, "steps" => 1.0, "added" => 1.0, "existed" => false)
-  @test K.job_words(made) == "Centient has the job 97/26 Antill Street, with 1 task for 1 trade."
-  @test K.job_words(merge(made, Dict("existed" => true))) == "Centient added 1 new task to the job 97/26 Antill Street."
-  @test K.job_words(merge(made, Dict("existed" => true, "added" => 0.0))) == "Centient has this job already: 97/26 Antill Street."
+  made = Dict{String,Any}("job" => 12.0, "title" => "12/40 Wattle Street", "tasks" => 1.0, "steps" => 1.0, "added" => 1.0, "existed" => false)
+  @test K.job_words(made) == "Centient has the job 12/40 Wattle Street, with 1 task for 1 trade."
+  @test K.job_words(merge(made, Dict("existed" => true))) == "Centient added 1 new task to the job 12/40 Wattle Street."
+  @test K.job_words(merge(made, Dict("existed" => true, "added" => 0.0))) == "Centient has this job already: 12/40 Wattle Street."
 end
 
 if Sys.isapple() && Sys.which("ffmpeg") !== nothing
@@ -85,15 +85,15 @@ if Sys.isapple() && Sys.which("ffmpeg") !== nothing
   cp(joinpath(dir, "walk.mov"), joinpath(web, "later.mov"))
   touch(joinpath(web, "hold"))
 
-  const page = joinpath(dir, "antill.md")
+  const page = joinpath(dir, "wattle.md")
   write(page, """
   ---
-  property: 97/26 Antill Street, Dickson ACT 2602
+  property: 12/40 Wattle Street, Dickson ACT 2602
   purpose: Ready for a new tenant
   progress: $site/tasks?key=ab12
   ---
 
-  # 97/26 Antill Street
+  # 12/40 Wattle Street
 
   ## Kitchen
 
@@ -213,9 +213,9 @@ if Sys.isapple() && Sys.which("ffmpeg") !== nothing
     @test asked.said == "Making the job in Centient…" && bubble() && K.off(maker())
     @test K.tip(maker()) == "Making the job in Centient…"
     @test settle(() -> asked.request === nothing)
-    @test r.value["asked"] == Dict("progress" => "$site/tasks?key=ab12", "title" => "97/26 Antill Street", "page" => page,
-                                   "property" => "97/26 Antill Street, Dickson ACT 2602", "purpose" => "Ready for a new tenant")
-    @test !asked.wrong && asked.said == "Centient has the job 97/26 Antill Street in sample-co, with 10 tasks for 5 trades."
+    @test r.value["asked"] == Dict("progress" => "$site/tasks?key=ab12", "title" => "12/40 Wattle Street", "page" => page,
+                                   "property" => "12/40 Wattle Street, Dickson ACT 2602", "purpose" => "Ready for a new tenant")
+    @test !asked.wrong && asked.said == "Centient has the job 12/40 Wattle Street in sample-co, with 10 tasks for 5 trades."
     # The words stay under the button for a few seconds, and they're its tooltip after that
     @test bubble() && !K.off(maker())
     asked.at -= K.JOB_SHOWS
@@ -224,10 +224,10 @@ if Sys.isapple() && Sys.which("ffmpeg") !== nothing
     # Centient has the job the next time. It says what it added, and then that there was nothing to add.
     make()
     @test settle(() -> !K.making(e))
-    @test e.nodes[:job_ask].said == "Centient added 2 new tasks to the job 97/26 Antill Street."
+    @test e.nodes[:job_ask].said == "Centient added 2 new tasks to the job 12/40 Wattle Street."
     make()
     @test settle(() -> !K.making(e))
-    @test e.nodes[:job_ask].said == "Centient has this job already: 97/26 Antill Street." && !e.nodes[:job_ask].wrong
+    @test e.nodes[:job_ask].said == "Centient has this job already: 12/40 Wattle Street." && !e.nodes[:job_ask].wrong
     # The words are about the page that Centient was asked for, and no other
     K.open!(e, partly); frames()
     @test !bubble() && K.tip(maker()) == "Make job in Centient"

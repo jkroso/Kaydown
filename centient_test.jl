@@ -47,9 +47,9 @@ end
   e = settle(s, C.ask("error", s=s, cmd=fake()))
   @test C.failed(e) && e.problem == "Unknown tool: error"
   # The tool that makes a job from a project page says what it made. The next time, it has the job.
-  page = Dict("progress" => "http://host/projects/1/tasks?key=ab12", "title" => "97/26 Antill Street")
+  page = Dict("progress" => "http://host/projects/1/tasks?key=ab12", "title" => "12/40 Wattle Street")
   job = settle(s, C.ask("make_job_from_page", page, s=s, cmd=fake()))
-  @test job.value["job"] == 12 && job.value["title"] == "97/26 Antill Street" && job.value["asked"] == page
+  @test job.value["job"] == 12 && job.value["title"] == "12/40 Wattle Street" && job.value["asked"] == page
   @test (job.value["tasks"], job.value["steps"], job.value["added"], job.value["existed"]) == (5, 10, 10, false)
   again = settle(s, C.ask("make_job_from_page", page, s=s, cmd=fake()))
   @test (again.value["added"], again.value["existed"]) == (2, true)

@@ -121,6 +121,7 @@
 @use "./pasteboard" => Pasteboard
 @use "./takeoff" => Plans
 @use "./centient" => Centient
+@use "github.com/jkroso/UI.jl/Interface/draw" Bubble
 @use "github.com/jkroso/URI.jl/FSPath" FSPath
 @use Colors: @colorant_str, RGBA, Colorant
 @use InteractiveUtils: clipboard
@@ -7388,20 +7389,21 @@ describe(b::ToolButton) = begin
   ishovered(b) || (b.quiet = false)
   on = (b.action == :panel && e.panel) || (b.action == :marks && marking(e))
   box = Box(width(30px), height(28px), radius(6px), Alignment.Center, name="Button",
-            background(on ? colours.active : ishovered(b) ? colours.hover : clear),
-          Icon(b.icon, size=15px, color=colours.dim))
+            background(on ? colours.active : ishovered(b) && !off(b) ? colours.hover : clear),
+          Icon(b.icon, size=15px, color=off(b) ? colours.faint : colours.dim))
   # While the sidebar is closed, a dot beside its button says that an agent waits for a page that isn't showing
   (b.action == :panel && !e.panel && !isempty(elsewhere(e))) || return box
   Row(child_gap=4px, box, Box(width(7px), height(7px), radius(3.5px), background(colours.accent)))
 end
 
-cursor(::ToolButton) = :hand
+cursor(b::ToolButton) = off(b) ? :arrow : :hand
 
 onkey(b::ToolButton, ::KeyPress{Keys.mouse_left}) = begin
   e = editor(b)
   b.action == :panel && toggle_panel!(e)
   b.action == :outside && open_outside!(e)
   b.action == :marks && toggle_marks!(e)
+  b.action == :job && make_job!(e)
   hush!(b)
   focus(e)
 end
@@ -7426,6 +7428,7 @@ tip(b::ToolButton) = begin
     return "$(uppercasefirst(first(ws).name)) waits for $(basename(first(ws).page))  ·  Show sidebar  ⌘\\"
   end
   b.action == :marks && return marking(e) ? "Hide $(whose(e)) changes" : "Show $(whose(e)) changes"
+  b.action == :job && return job_tip(e)
   b.action == :outside || return ""
   app = opener(e.buf.path)
   isempty(app) ? "Show in Finder" : "Open in $(app_name(app))"
@@ -7606,6 +7609,131 @@ cursor(s::SendButton) = isempty(agents(editor(s))) ? :arrow : :hand
 
 onkey(s::SendButton, ::KeyPress{Keys.mouse_left}) = (e = editor(s); send!(e); hush!(s); focus(e))
 
+# --- a job in Centient from the page ------------------------------------------------------
+#
+# A project page is one whose front matter has a `progress` line with a web
+# address. The walkthrough service keeps the page's tasks at that address. For
+# a project page, the top bar has a button that makes the page's job in
+# Centient: Centient reads the tasks from the address and gives each trade a
+# task. Centient needn't be open, and nothing waits for it. Words under the
+# button say that Centient works, and then what it made or why it couldn't.
+# They stay for a few seconds, and they're the button's tooltip after that.
+
+const JOB_SHOWS = 8   # seconds that Centient's answer stays under the button
+
+"What Kaydown asked Centient to make from a page, and what the button says of it"
+mutable struct JobAsk
+  path::String      # the page's file
+  request::Any      # what Centient was asked, or nothing once it has answered
+  said::String      # what the button says
+  wrong::Bool       # true when `said` is why Centient couldn't
+  at::Float64       # when Centient was asked, and then when it answered
+  shows::Bool       # true while the words are under the button
+end
+
+"What the front matter of `lines` sets `key` to, without quotes around it, or nothing if it has no such key"
+matter_value(lines, key) = begin
+  t = front_matter(lines)
+  t == 0 && return nothing
+  for (_, k, v) in matter_rows(lines, t)
+    k == key && return String(strip(strip(v), ['"', '\'']))
+  end
+  nothing
+end
+
+"The web address of the page's tasks, from the `progress` line of its front matter, or nothing if the page isn't a project page"
+progress_address(e) = begin
+  url = matter_value(e.buf.lines, "progress")
+  url !== nothing && startswith(url, r"https?://") ? url : nothing
+end
+
+"What Centient needs to make the page's job: the progress address, the page's first # heading, and the property and the purpose from the front matter"
+job_args(e) = begin
+  b = e.buf
+  args = Dict{String,Any}("progress" => progress_address(e))
+  headings = outline(b)
+  i = findfirst(h -> h.level == 1, headings)
+  i === nothing || isempty(headings[i].title) || (args["title"] = headings[i].title)
+  for key in ("property", "purpose")
+    value = matter_value(b.lines, key)
+    value === nothing || isempty(value) || (args[key] = value)
+  end
+  args
+end
+
+"What Kaydown asked Centient to make from the page that shows, or nothing"
+job(e) = (j = get(e.nodes, :job_ask, nothing); j !== nothing && j.path == e.buf.path ? j : nothing)
+
+"True while Centient makes a job"
+making(e) = (j = get(e.nodes, :job_ask, nothing); j !== nothing && j.request !== nothing)
+
+"True for a button of the top bar that does nothing now: the one that makes the job, when the Mac has no Centient or Centient makes a job"
+off(b::ToolButton) = b.action == :job && (!Centient.available() || making(editor(b)))
+
+"What the top bar shows for a project page: the button that makes the page's job in Centient"
+job_part(e) = progress_address(e) === nothing ? () : (button(e, :job, "hammer"), Box(width(4px)))
+
+"What the tooltip of the button that makes the job says: what the button does, or what happened when it did it"
+job_tip(e) = begin
+  Centient.available() || return "Centient isn't on this Mac"
+  j = job(e)
+  j === nothing ? "Make job in Centient" : j.said
+end
+
+"Ask Centient to make the page's job. Centient answers later, and `job_tick!` takes the answer."
+make_job!(e) = begin
+  (progress_address(e) === nothing || !Centient.available() || making(e)) && return
+  e.nodes[:job_ask] = JobAsk(e.buf.path, Centient.ask("make_job_from_page", job_args(e)), "Making the job in Centient…", false, time(), false)
+  nothing
+end
+
+"What to say of the job that Centient made, or that it had. `made` is Centient's answer."
+job_words(made) = begin
+  n(key) = (x = get(made, key, 0); x isa Real ? round(Int, x) : 0)
+  some(k, thing) = "$k $thing$(k == 1 ? "" : "s")"
+  title = string(something(get(made, "title", nothing), ""))
+  if get(made, "existed", false) === true
+    return n("added") > 0 ? "Centient added $(some(n("added"), "new task")) to the job $title." : "Centient has this job already: $title."
+  end
+  company = Centient.server.company
+  "Centient has the job $title$(isempty(company) ? "" : " in $company"), with $(some(n("steps"), "task")) for $(some(n("tasks"), "trade"))."
+end
+
+"""
+What happens to the page's job in each frame: Centient's answer is taken, and
+the words about it show under the button while Centient works and for a few
+seconds after it answers.
+"""
+job_tick!(e) = begin
+  j = get(e.nodes, :job_ask, nothing)
+  j === nothing && return
+  r = j.request
+  if r !== nothing
+    Centient.check!()
+    if Centient.finished(r)
+      j.request, j.at = nothing, time()
+      j.wrong = Centient.failed(r) || !(r.value isa AbstractDict)
+      j.said = Centient.failed(r) ? r.problem : j.wrong ? "Centient gave an answer that Kaydown can't read" : job_words(r.value)
+    else
+      redraw_in!(e, 0.1)   # while Centient works, the window looks again soon
+    end
+  end
+  win, b = window_of(e), get(e.nodes, :job, nothing)
+  (win === nothing || b === nothing) && return
+  left = j.request === nothing ? JOB_SHOWS - (time() - j.at) : Inf
+  if left > 0 && j.path == e.buf.path && progress_address(e) !== nothing
+    # The words look as a tooltip does. They stay while the mouse moves, which a tooltip doesn't.
+    popup!(win, Bubble(content=Box(padding(8px, 5px), label(j.said, 12px, color=TIP_INK)), target=b.rect),
+           anchor=b.rect, placement=:bottom, gap=6px, key=:job, input=false)
+    j.shows = true
+    isfinite(left) && redraw_in!(e, left)   # to take them away
+  elseif j.shows
+    close_popup!(win, :job)
+    j.shows = false
+  end
+  nothing
+end
+
 describe(t::TopBar) = begin
   e = editor(t)
   b = e.buf
@@ -7625,7 +7753,7 @@ describe(t::TopBar) = begin
       (readonly(b) ? (Box(height(28px), padding(8px, 0px), label(isempty(b.about) ? "Read only" : b.about * "  ·  Read only", 12px, color=colours.dim)),
                       # The app that the Mac uses for the file can change it, so a button opens the file there
                       button(e, :outside, "box-arrow-up-right")) :
-                     (agent_part(e)..., node!(Count, e, :count)))...))
+                     (job_part(e)..., agent_part(e)..., node!(Count, e, :count)))...))
 end
 
 # The window has no title bar, so you move it by dragging the top bar
@@ -8634,6 +8762,7 @@ picture_item(e, i) = begin
   m = match(PICTURE_LINE, e.buf.lines[i])
   m === nothing && return nothing
   src = unescaped(String(m[2]))
+  (note = media_note(e, i, src)) === nothing || return note   # a video or a sound that's on its way from the web
   # A sound file shows a player, and so does a video file
   sound = sound_file(docdir(e), e.buf.lines[i])
   sound === nothing || return sound_item(e, sound)
@@ -8653,6 +8782,122 @@ picture_item(e, i) = begin
   own!(node!(Document, e, :document), node)
   Live(node, h + 2LIVE_GAP)
 end
+
+# --- video and sound from the web --------------------------------------------------------
+#
+# A line can name a video or a sound by its address on the web, as it can a
+# picture. Kaydown downloads the file once, into a folder of the Mac's caches,
+# and the line's player plays that copy. The copy's name ends as the file's
+# does, like .mov, because macOS goes by that. What follows a ? or a # in the
+# address isn't part of the name, so each part of one video, like
+# walk.mov#t=61,86, plays from the same copy.
+#
+# While Kaydown downloads the file, the line says so. If Kaydown can't get it,
+# the line says that, and Kaydown tries again a minute later. A new try goes on
+# from what the last one got.
+
+const MEDIA_CACHE = Ref("")   # the folder a test keeps the copies in, in place of the one in the Mac's caches
+const RETRY = 60              # seconds after a download fails before Kaydown tries again
+# What's known of each copy that isn't whole yet: the `curl` that downloads it, or when the last one failed
+const downloads = Dict{String,Any}()
+
+"A line that says that Kaydown is downloading its video or its sound, or that it couldn't"
+@def mutable struct MediaNote <: SemanticUI
+  line::Int = 0
+  words::String = ""
+  failed::Bool = false
+  size::px = 13px   # of the text
+end
+
+"The folder that keeps the copies of the videos and the sounds from the web"
+media_dir() = isempty(MEDIA_CACHE[]) ? joinpath(homedir(), "Library", "Caches", "Kaydown", "media") : MEDIA_CACHE[]
+
+"The web address `url` without what follows its ? or its #"
+web_file(url) = String(first(split(url, r"[?#]", limit=2)))
+
+"Is `src` the web address of a video or a sound file?"
+web_media(src) = startswith(src, r"https?://") && (ext = lowercase(splitext(web_file(src))[2]); ext in VIDEOS || ext in SOUNDS)
+
+"The file on the Mac that keeps the copy of the video or the sound at the web address `url`"
+media_file(url) = (file = web_file(url); joinpath(media_dir(), string(hash(file), base=16) * lowercase(splitext(file)[2])))
+
+"`src` as a file on the Mac: the copy of a video or a sound on the web, and `src` itself for anything else"
+local_media(src) = web_media(src) ? media_file(src) : src
+
+"""
+Download the video or the sound at the web address `url`, unless its copy is on
+the Mac or on its way. It's `:there` once the copy is whole, `:coming` while
+`curl` downloads it, and `:failed` for a minute after `curl` couldn't get it.
+"""
+download!(e, url) = begin
+  file = media_file(url)
+  isfile(file) && return :there
+  part = file * ".part"
+  state = get(downloads, file, nothing)
+  if state isa Base.Process
+    if !process_exited(state)
+      redraw_in!(e, 0.5)   # look again soon
+      return :coming
+    end
+    if success(state) && isfile(part)
+      delete!(downloads, file)
+      mv(part, file, force=true)
+      return :there
+    end
+    # A server that said no, or that can't send the rest of a file, leaves nothing for the next try to go on from
+    state.exitcode in (22, 33) && rm(part, force=true)
+    state = downloads[file] = time()
+  end
+  if state isa Float64 && time() - state < RETRY
+    redraw_in!(e, RETRY - (time() - state))   # to try again
+    return :failed
+  end
+  # The address is asked for as it's written, with its ? and without its #. `curl` gives up when nothing comes for a minute.
+  address = replace(first(split(url, '#')), ' ' => "%20")
+  state = downloads[file] = try
+    mkpath(media_dir())
+    run(pipeline(`curl --silent --fail --location --connect-timeout 30 --speed-limit 1 --speed-time 60 --continue-at - --output $part $address`,
+                 stdout=devnull, stderr=devnull), wait=false)
+  catch
+    time()
+  end
+  redraw_in!(e, 0.5)
+  state isa Base.Process ? :coming : :failed
+end
+
+"""
+What line `i` shows while the video or the sound at the web address `src` isn't
+on the Mac: that Kaydown is downloading it, or that it couldn't. It's nothing
+once the copy is there, and when `src` is anything else.
+"""
+media_note(e, i, src) = begin
+  (Sys.isapple() && web_media(src)) || return nothing
+  state = download!(e, src)
+  state == :there && return nothing
+  what = lowercase(splitext(web_file(src))[2]) in VIDEOS ? "video" : "sound"
+  part = media_file(src) * ".part"
+  got = isfile(part) ? filesize(part) >> 20 : 0
+  node = node!(MediaNote, e, (:media_note, i))
+  node.line, node.failed, node.size = i, state == :failed, body(e).size * 0.76
+  node.words = state == :failed ? "Kaydown couldn't get the $what. It tries again in a minute." :
+               "Downloading the $what…" * (got > 0 ? " $got MB so far" : "")
+  own!(node!(Document, e, :document), node)
+  # Lay it out once to learn how tall it is
+  concrete = describe(Column(fixed(e.width), Alignment.Start, geometry(node)), (e.width, 9999px))
+  Live(node, concrete.height + 2LIVE_GAP)
+end
+
+describe(n::MediaNote) = begin
+  s = n.size
+  Row(width(grow=grow), Alignment.Center, padding(s, s * 0.7), child_gap=s * 0.6, radius(6px),
+      border(1px, :solid, colours.line), background(colours.block), name="Media note",
+    Icon(n.failed ? "exclamation-circle" : "cloud-arrow-down", size=s * 1.1, color=colours.dim),
+    label(n.words, s, color=colours.dim))
+end
+
+cursor(::MediaNote) = :ibeam
+# A click on the note puts the caret on its line, so the line shows as it's written
+onkey(n::MediaNote, ::KeyPress{Keys.mouse_left}) = edit_matter!(n, n.line)
 
 # --- video in the text -------------------------------------------------------------------
 #
@@ -8693,6 +8938,7 @@ end
 video_item(e, src) = begin
   Sys.isapple() || return nothing
   file, from, to = media_part(src)
+  file = local_media(file)   # a video on the web plays from the copy of it on the Mac
   (startswith(file, r"https?://") || !(lowercase(splitext(file)[2]) in VIDEOS)) && return nothing
   path = abspath(docdir(e), expanduser(file))
   isfile(path) || return nothing
@@ -8906,7 +9152,7 @@ sound_file(dir, text) = begin
   occursin("![", text) || return nothing
   m = match(PICTURE_LINE, text)
   m === nothing && return nothing
-  src = unescaped(String(m[2]))
+  src = local_media(unescaped(String(m[2])))   # a sound on the web plays from the copy of it on the Mac
   (startswith(src, r"https?://") || !(lowercase(splitext(src)[2]) in SOUNDS)) && return nothing
   abspath(dir, expanduser(src))
 end
@@ -9503,6 +9749,7 @@ describe(e::Editor) = begin
   find_tick!(e)
   sound_tick!(e)
   takeoff_tick!(e)
+  job_tick!(e)
   zoom_tick!(e)
   layout!(e)
   # A live block that changed the size of the text stays where it was in the window

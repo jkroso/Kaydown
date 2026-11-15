@@ -52,6 +52,7 @@ julia --project=. takeoff_test.jl        # how a takeoff is read, written and wo
 julia --project=. centient_test.jl       # how Kaydown talks to Centient's server
 julia --project=. takeoff_view_test.jl   # the block itself, in a window that isn't on the screen
 julia --project=. zoom_test.jl           # a picture, a diagram or a page that fills the window
+julia --project=. project_page_test.jl   # a video or a sound on the web, and the button that makes a job in Centient
 julia --project=. merge_test.jl
 julia --project=. pasteboard_test.jl
 ```

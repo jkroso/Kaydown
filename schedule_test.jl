@@ -1,0 +1,161 @@
+# Tests for schedule.jl. Run them with `julia --project=. schedule_test.jl`.
+
+@use Test: @test, @testset
+@use Dates: Date, Day
+@use "./schedule" => S
+
+# 16 November 2026 is a Monday
+const MON = Date(2026, 11, 16)
+
+const PAGE = ["# A job", "",
+              "- [x] Dig the trench",
+              "- [ ] Lay the **new** pipe",
+              "  - [ ] Test the pipe",
+              "- [ ] Fill the trench",
+              "- [ ] ",
+              "```",
+              "- [ ] Not a task",
+              "```",
+              "- [ ] Test the pipe"]
+
+const BLOCK = ["start: 2026-11-16", "colour: red", "",
+               "Dig the trench | 3 days",
+               "Lay the new pipe | 2d | after Dig the trench",
+               "Fill the trench | from 2026-11-30 | after Lay the new pipe | after Test the pipe | crew of 2"]
+
+@testset "days" begin
+  @test S.date("2026-11-16") == MON && S.date("16 Nov 2026") == MON && S.date("16/11/2026") == MON && S.date("16/11/26") == MON
+  @test S.date("16 November", today=Date(2026, 3, 1)) == MON && S.date("16/11", today=Date(2026, 3, 1)) == MON
+  @test S.date("today", today=MON) == MON
+  @test S.date("31 Feb 2026") === nothing && S.date("soon") === nothing && S.date("") === nothing
+  @test S.workday(MON + Day(5), false) == MON + Day(7) && S.workday(MON + Day(5), true) == MON + Day(5)
+  # Three working days after a Thursday is the next Tuesday
+  @test S.add(MON + Day(3), 3, false) == MON + Day(8) && S.add(MON + Day(3), 3, true) == MON + Day(6)
+  @test S.span(MON, MON + Day(7), false) == 6 && S.span(MON, MON + Day(7), true) == 8 && S.span(MON, MON - Day(1), false) == 0
+  @test S.short(MON) == "Mon 16 Nov" && S.long(MON) == "16 Nov 2026"
+  @test S.days_text(1) == "1 day" && S.days_text(4) == "4 days"
+end
+
+@testset "reading and writing" begin
+  s = S.schedule(BLOCK)
+  @test s.start == MON && !s.weekends && s.other == ["colour: red"]
+  @test [e.name for e in s.entries] == ["Dig the trench", "Lay the new pipe", "Fill the trench"]
+  @test [e.days for e in s.entries] == [3, 2, 1]
+  @test s.entries[3].from == Date(2026, 11, 30) && s.entries[3].after == ["Lay the new pipe", "Test the pipe"]
+  @test s.entries[3].other == ["crew of 2"]
+  # What's written reads as the same schedule
+  lines = S.written(s)
+  @test lines[1:3] == BLOCK[1:3] && lines[4] == BLOCK[4]
+  @test lines[5] == "Lay the new pipe | 2 days | after Dig the trench"
+  @test S.written(S.schedule(lines)) == lines
+  # A task that takes a day and waits for nothing has no line
+  push!(s.entries, S.Entry("Tidy up"))
+  @test S.written(s) == lines
+  @test S.written(S.Schedule()) == String[]
+  @test S.schedule(["days: every day"]).weekends && S.written(S.schedule(["days: every day"])) == ["days: every day"]
+  @test !S.schedule(["days: weekdays"]).weekends
+  # A | in a name has a \ before it
+  e = only(S.schedule(["Cut \\| fit the pipe | 2 days | after A \\| B"]).entries)
+  @test e.name == "Cut | fit the pipe" && e.after == ["A | B"]
+  @test S.written(S.Schedule(nothing, false, String[], [e])) == ["Cut \\| fit the pipe | 2 days | after A \\| B"]
+end
+
+@testset "the page's tasks" begin
+  ts = S.todos(PAGE)
+  @test [t.name for t in ts] == ["Dig the trench", "Lay the new pipe", "Test the pipe", "Fill the trench", "Test the pipe"]
+  @test [t.key for t in ts] == ["Dig the trench", "Lay the new pipe", "Test the pipe", "Fill the trench", "Test the pipe #2"]
+  @test [t.line for t in ts] == [3, 4, 5, 6, 11]
+  @test [t.done for t in ts] == [true, false, false, false, false] && ts[3].level == 2
+end
+
+@testset "the days of each task" begin
+  s = S.schedule(BLOCK)
+  ts = S.plan!(s, S.todos(PAGE), today=MON)
+  dig, lay, test, fill, again = ts
+  @test (dig.start, dig.finish) == (MON, MON + Day(2))
+  # Two days after the Wednesday are the Thursday and the Friday
+  @test (lay.start, lay.finish) == (MON + Day(3), MON + Day(4)) && lay.after == [1]
+  # A task with no line takes a day, and starts when the work does
+  @test test.entry === nothing && (test.start, test.finish) == (MON, MON) && again.start == MON
+  @test fill.after == [2, 3] && fill.start == Date(2026, 11, 30)
+  # Without its own first day, it starts on the Monday after the pipe is laid
+  fill.entry.from = nothing
+  @test S.plan!(s, S.todos(PAGE), today=MON)[4].start == MON + Day(7)
+  # With weekends worked, it starts on the Saturday
+  s.weekends = true
+  @test S.plan!(s, S.todos(PAGE), today=MON)[4].start == MON + Day(5)
+  # With no start, the work starts today, on a working day
+  @test S.plan!(S.Schedule(), S.todos(PAGE), today=MON + Day(5))[1].start == MON + Day(7)
+  # Two tasks that wait for each other: one of the links is left out
+  loop = S.schedule(["Dig the trench | after Fill the trench", "Fill the trench | after Dig the trench"])
+  ts = S.plan!(loop, S.todos(PAGE), today=MON)
+  @test ts[1].after == [4] && isempty(ts[4].after) && ts[1].start == MON + Day(1)
+end
+
+@testset "a task that was renamed" begin
+  s = S.schedule(BLOCK)
+  page = replace(PAGE, "- [x] Dig the trench" => "- [x] Dig out the trench")
+  ts = S.plan!(s, S.todos(page), today=MON)
+  @test ts[1].entry !== nothing && ts[1].days == 3
+  @test s.entries[1].name == "Dig out the trench" && s.entries[2].after == ["Dig out the trench"] && ts[2].after == [1]
+  # A task with another name altogether is a new task, in a schedule that was just read
+  s = S.schedule(BLOCK)
+  ts = S.plan!(s, S.todos(replace(PAGE, "- [x] Dig the trench" => "- [x] Order sand")), today=MON)
+  @test ts[1].entry === nothing && s.entries[1].name == "Dig the trench"
+  # Once the days are worked out, a task that gets a new name in its place keeps its line, whatever the name
+  s = S.schedule(BLOCK)
+  S.plan!(s, S.todos(PAGE), today=MON)
+  ts = S.plan!(s, S.todos(replace(PAGE, "- [x] Dig the trench" => "- [x] Order sand")), today=MON)
+  @test ts[1].days == 3 && s.entries[1].name == "Order sand" && ts[2].after == [1]
+  # A name that's more like another task's still goes with its own place
+  page = replace(PAGE, "- [ ] Lay the **new** pipe" => "- [ ] Lay the new pipe in its bed of sand, and fill the trench")
+  ts = S.plan!(s, S.todos(page), today=MON)
+  @test ts[2].days == 2 && ts[4].after == [2, 3] && ts[4].from == Date(2026, 11, 30)
+  # With a task more or fewer in the page, the places say nothing, and the names do
+  s = S.schedule(BLOCK)
+  S.plan!(s, S.todos(PAGE), today=MON)
+  ts = S.plan!(s, S.todos(vcat(["- [ ] First of all", "- [x] Dig all of the trench"], PAGE[4:end])), today=MON)
+  @test ts[1].entry === nothing && ts[2].days == 3
+  s = S.schedule(BLOCK)
+  ts = S.plan!(s, S.todos(replace(PAGE, "- [x] Dig the trench" => "- [x] Order sand")), today=MON)
+  # Its line goes when the schedule is next written
+  S.prune!(s, S.todos(replace(PAGE, "- [x] Dig the trench" => "- [x] Order sand")))
+  @test [e.name for e in s.entries] == ["Lay the new pipe", "Fill the trench"] && isempty(s.entries[1].after)
+  @test S.alike("Dig the trench", "Dig the trench") == 1 && S.alike("abc", "xyz") == 0 && S.alike("", "a") == 0
+end
+
+@testset "changing it" begin
+  s = S.Schedule()
+  plan() = S.plan!(s, S.todos(PAGE), today=MON)
+  ts = plan()
+  S.days!(s, ts[1], 4)
+  @test S.written(s) == ["Dig the trench | 4 days"]
+  @test S.link!(s, ts, 1, 2) == :ok
+  ts = plan()
+  @test ts[2].after == [1] && ts[2].start == MON + Day(4)
+  @test S.link!(s, ts, 1, 2) == :there && S.link!(s, ts, 2, 2) == :same && S.link!(s, ts, 2, 1) == :loop
+  @test S.link!(s, ts, 2, 4) == :ok
+  ts = plan()
+  @test S.link!(s, ts, 4, 1) == :loop && S.waits(ts, 4, 1) && !S.waits(ts, 1, 4)
+  # A day after the task is ready is kept. A day before it isn't.
+  S.move!(s, ts, ts[2], MON + Day(8), today=MON)
+  @test s.entries[2].from == MON + Day(8)
+  ts = plan()
+  @test ts[2].start == MON + Day(8) && ts[4].start == MON + Day(9)
+  S.move!(s, ts, ts[2], MON + Day(1), today=MON)
+  @test s.entries[2].from === nothing && plan()[2].start == MON + Day(4)
+  # A task that waits for nothing starts on the day it's moved to, and a Saturday is the Monday after
+  ts = plan()
+  S.move!(s, ts, ts[3], MON + Day(12), today=MON)
+  @test plan()[3].start == MON + Day(14)
+  # Moved back to the day that the work starts, it has nothing to say
+  ts = plan()
+  S.move!(s, ts, ts[3], MON, today=MON)
+  @test ts[3].entry.from === nothing && S.plain(ts[3].entry)
+  # A task with no line that's moved to the start gets none
+  S.move!(s, ts, ts[5], MON, today=MON)
+  @test ts[5].entry === nothing
+  S.unlink!(s, ts, 1, 2)
+  @test isempty(plan()[2].after)
+  @test S.written(s) == ["Dig the trench | 4 days", "Fill the trench | after Lay the new pipe"]
+end

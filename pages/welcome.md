@@ -168,6 +168,10 @@ If [Centient](https://centient.com.au) is on your Mac, a measure takes an item f
 
 Every change goes into the block's lines, so the file holds the whole takeoff. To see the lines, hold ⌥ and click the block.
 
+## Schedules
+
+A code block in the language `schedule` plans the page's to-do items. Each item is a task, and the block shows each task as a bar on a line of days. Drag the end of a bar to say how long the task takes, and drag from the circle after a bar to the task that waits for it. On a page with a schedule, the mouse over a to-do item shows the task's days at the end of its line. The page [schedule.md](schedule.md) has one to try.
+
 ## Recordings
 
 To record from your Mac's microphone, right-click the page and choose Insert › Recording. Kaydown starts to record at once, into a new file beside this one. Bars show how loud the sound is, and you can type while it records. Click the red button to stop. The first time, macOS asks whether Kaydown may use the microphone.
@@ -190,7 +194,7 @@ Click a file in the list that isn't Markdown to see it in the page. Kaydown show
 
 Right-click a file in the list to rename it, copy its path, show it in the Finder or move it to the Trash. Right-click the file's name at the top of the window for the same menu.
 
-Right-click the page to cut, copy or paste. The menu's Insert item adds a new block where you clicked: a heading, a list, a to-do item, a table, a sheet, a spreadsheet, a diagram, a takeoff, a live block and more.
+Right-click the page to cut, copy or paste. The menu's Insert item adds a new block where you clicked: a heading, a list, a to-do item, a table, a sheet, a spreadsheet, a diagram, a takeoff, a schedule, a live block and more.
 
 A file can start with front matter: lines like `title: Notes` between two lines of `---`. Kaydown shows it as a block of its own, and leaves it out of the word count.
 

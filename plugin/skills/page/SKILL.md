@@ -61,6 +61,7 @@ Exit code 3 means that Kaydown is not installed, or that it is too old to send a
 |---------|-------|
 | Headings, **bold**, *italic*, `code`, links, quotes, lists, a rule | Markdown, as usual. The headings are also the page's list of contents. |
 | A choice or a task | `- [ ] Text`. The user clicks the box. |
+| When each task is done, and what it waits for | A `schedule` code block. See below. |
 | A table | A Markdown table. The user can type in its cells and add rows. |
 | A flow, a sequence, states, classes, shares | A `mermaid` code block. See below. |
 | Code | A code block with its language. Kaydown colours it. |
@@ -111,6 +112,26 @@ A `spreadsheet` is a grid. Column letters and row numbers name the cells, and a 
 | Total    |      |            | = sum(D2:D3) |
 ```
 ````
+
+### A schedule
+
+A `schedule` code block shows every `- [ ]` item of the page as a bar on a line of days. The user drags the bars to change the plan, and Kaydown writes each change into the block. The block names each task by the text of its item, without the marks of bold and the like. A task with no line takes one day and starts when the work starts.
+
+````
+- [ ] Add the queue table
+- [ ] Write the worker
+- [ ] Move the price checks to the queue
+
+```schedule
+start: 2026-11-16
+
+Add the queue table | 2 days
+Write the worker | 3 days | after Add the queue table
+Move the price checks to the queue | from 2026-11-25 | after Write the worker
+```
+````
+
+After the name: `3 days` is how many working days the task takes, `after` and a task's name makes it wait for that task, and `from` and a day is the first day that it can start. A task can have several `after` parts. `start` is the day that the work starts. Saturday and Sunday aren't working days, unless the block has the line `days: every day`. Write a `\` before a `|` in a task's name.
 
 ### Code that runs
 

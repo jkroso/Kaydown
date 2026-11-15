@@ -3377,8 +3377,7 @@ column, or opens a menu that sorts and searches it.
 end
 "The words of a column's heading, and the arrow of its order. The heading's menu and tooltip point at them."
 @def mutable struct HeadWords <: SemanticUI
-  of::Any = nothing                           # the heading
-  rect::NTuple{4,px} = (0px, 0px, 0px, 0px)   # where they were last drawn, to put the tooltip under them
+  of::Any = nothing   # the heading
 end
 "The menu of a column of text: its two orders and a field to search it. It floats under the heading, as it does in Centient's lists."
 @def mutable struct ColumnMenu <: SemanticUI
@@ -5052,7 +5051,6 @@ describe(w::HeadWords) = begin
 end
 
 cursor(::ColumnHead) = :hand
-draw(ctx, size, ui::ConcreteRect, w::HeadWords) = (w.rect = (ui.left, ui.top, ui.width, ui.height); nothing)
 
 # A heading of numbers says what a click on it does
 onmouse(h::ColumnHead, ev::MouseMove) = begin
@@ -5060,8 +5058,8 @@ onmouse(h::ColumnHead, ev::MouseMove) = begin
   will = next_order(h.of, h.key)
   low, high = order_words(false)
   words = will == :asc ? low : will == :desc ? high : "The order they're written in"
-  show_tooltip!(ev.window, tip_label(words), head_words(h.of, h.key).rect...,
-                placement=:bottom, gap=6px)
+  # The tooltip follows the words: the mouse over them shows their arrow, which makes them wider on the next frame
+  show_tooltip!(ev.window, tip_label(words), head_words(h.of, h.key), placement=:bottom, gap=6px)
 end
 
 onkey(h::ColumnHead, ev::KeyPress{Keys.mouse_left}) = begin

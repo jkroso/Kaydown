@@ -465,6 +465,18 @@ end
   at((10, 10)); frames()
 end
 
+@testset "a heading's tooltip is under its words and arrow from the first frame" begin
+  # Amount's arrow shows when the mouse comes over it, on the frame after the mouse comes
+  v.sort = nothing
+  at((10, 10)); frames()
+  r = rect(v.parts[(:head, :amount)].words)
+  at((K.num(r.left + r.width) - 3, K.num(r.top + r.height / 2))); frames(1)
+  r = rect(v.parts[(:head, :amount)].words)
+  tip = only(p for p in popups(w) if p.key == :tooltip).scene
+  @test tip.left + tip.width / 2 ≈ r.left + r.width / 2
+  at((10, 10)); frames()
+end
+
 @testset "the quote" begin
   button(:quote)
   @test v.wrong && v.said == "Choose the customer first" && v.quoting === nothing

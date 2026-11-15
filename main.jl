@@ -3214,6 +3214,10 @@ end
 #     square metre, and a count for the rest. A measure with nothing drawn yet
 #     and no item is what the tool you choose makes it. A click on a measure in
 #     the list chooses its tool too.
+#   - The table has no column for a measure's name. Its item says what it is:
+#     the item's name, then the catalogue that it's from. A measure with no item
+#     shows the name that it has in the block. On a Mac with no Centient, a click
+#     on that name changes it.
 #   - What a search of Centient finds shows in a list that floats beside the
 #     text field. The search for an item looks in one catalogue at a time: the
 #     business's own items, or a supplier's that ⌥ lets you choose. The headings of the table of measures sort and search it.
@@ -3362,11 +3366,11 @@ end
   of::Any = nothing
   k::Int = 0
 end
-"A part of a measure's row that a click changes: its name, its item, or what it adds for waste"
+"A part of a measure's row that a click changes: its item, or what it adds for waste"
 @def mutable struct MeasureCell <: SemanticUI
   of::Any = nothing
   i::Int = 0
-  what::Symbol = :name
+  what::Symbol = :item
   rect::NTuple{4,px} = (0px, 0px, 0px, 0px)   # where it was last drawn: its width cuts its words short, and its tooltip goes under it
   full::String = ""                           # its words when they're cut short with …, to show in its tooltip, or "" when they fit
 end
@@ -3377,7 +3381,7 @@ column, or opens a menu that sorts and searches it.
 """
 @def mutable struct ColumnHead <: SemanticUI
   of::Any = nothing
-  key::Symbol = :name
+  key::Symbol = :item
   side::Symbol = :start   # the side of the cell that its words go on: :start, or :end over numbers that line up on the right
   words::Any = nothing    # its HeadWords
 end
@@ -3388,13 +3392,13 @@ end
 "The menu of a column of text: its two orders and a field to search it. It floats under the heading, as it does in Centient's lists."
 @def mutable struct ColumnMenu <: SemanticUI
   of::Any = nothing
-  key::Symbol = :name
+  key::Symbol = :item
   side::Symbol = :bottom   # the side of the heading that it's on
 end
 "One of the two orders in the menu of a column"
 @def mutable struct SortRow <: SemanticUI
   of::Any = nothing
-  key::Symbol = :name
+  key::Symbol = :item
   dir::Symbol = :asc
 end
 "A line of the list that a search shows: an item of Centient's catalogue, or a contact"
@@ -4597,31 +4601,59 @@ elide(s::AbstractString, size, wide) = begin
   rstrip(String(cs[1:lo])) * "…"
 end
 
+"True when measure `m` waits for an item: it has none, and Centient is here to choose one from"
+wants_item(m) = isempty(m.item) && Centient.available()
+
+"""
+What the table calls measure `m`. It's the name of its item. With no item, or
+one that Centient hasn't told of, it's the name that the measure has in the
+block. A measure that waits for an item, with the name it was made with, has
+none.
+"""
+item_name(v::TakeoffView, m) = begin
+  row = known(v, m.item)
+  row === nothing || return string(row["name"])
+  wants_item(m) && occursin(FIRST_NAME, m.name) ? "" : isempty(m.name) ? m.item : m.name
+end
+
+"The words `shown`, which start the words of `parts` and may end with …, as a text for each part in its colour"
+runs(shown::AbstractString, parts) = begin
+  cs, at, out = collect(shown), 0, Any[]
+  for (s, colour) in parts
+    n = min(length(s), length(cs) - at)
+    n > 0 || break
+    push!(out, label(String(cs[at+1:at+n]), 13px, color=colour))
+    at += n
+  end
+  out
+end
+
 describe(c::MeasureCell) = begin
   v, i = c.of, c.i
   i <= length(v.data.measures) || return Box(width(0px))
   m = v.data.measures[i]
   wide = c.what == :extra ? fixed(52px) : width(grow=grow)
   c.full = ""
-  v.asking == (c.what, i) && return field(v, wide)
-  # The words are in a box with no width of its own, so a long name doesn't take room from the cells beside it:
-  # the name and the item share the row. The words are cut short with … to fit the width the cell had when it was last drawn.
-  words(s, colour) = begin
+  # The item's cell holds the field for the item, and the field for the name on a Mac with no Centient
+  a = v.asking
+  a !== nothing && a[1] in (c.what == :item ? (:item, :name) : (:extra,)) && a[2] == i && return field(v, wide)
+  # The words are in a row with no width of its own, so long words take no room from the cells beside them.
+  # They're cut short with … to fit the width the cell had when it was last drawn. Each of `parts` is words and their colour.
+  words(parts...) = begin
+    s = join(first.(parts))
     shown = elide(s, 13px, c.rect[3])
     shown == s || (c.full = s)
-    Row(wide, height(grow=grow), Alignment.Center, clip=true, Box(fixed(0px), label(shown, 13px, color=colour)))
+    Row(wide, height(grow=grow), Alignment.Center, clip=true, Row(fixed(0px), runs(shown, parts)...))
   end
-  c.what == :name && return words(m.name, colours.ink)
-  c.what == :extra && return words(m.extra > 0 ? "+" * Plans.number(100m.extra) * "%" : "+0%", m.extra > 0 ? colours.ink : colours.faint)
-  # On a Mac with no Centient there's no catalogue to choose from, so the place for the item is empty
-  isempty(m.item) && return words(Centient.available() ? "Choose an item" : "", colours.accent)
-  row = known(v, m.item)
-  # An item that has the measure's name shows where it's from, and any other item shows its own name
-  row === nothing ? words(m.item, colours.dim) :
-  row["name"] == m.name ? words(string(row["source"]), colours.dim) : words(string(row["name"]) * "  ·  " * string(row["source"]), colours.dim)
+  c.what == :extra && return words((m.extra > 0 ? "+" * Plans.number(100m.extra) * "%" : "+0%", m.extra > 0 ? colours.ink : colours.faint))
+  name, row = item_name(v, m), known(v, m.item)
+  # An item that Centient knows shows where it's from after its name
+  row === nothing || return words((name, colours.ink), ("  ·  " * string(row["source"]), colours.dim))
+  wants_item(m) || return words((name, colours.ink))
+  isempty(name) ? words(("Choose an item", colours.accent)) : words((name, colours.ink), ("  ·  ", colours.dim), ("Choose an item", colours.accent))
 end
 
-cursor(c::MeasureCell) = c.what == :item && !Centient.available() ? :arrow : :hand
+cursor(::MeasureCell) = :hand
 
 draw(ctx, size, ui::ConcreteRect, c::MeasureCell) = begin
   # A new width cuts the words short in another place, so the cell is described again
@@ -4639,11 +4671,13 @@ onkey(c::MeasureCell, ::KeyPress{Keys.mouse_left}) = begin
   i <= length(v.data.measures) || return handled
   m = v.data.measures[i]
   # The first click on a row chooses it. A click on the row that's chosen changes the part that's clicked.
-  (v.current == i || (c.what == :item && isempty(m.item))) || return choose_measure!(v, i)
-  v.current = i
-  c.what == :name && return ask!(v, (:name, i), m.name)
+  # A measure that waits for an item is chosen and asks for its item at one click.
+  chosen = v.current == i
+  chosen || choose_measure!(v, i)
+  (chosen || (c.what == :item && wants_item(m))) || return handled
   c.what == :extra && return ask!(v, (:extra, i), m.extra > 0 ? Plans.number(100m.extra) : "", "%")
-  Centient.available() ? ask!(v, (:item, i)) : choose_measure!(v, i)
+  # With no Centient there's no catalogue to choose from, so the click changes the measure's name
+  Centient.available() ? ask!(v, (:item, i)) : ask!(v, (:name, i), m.name)
 end
 
 describe(r::MeasureRow) = begin
@@ -4664,10 +4698,10 @@ describe(r::MeasureRow) = begin
   remove = button!(v, (:delete, i), (:delete, i), icon="x-lg", tip="Remove this measure")
   # The panel beside a plan that fills the window is narrow, so a measure has two lines there
   v.beside && return Column(width(grow=grow), Alignment.Start, padding(10px, 4px), name="Measure", back, line...,
-    Row(width(grow=grow), height(26px), child_gap=8px, Alignment.Center, swatch(m.kind, hue(i)), cell(:name), size),
-    Row(width(grow=grow), height(26px), child_gap=8px, Alignment.Center, Box(width(14px)), cell(:item), cell(:extra), cost, remove))
+    Row(width(grow=grow), height(26px), child_gap=8px, Alignment.Center, swatch(m.kind, hue(i)), cell(:item), size),
+    Row(width(grow=grow), height(26px), child_gap=8px, Alignment.Center, Box(width(14px)), cell(:extra), Box(width(grow=grow)), cost, remove))
   Row(width(grow=grow), height(32px), padding(10px, 0px), child_gap=10px, Alignment.Center, name="Measure", back, line...,
-    swatch(m.kind, hue(i)), cell(:name), cell(:item), cell(:extra), size,
+    swatch(m.kind, hue(i)), cell(:item), cell(:extra), size,
     # A narrow block has no room for the price of one, so it shows what the measure comes to and no more
     # The price is for one of the measure's unit, so it needs no unit after it. One that the measure can't be in says its own.
     (has_price(v) ? (right(96px, row === nothing ? "" : (p = unit_price(m, row); p === nothing ? price_text(row) : dollars(p)), colours.dim),) : ())...,
@@ -5050,22 +5084,16 @@ draw(ctx, size, ui::ConcreteRect, l::FoundList) = caret(ctx, ui, l.side, rect(pl
 
 const HEAD_KEY = :takeoff_column
 "The columns of the table that sort: the heading of each, and whether it holds text"
-const COLUMNS = (name=("Measure", true), item=("Item", true), extra=("Waste", false), amount=("Amount", false),
-                 price=("Price", false), cost=("Cost", false))
+const COLUMNS = (item=("Item", true), extra=("Waste", false), amount=("Amount", false), price=("Price", false), cost=("Cost", false))
 "What the two orders of a column are called"
 order_words(text::Bool) = text ? ("A–Z", "Z–A") : ("Low → High", "High → Low")
 
-"The item of a measure in words: its name and the catalogue that it's from"
-item_words(v::TakeoffView, m) = begin
-  isempty(m.item) && return ""
-  row = known(v, m.item)
-  row === nothing ? m.item : string(row["name"], "  ·  ", row["source"])
-end
+"The item of a measure in words, as its column sorts and searches it: what the table calls it, and the catalogue that it's from"
+item_words(v::TakeoffView, m) = (row = known(v, m.item); item_name(v, m) * (row === nothing ? "" : "  ·  " * string(row["source"])))
 
 "What measure `i` has in the column `key`, as the thing that the column sorts by"
 column_value(v::TakeoffView, i, key) = begin
   m = v.data.measures[i]
-  key == :name && return lowercase(m.name)
   key == :item && return lowercase(item_words(v, m))
   key == :extra && return m.extra
   amount, row = Plans.amount(v.data, m), known(v, m.item)
@@ -5084,8 +5112,8 @@ end
 "The measures that the table shows, in the order that it shows them: those that the searches keep, sorted by the column that's chosen"
 shown_measures(v::TakeoffView) = begin
   ms = v.data.measures
-  has(i, key, words) = occursin(lowercase(words), key == :name ? lowercase(ms[i].name) : lowercase(item_words(v, ms[i])))
-  keep = [i for i in eachindex(ms) if all(((key, words),) -> has(i, key, words), v.filters)]
+  # The item's column is the one that holds text, so a search is of it
+  keep = [i for i in eachindex(ms) if all(words -> occursin(lowercase(words), lowercase(item_words(v, ms[i]))), values(v.filters))]
   v.sort === nothing ? keep : sort!(keep, by=i -> column_value(v, i, v.sort[1]), rev=v.sort[2] == :desc)
 end
 
@@ -5241,20 +5269,20 @@ has_price(v::TakeoffView) = editor(v).width >= 720px
 
 """
 The headings of the table of measures. Each is as wide as the cells under it.
-The panel beside a plan has two lines for each measure, so it has three
-headings and no more: the measure, its item and its cost.
+The panel beside a plan has two lines for each measure, so it has two
+headings and no more: the item and its cost.
 """
 table_head(v::TakeoffView) = begin
   # Each heading fills its cell, so the mouse can use it anywhere over its column
-  left(key) = Row(width(grow=grow), height(grow=grow), Alignment.Center, clip=true, (key === nothing ? () : (head(v, key, :start),))...)
+  left(key) = Row(width(grow=grow), height(grow=grow), Alignment.Center, clip=true, head(v, key, :start))
   right(wide, key) = Row(wide, height(grow=grow), Alignment.Center, clip=true, (key === nothing ? () : (head(v, key, :end),))...)
-  # With no Centient on the Mac there are no items, so the columns for them have no headings
+  # With no Centient on the Mac there are no prices, so the columns for them have no headings
   ours(key) = Centient.available() ? key : nothing
   look = (width(grow=grow), height(26px), Alignment.Center, background(colours.head), border(1px, :solid, colours.line)[:bottom])
   v.beside && return Row(look..., padding(10px, 0px), child_gap=8px, name="Headings",
-    Box(width(14px)), left(:name), left(ours(:item)), right(fixed(88px), ours(:cost)), Box(width(28px)))
+    Box(width(14px)), left(:item), right(fixed(88px), ours(:cost)), Box(width(28px)))
   Row(look..., padding(10px, 0px), child_gap=10px, name="Headings",
-    Box(width(14px)), left(:name), left(ours(:item)), Row(fixed(52px), height(grow=grow), Alignment.Center, clip=true, head(v, :extra, :start)),
+    Box(width(14px)), left(:item), Row(fixed(52px), height(grow=grow), Alignment.Center, clip=true, head(v, :extra, :start)),
     right(fixed(AMOUNT_W), :amount), (has_price(v) ? (right(fixed(96px), ours(:price)),) : ())..., right(fixed(88px), ours(:cost)),
     Box(width(28px)))   # over the buttons that remove a measure
 end

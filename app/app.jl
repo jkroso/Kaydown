@@ -11,10 +11,10 @@
 
 include("start.jl")
 
-@use ".." build_editor open_editor WELCOME restyle! problems pages_dir SIDEBAR_ICONS FILE_ICONS todo_at inbox Agent INSERTS PLAN_ICONS
+@use ".." build_editor open_editor WELCOME restyle! problems pages_dir SIDEBAR_ICONS FILE_ICONS todo_at inbox Agent INSERTS PLAN_ICONS window! editors settings_editor theme!
 @use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse Typed ontype
 @use "github.com/jkroso/Font.jl/units" px
-@use "github.com/jkroso/UI.jl/Interface/abstract" focus
+@use "github.com/jkroso/UI.jl/Interface/abstract" focus window_of
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Icon" load_icon
 @use "github.com/jkroso/UI.jl/Interface/draw" frame
 @use GeometryBasics: Vec2
@@ -138,8 +138,7 @@ warm_up() = begin
   e = build_editor(joinpath(dir, "welcome.md"))
   # A word that's spelt wrong adds items to the page's menu, and the clicks below count on where its items are
   e.spelling = false
-  w = Window(e, title="warm up", size=(1100px, 800px))
-  focus(e)
+  w = window!(e, title="warm up", size=(1100px, 800px))
   hold(keys) = foreach(k -> (w.keys |= k), keys)
   release(keys) = foreach(k -> (w.keys ⊻= k), keys)
   press(k, mods...) = (hold(mods); onkey(w, KeyPress{k}(0, w)); onkey(w, KeyRelease{k}(0, w)); release(mods); frame(w))
@@ -226,8 +225,17 @@ warm_up() = begin
   press(Keys.o, Keys.cmd); press(Keys.n); press(Keys.escape)
   # The page drawn for paper. A window that isn't on the screen shows no print panel.
   press(Keys.p, Keys.cmd)
-  # The settings page and back
-  press(Keys.comma, Keys.cmd); press(Keys.comma, Keys.cmd)
+  # The settings window. A setting that changes there changes in this window too, and ⌘W closes the settings window.
+  press(Keys.comma, Keys.cmd)
+  settings = settings_editor()
+  sw = window_of(settings)
+  frame(sw)
+  was = e.theme
+  theme!(settings, :night); frame(sw); frame(w)
+  e.theme == :night || error("A change to a setting in the settings window didn't reach the other window")
+  theme!(settings, was); frame(sw); frame(w)
+  sw.keys |= Keys.cmd; onkey(sw, KeyPress{Keys.w}(0, sw))
+  settings_editor() === nothing || error("⌘W didn't close the settings window")
   # The mouse over the top bar's buttons, and a click and a drag on the page
   foreach(x -> mouse(x, 22), (50, 550, 1000, 1075))
   press(Keys.up, Keys.cmd)
@@ -251,6 +259,9 @@ warm_up() = begin
   rm(Agent.place[], recursive=true)
   Agent.place[] = ""
   delete!(e.nodes, :agents)
+  # The app is built with the list of windows as the warm-up leaves it, so it must leave none
+  close(w)
+  isempty(editors) || error("A window that closed is still in the list of the windows that are open")
   rm(dir, recursive=true)
 end
 

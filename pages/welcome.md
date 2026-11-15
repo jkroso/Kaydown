@@ -41,7 +41,8 @@ A line that holds only a video file shows a player for it, like `![The kitchen](
 | ⌘P | Prints the page, or saves it as a PDF |
 | ⌘⇧E | Saves the page as a page of HTML, for a website |
 | ⌘Return | Sends the page to an agent that waits for it |
-| ⌘, | Opens the settings page. Press it again to go back. |
+| ⌘, | Opens the settings in a window of their own. Press it again to close that window. |
+| ⌘W | Closes the window |
 | ⌘\ | Shows and hides the list of files |
 | ⌘⇧\ | Gives the list of files the keyboard. Press esc to go back to the text. |
 | ⌘Z and ⌘⇧Z | Undo and redo |
@@ -193,4 +194,4 @@ Right-click the page to cut, copy or paste. The menu's Insert item adds a new bl
 
 A file can start with front matter: lines like `title: Notes` between two lines of `---`. Kaydown shows it as a block of its own, and leaves it out of the word count.
 
-Press ⌘, to open the settings: the colours, the font, the size of the text, the width of the page and what the count at the top right shows. A button there makes Kaydown the app that opens your Markdown files.
+Press ⌘, to open the settings in a window of their own: the colours, the font, the size of the text, the width of the page and what the count at the top right shows. A button there makes Kaydown the app that opens your Markdown files.

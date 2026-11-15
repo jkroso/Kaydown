@@ -1,6 +1,6 @@
 # Settings
 
-Kaydown keeps these choices, and uses them the next time it opens. Press ⌘, to go back to your page.
+Kaydown keeps these choices, and uses them the next time it opens. Each one changes every window as you choose it. Press ⌘W to close this window.
 
 ## Colours
 

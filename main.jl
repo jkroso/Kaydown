@@ -73,10 +73,11 @@
 #   - Click the word count to count characters or reading time instead.
 #   - ⌘+ and ⌘- change the text size by a pixel. ⌘0 puts it back.
 #   - ⌘P prints the page, or saves it as a PDF. ⌘⇧E saves it as a page of HTML.
-#   - ⌘, opens the settings page, where you choose the colours, the font, the
-#     text size, the width of the page and what the count at the top right
-#     counts. A button there makes Kaydown the app that opens Markdown files.
-#     ⌘, again goes back.
+#   - ⌘, opens the settings page in a window of its own, where you choose the
+#     colours, the font, the text size, the width of the page and what the
+#     count at the top right counts. A button there makes Kaydown the app that
+#     opens Markdown files. ⌘, again closes that window.
+#   - ⌘W closes a window. Kaydown quits when its last window closes.
 #   - ⌘⌥I opens the layout inspector.
 #
 # It uses these UI.jl features: a `Scroll` that only builds the lines
@@ -694,6 +695,7 @@ isspread(g::Grid) = g.head > 0px
   font::String = SERIF                  # of the page's text
   zoom::Float64 = 1.0
   remember::Bool = false                # write the settings to a file when they change
+  settings::Bool = false                # this window opened to show the settings page
   stat::Symbol = :words                 # what the count at the top right counts
   spelling::Bool = true                 # put a line of dots under each word that's spelt wrong
   popup::Symbol = :none                 # :finder while the file finder is open
@@ -834,7 +836,8 @@ end
 
 "Show the file at `path`. A file that's already open keeps its changes."
 open!(e, path) = begin
-  silence!()   # a sound that the last page was playing stops
+  # A sound that the last page was playing stops. A new window has no last page, and another window's sound plays on.
+  isempty(e.buffers) || silence!()
   e.buf.offset = e.scroll.offset
   e.buf = get!(e.buffers, path) do
     isfile(path) ? load(path) : Buffer(path=path)
@@ -5323,7 +5326,7 @@ const BAR_ROOM = 64px    # the bottom of the window, where the bar of buttons is
 const MOST_ZOOM = 8.0    # the biggest a picture gets: this many times its own size, or the size that fits the window if that's bigger
 const ZOOM_STEP = 1.25   # how much bigger the + button, and ⌘+, make a picture
 "The keys with ⌘ that do what they always do while a picture fills the window. The rest would change the page under it."
-const PAGE_KEYS = (Keys.s, Keys.o, Keys.p, Keys.comma, Keys.backslash)
+const PAGE_KEYS = (Keys.s, Keys.o, Keys.p, Keys.w, Keys.comma, Keys.backslash)
 
 "What fills the window, over the page"
 @def mutable struct ZoomView <: SemanticUI
@@ -7069,14 +7072,21 @@ end
 
 ismouse(k) = k in (Keys.mouse_left, Keys.mouse_right, Keys.mouse_middle)
 
-# The keys that do something with ⌘ while the page shows a file that's only shown: ⌘O, ⌘\, ⌘, and the
+# The keys that do something with ⌘ while the page shows a file that's only shown: ⌘O, ⌘\ and the
 # keys that change the size of the text. A file that shows as text takes ⌘A, ⌘C, ⌘F and ⌘G too.
-const READ_KEYS = (Keys.o, Keys.backslash, Keys.comma, Keys.equal, Keys.minus, getproperty(Keys, Symbol(0)))
+# ⌘W and ⌘, work in every window, so they aren't here.
+const READ_KEYS = (Keys.o, Keys.backslash, Keys.equal, Keys.minus, getproperty(Keys, Symbol(0)))
 const TEXT_KEYS = (Keys.a, Keys.c, Keys.f, Keys.g)
 
 onkey(e::Editor, ev::KeyPress{K}) where K = begin
   # A key that the sidebar's tree took, like Return on a heading, comes here next. It isn't for the text.
   pop!(e.nodes, :chose, false) && return
+  # ⌘W closes the window and ⌘, shows the settings, whatever has the keyboard. A slider on the
+  # settings page takes the keyboard when it's dragged, and ⌘, still closes that window.
+  if Keys.cmd in ev.window.keys
+    K == Keys.w && return (close(ev.window); nothing)
+    K == Keys.comma && return (toggle_settings!(e); nothing)
+  end
   # While a picture or a model fills the window, the keys are its own, and a right-click has no menu. Esc puts the page back.
   zoomed = zooming(e)
   zoomed === nothing || e.popup != :none || zoom_key!(zoomed, K, ev.window) !== handled || return
@@ -7164,8 +7174,6 @@ onkey(e::Editor, ev::KeyPress{K}) where K = begin
     print!(e, w)
   elseif cmd && K == Keys.backslash
     shift ? focus_panel!(e) : toggle_panel!(e)
-  elseif cmd && K == Keys.comma
-    toggle_settings!(e)
   elseif cmd && K == Keys.equal
     zoom!(e, zoom_for(text_size(e) + 1))
   elseif cmd && K == Keys.minus
@@ -8195,7 +8203,6 @@ move!(e, old, new) = begin
   for kind in (:read, :outline)
     haskey(e.nodes, (kind, old)) && (e.nodes[(kind, new)] = pop!(e.nodes, (kind, old)))
   end
-  get(e.nodes, :before_settings, "") == old && (e.nodes[:before_settings] = new)
   for item in items(file_tree(e), hidden=true)
     item.firstchild.path == old && (item.firstchild.path = new)
   end
@@ -8741,10 +8748,27 @@ Kaydown's icon. The app puts its own list here.
 """
 const inbox = Ref(String[])
 
-"Show the last file or folder that macOS asked for. A window shows one file, so that's the one to show."
+"""
+Show the last file or folder that macOS asked for. A window shows one file, so
+that's the one to show. The settings window keeps its page: another window
+shows the file, and with no other window open, a new one does.
+"""
 receive!(e) = begin
   files = inbox[]
   isempty(files) && return
+  if issettings(e)
+    i = findfirst(o -> !issettings(o), editors)
+    if i === nothing
+      path = pop!(files)
+      empty!(files)
+      ispath(path) && show_window!(page_window(path, e), window_of(e))
+    else
+      # That window may have nothing else to draw for, so ask it to draw
+      w = window_of(editors[i])
+      w === nothing || stale!(w)
+    end
+    return
+  end
   path = pop!(files)
   empty!(files)
   if isdir(path)
@@ -9848,37 +9872,135 @@ describe(e::Editor) = begin
     body, panel_edge(e)..., tablebar(e)..., suggestbox(e)..., findbar(e)..., fill_over(e)..., takeoff_over(e)..., zoom_over(e)..., node!(TopBar, e, :topbar), popup...)
 end
 
-# --- window -------------------------------------------------------------------------------
+# --- windows ------------------------------------------------------------------------------
+#
+# Kaydown can have more than one window open, each with an editor of its own.
+# The settings page opens in a window of its own, so the page you were working
+# on stays as it was. ⌘W closes a window, and Kaydown quits when its last
+# window closes.
 
 const WELCOME = joinpath(@__DIR__, "pages", "welcome.md")
+
+"The editor of each window that's open, in the order they opened"
+const editors = Editor[]
+
+"""
+Make a window for the editor `e`. `show_window!` puts it on the screen. Until
+it closes, `e` gets each setting that changes in another window.
+"""
+window!(e; kw...) = begin
+  w = Window(e; kw...)
+  push!(editors, e)
+  focus(e)
+  w
+end
+
+"""
+Put the window `w` on the screen, if the window `by` that asked for it is on
+the screen. A test's window isn't, so the windows that it opens aren't either.
+"""
+show_window!(w, by) = (by !== nothing && isopen(by) && open(w); w)
+
+onclose(e::Editor, ::Window) = (Base.filter!(o -> o !== e, editors); nothing)
+
+"""
+A window that shows the Markdown file or the folder at `path`, with the
+settings of the editor `like`. `show_window!` puts it on the screen.
+"""
+page_window(path, like) = begin
+  e = build_editor(path)
+  foreach(name -> setfield!(e, name, getfield(like, name)), SHARED)
+  e.remember = like.remember
+  e.size = paper_window(screen_room(), e.side)
+  window!(e, title="Kaydown", size=e.size)
+end
 
 # --- settings -----------------------------------------------------------------------------
 #
 # The settings are the page's colours, its font, the size of its text, its width
 # and what the count at the top right counts. ⌘, opens the settings page, a
-# Markdown file whose live blocks change them. They are kept in a file, so the
-# next window opens with them.
+# Markdown file whose live blocks change them, in a window of its own. A
+# setting that changes in one window changes in every window. They are kept in
+# a file, so the next window opens with them.
 
 "The folder of Kaydown's own pages. The built app changes it to the copies it writes out."
 const pages_dir = Ref(joinpath(@__DIR__, "pages"))
 
-"Show the settings page, or go back to the page that was open before it"
+"The settings that every window has the same: each is a field of the editor"
+const SHARED = (:theme, :font, :zoom, :widest, :stat, :spelling, :side)
+
+const SETTINGS_SIZE = (720px, 820px)   # of the settings window, when the window that asked for it is big enough
+const SETTINGS_DROP = 48px             # how far the settings window's top is below the top of the window that asked for it
+
+"True when `e` is the editor of the settings window. That window can go to another page, and then it's a window like any other."
+issettings(e) = e.settings && e.buf.path == joinpath(pages_dir[], "settings.md")
+
+"The editor of the settings window, or nothing while that window isn't open"
+settings_editor() = (i = findfirst(issettings, editors); i === nothing ? nothing : editors[i])
+
+"""
+Show the settings page in a window of its own. With that window open already,
+bring it to the front. In the settings window itself, close it.
+"""
 toggle_settings!(e) = begin
-  page = joinpath(pages_dir[], "settings.md")
-  if e.buf.path == page
-    back = get(e.nodes, :before_settings, "")
-    isempty(back) || open!(e, back)
-  else
-    e.nodes[:before_settings] = e.buf.path
-    open!(e, page)
-  end
+  by = window_of(e)
+  by === nothing && return e
+  issettings(e) && return (close(by); e)
+  s = settings_editor()
+  s === nothing || return (front!(window_of(s)); e)
+  s = build_editor(joinpath(pages_dir[], "settings.md"))
+  s.settings = true
+  foreach(name -> setfield!(s, name, getfield(e, name)), SHARED)
+  s.remember = e.remember
+  s.panel = false
+  # The window goes over the middle of the one that asked for it, a little below its top
+  wide, tall = SETTINGS_SIZE
+  tall = min(tall, max(400px, by.size[2] - 2SETTINGS_DROP))
+  at = (max(0px, by.position[1] + (by.size[1] - wide) / 2), by.position[2] + SETTINGS_DROP)
+  s.size = (wide, tall)
+  show_window!(window!(s, title="Settings", size=s.size, position=at), by)
   e
+end
+
+"""
+Give the other windows the settings of `e`, after one of them changed. A window
+that isn't in `editors`, like one a test makes, keeps its settings to itself.
+"""
+share_settings!(e) = begin
+  any(o -> o === e, editors) || return
+  for o in editors
+    o === e || adopt_settings!(o, e)
+  end
+end
+
+"Give `o` the settings of `e` that are different. The line at the top of `o`'s window stays there."
+adopt_settings!(o, e) = begin
+  changed = filter(name -> getfield(o, name) != getfield(e, name), SHARED)
+  isempty(changed) && return o
+  for name in changed
+    setfield!(o, name, getfield(e, name))
+    rerun!(o, name)   # a live block that reads the setting shows the new one
+  end
+  # The width of a sidebar that's hidden changes nothing that the window shows
+  o.panel || changed != (:side,) || return o
+  # Text of another size or width wraps again, and that moves the lines
+  y = o.scroll.offset
+  i = findfirst(it -> it.top + it.tall > y, o.layout)
+  i === nothing || (o.nodes[:hold] = (o.layout[i].first, o.layout[i].top - y))
+  empty!(o.flows)
+  w = window_of(o)
+  w === nothing || stale!(w)
+  o
 end
 
 settings_file() = joinpath(homedir(), "Library", "Application Support", "Kaydown", "settings")
 
-"Write the settings to their file, if this editor keeps them. An editor that's made for a test doesn't."
+"""
+Give the other windows the settings of `e`, and write them to their file if
+this editor keeps them. An editor that's made for a test doesn't.
+"""
 save_settings!(e) = begin
+  share_settings!(e)
   e.remember || return
   try
     mkpath(dirname(settings_file()))
@@ -9930,9 +10052,8 @@ open_editor(args) = begin
   "--paper" in args && (e.theme = :paper)
   e.remember = true
   e.size = paper_window(screen_room(), e.side)
-  window = Window(e, title="Kaydown", size=e.size)
-  focus(e)
-  display(window)
+  # This returns when the last window has closed
+  display(window!(e, title="Kaydown", size=e.size))
 end
 
 # The close, minimise and zoom buttons line up with the sidebar's button, in the middle of the top bar

@@ -351,6 +351,120 @@ end
   K.tool!(v, :select)
 end
 
+@testset "the units of a measure" begin
+  units() = [p for p in popups(w) if p.key == K.UNIT_KEY]
+  # The unit after an amount is what a click on it opens
+  word(i) = v.parts[(:amount, i)].unit
+  amount(i) = (r = rect(word(i)); click((K.num(r.left + r.width / 2), K.num(r.top + r.height / 2))))
+  cable = v.data.measures[2]
+  line(m) = only(l for l in block() if occursin("| " * m.name, l))
+  # A count with marks can be in pieces and no more, so it has no unit to click. A click on it chooses it.
+  click(part((:amount, 1)))
+  @test v.current == 1 && v.asking === nothing && isempty(units()) && word(1) === nothing
+  # A click on a length's number chooses it too, and shows no list
+  r = rect(v.parts[(:amount, 2)])
+  click((K.num(r.left) + 8, K.num(r.top + r.height / 2)))
+  @test v.current == 2 && v.asking === nothing && isempty(units())
+  # A click on its unit lists the units of length, smallest first, under the unit. The one it's in is picked.
+  amount(2)
+  @test v.asking == (:unit, 2) && length(units()) == 1
+  @test v.rows == ["mm", "cm", "inch", "ft", "yard", "m", "km", "mile"] && v.rows[v.pick] == "m"
+  @test only(units()).scene.top > rect(word(2)).top
+  # What's typed searches the names and the short forms. Return takes the unit that's picked.
+  typed("mm")
+  @test v.rows == ["mm"]
+  key(Keys.enter)
+  @test isempty(units()) && v.asking === nothing && cable.unit == "mm"
+  @test startswith(line(cable), "length in mm | ")
+  @test K.Plans.shown(cable, K.Plans.amount(v.data, cable)) == K.Plans.amount_number(1000K.Plans.amount(v.data, cable)) * " mm"
+  # Esc, or a click somewhere else, closes the list and changes nothing
+  amount(2); typed("ft"); key(Keys.escape)
+  @test isempty(units()) && cable.unit == "mm"
+  amount(2); key(Keys.down)
+  click(K.window_point(v, house(14, 3)))
+  @test isempty(units()) && cable.unit == "mm"
+  # The arrows pick a unit, and the mouse picks the one it's over. A click takes it.
+  amount(2)
+  @test v.rows[v.pick] == "mm"
+  key(Keys.down); key(Keys.down); key(Keys.up)
+  @test v.rows[v.pick] == "cm"
+  feet = findfirst(==("ft"), v.rows)
+  at(part((:unit_row, feet)))
+  @test v.pick == feet
+  click(part((:unit_row, feet)))
+  @test cable.unit == "ft" && startswith(line(cable), "length in ft | ")
+  # A quote's line is in the measure's unit, and a cost is for the unit that the item is priced in
+  q = K.quote_line(cable, 3.048)
+  @test q["unit"] == "ft" && q["quantity"] == 10
+  @test K.cost_of(cable, 3.048, Dict("unit" => "ft", "price" => 2.0)) ≈ 20
+  @test K.cost_of(cable, 3.048, Dict("unit" => "m", "price" => 2.0)) ≈ 6.096
+  # The price shows for one of the measure's unit: \$2 a metre is 61c a foot. A price a piece can't be.
+  @test K.unit_price(cable, Dict("unit" => "m", "price" => 2.0)) ≈ 0.6096
+  @test K.unit_price(cable, Dict("unit" => "lineal metre", "price" => 2.0)) ≈ 0.6096
+  @test K.unit_price(cable, Dict("unit" => "each", "price" => 2.0)) === nothing
+  @test K.unit_price(v.data.measures[1], Dict("unit" => "each", "price" => 12.5)) == 12.5
+  # Its kind's own unit is written as none
+  amount(2); typed("metre")
+  @test v.rows == ["mm", "cm", "m", "km"] && v.rows[v.pick] == "m"   # it names m, and is only part of the others
+  key(Keys.enter)
+  @test cable.unit == "" && startswith(line(cable), "length | ")
+  # A new measure with nothing drawn and no item lists every unit. One of another kind changes what it measures.
+  button(:add); key(Keys.escape)
+  n = length(v.data.measures)
+  amount(n)
+  @test length(v.rows) == 18 && v.rows[v.pick] == K.Plans.unit(v.data.measures[n])
+  typed("square metre"); key(Keys.enter)
+  m = v.data.measures[n]
+  @test m.kind == :area && m.unit == "" && m.name == "Area 2" && v.tool == :area && v.current == n
+  amount(n); typed("ft2")   # a keyboard's way to write ft²
+  @test v.rows == ["ft²"]
+  key(Keys.enter)
+  @test m.unit == "ft²" && line(m) == "area in ft² | Area 2"
+  # Once it has an item it keeps its kind, so it lists the units of its kind and no more
+  m.item = "item 1"
+  amount(n)
+  @test v.rows == ["mm²", "inch²", "ft²", "yard²", "m²", "acre", "hectare", "km²", "mile²"]
+  key(Keys.escape)
+  button((:delete, n))
+  @test length(v.data.measures) == 3 && cable.unit == ""
+end
+
+@testset "long words are cut short" begin
+  m = v.data.measures[2]
+  was = m.name
+  m.name = "A cable with a very long name, longer than its cell in the table of measures by a long way"
+  frames(3)
+  cell = v.parts[(:cell, 2, :name)]
+  name, item = rect(cell), rect(v.parts[(:cell, 2, :item)])
+  # It takes no room from the item beside it. The two share the row, under their headings.
+  @test name.width ≈ item.width
+  @test name.left ≈ rect(v.parts[(:head, :name)]).left && item.left ≈ rect(v.parts[(:head, :item)]).left
+  # Its words end with … and fit in the cell, and the mouse over it shows them whole
+  shown = K.elide(m.name, 13px, name.width)
+  @test endswith(shown, "…") && K.measure(K.Face(K.SANS, "", 13px, K.colours.ink, false), shown) <= name.width
+  @test cell.full == m.name
+  at(part((:cell, 2, :name)))
+  @test any(p -> p.key == :tooltip, popups(w))
+  # A short name fits, so it's whole and has no tooltip
+  m.name = was
+  at((10, 10)); frames(3)
+  @test cell.full == "" && K.elide(was, 13px, rect(cell).width) == was
+end
+
+@testset "a heading's arrow doesn't move its words" begin
+  K.tool!(v, :select)
+  # Waste's words are at the left of its cell. With the mouse over it, its arrow shows after them.
+  words = v.parts[(:head, :extra)].words
+  at((10, 10)); frames()
+  word = only(rect(words).children)
+  cell = rect(v.parts[(:head, :extra)])
+  at((K.num(cell.left) + 3, K.num(cell.top) + 3)); frames()
+  @test K.ishovered(v.parts[(:head, :extra)]) && length(rect(words).children) == 2
+  first, arrow = rect(words).children
+  @test first.left == word.left && first.width == word.width && arrow.left > word.left
+  at((10, 10)); frames()
+end
+
 @testset "the quote" begin
   button(:quote)
   @test v.wrong && v.said == "Choose the customer first" && v.quoting === nothing

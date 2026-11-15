@@ -73,11 +73,36 @@ end
   @test T.inside([(0.0, 0.0), (4.0, 0.0)]) == 0
 end
 
+@testset "the unit of a measure" begin
+  # It's written after the kind, and a measure with none is in its kind's own unit
+  t = T.takeoff(["scale: 1:100", "", "length in mm | Cable |  | +10%", "  0,0 720,0", "area in ft² | Tiles", "count | Taps"])
+  len, area, taps = t.measures
+  @test (len.unit, area.unit, taps.unit) == ("mm", "ft²", "")
+  @test (T.unit(len), T.unit(area), T.unit(taps)) == ("mm", "ft²", "Piece")
+  @test len.extra == 0.1 && len.name == "Cable"
+  @test T.written(t) == ["scale: 1:100", "", "length in mm | Cable |  | +10%", "  0,0 720,0", "area in ft² | Tiles", "count | Taps"]
+  # Its kind's own unit is written as none, and a unit of another kind, or none that Centient knows, is left out
+  @test T.takeoff(["length in m | Cable"]).measures[1].unit == ""
+  @test T.takeoff(["length in ft² | Cable"]).measures[1].unit == ""
+  @test T.takeoff(["length in furlong | Cable"]).measures[1].unit == ""
+  @test T.measure("width in mm | Cable") === nothing
+  # The amount shows in its unit. A foot and an inch are marks. Less than one shows three figures.
+  @test T.shown(len, 25.4) == "25400 mm"
+  @test T.shown(:length, 12.54, "km") == "0.0125 km" && T.shown(:length, 3.048, "ft") == "10'" && T.shown(:length, 0.0254, "inch") == "1\""
+  @test T.shown(:area, 10_000.0, "hectare") == "1 hectare" && T.shown(:count, 4.0, "Piece") == "4"
+  @test T.in_unit(1.0, "mm") ≈ 1000
+  @test T.in_unit(1.0, "ft²") ≈ 10.7639 atol=1e-4
+  @test T.unit_kind("yard") == :length && T.unit_kind("acre") == :area && T.unit_kind("Piece") == :count && T.unit_kind("hr") === nothing
+end
+
 @testset "the kind of measure for an item's unit" begin
   @test all(u -> T.kind_for(u) == :length, ("m", "M", "metre", "Metres", "per metre", "lm", "LM", "lin. m", "lineal metre", "/m", "mm"))
   @test all(u -> T.kind_for(u) == :area, ("m²", "m2", "sqm", "SQM", "sq. m", "square metres", "per m²", "square meter"))
   @test all(u -> T.kind_for(u) == :count, ("Piece", "each", "", "hr", "box", "kg", "L", "pack of 10"))
   @test T.kind_for(nothing) == :count
+  # Centient's own names for units
+  @test all(u -> T.kind_for(u) == :length, ("ft", "inch", "yard", "mile", "km"))
+  @test all(u -> T.kind_for(u) == :area, ("ft²", "acre", "hectare", "km²"))
 end
 
 @testset "what's under the mouse" begin

@@ -3211,6 +3211,11 @@ end
 #   - What a search of Centient finds shows in a list that floats beside the
 #     text field. The search for an item looks in one catalogue at a time: the
 #     business's own items, or a supplier's that ⌥ lets you choose. The headings of the table of measures sort and search it.
+#   - A click on the unit after a measure's amount lists the units that it can
+#     be in, as Centient's unit picker does. Type to search them. The amount
+#     shows in the unit that you choose, and the quote's line is in it too. A
+#     measure with nothing drawn and no item can take a unit of another kind,
+#     and that changes what it measures.
 #   - A count takes a mark for each click. A length and an area take a corner for
 #     each click: click twice, or press Return, to end one. An area also ends
 #     with a click on its first corner.
@@ -3328,11 +3333,35 @@ end
   of::Any = nothing
   i::Int = 0
 end
+"The amount of a measure in its row: the number, then the unit that it's in"
+@def mutable struct AmountCell <: SemanticUI
+  of::Any = nothing
+  i::Int = 0
+  unit::Any = nothing   # its UnitWord
+end
+"The unit after a measure's amount. A click on it shows the list of units that the measure can be in."
+@def mutable struct UnitWord <: SemanticUI
+  of::Any = nothing     # the AmountCell
+end
+"The list of units that floats under a measure's amount, with a field that searches it"
+@def mutable struct UnitMenu <: SemanticUI
+  of::Any = nothing
+  i::Int = 0
+  side::Symbol = :bottom   # the side of the amount that it's on
+  pick::Int = 0            # the row that was picked when it was last drawn. A row that the keys pick is brought in sight.
+end
+"A unit in the list of units"
+@def mutable struct UnitRow <: SemanticUI
+  of::Any = nothing
+  k::Int = 0
+end
 "A part of a measure's row that a click changes: its name, its item, or what it adds for waste"
 @def mutable struct MeasureCell <: SemanticUI
   of::Any = nothing
   i::Int = 0
   what::Symbol = :name
+  rect::NTuple{4,px} = (0px, 0px, 0px, 0px)   # where it was last drawn: its width cuts its words short, and its tooltip goes under it
+  full::String = ""                           # its words when they're cut short with …, to show in its tooltip, or "" when they fit
 end
 """
 The heading of a column of the table of measures. It fills the column's cell, so
@@ -3559,8 +3588,34 @@ dollars(x::Real) = begin
   (cents < 0 ? "-" : "") * "\$" * commas(abs(cents) ÷ 100) * "." * lpad(abs(cents) % 100, 2, '0')
 end
 
-"The unit of a quote's line for a measure of this kind, as Centient names it"
-quote_unit(kind::Symbol) = kind == :count ? "Piece" : kind == :length ? "m" : "m²"
+"""
+The price of one of measure `m`'s unit, from the catalogue's `row`. Centient's
+price is for one of the item's unit, so an item sold at \$2 a foot is \$6.56 a
+metre to a measure in metres. It's nothing when the item is sold by a unit
+that `m` can't be in, like a price a metre for a count.
+"""
+unit_price(m, row) = begin
+  u = string(something(get(row, "unit", nothing), ""))
+  Plans.kind_for(u) == m.kind || return nothing
+  # A unit that Centient doesn't name, like "lineal metre" or "each", is its kind's own
+  row["price"] * get(Plans.UNIT_SIZES, Plans.unit(m), 1.0) / get(Plans.UNIT_SIZES, u, 1.0)
+end
+
+"What `amount` of its kind's own unit of measure `m` costs at the price of the catalogue's `row`"
+cost_of(m, amount::Real, row) = begin
+  p = unit_price(m, row)
+  p === nothing ? amount * row["price"] : Plans.in_unit(amount, Plans.unit(m)) * p
+end
+
+"""
+The line of a quote for measure `m`, which comes to `amount` of its kind's own
+unit. The line is in the measure's unit, and Centient prices it from the item
+in that unit.
+"""
+quote_line(m, amount::Real) = begin
+  unit = Plans.unit(m)
+  Dict{String,Any}("ref" => m.item, "quantity" => round(Plans.in_unit(amount, unit), sigdigits=6), "unit" => unit, "note" => m.name)
+end
 
 "Ask Centient for a quote with a line for each measure"
 make_quote!(v::TakeoffView) = begin
@@ -3573,7 +3628,7 @@ make_quote!(v::TakeoffView) = begin
     amount = Plans.amount(t, m)
     amount === nothing && return say!(v, "Set the scale first, so that $(isempty(m.name) ? "each length" : m.name) has a size", true)
     amount > 0 || continue
-    push!(lines, Dict{String,Any}("ref" => m.item, "quantity" => round(amount, digits=2), "unit" => quote_unit(m.kind), "note" => m.name))
+    push!(lines, quote_line(m, amount))
   end
   isempty(lines) && return say!(v, "Nothing is measured yet", true)
   plan = isempty(t.plan) ? "" : " of " * basename(t.plan)
@@ -3594,6 +3649,13 @@ tick!(v::TakeoffView) = begin
   waiting = false
   # A column shows what its search finds while you type
   v.asking !== nothing && v.asking[1] == :filter && filter!(v, v.asking[2], plan_input(v).text)
+  # The list of units shows the ones that match what's typed. New words pick the unit that they name, or the first.
+  if v.asking !== nothing && v.asking[1] == :unit
+    words = String(strip(plan_input(v).text))
+    v.rows = Any[u for u in units_for(v, v.asking[2]) if unit_matches(u, words)]
+    words == v.query || (v.query = words; v.pick = something(findfirst(u -> names_unit(u, words), v.rows), 1))
+    v.pick = clamp(v.pick, 1, max(1, length(v.rows)))
+  end
   if v.asking !== nothing && v.asking[1] in (:item, :customer)
     words = String(strip(plan_input(v).text))
     words == v.query || (v.query = words; v.typed = time(); v.pick = 1)
@@ -3653,7 +3715,7 @@ end
 # --- the text field ----------------------------------------------------------------------
 
 "Close the text field, if it shows. What's typed in it is kept, but nothing is chosen from a list."
-settle_asking!(v::TakeoffView) = v.asking === nothing ? handled : v.asking[1] in (:item, :customer) ? stop_asking!(v) : answer!(v)
+settle_asking!(v::TakeoffView) = v.asking === nothing ? handled : v.asking[1] in (:item, :customer, :unit) ? stop_asking!(v) : answer!(v)
 
 "Show the text field for `what`, with `text` in it and selected"
 ask!(v::TakeoffView, what, text="", placeholder="") = begin
@@ -3681,7 +3743,7 @@ stop_asking!(v::TakeoffView) = begin
   v.asking = nothing
   v.rows, v.search = Any[], nothing
   w = window_of(v)
-  w === nothing || (close_popup!(w, FOUND_KEY); close_popup!(w, HEAD_KEY))
+  w === nothing || (close_popup!(w, FOUND_KEY); close_popup!(w, HEAD_KEY); close_popup!(w, UNIT_KEY))
   w !== nothing && w.focus === plan_input(v) && focus(part!(() -> PlanArea(of=v), v, :area))
   handled
 end
@@ -3722,7 +3784,10 @@ choose_row!(v::TakeoffView, k::Int) = begin
     v.known[m.item] = row
     # The item's unit says what the measure is, and the tool for it is ready to draw
     kind = Plans.kind_for(get(row, "unit", nothing))
-    isempty(m.shapes) && (m.kind = kind)
+    isempty(m.shapes) && m.kind != kind && (m.kind = kind; m.unit = "")
+    # The amount shows in the unit that the item is sold by, when the measure can be in it
+    sold = string(something(get(row, "unit", nothing), ""))
+    Plans.unit_kind(sold) == m.kind && Plans.unit!(m, sold)
     stop_asking!(v)
     commit!(v)
     v.current = a[2]
@@ -3743,6 +3808,7 @@ answer!(v::TakeoffView) = begin
   t = v.data
   # A column's search changes what the table shows, and nothing in the block
   a[1] == :filter && return (filter!(v, a[2], text); stop_asking!(v))
+  a[1] == :unit && return isempty(v.rows) ? stop_asking!(v) : unit!(v, a[2], v.rows[clamp(v.pick, 1, length(v.rows))])
   if a[1] in (:item, :customer)
     isempty(v.rows) || return choose_row!(v, v.pick)
     # Nothing to choose from. An empty field takes the item away, and a customer is kept as it's typed.
@@ -4016,10 +4082,10 @@ tag(ctx, (x, y), words) = begin
   Skia.sk_paint_delete(paint)
 end
 
-"What a shape of this kind comes to, as the plan shows it beside the shape, or \"\" when its page has no scale"
-size_text(v::TakeoffView, kind, shape) = begin
+"What a shape of this kind comes to in the unit `unit`, as the plan shows it beside the shape, or \"\" when its page has no scale"
+size_text(v::TakeoffView, kind, shape, unit=Plans.own_unit(kind)) = begin
   a = Plans.amount(v.data, kind, shape)
-  a === nothing ? "" : Plans.shown(kind, a)
+  a === nothing ? "" : Plans.shown(kind, a, unit)
 end
 
 "Draw what's measured on the page that shows, and what's being drawn"
@@ -4040,7 +4106,7 @@ draw_shapes(ctx, v::TakeoffView) = begin
     trace(ctx, ps, colour, on ? 4 : 2.5, fill=area ? RGBA(colour, 0.22) : nothing, closed=area)
     # The corners show on the measure that the tools draw for, so that you can take hold of one
     (on || v.current == i) && foreach(p -> dot(ctx, p, on ? 4 : 3, colour), ps)
-    on && tag(ctx, ps[end], size_text(v, m.kind, s))
+    on && tag(ctx, ps[end], size_text(v, m.kind, s, Plans.unit(m)))
   end
   isempty(v.draft) && return
   # What's being drawn runs on to the mouse
@@ -4050,7 +4116,9 @@ draw_shapes(ctx, v::TakeoffView) = begin
   ps = [window_point(v, p) for p in points]
   trace(ctx, ps, colour, 2, fill=kind == :area && length(ps) > 2 ? RGBA(colour, 0.15) : nothing, closed=kind == :area && length(ps) > 2)
   foreach(p -> dot(ctx, p, 3, colour), ps[1:length(v.draft)])
-  kind == :scale || tag(ctx, ps[end], size_text(v, kind, Plans.Shape(t.page, points)))
+  # In the unit of the measure that it's for
+  unit = v.current > 0 && t.measures[v.current].kind == kind ? Plans.unit(t.measures[v.current]) : Plans.own_unit(kind)
+  kind == :scale || tag(ctx, ps[end], size_text(v, kind, Plans.Shape(t.page, points), unit))
 end
 
 describe(a::PlanArea) = begin
@@ -4130,6 +4198,7 @@ kind!(v::TakeoffView, m, kind::Symbol) = begin
   (m.kind == kind || !isempty(m.shapes)) && return m
   occursin(FIRST_NAME, m.name) && (m.name = first_name(v, kind))
   m.kind = kind
+  m.unit = ""
   m
 end
 
@@ -4431,13 +4500,37 @@ price_text(row) = begin
   dollars(row["price"]) * (unit in ("", "Piece", "each") ? " each" : " / " * unit)
 end
 
+"""
+`s` cut short with … so that it's no wider than `wide` at `size`. It's all of
+`s` when it fits, and when there's no width to fit it to yet.
+"""
+elide(s::AbstractString, size, wide) = begin
+  face = Face(SANS, "", size, colours.ink, false)
+  (wide <= 0px || measure(face, s) <= wide) && return String(s)
+  # The most letters that fit with the … after them
+  cs = collect(s)
+  lo, hi = 0, length(cs)
+  while lo < hi
+    mid = (lo + hi + 1) ÷ 2
+    measure(face, rstrip(String(cs[1:mid])) * "…") <= wide ? (lo = mid) : (hi = mid - 1)
+  end
+  rstrip(String(cs[1:lo])) * "…"
+end
+
 describe(c::MeasureCell) = begin
   v, i = c.of, c.i
   i <= length(v.data.measures) || return Box(width(0px))
   m = v.data.measures[i]
   wide = c.what == :extra ? fixed(52px) : width(grow=grow)
+  c.full = ""
   v.asking == (c.what, i) && return field(v, wide)
-  words(s, colour) = Row(wide, height(grow=grow), Alignment.Center, clip=true, label(s, 13px, color=colour))
+  # The words are in a box with no width of its own, so a long name doesn't take room from the cells beside it:
+  # the name and the item share the row. The words are cut short with … to fit the width the cell had when it was last drawn.
+  words(s, colour) = begin
+    shown = elide(s, 13px, c.rect[3])
+    shown == s || (c.full = s)
+    Row(wide, height(grow=grow), Alignment.Center, clip=true, Box(fixed(0px), label(shown, 13px, color=colour)))
+  end
   c.what == :name && return words(m.name, colours.ink)
   c.what == :extra && return words(m.extra > 0 ? "+" * Plans.number(100m.extra) * "%" : "+0%", m.extra > 0 ? colours.ink : colours.faint)
   # On a Mac with no Centient there's no catalogue to choose from, so the place for the item is empty
@@ -4449,6 +4542,17 @@ describe(c::MeasureCell) = begin
 end
 
 cursor(c::MeasureCell) = c.what == :item && !Centient.available() ? :arrow : :hand
+
+draw(ctx, size, ui::ConcreteRect, c::MeasureCell) = begin
+  # A new width cuts the words short in another place, so the cell is described again
+  ui.width == c.rect[3] || redraw_in!(c.of, 0)
+  c.rect = (ui.left, ui.top, ui.width, ui.height)
+  nothing
+end
+
+# Words that are cut short show whole under the cell
+onmouse(c::MeasureCell, ev::MouseMove) = isempty(c.full) ? nothing :
+  show_tooltip!(ev.window, Box(padding(8px, 5px), label(c.full, 12px, color=TIP_INK)), c.rect..., placement=:bottom, gap=6px)
 
 onkey(c::MeasureCell, ::KeyPress{Keys.mouse_left}) = begin
   v, i = c.of, c.i
@@ -4475,8 +4579,8 @@ describe(r::MeasureRow) = begin
   back = background(v.current == i ? colours.active : ishovered(r) ? colours.hover : clear)
   # The first row has a line that doesn't show, so that its words are where the other rows' are
   line = (border(1px, :solid, !isempty(v.order) && v.order[1] == i ? clear : colours.line)[:top],)
-  size = right(86px, amount === nothing ? "No scale" : Plans.shown(m.kind, amount), amount === nothing ? colours.accent : colours.ink)
-  cost = right(88px, row === nothing || amount === nothing ? "" : dollars(amount * row["price"]), colours.ink)
+  size = part!(() -> AmountCell(of=v, i=i), v, (:amount, i))
+  cost = right(88px, row === nothing || amount === nothing ? "" : dollars(cost_of(m, amount, row)), colours.ink)
   remove = button!(v, (:delete, i), (:delete, i), icon="x-lg", tip="Remove this measure")
   # The panel beside a plan that fills the window is narrow, so a measure has two lines there
   v.beside && return Column(width(grow=grow), Alignment.Start, padding(10px, 4px), name="Measure", back, line...,
@@ -4485,7 +4589,8 @@ describe(r::MeasureRow) = begin
   Row(width(grow=grow), height(32px), padding(10px, 0px), child_gap=10px, Alignment.Center, name="Measure", back, line...,
     swatch(m.kind, hue(i)), cell(:name), cell(:item), cell(:extra), size,
     # A narrow block has no room for the price of one, so it shows what the measure comes to and no more
-    (has_price(v) ? (right(96px, row === nothing ? "" : price_text(row), colours.dim),) : ())...,
+    # The price is for one of the measure's unit, so it needs no unit after it. One that the measure can't be in says its own.
+    (has_price(v) ? (right(96px, row === nothing ? "" : (p = unit_price(m, row); p === nothing ? price_text(row) : dollars(p)), colours.dim),) : ())...,
     cost, remove)
 end
 
@@ -4499,6 +4604,182 @@ choose_measure!(v::TakeoffView, i::Int) = begin
 end
 
 onkey(r::MeasureRow, ::KeyPress{Keys.mouse_left}) = choose_measure!(r.of, r.i)
+
+# --- the units of a measure --------------------------------------------------------------
+#
+# A click on the unit after a measure's amount shows the list of units that it
+# can be in, as Centient's unit picker does: each unit's name, and the short
+# form that goes after an amount at the right. A field at the top of the list
+# searches it. The up and down arrows pick a unit, and so does the mouse. Return or a
+# click takes it. Esc, or a click somewhere else, closes the list and changes
+# nothing.
+
+const UNIT_KEY = :takeoff_units
+const AMOUNT_W = 96px    # how wide the column of amounts is
+const MOST_UNITS = 8     # the units that the list shows before it scrolls
+
+"""
+The units that measure `i` can be in. One with nothing drawn and no item can be
+a count, a length or an area, so it can take a unit of each kind. Any other
+keeps its kind.
+"""
+units_for(v::TakeoffView, i::Int) = begin
+  i <= length(v.data.measures) || return String[]
+  m = v.data.measures[i]
+  isempty(m.shapes) && isempty(m.item) ? reduce(vcat, collect(Plans.KIND_UNITS)) : copy(getfield(Plans.KIND_UNITS, m.kind))
+end
+
+"Write a unit as a keyboard can: m^2 or m2 for m². What's typed is folded the other way, so that each finds the other."
+fold_unit(s::AbstractString) = begin
+  s = replace(lowercase(s), "^2" => "²", "^3" => "³")
+  replace(s, r"([a-z]+)([23])(?!\d)" => m -> m[1:end-1] * (m[end] == '2' ? "²" : "³"))
+end
+
+"Other words that a unit is typed as"
+const UNIT_EXTRAS = Dict("hectare" => ["ha", "hectares"], "ft" => ["feet"], "inch" => ["in", "inches"],
+                         "ft²" => ["sq ft", "square feet"], "m" => ["meter"], "m²" => ["sqm", "square meter"], "Piece" => ["each"])
+
+"True when `words` find `unit`: they're in its name, its short form, or the name that Centient gives it"
+unit_matches(unit::AbstractString, words::AbstractString) = begin
+  isempty(words) && return true
+  q = fold_unit(words)
+  any(h -> occursin(q, fold_unit(h)), [Plans.UNIT_WORDS[unit], Plans.unit_short(unit), unit, get(UNIT_EXTRAS, unit, String[])...])
+end
+
+"True when `words` are a name of `unit` and not only part of one: metre for m, and not for mm"
+names_unit(unit::AbstractString, words::AbstractString) =
+  (q = fold_unit(words); any(h -> fold_unit(h) == q, [Plans.UNIT_WORDS[unit], Plans.unit_short(unit), unit, get(UNIT_EXTRAS, unit, String[])...]))
+
+"The unit word of the amount `c`. It belongs to the amount, so the mouse over it is over the amount too."
+unit_word(c::AmountCell) = begin
+  c.unit === nothing && (c.unit = UnitWord(of=c); setfield!(c.unit, :parent, c))
+  c.unit
+end
+
+describe(c::AmountCell) = begin
+  v, i = c.of, c.i
+  i <= length(v.data.measures) || return Box(width(0px))
+  m = v.data.measures[i]
+  amount = Plans.amount(v.data, m)
+  # It's as tall as the row, so that what cuts a long amount off at the side doesn't cut the tail of a comma or a g
+  cell(parts...) = Row(fixed(AMOUNT_W), height(grow=grow), Alignment.Center, justify=Alignment.End, clip=true, name="Amount", parts...)
+  amount === nothing && return cell(Box(label("No scale", 13px, color=colours.accent)))
+  unit = Plans.unit(m)
+  number = Box(label(Plans.amount_number(Plans.in_unit(amount, unit)), 13px, color=colours.ink))
+  # The unit is there to click when the measure can be in another. A count that can only be in pieces is a number.
+  length(units_for(v, i)) > 1 ? cell(number, unit_word(c)) : cell(Box(label(Plans.shown(m, amount), 13px, color=colours.ink)))
+end
+
+cursor(::AmountCell) = :hand
+# A click on the number chooses the measure, as a click on the rest of its row does
+onkey(c::AmountCell, ::KeyPress{Keys.mouse_left}) = choose_measure!(c.of, c.i)
+
+describe(w::UnitWord) = begin
+  c = w.of
+  v = c.of
+  c.i <= length(v.data.measures) || return Box(width(0px))
+  unit = Plans.unit(v.data.measures[c.i])
+  lit = ishovered(w) || v.asking == (:unit, c.i)
+  # A foot and an inch are marks right after the number. Another unit has a space before it, and the space is the unit's to click.
+  Row(height(grow=grow), padding(0px, 0px, 0px, unit in ("inch", "ft") ? 1px : 4px), Alignment.Center,
+    label(Plans.unit_short(unit), 13px, color=lit ? colours.accent : colours.ink))
+end
+
+cursor(::UnitWord) = :hand
+onkey(w::UnitWord, ev::KeyPress{Keys.mouse_left}) = open_units!(w.of, ev.window)
+
+"Show the list of the units that the measure of the amount `c` can be in, under its unit"
+open_units!(c::AmountCell, window) = begin
+  v, i = c.of, c.i
+  i <= length(v.data.measures) || return handled
+  ask!(v, (:unit, i), "", "Filter…")
+  v.query = ""   # so that the first frame keeps the unit that's picked
+  v.rows = Any[units_for(v, i)...]
+  v.pick = something(findfirst(==(Plans.unit(v.data.measures[i])), v.rows), 1)
+  menu = UnitMenu(of=v, i=i)
+  v.parts[:unit_menu] = menu
+  popup!(window, menu, anchor=unit_word(c), placement=:bottom, gap=9px, width=230px, key=UNIT_KEY,
+         onclose=() -> settle_asking!(v), theme=component_theme(editor(v).zoom))
+  handled
+end
+
+"""
+Put measure `i` in `unit`. A unit of another kind makes a measure with nothing
+drawn and no item that kind. The tool for it is ready to draw.
+"""
+unit!(v::TakeoffView, i::Int, unit::AbstractString) = begin
+  stop_asking!(v)
+  i <= length(v.data.measures) || return handled
+  m = v.data.measures[i]
+  kind = Plans.unit_kind(unit)
+  kind === nothing && return handled
+  if kind != m.kind
+    (isempty(m.shapes) && isempty(m.item)) || return handled
+    kind!(v, m, kind)
+  end
+  Plans.unit!(m, unit)
+  commit!(v)
+  v.current = i
+  tool!(v, m.kind)
+end
+
+describe(r::UnitRow) = begin
+  v, c = r.of, found_colours()
+  r.k <= length(v.rows) || return Box(height(0px))
+  unit = v.rows[r.k]
+  a = v.asking
+  on = a !== nothing && a[1] == :unit && a[2] <= length(v.data.measures) && Plans.unit(v.data.measures[a[2]]) == unit
+  short = Plans.unit_short(unit)
+  name = Plans.UNIT_WORDS[unit]
+  Row(width(grow=grow), height(28px), padding(8px, 0px), radius(6px), child_gap=8px, Alignment.Center,
+      background(v.pick == r.k ? c.pick : c.frame),
+    Row(width(grow=grow), height(grow=grow), Alignment.Center, clip=true, label(name, 13px, color=c.ink, weight=on ? "Semibold" : "")),
+    # The short form shows when it isn't the name again
+    (lowercase(short) == lowercase(name) ? () : (Box(label(short, 12px, color=c.dim)),))...)
+end
+
+cursor(::UnitRow) = :hand
+onkey(r::UnitRow, ::KeyPress{Keys.mouse_left}) = begin
+  v, a = r.of, r.of.asking
+  a !== nothing && a[1] == :unit && r.k <= length(v.rows) ? unit!(v, a[2], v.rows[r.k]) : handled
+end
+# The mouse picks the unit that it's over, as the arrow keys do
+onmouse(r::UnitRow, ::MouseMove) = begin
+  v = r.of
+  v.pick = r.k
+  menu = get(v.parts, :unit_menu, nothing)
+  menu === nothing || (menu.pick = r.k)   # it's in sight already, so the list doesn't scroll to it
+  handled
+end
+
+describe(m::UnitMenu) = begin
+  v, c = m.of, found_colours()
+  n, high = length(v.rows), 28px
+  scroll = get!(() -> Scroll(width(grow=grow)), v.parts, :unit_scroll)
+  body = if n == 0
+    Row(width(grow=grow), height(high), padding(8px, 0px), Alignment.Center, label("No unit has that name", 12px, color=c.dim))
+  else
+    # Half a row at the bottom says that the list goes on
+    scroll.height = height(n <= MOST_UNITS ? n * high : MOST_UNITS * high - high / 2)
+    m.pick == v.pick || (m.pick = v.pick; scroll_into_view!(scroll, high * (v.pick - 1), high * v.pick))
+    reuse!(scroll, Column(width(grow=grow), Alignment.Start, [part!(() -> UnitRow(of=v, k=k), v, (:unit_row, k)) for k in 1:n]...))
+  end
+  Box(width(grow=grow), padding(6px), radius(8px), background(c.frame), border(1px, :solid, c.line),
+      shadow(0, 6, 16, RGBA(60 / 255, 45 / 255, 20 / 255, 0.2)), name="Units",
+    Column(width(grow=grow), Alignment.Start, child_gap=4px,
+      Box(width(grow=grow), padding(2px, 2px),
+        Box(width(grow=grow), height(28px), padding(8px, 0px), radius(6px), border(1px, :solid, c.line), background(c.frame), plan_input(v))),
+      body))
+end
+
+placed!(m::UnitMenu, side) = (m.side = side; nothing)
+draw(ctx, size, ui::ConcreteRect, m::UnitMenu) = caret(ctx, ui, m.side, rect(unit_word(part!(() -> AmountCell(of=m.of, i=m.i), m.of, (:amount, m.i)))))
+
+# The list sees a key before its field does. The arrows pick a unit, Return takes it, and Esc closes the list.
+onkey(m::UnitMenu, ::KeyPress{Keys.enter}) = answer!(m.of)
+onkey(m::UnitMenu, ::KeyPress{Keys.escape}) = stop_asking!(m.of)
+onkey(m::UnitMenu, ::KeyPress{Keys.down}) = (v = m.of; v.pick = min(v.pick + 1, max(1, length(v.rows))); handled)
+onkey(m::UnitMenu, ::KeyPress{Keys.up}) = (v = m.of; v.pick = max(v.pick - 1, 1); handled)
 
 # --- the list that a search shows --------------------------------------------------------
 #
@@ -4709,8 +4990,8 @@ column_value(v::TakeoffView, i, key) = begin
   key == :extra && return m.extra
   amount, row = Plans.amount(v.data, m), known(v, m.item)
   key == :amount ? something(amount, -1.0) :
-  key == :price  ? (row === nothing ? -1.0 : Float64(row["price"])) :
-                   (row === nothing || amount === nothing ? -1.0 : amount * row["price"])
+  key == :price  ? (row === nothing ? -1.0 : Float64(something(unit_price(m, row), row["price"]))) :
+                   (row === nothing || amount === nothing ? -1.0 : cost_of(m, amount, row))
 end
 
 "Search the column `key` for `words`. No words takes its search away."
@@ -4765,7 +5046,8 @@ describe(w::HeadWords) = begin
   mark = dir !== nothing ? (Icon(dir == :asc ? "chevron-up" : "chevron-down", size=9px, color=colours.ink),) :
          lit && will !== nothing ? (Icon(will == :asc ? "chevron-up" : "chevron-down", size=9px, color=colours.faint),) : ()
   parts = (label(words, 11px, color=colour), mark...)
-  Row(height(20px), child_gap=4px, Alignment.Center, (text ? parts : reverse(parts))...)
+  # The arrow goes on the side away from the cell's edge, so that it doesn't push the words when it shows
+  Row(height(20px), child_gap=4px, Alignment.Center, (h.side == :start ? parts : reverse(parts))...)
 end
 
 cursor(::ColumnHead) = :hand
@@ -4894,7 +5176,7 @@ table_head(v::TakeoffView) = begin
     Box(width(14px)), left(:name), left(ours(:item)), right(fixed(88px), ours(:cost)), Box(width(28px)))
   Row(look..., padding(10px, 0px), child_gap=10px, name="Headings",
     Box(width(14px)), left(:name), left(ours(:item)), Row(fixed(52px), height(grow=grow), Alignment.Center, clip=true, head(v, :extra, :start)),
-    right(fixed(86px), :amount), (has_price(v) ? (right(fixed(96px), ours(:price)),) : ())..., right(fixed(88px), ours(:cost)),
+    right(fixed(AMOUNT_W), :amount), (has_price(v) ? (right(fixed(96px), ours(:price)),) : ())..., right(fixed(88px), ours(:cost)),
     Box(width(28px)))   # over the buttons that remove a measure
 end
 
@@ -4931,7 +5213,7 @@ foot(v::TakeoffView) = begin
   for m in t.measures
     amount, row = Plans.amount(t, m), known(v, m.item)
     (amount === nothing || row === nothing) && continue
-    total += amount * row["price"]
+    total += cost_of(m, amount, row)
     priced = true
   end
   asking = v.asking == (:customer,)
@@ -8878,7 +9160,7 @@ takeoff_html(e, s, t) = begin
   isempty(data.measures) && return nothing
   rows = map(data.measures) do m
     amount = Plans.amount(data, m)
-    "<tr><td>$(escape(m.name))</td><td>$(amount === nothing ? "" : escape(Plans.shown(m.kind, amount)))</td></tr>"
+    "<tr><td>$(escape(m.name))</td><td>$(amount === nothing ? "" : escape(Plans.shown(m, amount)))</td></tr>"
   end
   about = join(filter(!isempty, [isempty(data.plan) ? "" : "Measured from " * escape(basename(data.plan)),
                                  isempty(data.customer) ? "" : "for " * escape(data.customer),

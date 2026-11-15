@@ -46,8 +46,8 @@
 #     components, and click one to go to it. ⌘⇧\ gives that list the keyboard: ↑ and ↓
 #     move through it, → and ← show and hide what's under an item, Return
 #     opens the item and esc goes back to the text.
-#   - Right-click a file in that list to rename it, copy its path or move it
-#     to the Trash.
+#   - Right-click a file in that list, or the file's name in the top bar, to
+#     rename it, copy its path, show it in the Finder or move it to the Trash.
 #   - Right-click the page to cut, copy and paste, and to insert a new block
 #     where you clicked: a heading, a list, a to-do item, a table, a sheet, a
 #     spreadsheet, a code block, a live block, a takeoff, a recording or a divider.
@@ -731,6 +731,8 @@ end
   action::Symbol = :none
   label::String = ""
 end
+"The file's name in the middle of the top bar. A right-click on it shows the file's menu."
+@def mutable struct Title <: SemanticUI end
 @def mutable struct Count <: SemanticUI       # the word count in the top bar
   rect::NTuple{4,px} = (0px, 0px, 0px, 0px)
   quiet::Bool = false
@@ -7736,16 +7738,14 @@ describe(t::TopBar) = begin
   e = editor(t)
   b = e.buf
   side = 250px
+  ended_rename!(e)
   # The top bar lies over the top of the sidebar. The file's name is in the
   # middle of the space beside the sidebar, so it moves as the sidebar slides.
   Row(width(grow=grow), height(TOPBAR_H), name="TopBar",
     # The close, minimise and zoom buttons sit over the first 84px
     Row(fixed(side + panel_w(e) * opened(e)), height(grow=grow), padding(0px, 0px, 0px, 84px),
       button(e, :panel, "layout-sidebar")),
-    Box(width(grow=grow), height(grow=grow), clip=true,
-      Row(child_gap=6px,
-        label(name(b), 13px, color=colours.dim),
-        (dirty(b) ? (label("— edited", 13px, color=colours.faint),) : ())...)),
+    Box(width(grow=grow), height(grow=grow), clip=true, node!(Title, e, :title)),
     Row(fixed(side), height(grow=grow), justify=Alignment.End, padding(0px, 10px, 0px, 0px),
       # A file that's only shown has no words to count. The bar says that it's only shown.
       (readonly(b) ? (Box(height(28px), padding(8px, 0px), label(isempty(b.about) ? "Read only" : b.about * "  ·  Read only", 12px, color=colours.dim)),
@@ -7756,6 +7756,30 @@ end
 
 # The window has no title bar, so you move it by dragging the top bar
 onkey(t::TopBar, ::KeyPress{Keys.mouse_left}) = drag_window!(window_of(t))
+
+# A right-click on the file's name shows the same menu as a right-click on the
+# file in the sidebar. While the file is renamed from there, a text field with
+# its name is where the name was.
+
+describe(t::Title) = begin
+  e = editor(t)
+  b = e.buf
+  if !isempty(b.path) && renaming(e, :title) == b.path
+    # The field grows as the name gets longer
+    wide = clamp(measure(Face(SANS, "", 13px, colours.ink, false), renamer(e).text) + 24px, 160px, 420px)
+    return Box(width(wide), height(22px), padding(5px, 0px), radius(4px), Alignment.Start, background(colours.bg),
+               border(1px, :solid, colours.accent), renamer(e))
+  end
+  Row(child_gap=6px,
+    label(name(b), 13px, color=colours.dim),
+    (dirty(b) ? (label("— edited", 13px, color=colours.faint),) : ())...)
+end
+
+onkey(t::Title, ::KeyPress{Keys.mouse_right}) = begin
+  e = editor(t)
+  isempty(e.buf.path) || file_menu!(e, window_of(t), e.buf.path; at=:title)
+  handled
+end
 
 # --- the sidebar --------------------------------------------------------------------------
 
@@ -7801,7 +7825,7 @@ describe(l::FileLabel) = begin
   e = editor(l)
   changed = haskey(e.buffers, l.path) && dirty(e.buffers[l.path])
   # While the file is renamed, a text field with its name is where the name was
-  name = get(e.nodes, :renaming, "") == l.path ?
+  name = renaming(e, :sidebar) == l.path ?
     Box(width(grow=grow), height(22px), padding(5px, 0px), radius(4px), Alignment.Start, background(colours.bg),
         border(1px, :solid, colours.accent), renamer(e)) :
     isdir(l.path) ? Box(width(grow=grow), Alignment.Start, label(basename(l.path))) :
@@ -8009,9 +8033,8 @@ fill_tree!(e, tree) = begin
   for group in tree.children
     group isa Tree.ItemGroup && !group.collapsed && outline!(e, group)
   end
+  ended_rename!(e)
   w = window_of(e)
-  # A click somewhere else while a file is renamed gives the file the name that's typed
-  w !== nothing && haskey(e.nodes, :renaming) && w.focus !== renamer(e) && (finish_rename!(e); delete!(e.nodes, :renaming))
   shown = items(tree)
   if w === nothing || w.focus !== tree
     # While the text has the keyboard, the tree marks where the caret is
@@ -8032,19 +8055,43 @@ end
 panel_theme() = Theme(size=Tree.LABEL_SIZE, surface=colours.panel, text=colours.ink, dim=colours.dim, line=colours.line,
                       hover=colours.hover, select=colours.active, family=SANS)
 
-# --- the menu of a file in the sidebar ------------------------------------------------------
+# --- the menu of a file ---------------------------------------------------------------------
 #
-# A right-click on a file in the sidebar shows a menu that renames the file,
-# copies its path or moves it to the Trash. It's a menu of macOS's own, so it
+# A right-click on a file in the sidebar, or on the name of the file that shows
+# in the top bar, shows a menu that renames the file, copies its path, shows it
+# in the Finder or moves it to the Trash. It's a menu of macOS's own, so it
 # looks and works like the other menus on the Mac. A window that isn't on a
 # screen, like the one a test makes, gets a menu that Kaydown draws.
 
-const FILE_MENU = ["Rename", "Copy Path", "-", "Move to Trash"]   # "-" is a line between two groups
+const FILE_MENU = ["Rename", "Copy Path", "Show in Finder", "-", "Move to Trash"]   # "-" is a line between two groups
 
 # A menu's text is 13/12 of its theme's size. This size makes it 13px, the size of a file's name in the sidebar.
 "The colours and the text size of a menu that floats over the window"
 menu_theme() = Theme(size=12px, surface=colours.float, text=colours.ink, dim=colours.dim, line=colours.line,
                      hover=colours.hover, select=colours.active, family=SANS)
+
+"""
+Show the menu of the file at `path`. `at` is where you right-clicked: the
+file's name in the `:sidebar` or in the `:title` of the top bar. Rename puts
+the text field there.
+"""
+file_menu!(e, w, path; at=:sidebar) = begin
+  act(i) = file_act!(e, path, get(FILE_MENU, i, ""); at)
+  # A new file that isn't saved yet isn't on the disk, so the Finder can't show it
+  off = isfile(path) ? () : (findfirst(==("Show in Finder"), FILE_MENU),)
+  system_menu(w, FILE_MENU, act; off) || drawn_menu!(w, FILE_MENU, act; off)
+  nothing
+end
+
+"Do to the file at `path` what the item `name` of its menu says"
+file_act!(e, path, name; at=:sidebar) =
+  name == "Rename" ? rename!(e, path; at) :
+  name == "Copy Path" ? clipboard(path) :
+  name == "Show in Finder" ? show_in_finder(path) :
+  name == "Move to Trash" ? trash!(e, path) : nothing
+
+"Open a Finder window on the folder of the file at `path`, with the file selected"
+show_in_finder(path) = (Sys.isapple() && ispath(path) && run(pipeline(`open -R $path`, stdout=devnull, stderr=devnull), wait=false); nothing)
 
 "Show the menu of the file in the sidebar that the mouse is over, if it's over one"
 file_menu!(e, w) = begin
@@ -8057,14 +8104,7 @@ file_menu!(e, w) = begin
   # The tree takes the keyboard, so the file that the menu is for stays marked
   focus(tree)
   tree.focused = item
-  act(name) = name == "Rename" ? rename!(e, path) : name == "Copy Path" ? clipboard(path) :
-              name == "Move to Trash" ? trash!(e, path) : nothing
-  if !system_menu(w, FILE_MENU, i -> act(get(FILE_MENU, i, "")))
-    names = filter(!=("-"), FILE_MENU)
-    show_menu!(w, names, w.mouse[1], w.mouse[2], 150px, theme=menu_theme(), item_height=28px, dividers=true, lift=3.0,
-               onselect=i -> act(get(names, i, "")))
-  end
-  nothing
+  file_menu!(e, w, path)
 end
 
 "The text field that a file's new name is typed in"
@@ -8073,38 +8113,64 @@ renamer(e) = node!(e, :renamer) do
             look=(_, text) -> Row(width(grow=grow), height(grow=grow), clip=true, text))
 end
 
-"Start to rename the file at `path`: its name in the sidebar becomes a text field, with the whole name selected"
-rename!(e, path) = begin
+"""
+Start to rename the file at `path`. Its name becomes a text field, in the
+sidebar or in the top bar, as `at` says. The sidebar's field has the name
+without its ending, all selected. The top bar shows the whole name, so its
+field has the whole name, with the part before the ending selected.
+"""
+rename!(e, path; at=:sidebar) = begin
   i = renamer(e)
   i.color = colours.ink
-  i.text = title(path)
-  i.anchor, i.cursor = 0, length(i.text)
+  i.text = at == :title ? basename(path) : title(path)
+  i.anchor, i.cursor = 0, length(title(path))
   e.nodes[:renaming] = path
+  e.nodes[:renaming_at] = at
   focus(i)
+end
+
+"The path of the file that's being renamed in `at`, the `:sidebar` or the `:title`. It's \"\" when none is."
+renaming(e, at) = get(e.nodes, :renaming_at, :sidebar) == at ? get(e.nodes, :renaming, "") : ""
+
+"Take the text field away. The keyboard goes back to the sidebar, or to the text when the field was in the top bar."
+stop_rename!(e) = begin
+  delete!(e.nodes, :renaming)
+  pop!(e.nodes, :renaming_at, :sidebar) == :title ? focus(e) : focus(file_tree(e))
 end
 
 "Return gives the file the name that's typed, and esc leaves it with the name it has"
 rename_key!(e, K) = begin
   if K == Keys.escape
-    delete!(e.nodes, :renaming)
-    focus(file_tree(e))
+    stop_rename!(e)
   elseif K == Keys.enter && finish_rename!(e)
-    delete!(e.nodes, :renaming)
-    focus(file_tree(e))
+    stop_rename!(e)
   end
+  nothing
+end
+
+"A click somewhere else while a file is renamed gives the file the name that's typed"
+ended_rename!(e) = begin
+  w = window_of(e)
+  (w === nothing || !haskey(e.nodes, :renaming) || w.focus === renamer(e)) && return
+  finish_rename!(e)
+  delete!(e.nodes, :renaming)
+  delete!(e.nodes, :renaming_at)
   nothing
 end
 
 """
 Give the file that's being renamed the name in the text field. The file keeps
-its ending, like .md, unless the name is typed with one. It's false when
-another file has that name already, and then nothing changes.
+its ending, like .md, unless the name is typed with one: a Markdown ending, or
+the ending it has. It's false when another file has that name already, and
+then nothing changes.
 """
 finish_rename!(e) = begin
   old = get(e.nodes, :renaming, "")
   name = String(strip(renamer(e).text))
   (isempty(old) || isempty(name) || occursin('/', name)) && return true
-  new = joinpath(dirname(old), ismarkdown(name) ? name : name * splitext(old)[2])
+  ending = splitext(old)[2]
+  typed = ismarkdown(name) || lowercase(splitext(name)[2]) == lowercase(ending)
+  new = joinpath(dirname(old), typed ? name : name * ending)
   new == old && return true
   # A Mac's disk takes Notes.md and notes.md to be one file, so a change of capitals isn't a clash
   ispath(new) && lowercase(new) != lowercase(old) && return false
@@ -8621,7 +8687,7 @@ open_outside!(e) = begin
   path = e.buf.path
   isfile(path) || return e
   if isempty(opener(path)) && Sys.isapple()
-    run(pipeline(`open -R $path`, stdout=devnull, stderr=devnull), wait=false)
+    show_in_finder(path)
   else
     open_url(path)
   end

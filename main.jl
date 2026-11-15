@@ -3334,11 +3334,21 @@ end
   i::Int = 0
   what::Symbol = :name
 end
-"The heading of a column of the table of measures. A click sorts by the column, or opens a menu that sorts and searches it."
+"""
+The heading of a column of the table of measures. It fills the column's cell, so
+the mouse can be anywhere over the column to use it. A click sorts by the
+column, or opens a menu that sorts and searches it.
+"""
 @def mutable struct ColumnHead <: SemanticUI
   of::Any = nothing
   key::Symbol = :name
-  rect::NTuple{4,px} = (0px, 0px, 0px, 0px)   # where it was last drawn, to put its tooltip under it
+  side::Symbol = :start   # the side of the cell that its words go on: :start, or :end over numbers that line up on the right
+  words::Any = nothing    # its HeadWords
+end
+"The words of a column's heading, and the arrow of its order. The heading's menu and tooltip point at them."
+@def mutable struct HeadWords <: SemanticUI
+  of::Any = nothing                           # the heading
+  rect::NTuple{4,px} = (0px, 0px, 0px, 0px)   # where they were last drawn, to put the tooltip under them
 end
 "The menu of a column of text: its two orders and a field to search it. It floats under the heading, as it does in Centient's lists."
 @def mutable struct ColumnMenu <: SemanticUI
@@ -4705,13 +4715,32 @@ shown_measures(v::TakeoffView) = begin
   v.sort === nothing ? keep : sort!(keep, by=i -> column_value(v, i, v.sort[1]), rev=v.sort[2] == :desc)
 end
 
-"The heading of the column `key`"
-head(v::TakeoffView, key::Symbol) = part!(() -> ColumnHead(of=v, key=key), v, (:head, key))
+"The heading of the column `key`. `side` is the side of its cell that its words go on, and nothing keeps the side that it has."
+head(v::TakeoffView, key::Symbol, side=nothing) = begin
+  h = part!(() -> ColumnHead(of=v, key=key), v, (:head, key))
+  side === nothing || (h.side = side)
+  h
+end
+
+"""
+The words of the heading of the column `key`. They belong to the heading, so a
+click on them goes to it, and the mouse over them is over it.
+"""
+head_words(v::TakeoffView, key::Symbol) = begin
+  h = head(v, key)
+  h.words === nothing && (h.words = HeadWords(of=h); setfield!(h.words, :parent, h))
+  h.words
+end
 
 "The order that a click on a heading of numbers gives next. It's nothing for the order that the block is written in."
 next_order(v::TakeoffView, key) = v.sort === nothing || v.sort[1] != key ? :asc : v.sort[2] == :asc ? :desc : nothing
 
-describe(h::ColumnHead) = begin
+describe(h::ColumnHead) =
+  Row(width(grow=grow), height(grow=grow), Alignment.Center, justify=h.side == :end ? Alignment.End : Alignment.Start, name="Heading",
+    head_words(h.of, h.key))
+
+describe(w::HeadWords) = begin
+  h = w.of
   v = h.of
   words, text = COLUMNS[h.key]
   dir = v.sort !== nothing && v.sort[1] == h.key ? v.sort[2] : nothing
@@ -4723,11 +4752,11 @@ describe(h::ColumnHead) = begin
   mark = dir !== nothing ? (Icon(dir == :asc ? "chevron-up" : "chevron-down", size=9px, color=colours.ink),) :
          lit && will !== nothing ? (Icon(will == :asc ? "chevron-up" : "chevron-down", size=9px, color=colours.faint),) : ()
   parts = (label(words, 11px, color=colour), mark...)
-  Row(height(20px), child_gap=4px, Alignment.Center, name="Heading", (text ? parts : reverse(parts))...)
+  Row(height(20px), child_gap=4px, Alignment.Center, (text ? parts : reverse(parts))...)
 end
 
 cursor(::ColumnHead) = :hand
-draw(ctx, size, ui::ConcreteRect, h::ColumnHead) = (h.rect = (ui.left, ui.top, ui.width, ui.height); nothing)
+draw(ctx, size, ui::ConcreteRect, w::HeadWords) = (w.rect = (ui.left, ui.top, ui.width, ui.height); nothing)
 
 # A heading of numbers says what a click on it does
 onmouse(h::ColumnHead, ev::MouseMove) = begin
@@ -4735,7 +4764,8 @@ onmouse(h::ColumnHead, ev::MouseMove) = begin
   will = next_order(h.of, h.key)
   low, high = order_words(false)
   words = will == :asc ? low : will == :desc ? high : "The order they're written in"
-  show_tooltip!(ev.window, Box(padding(8px, 5px), label(words, 12px, color=TIP_INK)), h.rect..., placement=:bottom, gap=6px)
+  show_tooltip!(ev.window, Box(padding(8px, 5px), label(words, 12px, color=TIP_INK)), head_words(h.of, h.key).rect...,
+                placement=:bottom, gap=6px)
 end
 
 onkey(h::ColumnHead, ev::KeyPress{Keys.mouse_left}) = begin
@@ -4749,7 +4779,7 @@ onkey(h::ColumnHead, ev::KeyPress{Keys.mouse_left}) = begin
   menu = ColumnMenu(of=v, key=h.key)
   v.parts[:column_menu] = menu
   # A click outside the menu closes it and keeps what's typed
-  popup!(ev.window, menu, anchor=h, placement=:bottom, gap=9px, width=210px, key=HEAD_KEY,
+  popup!(ev.window, menu, anchor=head_words(v, h.key), placement=:bottom, gap=9px, width=210px, key=HEAD_KEY,
          onclose=() -> settle_asking!(v), theme=component_theme(editor(v).zoom))
   handled
 end
@@ -4785,7 +4815,7 @@ describe(m::ColumnMenu) = begin
         Box(width(grow=grow), height(28px), padding(8px, 0px), radius(6px), border(1px, :solid, c.line), background(c.frame), plan_input(v)))))
 end
 
-draw(ctx, size, ui::ConcreteRect, m::ColumnMenu) = caret(ctx, ui, m.side, rect(head(m.of, m.key)))
+draw(ctx, size, ui::ConcreteRect, m::ColumnMenu) = caret(ctx, ui, m.side, rect(head_words(m.of, m.key)))
 
 # The menu sees a key before its text field does. Return keeps the search, and Esc puts back the one before.
 onkey(m::ColumnMenu, ::KeyPress{Keys.enter}) = answer!(m.of)
@@ -4841,15 +4871,16 @@ The panel beside a plan has two lines for each measure, so it has three
 headings and no more: the measure, its item and its cost.
 """
 table_head(v::TakeoffView) = begin
-  left(key) = Row(width(grow=grow), height(grow=grow), Alignment.Center, clip=true, (key === nothing ? () : (head(v, key),))...)
-  right(wide, key) = Row(wide, height(grow=grow), Alignment.Center, justify=Alignment.End, clip=true, (key === nothing ? () : (head(v, key),))...)
+  # Each heading fills its cell, so the mouse can use it anywhere over its column
+  left(key) = Row(width(grow=grow), height(grow=grow), Alignment.Center, clip=true, (key === nothing ? () : (head(v, key, :start),))...)
+  right(wide, key) = Row(wide, height(grow=grow), Alignment.Center, clip=true, (key === nothing ? () : (head(v, key, :end),))...)
   # With no Centient on the Mac there are no items, so the columns for them have no headings
   ours(key) = Centient.available() ? key : nothing
   look = (width(grow=grow), height(26px), Alignment.Center, background(colours.head), border(1px, :solid, colours.line)[:bottom])
   v.beside && return Row(look..., padding(10px, 0px), child_gap=8px, name="Headings",
     Box(width(14px)), left(:name), left(ours(:item)), right(fixed(88px), ours(:cost)), Box(width(28px)))
   Row(look..., padding(10px, 0px), child_gap=10px, name="Headings",
-    Box(width(14px)), left(:name), left(ours(:item)), Row(fixed(52px), height(grow=grow), Alignment.Center, head(v, :extra)),
+    Box(width(14px)), left(:name), left(ours(:item)), Row(fixed(52px), height(grow=grow), Alignment.Center, clip=true, head(v, :extra, :start)),
     right(fixed(86px), :amount), (has_price(v) ? (right(fixed(96px), ours(:price)),) : ())..., right(fixed(88px), ours(:cost)),
     Box(width(28px)))   # over the buttons that remove a measure
 end

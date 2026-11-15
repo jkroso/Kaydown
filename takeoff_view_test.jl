@@ -294,6 +294,21 @@ end
   @test issorted([amounts()[i] for i in v.order], rev=true) && names() != written
   head(:amount)
   @test v.sort === nothing && names() == written
+  # A heading fills its cell, so a click away from its words uses it too
+  cell, words = rect(v.parts[(:head, :amount)]), rect(v.parts[(:head, :amount)].words)
+  @test K.num(cell.width) > K.num(words.width) + 20 && K.num(cell.height) >= 24
+  corner = (K.num(cell.left) + 3, K.num(cell.top) + 3)
+  at(corner)
+  @test K.ishovered(v.parts[(:head, :amount)])
+  click(corner)
+  @test v.sort == (:amount, :asc)
+  click(corner); click(corner)
+  @test v.sort === nothing
+  name = rect(v.parts[(:head, :name)])
+  click((K.num(name.left + name.width) - 4, K.num(name.top + name.height / 2)))
+  @test v.asking == (:filter, :name, "") && length(menus()) == 1
+  key(Keys.escape)
+  @test v.asking === nothing && isempty(menus())
   # A heading of text opens a menu under it, with its two orders and a field that searches the column
   head(:name)
   @test v.asking == (:filter, :name, "") && length(menus()) == 1

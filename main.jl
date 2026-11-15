@@ -4094,9 +4094,22 @@ draw(ctx, size, ui::ConcreteRect, a::PlanArea) = begin
   end
 end
 
+"""
+True when the mouse is over something on the plan that a click selects: a
+mark, a line, an outline or the inside of one. The window asks for the cursor
+before the plan sees the mouse move, so this reads where the window's mouse is.
+"""
+over_shape(v::TakeoffView) = begin
+  w = window_of(v)
+  (w === nothing || v.zoom <= 0) && return false
+  p = page_point(v, num(w.mouse[1]), num(w.mouse[2]))
+  Plans.shape(v.data, v.data.page, p, REACH / v.zoom) !== nothing
+end
+
+# With the select tool, a hand over something that a click selects, and an arrow over the paper
 cursor(a::PlanArea) = begin
   v = a.of
-  plan_size(v) === nothing ? :hand : v.tool == :select ? (v.grab === nothing ? :arrow : :hand) : :crosshair
+  plan_size(v) === nothing ? :hand : v.tool == :select ? (v.grab !== nothing || over_shape(v) ? :hand : :arrow) : :crosshair
 end
 
 # --- the mouse and the keys on the plan --------------------------------------------------

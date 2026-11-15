@@ -120,6 +120,13 @@ end
 
 @testset "selecting, moving and undoing" begin
   typed("v")
+  # Over something that a click selects, the mouse is a hand. Over the paper, it's an arrow.
+  area = v.parts[:area]
+  pointer(x, y) = (at(K.window_point(v, house(x, y))); K.cursor(area))
+  @test pointer(5.6, 2.2) == :hand   # a mark
+  @test pointer(3, 0.4) == :hand     # the cable
+  @test pointer(8, 2) == :hand       # inside the floor
+  @test pointer(14, 3) == :arrow     # the paper
   plan_click(5.6, 2.2)
   @test v.picked == (1, 1, 3)
   key(Keys.delete)

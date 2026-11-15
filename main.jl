@@ -7655,10 +7655,11 @@ progress_address(e) = begin
   url !== nothing && startswith(url, r"https?://") ? url : nothing
 end
 
-"What Centient needs to make the page's job: the progress address, the page's first # heading, and the property and the purpose from the front matter"
+"What Centient needs to make the page's job: the progress address, the page's first # heading, the property and the purpose from the front matter, and where the page's file is, which the job keeps as its PRD"
 job_args(e) = begin
   b = e.buf
   args = Dict{String,Any}("progress" => progress_address(e))
+  isempty(b.path) || (args["page"] = abspath(b.path))
   headings = outline(b)
   i = findfirst(h -> h.level == 1, headings)
   i === nothing || isempty(headings[i].title) || (args["title"] = headings[i].title)

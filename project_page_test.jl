@@ -213,7 +213,7 @@ if Sys.isapple() && Sys.which("ffmpeg") !== nothing
     @test asked.said == "Making the job in Centient…" && bubble() && K.off(maker())
     @test K.tip(maker()) == "Making the job in Centient…"
     @test settle(() -> asked.request === nothing)
-    @test r.value["asked"] == Dict("progress" => "$site/tasks?key=ab12", "title" => "97/26 Antill Street",
+    @test r.value["asked"] == Dict("progress" => "$site/tasks?key=ab12", "title" => "97/26 Antill Street", "page" => page,
                                    "property" => "97/26 Antill Street, Dickson ACT 2602", "purpose" => "Ready for a new tenant")
     @test !asked.wrong && asked.said == "Centient has the job 97/26 Antill Street in sample-co, with 10 tasks for 5 trades."
     # The words stay under the button for a few seconds, and they're its tooltip after that
@@ -235,7 +235,7 @@ if Sys.isapple() && Sys.which("ffmpeg") !== nothing
 
   @testset "what Centient says went wrong shows under the button" begin
     K.open!(e, far); frames()
-    @test K.job_args(e) == Dict("progress" => "http://unreachable:9330/walkthrough/projects/7/tasks?key=cd34", "title" => "3 Far Road")
+    @test K.job_args(e) == Dict("progress" => "http://unreachable:9330/walkthrough/projects/7/tasks?key=cd34", "title" => "3 Far Road", "page" => far)
     make()
     @test settle(() -> !K.making(e))
     asked = e.nodes[:job_ask]

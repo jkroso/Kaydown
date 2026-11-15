@@ -20,6 +20,9 @@
 #     formula, like = B2 * C2 or = sum(D2:D4), and shows what it comes to.
 #   - Write a code block in the language `mermaid` to show a diagram: a
 #     flowchart, a sequence diagram and so on. ⌥-click shows it as code.
+#   - Move the mouse over a diagram, a picture, a page of a PDF file, a model or
+#     a video, and click the button beside its top right corner to make it fill the window.
+#     Pinch, or scroll with ⌘ held, to zoom it there, and drag it to move it.
 #   - Write a code block in the language `takeoff` to measure from a plan: drop
 #     a PDF file on it, count fittings, measure lengths and areas, choose each
 #     item from Centient's catalogue and make a quote in Centient.
@@ -93,7 +96,7 @@
 @use "github.com/jkroso/UI.jl/Interface/draw" ui draw ishovered cursor open_url viewport show_tooltip! hide_tooltip! hittest show_menu! hide_menu! redraw_in! rect popup! close_popup! MouseScroll Pinch onpinch placed! with_clip with_round_clip
 @use "github.com/jkroso/UI.jl/Interface/objc" libobjc cls sel msg nsstring jstring with_pool send
 @use "github.com/jkroso/UI.jl/Interface/fonts" skia_font register_font
-@use "github.com/jkroso/UI.jl/Interface/image" image_aspect image_source
+@use "github.com/jkroso/UI.jl/Interface/image" image_aspect image_source has_image
 @use "github.com/jkroso/UI.jl/Interface/inspector" toggle_inspector!
 @use "github.com/jkroso/UI.jl/Interface/window" hide_titlebar! place_window_buttons! drag_window! set_dark! nswindow system_menu
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Icon" Icon
@@ -103,7 +106,7 @@
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Player" AudioPlayer VideoPlayer pause!
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Recorder" AudioRecorder record! stop! plays
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Mermaid" Mermaid problem
-@use "github.com/jkroso/UI.jl/Interface/media" silence! recording
+@use "github.com/jkroso/UI.jl/Interface/media" silence! recording picture_size
 @use "github.com/jkroso/UI.jl/Interface/Semantic/ThreeMF" => ThreeMF
 @use "./pictures" picture natural thumbnail pdf_pages pdf_page pdf_size pdf_part
 @use "./spelling" misspelt guesses learn!
@@ -2271,10 +2274,15 @@ onmouse(s::Shown, ::MouseMove) = held(s, Keys.mouse_left) ? handled : nothing
 
 # The components in the block get the page's colours
 describe(s::Shown) = begin
-  t = component_theme(editor(s).zoom)
+  e = editor(s)
+  t = component_theme(e.zoom)
   was, s.was = s.was, t
   with_theme(t) do
+    # A diagram, a model and a video have a button that makes them fill the window. One that fills it leaves its room here empty.
+    what = s.inline ? nothing : fill_what(s.value)
+    what !== nothing && what[1] == :node && zoomed_node(e, s.value) && return Column(width(grow=grow), Alignment.Start, held_room(e))
     inner = s.value isa SemanticUI ? Base.invokelatest(convert, GeometricUI, s.value) : redescribe!(detach!(s.value), t, was)
+    what === nothing || (inner = fillable(s, what, inner, wide=fill_wide(s.value)))
     s.inline ? Row(width(grow=grow), Alignment.Center, inner) : Column(width(grow=grow), Alignment.Start, inner)
   end
 end
@@ -2782,7 +2790,7 @@ describe(p::Pages) = begin
   shape = image_aspect(key)
   arrow(name, on) = Icon(name, size=11px, color=on ? colours.dim : colours.faint)
   Column(Alignment.Start, child_gap=6px,
-    Image(key, fixed(p.wide), height(p.wide / shape), radius(3px), border(1px, :solid, colours.line)),
+    fillable(p, (:pdf, p.path, p.page), Image(key, fixed(p.wide), height(p.wide / shape), radius(3px), border(1px, :solid, colours.line))),
     (p.count > 1 ? (Row(fixed(p.wide), height(22px), justify=Alignment.Center, child_gap=10px,
        arrow("chevron-left", p.page > 1), label("Page $(p.page) of $(p.count)", 12px, color=colours.dim),
        arrow("chevron-right", p.page < p.count)),) : ())...)
@@ -2857,18 +2865,21 @@ preview.
 """
 peek(l::Breadcrumb, path, ext, note) = begin
   mac = Sys.isapple()
+  # A picture, a model and a video have a button that makes them fill the window
+  pic(key, more...; kw...) = fillable(l, (:picture, key), framed(key, more...; kw...))
   if ext in PICTURES
-    return framed(path)
+    return pic(path)
   elseif ext in MAC_PICTURES
     key = picture(path)
-    key === nothing || return framed(key)
+    key === nothing || return pic(key)
   elseif ext in MODELS
     viewer = model(l, path)
-    viewer === nothing || return viewer
+    viewer === nothing || return fillable(l, (:node, viewer), viewer, wide=:grow)
   elseif mac && ext in SOUNDS
     return player(l, path, AudioPlayer)
   elseif mac && ext in VIDEOS
-    return player(l, path, VideoPlayer)
+    p = player(l, path, VideoPlayer)
+    return fillable(l, (:node, p), p, wide=video_wide(p))
   elseif mac && ext == ".pdf"
     found = pager(l, path)
     found === nothing || return found
@@ -2889,7 +2900,7 @@ peek(l::Breadcrumb, path, ext, note) = begin
     return pageview(editor(l), page)
   elseif ext in DOCUMENTS || ext in FONTS
     key = thumbnail(path)
-    return key === nothing ? nothing : framed(key, 400px, page=ext in DOCUMENTS)
+    return key === nothing ? nothing : pic(key, 400px, page=ext in DOCUMENTS)
   end
   text = text!(l, path)
   if text !== nothing
@@ -2898,7 +2909,7 @@ peek(l::Breadcrumb, path, ext, note) = begin
   end
   # The Finder has a picture for many kinds of file that have none here
   key = thumbnail(path)
-  key === nothing ? nothing : framed(key)
+  key === nothing ? nothing : pic(key)
 end
 
 "What shows under the path of a file: its picture, its model, its player, its pages or its text, and when it last changed"
@@ -3076,17 +3087,17 @@ viewer(v::FileView, e, note) = begin
     # A picture of pixels is a pixel to the px. One that macOS read, like an SVG, is the size that macOS says it is.
     size = something(natural(key), (source.width, source.height))
     note("$(round(Int, size[1])) × $(round(Int, size[2]))")
-    return fitted(e, key, size[1])
+    return fillable(v, (:picture, key), fitted(e, key, size[1]))
   elseif ext in MODELS
     m = made(() -> STLViewer(path=path), STLViewer)
-    m.height = room
-    return load!(m) isa Mesh ? m : nothing
+    zoomed_node(e, m) || (m.height = room)   # one that fills the window is as tall as the window
+    return load!(m) isa Mesh ? fillable(v, (:node, m), m, wide=:grow) : nothing
   elseif mac && ext in SOUNDS
     return made(() -> AudioPlayer(path=path), AudioPlayer)
   elseif mac && ext in VIDEOS
     p = made(() -> VideoPlayer(path=path), VideoPlayer)
-    p.height = room
-    return p
+    zoomed_node(e, p) || (p.height = room)
+    return fillable(v, (:node, p), p, wide=video_wide(p))
   elseif mac && ext == ".pdf"
     p = made(() -> Pages(path=path, count=pdf_pages(path)), Pages)
     p.count == 0 && return nothing
@@ -3109,7 +3120,7 @@ viewer(v::FileView, e, note) = begin
   # and what it has for many kinds of file that have no viewer here
   key = thumbnail(path)
   key === nothing && return nothing
-  fitted(e, key, image_source(key).width / 2, line=ext in DOCUMENTS)   # the picture has two pixels to the px
+  fillable(v, (:picture, key), fitted(e, key, image_source(key).width / 2, line=ext in DOCUMENTS))   # the picture has two pixels to the px
 end
 
 describe(v::FileView) = begin
@@ -4960,6 +4971,528 @@ cursor(::TakeoffView) = :arrow
 onkey(v::TakeoffView, ::KeyPress{Keys.mouse_left}) = (focus(part!(() -> PlanArea(of=v), v, :area)); handled)
 onmouse(v::TakeoffView, ::MouseMove) = held(v, Keys.mouse_left) ? handled : nothing
 
+# --- a picture, a diagram or a page that fills the window ---------------------------------
+#
+# While the mouse is over a picture, a diagram, a page of a PDF file, a model or
+# a video, a button shows beside its top right corner, so it covers none of it.
+# The button makes it fill the window, over the page and under the top bar.
+# Esc, or the button with a cross, puts the page back where it was.
+#
+#   - A picture, a diagram and a page of a PDF file fit the window at first.
+#     Pinch, or scroll with ⌘ held, to make one bigger or smaller round the
+#     mouse. ⌘+, ⌘- and the buttons under it do the same, and ⌘0 fits it to
+#     the window again. Drag it, or scroll, to move it.
+#   - A pinch outwards on a picture, a diagram or a page in the page makes it
+#     fill the window too.
+#   - ← and → go to the page before and the next page of a PDF file. The page
+#     that shows in the document goes on from the page you looked at.
+#   - A model and a video only fill the window. A model turns and zooms there
+#     as it does in the page, and a video plays on.
+#
+# A diagram is drawn again at each size, so it's sharp however big it is, and so
+# is a page of a PDF file once it stops moving. A picture is as sharp as its pixels.
+
+const ZOOM_EDGE = 24.0   # px of room round a picture that fits the window
+const BAR_ROOM = 64px    # the bottom of the window, where the bar of buttons is
+const MOST_ZOOM = 8.0    # the biggest a picture gets: this many times its own size, or the size that fits the window if that's bigger
+const ZOOM_STEP = 1.25   # how much bigger the + button, and ⌘+, make a picture
+"The keys with ⌘ that do what they always do while a picture fills the window. The rest would change the page under it."
+const PAGE_KEYS = (Keys.s, Keys.o, Keys.p, Keys.comma, Keys.backslash)
+
+"What fills the window, over the page"
+@def mutable struct ZoomView <: SemanticUI
+  what::Any = nothing                       # (:picture, key), (:diagram, code), (:pdf, path, page) or (:node, node). Nothing while the page shows.
+  path::String = ""                         # the document it was opened from. It closes when another document shows.
+  from::Any = nothing                       # the node of the page that it was opened from
+  page::Int = 1                             # of a PDF file
+  pages::Int = 1
+  zoom::Float64 = 0.0                       # px of the window to a px of the picture at its own size. 0 fits it to the window.
+  at::Tuple{Float64,Float64} = (0.0, 0.0)   # the point of the picture at the view's top left
+  box::NTuple{4,Float64} = (0.0, 0.0, 0.0, 0.0)   # where the view is in the window: its left, top, width and height
+  fits::Bool = true                         # it shows the whole picture, so it fits the window again when the window changes size
+  grab::Any = nothing                       # where a drag started, and the point of the picture that was at the view's top left then
+  moved::Float64 = 0.0                      # when the view last moved
+  sharp::Sharp = Sharp(nothing, C_NULL, 1.0)
+  drawn::Any = nothing                      # a diagram laid out at its own size, with what it was laid out for
+  home::Any = nothing                       # how tall a model or a video was in the page
+  held::px = 0px                            # the room that a model or a video took in the page, which the page keeps for it
+  pinned::px = 0px                          # how far the page was scrolled
+  parts::Dict{Any,Any} = Dict{Any,Any}()    # its buttons and its area, kept between frames
+end
+
+"The part of a ZoomView that shows the picture. It takes the mouse and the keys."
+@def mutable struct ZoomArea <: SemanticUI
+  of::Any = nothing
+end
+
+"""
+A picture, a diagram, a page, a model or a video in the page that can fill the
+window. It's a node of its own so that the window knows where it is, to put
+its button beside it.
+"""
+@def mutable struct Fillable <: SemanticUI
+  what::Any = nothing      # what fills the window. See ZoomView.
+  content::Any = nothing   # what shows in the page
+  sizing::Any = ()         # how wide it is
+  button::Any = nothing    # its FillButton, once it has shown
+end
+
+"The button beside the top right corner of a Fillable that makes it fill the window"
+@def mutable struct FillButton <: SemanticUI
+  rect::NTuple{4,px} = (0px, 0px, 0px, 0px)   # where it was last drawn, to put its tooltip under it
+  quiet::Bool = false                         # clicked, so no tooltip until the mouse leaves it
+end
+
+const FILL_SIDE = 24px   # how wide and how tall the button is that makes a picture fill the window
+const FILL_GAP = 4px     # between that button and the picture, and between it and the window's edge
+
+"A part of `v` that's kept between frames"
+part!(make, v::ZoomView, key) = begin
+  node = get!(make, v.parts, key)
+  node.parent === nothing && setfield!(node, :parent, v)
+  node
+end
+
+"The ZoomView of `e` while it fills the window, or nothing"
+zooming(e) = (v = get(e.nodes, :zoom, nothing); v === nothing || v.what === nothing ? nothing : v)
+
+"True when `a` and `b` say the same thing fills the window. A node is the same node, not one like it."
+same_what(a, b) = a !== nothing && b !== nothing && a[1] == b[1] && (a[1] == :node ? a[2] === b[2] : a == b)
+
+"True when `node`, a model or a video, fills the window now"
+zoomed_node(e, node) = (v = zooming(e); v !== nothing && v.what[1] == :node && v.what[2] === node)
+
+"The empty room that the page keeps for the model or the video that fills the window"
+held_room(e) = Box(width(grow=grow), height(zooming(e).held))
+
+"What fills the window when you click the button over `x`, a node that a live block made, or nothing if it has no button"
+fill_what(x) = x isa Mermaid ? (isdiagram(x.code) ? (:diagram, x.code) : nothing) : x isa Union{STLViewer,VideoPlayer} ? (:node, x) : nothing
+
+"How wide `x` is at most in the page, for the button over its top right corner: a width, or :grow when it's as wide as the page"
+fill_wide(x) = x isa VideoPlayer ? video_wide(x) : x isa Mermaid && x.made !== nothing && hasproperty(x.made[2], :w) ? px(x.made[2].w) : :grow
+
+"How wide the picture of a video is at most: as wide as a picture of its height is, as VideoPlayer works it out"
+video_wide(p::VideoPlayer) = begin
+  s = p.media === nothing ? (0.0, 0.0) : picture_size(p.media)
+  s[1] > 0 && s[2] > 0 ? max(240px, p.height * s[1] / s[2]) : :grow
+end
+
+"The Fillable of each node of the page that shows one, by the node"
+fills(e) = get!(Dict{UInt,Fillable}, e.nodes, :fills)
+
+"""
+`content`, which `owner` shows, as a Fillable: while the mouse is over it, a
+button beside it makes `what` fill the window. `wide` is how wide the content
+is at most: a width, :grow for content that's as wide as the room it's given,
+or nothing for content of a fixed size. A model or a video that fills the
+window now leaves its room empty.
+"""
+fillable(owner, what, content; wide=nothing) = begin
+  e = editor(owner)
+  what[1] == :node && zoomed_node(e, what[2]) && return held_room(e)
+  f = get!(() -> own!(owner, Fillable()), fills(e), objectid(owner))
+  f.what, f.content = what, content
+  f.sizing = wide === nothing ? () : wide === :grow ? (width(grow=grow),) : (width(grow=grow, max=wide),)
+  f
+end
+
+describe(f::Fillable) = Box(f.sizing..., Alignment.Start, f.content isa GeometricUI ? detach!(f.content) : f.content)
+
+"""
+Where the button of a picture that's at `r` in the window goes: beside its top
+right corner, so it covers none of the picture. Where the window has no room
+there, it's beside the top left corner, and where there's room on neither
+side, it's in the top right corner. It stays under the top bar.
+"""
+fill_spot(e, r) = begin
+  w, _ = window_size(e)
+  top = min(max(r.top, TOPBAR_H + FILL_GAP), r.top + r.height - FILL_SIDE)
+  right = r.left + r.width + FILL_GAP
+  right + FILL_SIDE <= w - FILL_GAP && return (right, top)
+  left = r.left - FILL_GAP - FILL_SIDE
+  left >= panel_w(e) * opened(e) + FILL_GAP && return (left, top)
+  (right - 2FILL_GAP - FILL_SIDE, top + FILL_GAP)
+end
+
+"""
+The button that makes the picture under the mouse fill the window, beside it.
+It shows while the mouse is over the picture or the button, or between them.
+"""
+fill_over(e) = begin
+  (zooming(e) === nothing && full_takeoff(e) === nothing && e.popup == :none) || return ()
+  win = window_of(e)
+  win === nothing && return ()
+  x, y = num(win.mouse[1]), num(win.mouse[2])
+  # A picture under a path is in a live block that can fill the window too, so the smallest one under the mouse has the button
+  best, spot, least = nothing, nothing, Inf
+  for f in values(fills(e))
+    r = rect(f)
+    r === nothing && continue
+    s = fill_spot(e, r)
+    num(min(r.left, s[1])) <= x < num(max(r.left + r.width, s[1] + FILL_SIDE)) || continue
+    num(min(r.top, s[2])) <= y < num(max(r.top + r.height, s[2] + FILL_SIDE)) || continue
+    area = num(r.width) * num(r.height)
+    area < least && ((best, spot, least) = (f, s, area))
+  end
+  best === nothing && return ()
+  b = best.button === nothing ? (best.button = own!(best, FillButton())) : best.button
+  (Row(width(grow=grow), height(grow=grow), Alignment.Start, padding(spot[2], 0px, 0px, spot[1]), b),)
+end
+
+describe(b::FillButton) = begin
+  ishovered(b) || (b.quiet = false)
+  Box(width(FILL_SIDE), height(FILL_SIDE), radius(6px), Alignment.Center, justify=Alignment.Center, name="Button",
+      background(ishovered(b) ? colours.hover : colours.float), border(1px, :solid, colours.line),
+    Icon("arrows-fullscreen", size=12px, color=colours.dim))
+end
+
+cursor(::FillButton) = :hand
+draw(ctx, size, ui::ConcreteRect, b::FillButton) = (b.rect = (ui.left, ui.top, ui.width, ui.height); nothing)
+
+onmouse(b::FillButton, ev::MouseMove) = begin
+  b.quiet && return handled
+  tip = b.parent.what[1] == :node ? "Fill the window" : "Fill the window  pinch"
+  show_tooltip!(ev.window, Box(padding(8px, 5px), label(tip, 12px, color=TIP_INK)), b.rect..., placement=:bottom, gap=6px)
+  handled
+end
+
+onkey(b::FillButton, ev::KeyPress{Keys.mouse_left}) = begin
+  b.quiet = true
+  hide_tooltip!(ev.window)
+  f = b.parent
+  zoom_in!(editor(b), f.what, f.parent)
+end
+
+"A pinch outwards on a picture, a diagram or a page in the page makes it fill the window"
+pinch_open(owner, ev::Pinch) = begin
+  ev.scale > 1 || return nothing
+  e = editor(owner)
+  f = get(fills(e), objectid(owner), nothing)
+  (f === nothing || f.what === nothing || f.what[1] == :node) && return nothing
+  # Only when the fingers are on the picture, not beside it
+  r = rect(f)
+  x, y = num(ev.window.mouse[1]), num(ev.window.mouse[2])
+  (r !== nothing && num(r.left) <= x < num(r.left + r.width) && num(r.top) <= y < num(r.top + r.height)) || return nothing
+  zoom_in!(e, f.what, owner)
+end
+
+onpinch(s::Shown, ev::Pinch) = pinch_open(s, ev)
+onpinch(p::Pages, ev::Pinch) = pinch_open(p, ev)
+onpinch(v::FileView, ev::Pinch) = pinch_open(v, ev)
+onpinch(l::Breadcrumb, ev::Pinch) = pinch_open(l, ev)
+
+"Make `what` fill the window. `from` is the node of the page that shows it."
+zoom_in!(e, what, from=nothing) = begin
+  v = node!(ZoomView, e, :zoom)
+  # A pinch goes on to the page until the next frame is drawn, so it would open it again
+  same_what(v.what, what) && return handled
+  zoom_out!(v, false)
+  v.what, v.path, v.from, v.pinned = what, e.buf.path, from, e.scroll.offset
+  v.zoom, v.fits, v.grab, v.drawn = 0.0, true, nothing, nothing
+  if what[1] == :pdf
+    v.page, v.pages = what[3], max(1, pdf_pages(what[2]))
+  elseif what[1] == :node
+    r = rect(what[2])
+    v.home = what[2].height
+    v.held = r === nothing ? what[2].height : r.height
+  end
+  focus(part!(() -> ZoomArea(of=v), v, :area))
+  handled
+end
+
+"Put the page back, with a model or a video back in it. `refocus` gives the keyboard back to the text."
+zoom_out!(v::ZoomView, refocus=true) = begin
+  what = v.what
+  what === nothing && return handled
+  v.what = nothing
+  what[1] == :node && v.home !== nothing && (what[2].height = v.home)
+  v.from isa Pages && (v.from.page = v.page)   # the page in the document goes on from the page you looked at
+  v.from = nothing
+  e = editor(v)
+  e.scroll.offset = v.pinned
+  refocus && focus(e)
+  handled
+end
+
+"In each frame: the page comes back when another document shows, and until then it stays where it was"
+zoom_tick!(e) = begin
+  v = zooming(e)
+  v === nothing && return
+  v.path == e.buf.path || return zoom_out!(v, false)
+  e.scroll.offset = v.pinned
+  nothing
+end
+
+"What fills the window, over the page and the sidebar and under the top bar"
+zoom_over(e) = zooming(e) === nothing ? () :
+  (Box(width(grow=grow), height(grow=grow), padding(TOPBAR_H, 0px, 0px, 0px), background(colours.bg), geometry(e.nodes[:zoom])),)
+
+"The button of `v` that's kept under `key`, with what it does and shows now"
+button!(v::ZoomView, key, action; icon="", tip="", off=false) = begin
+  b = part!(() -> PlanButton(of=v), v, (:button, key))
+  b.action, b.icon, b.tip, b.off = action, icon, tip, off
+  b
+end
+
+"Do what a button of a ZoomView does"
+act!(v::ZoomView, action, w) = begin
+  a = action isa Tuple ? action[1] : action
+  a == :zoom && return zoom_by!(v, action[2], view_middle(v)...)
+  a == :fit && return fit_now!(v)
+  a == :page && return turn!(v, action[2])
+  a == :close && return zoom_out!(v)
+  handled
+end
+
+describe(v::ZoomView) = begin
+  e = editor(v)
+  what = v.what
+  bar(buttons...) = Column(width(grow=grow), height(grow=grow), Alignment.Center, justify=Alignment.End, padding(0px, 0px, 16px, 0px),
+    Row(height(36px), padding(4px), child_gap=2px, radius(8px), Alignment.Center, background(colours.float),
+        border(1px, :solid, colours.line), lifted, buttons...))
+  close = button!(v, :close, :close, icon="x-lg", tip="Back to the page  esc")
+  if what[1] == :node
+    # A model or a video is as tall as the window has room for. Its own bar is under its picture.
+    node = what[2]
+    _, h = window_size(e)
+    node.height = max(160px, h - TOPBAR_H - BAR_ROOM - px(2ZOOM_EDGE) - 44px)
+    shows = with_theme(() -> geometry(node), component_theme(e.zoom))
+    return Stack(width(grow=grow), height(grow=grow), Alignment.Start,
+      Column(width(grow=grow), height(grow=grow), Alignment.Center, padding(px(ZOOM_EDGE)), shows),
+      bar(close))
+  end
+  what[1] == :diagram && lay_diagram!(v)
+  # The view is the whole window under the top bar, so it's fitted here, and the bar says how big the picture is in this frame
+  w, h = window_size(e)
+  reframe!(v, (0.0, num(TOPBAR_H), num(w), num(h) - num(TOPBAR_H)))
+  buttons = Any[button!(v, :smaller, (:zoom, 1 / ZOOM_STEP), icon="zoom-out", tip="Smaller  pinch, or ⌘ and scroll"),
+                Box(width(46px), Alignment.Center, justify=Alignment.Center,
+                    label(v.zoom > 0 ? "$(round(Int, 100v.zoom))%" : "", 12px, color=colours.dim)),
+                button!(v, :bigger, (:zoom, ZOOM_STEP), icon="zoom-in", tip="Bigger  pinch, or ⌘ and scroll"),
+                button!(v, :fit, :fit, icon="aspect-ratio", tip="Fit the window  ⌘0")]
+  if what[1] == :pdf && v.pages > 1
+    push!(buttons, button!(v, :back, (:page, -1), icon="chevron-left", tip="The page before  ←", off=v.page <= 1),
+          Box(Alignment.Center, padding(4px, 0px), label("Page $(v.page) of $(v.pages)", 12px, color=colours.dim)),
+          button!(v, :on, (:page, 1), icon="chevron-right", tip="The next page  →", off=v.page >= v.pages))
+  end
+  push!(buttons, close)
+  Stack(width(grow=grow), height(grow=grow), Alignment.Start, part!(() -> ZoomArea(of=v), v, :area), bar(buttons...))
+end
+
+describe(::ZoomArea) = Box(width(grow=grow), height(grow=grow))
+cursor(::ZoomArea) = :arrow
+
+"""
+Lay the diagram of `v` out at its own size, in the page's font and colours, to
+draw at any size. It's laid out again when the font or the colours change.
+"""
+lay_diagram!(v::ZoomView) = begin
+  e = editor(v)
+  code = v.what[2]
+  key = (code, e.theme, e.font, e.zoom)
+  v.drawn !== nothing && v.drawn[1] == key && return v.drawn[2]
+  m = own!(v, Mermaid(code))
+  root = with_theme(component_theme(e.zoom)) do
+    inner = geometry(m)
+    made = m.made === nothing ? nothing : m.made[2]
+    (made === nothing || !hasproperty(made, :w) || made.w <= 0) && return nothing
+    describe(Column(fixed(px(made.w)), Alignment.Start, inner), (px(made.w), 99999px))
+  end
+  v.drawn = (key, root)
+  root
+end
+
+"How wide and how tall what `v` shows is at its own size, in px, or nothing when it can't be shown"
+subject_size(v::ZoomView) = begin
+  what = v.what
+  what === nothing && return nothing
+  if what[1] == :picture
+    has_image(what[2]) || return nothing
+    s = image_source(what[2])
+    n = natural(what[2])
+    n === nothing ? (Float64(s.width), Float64(s.height)) : (Float64(n[1]), Float64(n[2]))
+  elseif what[1] == :diagram
+    root = v.drawn === nothing ? nothing : v.drawn[2]
+    root === nothing ? nothing : (num(root.width), num(root.height))
+  elseif what[1] == :pdf
+    s = pdf_size(what[2], v.page)
+    s === nothing ? nothing : (Float64(s[1]), Float64(s[2]))
+  end
+end
+
+"The middle of the part of the view that's above the bar of buttons"
+view_middle(v::ZoomView) = (v.box[1] + v.box[3] / 2, v.box[2] + (v.box[4] - num(BAR_ROOM)) / 2)
+
+"How many px to a px of the picture fits the whole of something `s` big in the view, above the bar and with room round it"
+fit_zoom(v::ZoomView, s) = max(min((v.box[3] - 2ZOOM_EDGE) / s[1], (v.box[4] - num(BAR_ROOM) - 2ZOOM_EDGE) / s[2]), 1e-3)
+
+"Show the whole picture, in the middle of the view"
+fit!(v::ZoomView, s) = (v.zoom = fit_zoom(v, s); v.fits = true; hold!(v, s))
+
+"""
+Keep the picture in the view. Where it's narrower than the view, it stays in
+the middle, and so it does where it's shorter. Otherwise it moves no further
+than its edges, with room round them.
+"""
+hold!(v::ZoomView, s) = begin
+  w, h = v.box[3] / v.zoom, (v.box[4] - num(BAR_ROOM)) / v.zoom
+  edge = ZOOM_EDGE / v.zoom
+  v.at = (s[1] + 2edge <= w ? (s[1] - w) / 2 : clamp(v.at[1], -edge, s[1] - w + edge),
+          s[2] + 2edge <= h ? (s[2] - h) / 2 : clamp(v.at[2], -edge, s[2] - h + edge))
+  v
+end
+
+"Note that the view is now `box`. A picture that fitted the old view fits the new one."
+reframe!(v::ZoomView, box) = begin
+  s = subject_size(v)
+  changed, v.box = box != v.box, box
+  s === nothing && return v
+  v.zoom <= 0 || (v.fits && changed) ? fit!(v, s) : hold!(v, s)
+end
+
+"Note that the view moved just now, and keep the picture in it"
+moved!(v::ZoomView, s) = begin
+  v.moved = time()
+  hold!(v, s)
+  v.fits = v.zoom <= fit_zoom(v, s) * 1.0001
+  handled
+end
+
+"Fit the picture to the window again"
+fit_now!(v::ZoomView) = (s = subject_size(v); s === nothing || fit!(v, s); handled)
+
+"Make the picture `by` times as big. The point of it at the place `(x, y)` in the window stays there."
+zoom_by!(v::ZoomView, by, x, y) = begin
+  s = subject_size(v)
+  (s === nothing || v.zoom <= 0) && return handled
+  p = (v.at[1] + (x - v.box[1]) / v.zoom, v.at[2] + (y - v.box[2]) / v.zoom)
+  f = fit_zoom(v, s)
+  v.zoom = clamp(v.zoom * by, min(f, 1.0), max(f, 1.0) * MOST_ZOOM)
+  v.at = (p[1] - (x - v.box[1]) / v.zoom, p[2] - (y - v.box[2]) / v.zoom)
+  moved!(v, s)
+end
+
+"Go on by `by` pages of a PDF file, as far as the first page or the last"
+turn!(v::ZoomView, by) = begin
+  page = clamp(v.page + by, 1, v.pages)
+  page == v.page && return handled
+  v.page, v.zoom, v.fits = page, 0.0, true
+  handled
+end
+
+draw(ctx, size, ui::ConcreteRect, a::ZoomArea) = begin
+  v = a.of
+  v.what === nothing && return
+  reframe!(v, (num(ui.left), num(ui.top), num(ui.width), num(ui.height)))
+  s = subject_size(v)
+  (s === nothing || v.zoom <= 0) && return
+  with_clip(() -> zoom_ink(ctx, v, s), ctx, ui.left, ui.top, ui.width, ui.height)
+end
+
+"Draw what `v` shows, which is `s` big at its own size"
+zoom_ink(ctx, v::ZoomView, s) = begin
+  x, y = v.box[1] - v.at[1] * v.zoom, v.box[2] - v.at[2] * v.zoom
+  w, h = s[1] * v.zoom, s[2] * v.zoom
+  kind = v.what[1]
+  if kind == :picture
+    image = image_source(v.what[2])
+    paint_picture(ctx, image.raw, (0, 0, image.width, image.height), (x, y, w, h))
+  elseif kind == :diagram
+    # The diagram is drawn at its own size onto a canvas that's made bigger, so its lines and its words stay sharp
+    root = v.drawn[2]
+    Skia.sk_canvas_save(ctx)
+    Skia.sk_canvas_translate(ctx, Float32(x), Float32(y))
+    Skia.sk_canvas_scale(ctx, Float32(v.zoom), Float32(v.zoom))
+    Skia.sk_canvas_translate(ctx, -Float32(num(root.left)), -Float32(num(root.top)))
+    try
+      draw(ctx, root.size, root)
+    finally
+      Skia.sk_canvas_restore(ctx)
+    end
+  else
+    paper = (x, y, w, h)
+    paper!(ctx, paper)
+    with_round_clip(() -> pdf_ink(ctx, v, paper), ctx, px(x), px(y), px(w), px(h), px(PAPER_ROUND))
+  end
+end
+
+"Draw the part of a PDF page that's in the view, at the screen's own pixels. While it moves, a rougher picture of the whole page shows."
+pdf_ink(ctx, v::ZoomView, paper) = begin
+  left, top, wide, tall = v.box
+  path = v.what[2]
+  d = clamp(density(ctx), 2, 3)
+  w, h = round(Int, wide * d), round(Int, tall * d)
+  (w < 1 || h < 1) && return
+  k = v.zoom * d   # the screen's pixels to a point of the page
+  of = (path, mtime(path), v.page, k, v.at, w, h)
+  p = v.sharp
+  if p.of != of && p.cost > QUICK && time() - v.moved < SETTLED
+    rough = pdf_page(path, v.page, 2000)
+    if rough !== nothing
+      r = image_source(rough)
+      paint_picture(ctx, r.raw, (0, 0, r.width, r.height), paper)
+    end
+    redraw_in!(v, SETTLED)
+    return
+  end
+  image = sharpen!(p, path, v.page, of, k, v.at[1] * k, v.at[2] * k, w, h)
+  image == C_NULL || paint_picture(ctx, image, (0, 0, w, h), (left, top, wide, tall))
+end
+
+# A click starts a drag that moves the picture
+onkey(a::ZoomArea, ev::KeyPress{Keys.mouse_left}) = begin
+  w = ev.window
+  focus(a)
+  a.of.grab = ((num(w.mouse[1]), num(w.mouse[2])), a.of.at)
+  handled
+end
+
+onmouse(a::ZoomArea, ev::MouseMove) = begin
+  v = a.of
+  g = v.grab
+  g === nothing && return handled
+  Keys.mouse_left in ev.window.keys || (v.grab = nothing; return handled)
+  s = subject_size(v)
+  (s === nothing || v.zoom <= 0) && return handled
+  (x0, y0), at = g
+  x, y = num(ev.position[1]), num(ev.position[2])
+  v.at = (at[1] - (x - x0) / v.zoom, at[2] - (y - y0) / v.zoom)
+  moved!(v, s)
+end
+
+# Scrolling with ⌘ held makes the picture bigger or smaller, round the mouse. Scrolling without ⌘ moves it.
+onscroll(a::ZoomArea, ev::MouseScroll) = begin
+  v, w = a.of, ev.window
+  Keys.cmd in w.keys && return zoom_by!(v, exp(num(ev.delta[2]) / 10), num(w.mouse[1]), num(w.mouse[2]))
+  s = subject_size(v)
+  (s === nothing || v.zoom <= 0) && return handled
+  v.at = (v.at[1] - 30num(ev.delta[1]) / v.zoom, v.at[2] - 30num(ev.delta[2]) / v.zoom)
+  moved!(v, s)
+end
+
+# Two fingers that move apart or together on the trackpad make the picture bigger or smaller, round the mouse
+onpinch(a::ZoomArea, ev::Pinch) = zoom_by!(a.of, ev.scale, num(ev.window.mouse[1]), num(ev.window.mouse[2]))
+
+# The keys are the view's, so none of them change the page under it. A right-click has no menu here.
+onkey(a::ZoomArea, ev::KeyPress{K}) where K = ismouse(K) && K != Keys.mouse_right ? nothing : zoom_key!(a.of, K, ev.window)
+ontype(::ZoomArea, ::Typed) = handled
+
+"""
+Do what the key `K` does while `v` fills the window. It's `handled`, or nothing
+for a key with ⌘ that the page still takes, like ⌘S.
+"""
+zoom_key!(v::ZoomView, K, w) = begin
+  cmd = Keys.cmd in w.keys
+  K == Keys.escape && return zoom_out!(v)
+  cmd && K in PAGE_KEYS && return nothing
+  v.what[1] == :node && return handled
+  cmd && K == Keys.equal && return zoom_by!(v, ZOOM_STEP, view_middle(v)...)
+  cmd && K == Keys.minus && return zoom_by!(v, 1 / ZOOM_STEP, view_middle(v)...)
+  cmd && K == getproperty(Keys, Symbol(0)) && return fit_now!(v)
+  !cmd && v.what[1] == :pdf && K in (Keys.left, Keys.right) && return turn!(v, K == Keys.left ? -1 : 1)
+  handled
+end
+
 # --- front matter as a card ---------------------------------------------------------
 #
 # While the caret isn't in it, front matter shows as a card: a small FRONTMATTER
@@ -6197,6 +6730,9 @@ const TEXT_KEYS = (Keys.a, Keys.c, Keys.f, Keys.g)
 onkey(e::Editor, ev::KeyPress{K}) where K = begin
   # A key that the sidebar's tree took, like Return on a heading, comes here next. It isn't for the text.
   pop!(e.nodes, :chose, false) && return
+  # While a picture or a model fills the window, the keys are its own, and a right-click has no menu. Esc puts the page back.
+  zoomed = zooming(e)
+  zoomed === nothing || e.popup != :none || zoom_key!(zoomed, K, ev.window) !== handled || return
   K == Keys.mouse_right && return context_menu!(e, ev.window)
   ismouse(K) && return
   w = ev.window
@@ -6326,6 +6862,7 @@ end
 ontype(e::Editor, ev::Typed) = begin
   # A character that a part of a live block didn't take comes here next. It isn't for the text.
   ev.window.focus === e || return nothing
+  zooming(e) === nothing || return handled   # the page under a picture that fills the window doesn't change
   c = ev.char
   # macOS has characters of its own for keys like the arrows, which aren't text
   (iscntrl(c) || '\uf700' <= c <= '\uf8ff') && return nothing
@@ -7697,8 +8234,9 @@ const PICTURE_LINE = r"^\s*(?:\[\s*)?!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\
   h::px = 0px
 end
 
-describe(p::Picture) = Box(width(grow=grow), Alignment.Start, Image(p.key, fixed(p.w), height(p.h), radius(4px)))
+describe(p::Picture) = Box(width(grow=grow), Alignment.Start, fillable(p, (:picture, p.key), Image(p.key, fixed(p.w), height(p.h), radius(4px))))
 cursor(::Picture) = :ibeam
+onpinch(p::Picture, ev::Pinch) = pinch_open(p, ev)
 # A click on the picture puts the caret on its line, so the line shows as it's written
 onkey(p::Picture, ::KeyPress{Keys.mouse_left}) = edit_matter!(p, p.line)
 
@@ -8404,6 +8942,7 @@ describe(e::Editor) = begin
   find_tick!(e)
   sound_tick!(e)
   takeoff_tick!(e)
+  zoom_tick!(e)
   layout!(e)
   # A live block that changed the size of the text stays where it was in the window
   hold = pop!(e.nodes, :hold, nothing)
@@ -8428,7 +8967,7 @@ describe(e::Editor) = begin
       node!(Page, e, :page)))
   popup = e.popup == :none ? () : (node!(Backdrop, e, :backdrop), finder(e))
   Stack(width(grow=grow), height(grow=grow), Alignment.Start, name="Editor",
-    body, panel_edge(e)..., tablebar(e)..., suggestbox(e)..., findbar(e)..., takeoff_over(e)..., node!(TopBar, e, :topbar), popup...)
+    body, panel_edge(e)..., tablebar(e)..., suggestbox(e)..., findbar(e)..., fill_over(e)..., takeoff_over(e)..., zoom_over(e)..., node!(TopBar, e, :topbar), popup...)
 end
 
 # --- window -------------------------------------------------------------------------------

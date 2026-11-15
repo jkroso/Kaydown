@@ -1,6 +1,6 @@
 # Kaydown
 
-A Markdown editor for the Mac, made with [UI.jl](https://github.com/jkroso/UI.jl). It draws each line the way it will read, and you type in it. A code block in the language `ui` runs its Julia code and shows what the code makes. A code block in the language `sheet` works things out, a row at a time. A code block in the language `spreadsheet` is a grid of cells with formulas. A code block in the language `mermaid` shows a diagram, like a flowchart. A code block in the language `takeoff` shows a building plan that you measure from, and makes a quote from what you measure. A line that holds only a sound file shows a player, and the page's Insert menu records one from the microphone. A button under the player writes down what's said in it, on the Mac.
+A Markdown editor for the Mac, made with [UI.jl](https://github.com/jkroso/UI.jl). It draws each line the way it will read, and you type in it. A code block in the language `ui` runs its Julia code and shows what the code makes. A code block in the language `sheet` works things out, a row at a time. A code block in the language `spreadsheet` is a grid of cells with formulas. A code block in the language `mermaid` shows a diagram, like a flowchart. A button beside a diagram, a picture or a page of a PDF file makes it fill the window, where you zoom it with a pinch. A code block in the language `takeoff` shows a building plan that you measure from, and makes a quote from what you measure. A line that holds only a sound file shows a player, and the page's Insert menu records one from the microphone. A button under the player writes down what's said in it, on the Mac.
 
 "Kaydown" is a working name, after Alan Kay.
 
@@ -51,6 +51,7 @@ A window of Centient that's open doesn't show the new quote until it loads its l
 julia --project=. takeoff_test.jl        # how a takeoff is read, written and worked out
 julia --project=. centient_test.jl       # how Kaydown talks to Centient's server
 julia --project=. takeoff_view_test.jl   # the block itself, in a window that isn't on the screen
+julia --project=. zoom_test.jl           # a picture, a diagram or a page that fills the window
 julia --project=. merge_test.jl
 julia --project=. pasteboard_test.jl
 ```

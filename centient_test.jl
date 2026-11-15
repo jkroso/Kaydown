@@ -46,6 +46,15 @@ end
   @test C.failed(f) && f.problem == "Centient has no contact called Nobody" && f.value === nothing
   e = settle(s, C.ask("error", s=s, cmd=fake()))
   @test C.failed(e) && e.problem == "Unknown tool: error"
+  # The tool that makes a job from a project page says what it made. The next time, it has the job.
+  page = Dict("progress" => "http://host/projects/1/tasks?key=ab12", "title" => "97/26 Antill Street")
+  job = settle(s, C.ask("make_job_from_page", page, s=s, cmd=fake()))
+  @test job.value["job"] == 12 && job.value["title"] == "97/26 Antill Street" && job.value["asked"] == page
+  @test (job.value["tasks"], job.value["steps"], job.value["added"], job.value["existed"]) == (5, 10, 10, false)
+  again = settle(s, C.ask("make_job_from_page", page, s=s, cmd=fake()))
+  @test (again.value["added"], again.value["existed"]) == (2, true)
+  lost = settle(s, C.ask("make_job_from_page", Dict("progress" => "http://unreachable/projects/1/tasks"), s=s, cmd=fake()))
+  @test C.failed(lost) && lost.problem == "Couldn't reach the walkthrough service. Check the internet connection."
   # A program that stops takes what waits for it with it, and says its last words
   slow = C.ask("slow", s=s, cmd=fake())
   q = settle(s, C.ask("quit", s=s, cmd=fake()))

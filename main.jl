@@ -9287,8 +9287,9 @@ end
 # recording stops.
 #
 # While the mouse is over the player, a button under it writes down what's said
-# in the file. macOS does it on the Mac, and the words go into a paragraph under
-# the line. You can type while it works. See transcribe.jl.
+# in the file. The button lies over the gap under the player, so it takes no
+# room in the page. macOS does the work on the Mac, and the words go into a
+# paragraph under the line. You can type while it works. See transcribe.jl.
 
 "A line of the document that holds only a sound file"
 @def mutable struct SoundLine <: SemanticUI
@@ -9301,6 +9302,7 @@ end
 end
 
 const TRANSCRIBE_H = 26px   # how tall the Transcribe button is
+const TRANSCRIBE_GAP = 6px  # between a sound's player and the Transcribe button under it
 
 # The recorder of each sound file that a line has shown. They're kept while
 # Kaydown runs, so that a recording goes on while another file shows.
@@ -9345,19 +9347,39 @@ describe(s::SoundLine) = begin
   r.parent === s || setfield!(r, :parent, s)
   # It's a component, so it gets the colours and the text size that a live block gives one
   with_theme(component_theme(e.zoom)) do
-    plays(r) || return Column(width(grow=grow), Alignment.Start, r)
-    # The button shows while the mouse is over the line, and while macOS works.
-    # Its room stays empty at other times, so the text under the line doesn't move.
-    (ishovered(s) || transcribing(s.path)) ||
-      return Column(width(grow=grow), Alignment.Start, child_gap=6px, r, Box(height(TRANSCRIBE_H)))
+    Column(width(grow=grow), Alignment.Start, r)
+  end
+end
+
+"""
+The Transcribe button of a sound's player, under the player. It lies over the
+page, in the gap under the player, so the line is only as tall as its player
+and the text under it never moves. The button shows while the mouse is over
+the player or the button, or between them, and while macOS works.
+"""
+sound_over(e) = begin
+  (zooming(e) === nothing && full_takeoff(e) === nothing && e.popup == :none) || return ()
+  win = window_of(e)
+  win === nothing && return ()
+  x, y = win.mouse
+  for s in values(e.nodes)
+    (s isa SoundLine && plays(recorder(s.path))) || continue
+    r = rect(s)
+    r === nothing && continue
+    top = r.top + r.height + TRANSCRIBE_GAP
+    over = r.left <= x < r.left + r.width && r.top <= y < top + TRANSCRIBE_H
+    (over || transcribing(s.path)) || continue
     button = node!(() -> TranscribeButton(path=s.path), e, (:transcribe, s.path))
     button.parent === s || setfield!(button, :parent, s)
     t = get(transcriptions, s.path, nothing)
     # What went wrong the last time, or that there were no words
     note = t === nothing || !finished(t) ? "" : t.text == "" ? "No words were heard in it" : t.problem
-    Column(width(grow=grow), Alignment.Start, child_gap=6px, r,
-      Row(Alignment.Center, child_gap=10px, button, (isempty(note) ? () : (label(note, 12px, color=colours.dim),))...))
+    # The page's own colour is behind them, so that they read over a line of text that's right under the player
+    return (Row(width(grow=grow), height(grow=grow), Alignment.Start, padding(top, 0px, 0px, r.left),
+              Row(Alignment.Center, child_gap=10px, radius(6px), background(colours.bg),
+                button, (isempty(note) ? () : (label(note, 12px, color=colours.dim),))...)),)
   end
+  ()
 end
 
 # A click beside the player puts the caret on the line, so that the line shows as it's written
@@ -9945,7 +9967,7 @@ describe(e::Editor) = begin
       node!(Page, e, :page)))
   popup = e.popup == :none ? () : (node!(Backdrop, e, :backdrop), finder(e))
   Stack(width(grow=grow), height(grow=grow), Alignment.Start, name="Editor",
-    body, panel_edge(e)..., tablebar(e)..., suggestbox(e)..., findbar(e)..., fill_over(e)..., takeoff_over(e)..., zoom_over(e)..., node!(TopBar, e, :topbar), popup...)
+    body, panel_edge(e)..., tablebar(e)..., suggestbox(e)..., findbar(e)..., sound_over(e)..., fill_over(e)..., takeoff_over(e)..., zoom_over(e)..., node!(TopBar, e, :topbar), popup...)
 end
 
 # --- windows ------------------------------------------------------------------------------

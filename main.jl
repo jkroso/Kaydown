@@ -91,6 +91,9 @@
 #     Kaydown the app that opens Markdown files. The tabs at the top of that
 #     window show two more pages: Code editor, for how code shows, and Key
 #     bindings, for the keys of each command. ⌘, again closes that window.
+#   - The Kaydown app updates itself. It gets a newer version while you work,
+#     and the new version takes its place when you quit. A box in the settings
+#     turns that off. update.jl says how it works.
 #   - On the Key bindings page, choose the keys of VS Code, Sublime Text or
 #     Emacs, or click a command and press the keys you want for it.
 #   - ⌘D selects the word that the caret is in. ⌘D again selects the next
@@ -144,6 +147,7 @@
 @use "./takeoff" => Plans
 @use "./schedule" => Schedules
 @use "./centient" => Centient
+@use "./update" => Update
 @use "github.com/jkroso/UI.jl/Interface/draw" Bubble
 @use "github.com/jkroso/URI.jl/FSPath" FSPath
 @use Colors: @colorant_str, RGBA, Colorant
@@ -782,6 +786,7 @@ isspread(g::Grid) = g.head > 0px
   settings::Bool = false                # this window opened to show the settings page
   stat::Symbol = :words                 # what the count at the top right counts
   spelling::Bool = true                 # put a line of dots under each word that's spelt wrong
+  updates::Bool = true                  # the app looks for a newer version of itself, and gets it, without being asked
   wrap::Bool = true                     # a line of a file of code that's too long for the window goes on under itself
   numbers::Bool = true                  # a file of code shows the number of each line beside it
   shade::Bool = false                   # the line of a file of code that the caret is on is shaded
@@ -2478,6 +2483,14 @@ sandbox(e) = get!(e.nodes, :sandbox) do
   Core.eval(m, :(const markdown_app = $(() -> (reads!(e, :app); app_name(markdown_app())))))
   Core.eval(m, :(const app_installed = $(() -> (reads!(e, :app); !isempty(app_path())))))
   Core.eval(m, :(const default_app! = $(() -> default_app!(e))))
+  # ... and the app's own updates. `app_updates()` is true when the app gets a newer version without being asked.
+  # `update_news()` says how far an update has got. `update_offer()` is what a button can do about it now, like
+  # "Check now", or "" for nothing. `update!()` does that.
+  Core.eval(m, :(const app_updates = $(() -> (reads!(e, :updates); e.updates))))
+  Core.eval(m, :(const app_updates! = $(on -> updates!(e, Bool(on)))))
+  Core.eval(m, :(const update_news = $(() -> update_news(e))))
+  Core.eval(m, :(const update_offer = $(() -> (reads!(e, :updates); reads!(e, :update); Update.label(Update.own())))))
+  Core.eval(m, :(const update! = $(() -> update_act!(e))))
   # The units that a sheet has, from Units.jl, so that code can work with lengths, times and so on: 12m * 2.4m.
   # They come in with `using`, so a name that a block makes or loads for itself wins over a unit with that name.
   Core.eval(m, :(const SheetUnits = $(units())))
@@ -12817,6 +12830,7 @@ describe(e::Editor) = begin
   takeoff_tick!(e)
   schedule_tick!(e)
   job_tick!(e)
+  update_tick!(e)
   zoom_tick!(e)
   layout!(e)
   # A page whose long lines don't wrap scrolls sideways as far as its longest line goes, and no further when the window grows
@@ -12908,7 +12922,7 @@ end
 const pages_dir = Ref(joinpath(@__DIR__, "pages"))
 
 "The settings that every window has the same: each is a field of the editor"
-const SHARED = (:theme, :font, :weight, :zoom, :widest, :stat, :spelling, :wrap, :numbers, :shade, :indent, :code_scale, :code_font, :code_weight, :guide, :bundle, :rebound, :side)
+const SHARED = (:theme, :font, :weight, :zoom, :widest, :stat, :spelling, :updates, :wrap, :numbers, :shade, :indent, :code_scale, :code_font, :code_weight, :guide, :bundle, :rebound, :side)
 
 "The pages of the settings, in the order of their tabs: the name of each page's file, and what its tab says"
 const SETTINGS_PAGES = ("settings.md" => "General", "code-editor.md" => "Code editor", "key-bindings.md" => "Key bindings")
@@ -12993,10 +13007,74 @@ save_settings!(e) = begin
     mkpath(dirname(settings_file()))
     # After the bundle of key bindings comes a line for each command that has other keys than the bundle's, like key.save=ctrl+s
     changed = join(["key.$name=$(e.rebound[name])\n" for name in sort!(collect(keys(e.rebound)))])
-    write(settings_file(), "theme=$(e.theme)\nfont=$(e.font)\nweight=$(e.weight)\nzoom=$(e.zoom)\nwidth=$(e.widest.value)\ncount=$(e.stat)\nspelling=$(e.spelling)\nwrap=$(e.wrap)\nnumbers=$(e.numbers)\nshade=$(e.shade)\nindent=$(e.indent)\ncode=$(e.code_scale)\ncodefont=$(e.code_font)\ncodeweight=$(e.code_weight)\nguide=$(e.guide)\nsidebar=$(e.side.value)\nkeys=$(e.bundle)\n$changed")
+    write(settings_file(), "theme=$(e.theme)\nfont=$(e.font)\nweight=$(e.weight)\nzoom=$(e.zoom)\nwidth=$(e.widest.value)\ncount=$(e.stat)\nspelling=$(e.spelling)\nupdates=$(e.updates)\nwrap=$(e.wrap)\nnumbers=$(e.numbers)\nshade=$(e.shade)\nindent=$(e.indent)\ncode=$(e.code_scale)\ncodefont=$(e.code_font)\ncodeweight=$(e.code_weight)\nguide=$(e.guide)\nsidebar=$(e.side.value)\nkeys=$(e.bundle)\n$changed")
   catch
     # A file that can't be written only means the settings last as long as the window
   end
+  nothing
+end
+
+# --- the app's own updates ------------------------------------------------------------------
+#
+# The Kaydown app gets a newer version of itself while you work, and the new
+# version takes the app's place when you quit. update.jl does the work, and
+# says how. The settings page has a box that turns it off, a line that says how
+# far an update has got, and a button to look for one now.
+
+"Turn on or off whether the app gets a newer version without being asked"
+updates!(e, on::Bool) = begin
+  e.updates = on
+  Update.own().auto = on
+  save_settings!(e)
+  rerun!(e, :updates)
+  e
+end
+
+"True when a page that's open in a window has changes that aren't in its file"
+unsaved() = any(o -> dirty(o.buf) || any(dirty, values(o.buffers)), editors)
+
+"""
+What happens to the app's update in each frame. Only a window of the app looks
+for one: a window that a test makes doesn't. When an update gets further, the
+blocks of the settings page that show it run again.
+"""
+update_tick!(e) = begin
+  e.remember || return
+  u = Update.own()
+  u.auto = e.updates
+  wait = Update.tick!(u)
+  if get(e.nodes, :update_seen, -1) != u.changed
+    e.nodes[:update_seen] = u.changed
+    delete!(e.nodes, :update_held)
+    rerun!(e, :update)
+  end
+  isfinite(wait) && redraw_in!(e, wait)   # while it checks or downloads, the window looks again soon
+  nothing
+end
+
+"A sentence or two on how far the app's update has got, for the settings page"
+update_news(e) = begin
+  reads!(e, :updates)
+  reads!(e, :update)
+  get(e.nodes, :update_held, false) && return "Save your changes first. A page has changes that aren't in its file, and a restart would lose them."
+  Update.says(Update.own())
+end
+
+"""
+Do what the button on the settings page offers: look for a newer version, get
+it, or restart to use it. A restart closes every window, and the new version
+opens once it's in the app's place. It doesn't happen while a page has changes
+that aren't saved.
+"""
+update_act!(e) = begin
+  u = Update.own()
+  if Update.action(u) === :restart && unsaved()
+    e.nodes[:update_held] = true
+    return rerun!(e, :update)
+  end
+  Update.act!(u)
+  rerun!(e, :update)
+  u.again && foreach(o -> (w = window_of(o); w === nothing || close(w)), copy(editors))
   nothing
 end
 
@@ -13022,6 +13100,8 @@ load_settings!(e) = begin
       e.stat = Symbol(value)
     elseif name == "spelling"
       e.spelling = value != "false"
+    elseif name == "updates"
+      e.updates = value != "false"
     elseif name == "wrap"
       e.wrap = value != "false"
     elseif name == "numbers"
@@ -13073,6 +13153,8 @@ open_editor(args) = begin
   e.size = paper_window(screen_room(), e.side)
   # This returns when the last window has closed
   display(window!(e, title="Kaydown", size=e.size))
+  # A newer version of the app that's ready takes the app's place once Kaydown has quit
+  Update.quit!(Update.own())
 end
 
 # The close, minimise and zoom buttons line up with the sidebar's button, in the middle of the top bar

@@ -80,6 +80,21 @@ app == "Kaydown" ? say("Kaydown opens the Markdown files on this Mac.") :
 
 The default app is the one that opens a Markdown file when you double-click it in the Finder. macOS asks you to confirm the change.
 
+## Updates
+
+```ui
+Checkbox(label="Update Kaydown automatically", checked=app_updates(), onchange=box -> app_updates!(box.checked))
+```
+
+```ui
+say(text) = Text(text, size=page_text_size() * 1px)
+offer = update_offer()
+isempty(offer) ? say(update_news()) :
+  Column(Alignment.Start, child_gap=12px, say(update_news()), Button(label=offer, onclick=button -> update!()))
+```
+
+With this on, Kaydown looks for a newer version when it opens, and once a day after that. It gets the new version while you work. The new version takes the place of this one when you quit Kaydown. To look for one, Kaydown asks GitHub which version is the newest. It sends nothing about you or your files.
+
 ---
 
 This page is a Markdown file, like any other in Kaydown. To see the code of a setting, hold ⌥ and click it.

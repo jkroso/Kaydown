@@ -11,7 +11,7 @@
 
 include("start.jl")
 
-@use ".." build_editor open_editor WELCOME restyle! problems pages_dir SIDEBAR_ICONS FILE_ICONS todo_at inbox Agent INSERTS PLAN_ICONS SCHEDULE_ICONS window! editors settings_editor theme!
+@use ".." build_editor open_editor WELCOME restyle! problems pages_dir SIDEBAR_ICONS FILE_ICONS todo_at inbox Agent INSERTS PLAN_ICONS SCHEDULE_ICONS window! editors settings_editor theme! Update
 @use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse Typed ontype
 @use "github.com/jkroso/Font.jl/units" px
 @use "github.com/jkroso/UI.jl/Interface/abstract" focus window_of
@@ -261,6 +261,16 @@ warm_up() = begin
   rm(Agent.place[], recursive=true)
   Agent.place[] = ""
   delete!(e.nodes, :agents)
+  # The app's own update: a look for a newer version, and a download that finds no file. Both read this
+  # folder, so nothing goes over a network, and they leave the app and its own folder alone.
+  write(joinpath(dir, "latest.txt"), "version=2.0.0\nfile=none.zip\nsha256=$(repeat('0', 64))\n")
+  u = Update.Updater(dir, v"1.0.0", feed="file://" * joinpath(dir, "latest.txt"), dir=joinpath(dir, "update"), rule="anchor apple", register="/usr/bin/true")
+  Update.tick!(u)
+  Update.finish!(u)
+  u.newest == v"2.0.0" || error("The app didn't read which version is the newest")
+  (u.staged === nothing && startswith(Update.says(u), "The download of Kaydown 2.0.0 stopped.")) || error("A download with no file didn't fail: ", Update.says(u))
+  Update.label(u) == "Get Kaydown 2.0.0" || error("The app didn't offer the newer version after its download failed")
+  Update.quit!(u) && error("A quit started an update with no new version ready")
   # The app is built with the list of windows as the warm-up leaves it, so it must leave none
   close(w)
   isempty(editors) || error("A window that closed is still in the list of the windows that are open")

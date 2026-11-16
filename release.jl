@@ -5,6 +5,12 @@
 #
 # The version comes from the VERSION file. Change it before each release.
 #
+# A release has two files: the zip file, and latest.txt, which names the version
+# and the zip file. Each copy of the app reads latest.txt to see if it's the
+# newest version, and updates itself from the zip file if not. update.jl says
+# how. The release goes to the GitHub repo that update.jl names as `REPO`, which
+# must be public, since the app reads it without an account.
+#
 # It builds the app, signs it with your Developer ID certificate, and sends it
 # to Apple to be notarised. Apple checks it for malware, which takes a few
 # minutes. A Mac opens a notarised app without a warning.
@@ -15,17 +21,18 @@
 #     xcrun notarytool store-credentials kaydown --apple-id <your Apple ID> --team-id <your team ID>
 #
 # It asks for an app-specific password, which you make at account.apple.com
-# under Sign-In and Security.
+# under Sign-In and Security. With an App Store Connect API key, give it the key
+# instead:
+#
+#     xcrun notarytool store-credentials kaydown --key <path of the .p8 file> --key-id <key ID> --issuer <issuer ID>
 #
 # These environment variables change what it uses:
 #
 #   APP_SIGN="Developer ID Application"   the certificate that signs the app
 #   NOTARY_PROFILE=kaydown                the name notarytool keeps your account under
-#   RELEASE_REPO=jkroso/Kaydown           the GitHub repo that gets the release
 
 const publish = "--publish" in ARGS
 const profile = get(ENV, "NOTARY_PROFILE", "kaydown")
-const repo = get(ENV, "RELEASE_REPO", "jkroso/Kaydown")
 haskey(ENV, "APP_SIGN") || (ENV["APP_SIGN"] = "Developer ID Application")
 
 "Run `cmd` in Kaydown's folder and give back what it prints"
@@ -33,12 +40,21 @@ output(cmd) = readchomp(setenv(cmd, dir=@__DIR__))
 ok(cmd) = success(pipeline(setenv(cmd, dir=@__DIR__), stdout=devnull, stderr=devnull))
 
 const tag = "v" * strip(read(joinpath(@__DIR__, "VERSION"), String))
+# The app compares versions, so the version is written the way Julia writes one
+string(something(tryparse(VersionNumber, tag[2:end]), "")) == tag[2:end] ||
+  error("The VERSION file says \"", tag[2:end], "\". Write the version with three numbers, like 1.2.0.")
 
 # Find what would stop the release before the build, which takes a few minutes
 ok(`xcrun notarytool history --keychain-profile $profile`) ||
   error("notarytool has no account under the name \"$profile\". See the top of release.jl for how to store one.")
 include("app/bundle.jl")   # defines `out` and `uncommitted`, and finds the packages the app is built from
+@use "./update" => Update
+"The GitHub repo that gets the release. The app looks there for a newer version."
+const repo = Update.REPO
 if publish
+  (ok(`gh repo view $repo`) && output(`gh repo view $repo --json visibility --jq .visibility`) == "PUBLIC") ||
+    error("The app looks for a newer version in the releases of github.com/", repo, ", so that must be a public repo. ",
+          "Make it, or name another repo as `REPO` in update.jl.")
   isempty(output(`git status --porcelain`)) || error("Commit your changes first, so the release matches a commit.")
   isempty(uncommitted()) || error("Commit the changes in ", join(uncommitted(), ", ", " and "), " first. The app is built from them.")
   isempty(output(`git tag --list $tag`)) || error("There is already a tag $tag. Change the VERSION file.")
@@ -63,13 +79,19 @@ end
 run(`xcrun stapler staple $app`)
 pack()
 run(`spctl --assess --type execute --verbose $app`)
+# latest.txt names this version and the zip file, for the copies of the app that look for a newer version
+const latest = Update.announce(out, version, zip, macos=readchomp(`plutil -extract LSMinimumSystemVersion raw $(joinpath(app, "Contents", "Info.plist"))`))
 println("\n", zip, " is ready.")
 
 if publish
   run(setenv(`git tag $tag`, dir=@__DIR__))
   run(setenv(`git push origin $tag`, dir=@__DIR__))
-  run(`gh release create $tag $zip --repo $repo --title "Kaydown $version" --generate-notes`)
-  println("Published ", tag, " on github.com/", repo)
+  # GitHub writes the notes from the commits when the release is in the repo of the source
+  ours = endswith(replace(output(`git remote get-url origin`), r"\.git$" => ""), "/" * repo)
+  notes = ours ? `--generate-notes` : `--notes $("Kaydown $version")`
+  # GitHub shows the release only once both files are there, so latest.txt never names a file that isn't
+  run(`gh release create $tag $zip $latest --repo $repo --title "Kaydown $version" $notes`)
+  println("Published ", tag, " on github.com/", repo, ". Each copy of the app gets it within a day.")
 else
   println("Run it again with --publish to put it on GitHub as release ", tag, ".")
 end

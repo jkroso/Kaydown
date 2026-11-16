@@ -68,6 +68,7 @@ julia -O0 --project=. code_settings_test.jl  # the settings of code: long lines,
 julia -O0 --project=. weight_test.jl         # the weights of the page's text and of code: the weights a font has, bold text, the settings file
 julia -O0 --project=. keys_test.jl           # the key bindings: the commands, the bundles of shortcuts and the page that changes them
 julia -O0 --project=. highlight_test.jl      # the colours of the parts of a line of code, and of the code in a string
+julia -O0 --project=. update_test.jl         # the app's own updates: a newer version comes, is checked and takes the app's place
 julia -O0 --project=. merge_test.jl
 julia -O0 --project=. pasteboard_test.jl
 ```
@@ -106,9 +107,17 @@ The build uses the same copy of UI.jl that `main.jl` runs with: your UI.jl folde
 
 ## Make a release
 
-1. Change the version in the `VERSION` file, and commit.
-2. Run `julia --project=. release.jl`. It builds the app, signs it with a Developer ID certificate and has Apple notarise it. It writes `build/Kaydown-<version>.zip`.
+1. Change the version in the `VERSION` file, and commit. Write it with three numbers, like `0.2.0`.
+2. Run `julia --project=. release.jl`. It builds the app, signs it with a Developer ID certificate and has Apple notarise it. It writes `build/Kaydown-<version>.zip` and `build/latest.txt`.
 3. Open the app from the zip file to check it.
-4. Run `julia --project=. release.jl --publish`. It builds again, then tags the commit and puts the zip file on GitHub as a release.
+4. Run `julia --project=. release.jl --publish`. It builds again, then tags the commit and puts the two files on GitHub as a release.
 
 The top of `release.jl` says how to store your Apple account for the notarising step. You do that once.
+
+The release goes to the GitHub repo that `update.jl` names as `REPO`. That repo must be public, because each copy of the app reads it without an account.
+
+## How the app updates itself
+
+A copy of the app from a release looks for a newer release when it opens, and once a day after that. It reads `latest.txt` from the newest release, which names the version and its zip file. If the version is newer, the app gets the zip file while you work, and checks that the app in it has the signature of the same developer as itself. The new app takes the old one's place after you quit Kaydown. The settings page has a box that turns this off, a line that says how far an update has got, and a button to look for one now.
+
+An app that `app/build.jl` built is signed for your Mac only, and doesn't update itself. `update.jl` says how it all works, and how to try an update without a release.

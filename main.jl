@@ -93,7 +93,10 @@
 #     of each command. ⌘, again closes that window.
 #   - On the Key bindings page, choose the keys of VS Code, Sublime Text or
 #     Emacs, or click a command and press the keys you want for it.
-#   - ⌘/ makes a comment of a line of code. ⌘L selects a line, ⌘D copies it
+#   - ⌘D selects the word that the caret is in. ⌘D again selects the next
+#     place that has that word as well, and what you type then goes in at
+#     each of them. Escape leaves the selection that you started with.
+#   - ⌘/ makes a comment of a line of code. ⌘L selects a line, ⌘⇧D copies it
 #     to the line under it, ⌘⇧K deletes it, and ⌘⌥[ and ⌘⌥] move it up and down.
 #   - ⌘W closes a window. Kaydown quits when its last window closes.
 #   - ⌘⌥I opens the layout inspector.
@@ -517,6 +520,10 @@ Base.@kwdef mutable struct Buffer
   lines::Vector{String} = [""]
   caret::Pos = (1, 0)
   anchor::Pos = (1, 0)                  # where the selection starts. The caret is its other end.
+  # The other selections, when there are several at once: where each starts, and its caret. See `others`.
+  others::Vector{Tuple{Pos,Pos}} = Tuple{Pos,Pos}[]
+  others_for::Tuple{Pos,Pos,Int} = ((1, 0), (1, 0), -1)   # the anchor, the caret and the version that `others` goes with
+  many::Bool = false                    # true while something is done at each selection in turn
   undo::Vector{Any} = Any[]
   redo::Vector{Any} = Any[]
   version::Int = 0                      # changes with every edit
@@ -650,10 +657,36 @@ excerpt(b::Buffer, lo::Pos, hi::Pos) = begin
   join([rest(b.lines[lo[1]], lo[2]); b.lines[lo[1]+1:hi[1]-1]; head(b.lines[hi[1]], hi[2])], "\n")
 end
 
-snapshot(b::Buffer) = (copy(b.lines), b.caret, b.anchor, b.version)
+"""
+The other selections, when there are several at once. ⌘D on a word that's
+selected adds the next place that has the word. What's typed then goes in at
+each of them. They last until the caret moves, or the text changes, in a way
+that isn't done at each of them: a click, ↑, undo, a change from outside.
+"""
+others(b::Buffer) = begin
+  isempty(b.others) && return b.others
+  (b.many || b.others_for == (b.anchor, b.caret, b.version)) || empty!(b.others)
+  b.others
+end
 
-restore!(b::Buffer, (lines, caret, anchor, version)) = begin
-  b.lines, b.caret, b.anchor, b.version = lines, caret, anchor, version
+"Keep the other selections with the caret where it is now"
+keep_others!(b::Buffer) = (b.others_for = (b.anchor, b.caret, b.version); b)
+
+"True when two selections share some text, or start at the same place"
+clash(s, t) = begin
+  (a, b), (c, d) = minmax(s...), minmax(t...)
+  a == c || (a < d && c < b)
+end
+
+"Where `p` is after the text from `lo` to `hi` was replaced by text that ends at `stop`"
+moved(p::Pos, lo::Pos, hi::Pos, stop::Pos) =
+  p <= lo ? p : p < hi ? stop : p[1] == hi[1] ? (stop[1], stop[2] + p[2] - hi[2]) : (p[1] + stop[1] - hi[1], p[2])
+
+snapshot(b::Buffer) = (copy(b.lines), b.caret, b.anchor, b.version, copy(others(b)))
+
+restore!(b::Buffer, (lines, caret, anchor, version, rest)) = begin
+  b.lines, b.caret, b.anchor, b.version, b.others = lines, caret, anchor, version, copy(rest)
+  keep_others!(b)
   b.typed = 0.0
 end
 
@@ -670,7 +703,10 @@ edit!(b::Buffer, lo::Pos, hi::Pos, new::AbstractString; typing=false) = begin
   joined = head(b.lines[lo[1]], lo[2]) * new * rest(b.lines[hi[1]], hi[2])
   splice!(b.lines, lo[1]:hi[1], String.(split(joined, '\n')))
   parts = split(new, '\n')
-  b.caret = b.anchor = (lo[1] + length(parts) - 1, length(parts) == 1 ? lo[2] + length(new) : length(last(parts)))
+  stop = (lo[1] + length(parts) - 1, length(parts) == 1 ? lo[2] + length(new) : length(last(parts)))
+  b.caret = b.anchor = stop
+  # Each of the other selections stays with its own text
+  isempty(b.others) || map!(((a, c),) -> (moved(a, lo, hi, stop), moved(c, lo, hi, stop)), b.others, b.others)
   b.version = (stamp[] += 1)
   b
 end
@@ -7852,6 +7888,23 @@ draw(ctx, size, ui::ConcreteRect, d::Document) = begin
   e = editor(d)
   b = e.buf
   e.origin = (ui.left, ui.top)
+  fill_selection(ctx, selection_boxes(ctx, e, ui))
+  with_others(() -> fill_selection(ctx, selection_boxes(ctx, e, ui)), b)
+  annotate(ctx, e, ui)
+  # A file that's only shown has a selection and no caret
+  if !(b.reading || readonly(b))
+    carets(ctx, e, ui)
+    with_others(() -> carets(ctx, e, ui), b)
+  end
+  margin(ctx, e, ui)
+end
+
+"""
+The boxes that cover the selection on the page, whose text is at `ui`. The
+part of it that's in the cells of a table is filled here, a cell at a time.
+"""
+selection_boxes(ctx, e, ui) = begin
+  b = e.buf
   # The selection goes under the caret, as one shape for each run of lines that touch
   rects = Rect[]
   for it in e.layout[e.shown]
@@ -7891,11 +7944,7 @@ draw(ctx, size, ui::ConcreteRect, d::Document) = begin
       sel === nothing || append!(rects, marks(it.content, ui.left, top, sel, margin=selection(b)[1][1] < it.first))
     end
   end
-  fill_selection(ctx, rects)
-  annotate(ctx, e, ui)
-  # A file that's only shown has a selection and no caret
-  (b.reading || readonly(b)) || carets(ctx, e, ui)
-  margin(ctx, e, ui)
+  rects
 end
 
 """
@@ -8513,7 +8562,13 @@ surround!(e, mark::String) = begin
   touch!(e)
 end
 
-copy_selection!(e) = selecting(e.buf) && clipboard(excerpt(e.buf, selection(e.buf)...))
+"Copy what's selected. With several selections, each one's text goes on a line of its own, in the order of the page."
+copy_selection!(e) = begin
+  b = e.buf
+  spans = selecting(b) ? [selection(b)] : Tuple{Pos,Pos}[]
+  with_others(() -> selecting(b) && push!(spans, selection(b)), b)
+  isempty(spans) ? false : clipboard(join((excerpt(b, s...) for s in sort(spans)), "\n"))
+end
 
 """
 Put what the clipboard holds into the text at the caret. Files that were
@@ -8535,7 +8590,7 @@ paste!(e) = begin
     # A picture that's copied from a web page comes with its address as text, and the picture is what's wanted
     found = isempty(strip(text)) || occursin(r"^\s*\w+://\S+\s*$", text) ? Pasteboard.media() : nothing
     path = found === nothing ? nothing : keep_pasted(e, found...)
-    path === nothing && return type!(e, replace(text, "\r\n" => "\n", '\r' => '\n', '\t' => "  "))
+    path === nothing && return each_selection!(() -> type!(e, replace(text, "\r\n" => "\n", '\r' => '\n', '\t' => "  ")), e)
     paths = [path]
   end
   paths = [passing(e, p) ? something(keep_copy(e, p), p) : p for p in paths]
@@ -8824,6 +8879,118 @@ select_lines!(e) = begin
   move!(e, hi[1] < length(b.lines) ? (hi[1] + 1, 0) : line_end(b, hi[1]), true; by=1)
 end
 
+"""
+Do `f` at each selection: at the main one, then at each of the others with it
+in the main one's place. An edit that one of them makes moves the ones after
+it, and one ⌘Z takes back what they all did.
+"""
+each_selection!(f, e) = begin
+  b = e.buf
+  n = length(others(b))
+  (n == 0 || b.many) && return f()
+  undos = length(b.undo)
+  b.many = true
+  try
+    for _ in 0:n
+      f()
+      # The main selection goes to the back of the queue, and the next one takes its place
+      push!(b.others, (b.anchor, b.caret))
+      b.anchor, b.caret = popfirst!(b.others)
+    end
+  finally
+    b.many = false
+  end
+  length(b.undo) > undos + 1 && resize!(b.undo, undos + 1)
+  # Two selections that came to the same place are one
+  kept = Tuple{Pos,Pos}[]
+  for s in b.others
+    clash(s, (b.anchor, b.caret)) || any(k -> clash(s, k), kept) || push!(kept, s)
+  end
+  b.others = kept
+  keep_others!(b)
+  nothing
+end
+
+"Do `f` with each of the other selections in the main one's place, then put the main one back. It's for drawing them."
+with_others(f, b::Buffer) = begin
+  list = copy(others(b))
+  isempty(list) && return
+  main, many = (b.anchor, b.caret), b.many
+  b.many = true
+  try
+    for s in list
+      b.anchor, b.caret = s
+      f()
+    end
+  finally
+    b.anchor, b.caret = main
+    b.many = many
+  end
+end
+
+"The columns of each place in `line` that has `text`. With `whole`, only where it's a word by itself."
+places(line::AbstractString, text::AbstractString, whole::Bool) = begin
+  out = Tuple{Int,Int}[]
+  at = firstindex(line)
+  while (r = findnext(text, line, at)) !== nothing
+    before, after = prevind(line, first(r)), nextind(line, last(r))
+    if whole && ((before >= 1 && isword(line[before])) || (after <= ncodeunits(line) && isword(line[after])))
+      at = nextind(line, first(r))
+      continue
+    end
+    lo = length(line, 1, before)
+    push!(out, (lo, lo + length(text)))
+    at = after
+  end
+  out
+end
+
+"""
+Select the next place that has the text of the selection as well, and go to
+it. After the end of the page it looks from the top. Text that is one word is
+found only where it's a word by itself. A live block's own text isn't looked at.
+"""
+select_next!(e) = begin
+  b = e.buf
+  lo, hi = selection(b)
+  (lo != hi && lo[1] == hi[1]) || return
+  text = excerpt(b, lo, hi)
+  whole = all(isword, text)
+  taken = [(b.anchor, b.caret); others(b)]
+  found = [((i, from), (i, to)) for i in eachindex(b.lines) for (from, to) in places(b.lines[i], text, whole)]
+  for s in [filter(s -> s[1] >= hi, found); filter(s -> s[1] < lo, found)]
+    (any(t -> clash(s, t), taken) || item(e, s[1][1]).content isa Live) && continue
+    push!(b.others, (b.anchor, b.caret))
+    b.anchor, b.caret = s
+    keep_others!(b)
+    return
+  end
+end
+
+"""
+Select the word that the caret is in or beside. With a selection, each end of
+it goes out to the edge of the word that it's in. With whole words selected
+already, the next place that has the same text is selected as well, so what's
+typed next goes in at each of them. With no word at the caret, nothing changes.
+
+The selection that was there first stays first in `others`, so Escape can go
+back to it.
+"""
+select_word!(e) = begin
+  b = e.buf
+  grew = Ref(false)
+  each_selection!(e) do
+    lo, hi = selection(b)
+    from = (lo[1], word_at(b.lines[lo[1]], lo[2])[1])
+    to = (hi[1], word_at(b.lines[hi[1]], hi[2])[2])
+    (from, to) == (lo, hi) && return
+    b.anchor, b.caret = from, to
+    grew[] = true
+  end
+  grew[] || select_next!(e)
+  touch!(e)
+end
+
 "What starts a comment in each language of code, by the language's name or the end of its file's name"
 const COMMENT_MARKS = Dict{String,String}(
   (lang => "#" for lang in ("jl", "julia", "ui", "py", "python", "rb", "ruby", "sh", "bash", "zsh", "fish", "toml", "yaml", "yml", "r", "perl", "pl", "make", "dockerfile"))...,
@@ -8892,6 +9059,7 @@ const COMMAND_GROUPS = [
     Command(:copy, "Copy", :look, "cmd+c", (e, w, _) -> copy_selection!(e)),
     Command(:paste, "Paste", :edit, "cmd+v", (e, w, _) -> paste!(e)),
     Command(:select_all, "Select all", :look, "cmd+a", (e, w, _) -> select_all!(e)),
+    Command(:select_word, "Select the word at the caret", :look, "cmd+d", (e, w, _) -> select_word!(e)),
     Command(:find, "Find in the page", :look, "cmd+f", (e, w, _) -> open_find!(e)),
     Command(:find_next, "Go to the next place that's found", :look, "cmd+g", (e, w, _) -> find_step!(e, 1)),
     Command(:find_last, "Go to the place that's found before", :look, "cmd+shift+g", (e, w, _) -> find_step!(e, -1)),
@@ -8907,7 +9075,7 @@ const COMMAND_GROUPS = [
     Command(:select_line, "Select the line", :look, "cmd+l", (e, w, _) -> select_lines!(e)),
     Command(:line_up, "Move the line up", :edit, "cmd+opt+left_bracket", (e, w, _) -> move_lines!(e, -1)),
     Command(:line_down, "Move the line down", :edit, "cmd+opt+right_bracket", (e, w, _) -> move_lines!(e, 1)),
-    Command(:duplicate_line, "Copy the line to the line under it", :edit, "cmd+d", (e, w, _) -> duplicate_lines!(e)),
+    Command(:duplicate_line, "Copy the line to the line under it", :edit, "cmd+shift+d", (e, w, _) -> duplicate_lines!(e)),
     Command(:delete_line, "Delete the line", :edit, "cmd+shift+k", (e, w, _) -> delete_lines!(e)),
     Command(:comment, "Make a line of code a comment, or code again", :edit, "cmd+slash", (e, w, _) -> toggle_comment!(e)),
     Command(:indent, "Indent, or go to the next cell of a table", :type, "tab", (e, w, _) -> indent!(e, false)),
@@ -8949,13 +9117,13 @@ const BUNDLES = [
     :line_up => "opt+up", :line_down => "opt+down", :duplicate_line => "opt+shift+down, opt+shift+up"],
   "Sublime Text" => [
     :open => "cmd+p, cmd+o", :print => "cmd+opt+p", :sidebar => "cmd+k cmd+b, cmd+backslash", :redo => "cmd+shift+z, cmd+y",
-    :line_up => "ctrl+cmd+up", :line_down => "ctrl+cmd+down", :duplicate_line => "cmd+shift+d", :delete_line => "ctrl+shift+k",
+    :line_up => "ctrl+cmd+up", :line_down => "ctrl+cmd+down", :delete_line => "ctrl+shift+k",
     :erase_line_start => "cmd+backspace, cmd+k cmd+backspace", :erase_line_end => "ctrl+k, cmd+k cmd+k"],
   # Emacs's own keys come first, and the Mac's keys still work where Emacs has no other use for them
   "Emacs" => [
     :save => "ctrl+x ctrl+s, cmd+s", :open => "ctrl+x ctrl+f, cmd+o", :close => "ctrl+x ctrl+c, cmd+w",
     :undo => "ctrl+slash, ctrl+x u, cmd+z", :cut => "ctrl+w, cmd+x", :copy => "opt+w, cmd+c", :paste => "ctrl+y, cmd+v",
-    :select_all => "ctrl+x h, cmd+a", :find => "ctrl+s, cmd+f", :find_last => "ctrl+r, cmd+shift+g", :comment => "opt+semicolon, cmd+slash",
+    :select_all => "ctrl+x h, cmd+a", :select_word => "opt+shift+2, cmd+d", :find => "ctrl+s, cmd+f", :find_last => "ctrl+r, cmd+shift+g", :comment => "opt+semicolon, cmd+slash",
     :left => "ctrl+b, left", :right => "ctrl+f, right", :up => "ctrl+p, up", :down => "ctrl+n, down",
     :word_left => "opt+b, opt+left", :word_right => "opt+f, opt+right",
     :line_start => "ctrl+a, cmd+left, home", :line_end => "ctrl+e, cmd+right, end",
@@ -9022,8 +9190,13 @@ command!(e, w, K) = begin
   (name, select)
 end
 
+"The commands that are done at each selection when there are several: the ones that go along a line, and the ones that delete"
+const AT_EACH = Set([:left, :right, :word_left, :word_right, :line_start, :line_end, :bold, :italic,
+                     :erase_back, :erase, :erase_word_back, :erase_word, :erase_line_start, :erase_line_end])
+
 "Run the command called `name` in the window `w` of `e`"
-run!(e, w, name::Symbol, select::Bool=false) = COMMANDS[name].run(e, w, select)
+run!(e, w, name::Symbol, select::Bool=false) =
+  name in AT_EACH ? each_selection!(() -> COMMANDS[name].run(e, w, select), e) : COMMANDS[name].run(e, w, select)
 
 "The first shortcut of the command `name` with two spaces before it, to end a tooltip with, or nothing when the command has no keys"
 hint(e, name::Symbol) = (list = keys_now(e).of[name]; isempty(list) ? "" : "  " * caps(first(list)))
@@ -9266,6 +9439,11 @@ onkey(e::Editor, ev::KeyPress{K}) where K = begin
     # none of that either, it hides the caret and every line shows as it reads.
     if e.popup != :none
       e.popup = :none
+    elseif !isempty(others(b))
+      # With several selections, Escape leaves the one that was there first, and the page goes back to it
+      b.anchor, b.caret = first(b.others)
+      empty!(b.others)
+      touch!(e)
     elseif !forget_outcomes!(e)
       b.anchor = b.caret
       b.reading = true
@@ -9273,7 +9451,7 @@ onkey(e::Editor, ev::KeyPress{K}) where K = begin
   elseif command !== nothing
     run!(e, w, command, select)
   elseif K == Keys.enter
-    newline!(e)
+    each_selection!(() -> newline!(e), e)
   end
   nothing
 end
@@ -9292,7 +9470,7 @@ ontype(e::Editor, ev::Typed) = begin
   (iscntrl(c) || '\uf700' <= c <= '\uf8ff') && return nothing
   # While the page is read, a key that would change the text does nothing. A file that's only shown is never changed.
   (e.buf.reading || readonly(e.buf)) && return nothing
-  type!(e, string(c), typing=true)
+  each_selection!(() -> type!(e, string(c), typing=true), e)
   # A code block offers names only just after a character is typed
   e.nodes[:typed_at] = (e.buf.path, e.buf.version, e.buf.caret)
   handled
@@ -10528,7 +10706,7 @@ const INSERTS = [
 const PAGE_MENU = ["Cut", "Copy", "Paste", "-", "Select All", "-", "Find…", "Export as HTML…", "-",
                    "Insert" => [x isa String ? x : x[1] for x in INSERTS]]
 
-cut!(e) = copy_selection!(e) === false || type!(e, "")
+cut!(e) = copy_selection!(e) === false || each_selection!(() -> type!(e, ""), e)
 select_all!(e) = begin
   b = e.buf
   b.reading = false   # a selection shows the caret's end of it

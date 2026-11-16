@@ -147,7 +147,7 @@ end
   @test b.lines == ["b", "a", "c", "d"] && b.caret == (1, 1)
   press(w, Keys.left_bracket, cmd, opt)           # the first line has nowhere to go
   @test b.lines == ["b", "a", "c", "d"]
-  press(w, Keys.d, cmd)
+  press(w, Keys.d, cmd, shift)
   @test b.lines == ["b", "b", "a", "c", "d"] && b.caret == (2, 1)
   press(w, Keys.k, cmd, shift)
   @test b.lines == ["b", "a", "c", "d"] && b.caret == (2, 1)
@@ -177,6 +177,122 @@ end
   @test b.lines == ["alpha", "gamma"]
   press(w, Keys.k, ctrl)
   @test b.lines == ["alphagamma"]
+end
+
+@testset "⌘D selects the word at the caret" begin
+  e, w = window("one two_3 three\n  don't stop\n\n+ -")
+  b = e.buf
+  picked() = K.excerpt(b, K.selection(b)...)
+  caret!(e, w, 1, 6)                              # in the middle of a word
+  press(w, Keys.d, cmd)
+  @test (b.anchor, b.caret) == ((1, 4), (1, 9)) && picked() == "two_3"
+  for col in (0, 3)                               # at the start of a word, and at its end
+    caret!(e, w, 1, col)
+    press(w, Keys.d, cmd)
+    @test picked() == "one"
+  end
+  caret!(e, w, 2, 4)
+  press(w, Keys.d, cmd)
+  @test picked() == "don't"
+  # With part of a word selected, each end goes out to the edge of its word
+  b.anchor, b.caret = (1, 5), (2, 3)
+  press(w, Keys.d, cmd)
+  @test (b.anchor, b.caret) == ((1, 4), (2, 7))
+  # With no word at the caret, nothing changes
+  for at in ((3, 0), (4, 1))
+    caret!(e, w, at...)
+    press(w, Keys.d, cmd)
+    @test b.anchor == b.caret == at
+  end
+  # Every bundle has it on ⌘D. Emacs has it on ⌥⇧2 as well.
+  for (bundle, _) in K.BUNDLES
+    e.bundle = bundle
+    caret!(e, w, 1, 12)
+    press(w, Keys.d, cmd)
+    @test picked() == "three" && b.lines[1] == "one two_3 three"
+  end
+  # ⌘⇧D copies the line now, in the bundles of Kaydown and Sublime Text
+  @test K.caps.(K.bundle_keys("Kaydown")[:duplicate_line]) == K.caps.(K.bundle_keys("Sublime Text")[:duplicate_line]) == ["⌘⇧D"]
+  e.bundle = "Emacs"
+  caret!(e, w, 1, 1)
+  press(w, K.read_shortcuts("opt+shift+2")[1][1].key, opt, shift)
+  @test picked() == "one"
+end
+
+@testset "⌘D again selects the next place that has the word as well" begin
+  e, w = window("cat dog cat\ncatalog cat\n\nCat cat.")
+  b = e.buf
+  spans() = sort([K.selection(b); [minmax(s...) for s in K.others(b)]])
+  caret!(e, w, 1, 1)
+  press(w, Keys.d, cmd)
+  @test spans() == [((1, 0), (1, 3))]
+  press(w, Keys.d, cmd)                           # the next one is selected too, and the caret goes to it
+  @test spans() == [((1, 0), (1, 3)), ((1, 8), (1, 11))] && b.caret == (1, 11)
+  press(w, Keys.d, cmd)                           # "catalog" has the letters, and isn't the word
+  @test b.caret == (2, 11)
+  press(w, Keys.d, cmd)                           # nor is "Cat"
+  @test b.caret == (4, 7)
+  all4 = [((1, 0), (1, 3)), ((1, 8), (1, 11)), ((2, 8), (2, 11)), ((4, 4), (4, 7))]
+  @test spans() == all4
+  press(w, Keys.d, cmd)                           # every place is selected, so nothing changes
+  @test spans() == all4
+  # What's typed goes in at each of them
+  ontype(w, Typed('o', w)); ontype(w, Typed('x', w)); frame(w)
+  @test b.lines == ["ox dog ox", "catalog ox", "", "Cat ox."]
+  @test spans() == [((1, 2), (1, 2)), ((1, 9), (1, 9)), ((2, 10), (2, 10)), ((4, 6), (4, 6))]
+  # ⌫ and the keys that go along the line work at each of them too
+  press(w, Keys.backspace)
+  @test b.lines == ["o dog o", "catalog o", "", "Cat o."]
+  press(w, Keys.left)
+  ontype(w, Typed('b', w)); frame(w)
+  @test b.lines == ["bo dog bo", "catalog bo", "", "Cat bo."]
+  press(w, Keys.right, shift)
+  @test spans() == [((1, 1), (1, 2)), ((1, 8), (1, 9)), ((2, 9), (2, 10)), ((4, 5), (4, 6))]
+  # One ⌘Z takes back what was done at all of them, and they're all still selected
+  press(w, Keys.backspace)
+  @test b.lines == ["b dog b", "catalog b", "", "Cat b."]
+  press(w, Keys.z, cmd)
+  @test b.lines == ["bo dog bo", "catalog bo", "", "Cat bo."] && length(K.others(b)) == 3
+  # Escape leaves the selection that was there first, and the caret still shows
+  press(w, Keys.escape)
+  @test isempty(K.others(b)) && !b.reading
+  @test (b.anchor, b.caret) == ((1, 1), (1, 2))
+  ontype(w, Typed('!', w)); frame(w)
+  @test b.lines == ["b! dog bo", "catalog bo", "", "Cat bo."]
+  # That's so with the words still selected, too
+  e, w = window("cat dog cat\ncat")
+  b = e.buf
+  caret!(e, w, 1, 9)
+  press(w, Keys.d, cmd); press(w, Keys.d, cmd); press(w, Keys.d, cmd)
+  @test b.caret == (1, 3) && length(K.others(b)) == 2
+  press(w, Keys.escape)
+  @test isempty(K.others(b)) && (b.anchor, b.caret) == ((1, 8), (1, 11))
+  # A key that isn't done at each of them leaves the one caret
+  e, w = window("a b a\nb")
+  b = e.buf
+  caret!(e, w, 1, 0)
+  press(w, Keys.d, cmd); press(w, Keys.d, cmd)
+  @test length(K.others(b)) == 1
+  press(w, Keys.down)
+  @test isempty(K.others(b))
+  # Return starts a new line at each of them, and the ones after it move down
+  caret!(e, w, 1, 0)
+  press(w, Keys.d, cmd); press(w, Keys.d, cmd)
+  press(w, Keys.right)
+  press(w, Keys.enter)
+  @test b.lines == ["a", " b a", "", "b"]
+  @test spans() == [((2, 0), (2, 0)), ((3, 0), (3, 0))]
+  # Text that isn't one word is found wherever it is, and the search goes round to the top of the page
+  e, w = window("x a+b\na+b a+b.")
+  b = e.buf
+  b.anchor, b.caret = (2, 4), (2, 7)
+  press(w, Keys.d, cmd)
+  @test spans() == [((1, 2), (1, 5)), ((2, 4), (2, 7))] && b.caret == (1, 5)
+  press(w, Keys.d, cmd)
+  @test spans() == [((1, 2), (1, 5)), ((2, 0), (2, 3)), ((2, 4), (2, 7))]
+  # ⌘B makes each of them bold
+  press(w, Keys.b, cmd)
+  @test b.lines == ["x **a+b**", "**a+b** **a+b**."]
 end
 
 @testset "⌘/ makes a comment of a line of code, and code of it again" begin

@@ -72,6 +72,8 @@ area = width * 3.6
 grid = [row * column for row in 1:3, column in 1:4]
 ```
 
+The page [julia.md](julia.md) has more code to run: an expression of several lines, what code prints, the names that a block offers as you type, and the box of a function.
+
 ## Live blocks
 
 A code block in the language `ui` holds Julia code. The page runs the code and shows what it makes: a node from any Julia module, or any other value as text.
@@ -215,3 +217,5 @@ Right-click the page to cut, copy or paste. The menu's Insert item adds a new bl
 A file can start with front matter: lines like `title: Notes` between two lines of `---`. Kaydown shows it as a block of its own, and leaves it out of the word count.
 
 Press ⌘, to open the settings in a window of their own: the colours, the font and its weight, the size of the text, the width of the page and what the count at the top right shows. A button there makes Kaydown the app that opens your Markdown files. The tabs at the top of that window show two more pages. Code editor has the settings for code: its font, its weight, its size, its indent, its line numbers and whether a long line wraps. Key bindings has the keys of each command. There you can choose the keys of VS Code, Sublime Text or Emacs, or click a command and press the keys you want for it.
+
+The Kaydown app updates itself. It gets a newer version while you work, and the new version takes the place of this one when you quit. A box at the end of the settings turns that off.

@@ -6,9 +6,9 @@ This page plans a job. Each to-do item is a task. The schedule under the tasks s
 
 - [x] Mark out the driveway
 - [x] Dig out the soil and cart it away
-- [x] Set the forms along the edges
-  - [x] Set the drain across the garage door
-- [x] Fix the steel mesh
+- [ ] Set the forms along the edges
+  - [ ] Set the drain across the garage door
+- [ ] Fix the steel mesh
 - [ ] Book the concrete and the pump
 - [ ] Pour and finish the concrete
 - [ ] Cut the joints
@@ -19,15 +19,13 @@ Move the mouse over a task. Its days show at the end of its line: its first and 
 ## Schedule
 
 ```schedule
-start: 2026-11-16
-
 Mark out the driveway | 2 days
 Dig out the soil and cart it away | 3 days | after Mark out the driveway
 Set the forms along the edges | 2 days | after Dig out the soil and cart it away
 Set the drain across the garage door | after Set the forms along the edges
 Fix the steel mesh | 2 days | after Set the drain across the garage door
-Pour and finish the concrete | after Book the concrete and the pump
-Cut the joints | after Pour and finish the concrete | after Fix the steel mesh
+Pour and finish the concrete | after Fix the steel mesh | after Book the concrete and the pump
+Cut the joints | after Pour and finish the concrete
 Take the forms off and clean up | after Cut the joints
 ```
 

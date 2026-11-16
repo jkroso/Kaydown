@@ -1,10 +1,36 @@
 # Kaydown
 
-A Markdown editor for the Mac, made with [UI.jl](https://github.com/jkroso/UI.jl). It draws each line the way it will read, and you type in it. A code block in the language `ui` runs its Julia code and shows what the code makes. In a code block in the language `julia`, ⌘Return runs the line that the caret is in, and shows what it comes to in a box after the line. A Julia file opens as one block of code that you change the same way, and a code block offers the names in scope as you type. A code block in the language `sheet` works things out, a row at a time. A code block in the language `spreadsheet` is a grid of cells with formulas. A code block in the language `mermaid` shows a diagram, like a flowchart. A button beside a diagram, a picture or a page of a PDF file makes it fill the window, where you zoom it with a pinch. A code block in the language `takeoff` shows a building plan that you measure from, and makes a quote from what you measure. A code block in the language `schedule` shows the page's to-do items as bars on a line of days, and you drag the bars to plan the work. A line that holds only a sound file shows a player, and the page's Insert menu records one from the microphone. A button under the player writes down what's said in it, on the Mac.
+A Markdown editor for the Mac, made with [UI.jl](https://github.com/jkroso/UI.jl). It draws each line the way it will read, and you type in it.
+
+A code block does more than show code. What it does depends on its language:
+
+- `ui` runs its Julia code and shows what the code makes.
+- `julia` runs the line that the caret is in when you press ⌘Return, and shows what it comes to in a box after the line. It offers the names in scope as you type.
+- `sheet` works things out, a row at a time.
+- `spreadsheet` is a grid of cells with formulas.
+- `mermaid` shows a diagram, like a flowchart.
+- `takeoff` shows a building plan that you measure from, and makes a quote from what you measure.
+- `schedule` shows the page's to-do items as bars on a line of days, and you drag the bars to plan the work.
+
+A page shows more than text:
+
+- A line that holds only a picture, a video or a sound file shows it, or a player for it. The page's Insert menu records a sound from the microphone, and a button under the player writes down what's said in it, on the Mac.
+- A button beside a diagram, a picture or a page of a PDF file makes it fill the window, where you zoom it with a pinch.
+- A Julia file opens as one block of code, which you change and run as you do a `julia` block.
 
 "Kaydown" is a working name, after Alan Kay.
 
-## Run it
+## Get the app
+
+1. Download `Kaydown-<version>.zip` from the [newest release](https://github.com/jkroso/Kaydown/releases/latest).
+2. Open the zip file.
+3. Move Kaydown to your Applications folder, and open it.
+
+The app needs a Mac with Apple silicon, and macOS 12 or later. To write down what's said in a recording, it needs macOS 26 or later. It opens on its welcome page, which shows what the editor does.
+
+The app updates itself. [How the app updates itself](#how-the-app-updates-itself) says how, and how to turn that off.
+
+## Run it from the source
 
 You need Julia and [Kip](https://github.com/jkroso/Kip.jl).
 
@@ -13,7 +39,13 @@ julia --project=. main.jl                # opens the welcome page
 julia --project=. main.jl ~/notes        # opens a file or a folder
 ```
 
-`pages/welcome.md` shows what the editor does. `pages/components.md` has a live block for each of UI.jl's components.
+The `pages` folder has the pages that come with Kaydown:
+
+- `welcome.md` shows what the editor does.
+- `components.md` has a live block for each of UI.jl's components.
+- `julia.md` has code to run with ⌘Return.
+- `schedule.md` has a schedule to try.
+- `settings.md`, `code-editor.md` and `key-bindings.md` are the three pages of the settings window.
 
 ## Use it with an agent
 
@@ -70,8 +102,15 @@ julia -O0 --project=. keys_test.jl           # the key bindings: the commands, t
 julia -O0 --project=. highlight_test.jl      # the colours of the parts of a line of code, and of the code in a string
 julia -O0 --project=. detail_test.jl         # what the box of a function and of a module shows when it's open
 julia -O0 --project=. update_test.jl         # the app's own updates: a newer version comes, is checked and takes the app's place
-julia -O0 --project=. merge_test.jl
-julia -O0 --project=. pasteboard_test.jl
+julia -O0 --project=. window_test.jl         # the settings window, ⌘W, and the settings that every window shares
+julia -O0 --project=. title_test.jl          # the menu of the file's name in the top bar
+julia -O0 --project=. selection_test.jl      # where the colour of the selection goes
+julia -O0 --project=. spelling_test.jl       # the red dots under a word that's spelt wrong, and what the page's menu does with it
+julia -O0 --project=. sound_test.jl          # a line that holds only a sound file, and the Transcribe button under its player
+julia -O0 --project=. video_test.jl          # a line that holds only a video file. It needs ffmpeg to make the video.
+julia -O0 --project=. html_test.jl           # the page of HTML that ⌘⇧E saves
+julia -O0 --project=. merge_test.jl          # your changes and an agent's changes to one page put together, and how the two talk
+julia -O0 --project=. pasteboard_test.jl     # what the Mac's clipboard holds: text, files and pictures
 ```
 
 The first three need no Centient. `centient_fake.jl` answers in its place.

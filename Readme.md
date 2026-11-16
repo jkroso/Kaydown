@@ -65,6 +65,7 @@ julia --project=. outcome_test.jl        # the code that ⌘Return runs in a `ju
 julia --project=. names_test.jl          # the list of names that a code block offers while you type
 julia --project=. code_file_test.jl      # a Julia file that the page changes, as one block of code
 julia --project=. code_settings_test.jl  # the settings of code: long lines, line numbers, the guide, the indent, the font and size
+julia --project=. keys_test.jl           # the key bindings: the commands, the bundles of shortcuts and the page that changes them
 julia --project=. highlight_test.jl      # the colours of the parts of a line of code, and of the code in a string
 julia --project=. merge_test.jl
 julia --project=. pasteboard_test.jl

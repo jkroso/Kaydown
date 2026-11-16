@@ -85,10 +85,16 @@
 #   - Click the word count to count characters or reading time instead.
 #   - ⌘+ and ⌘- change the text size by a pixel. ⌘0 puts it back.
 #   - ⌘P prints the page, or saves it as a PDF. ⌘⇧E saves it as a page of HTML.
-#   - ⌘, opens the settings page in a window of its own, where you choose the
-#     colours, the font, the text size, the width of the page, what the
-#     count at the top right counts and how code shows. A button there makes
-#     Kaydown the app that opens Markdown files. ⌘, again closes that window.
+#   - ⌘, opens the settings in a window of their own, where you choose the
+#     colours, the font, the text size, the width of the page and what the
+#     count at the top right counts. A button there makes Kaydown the app that
+#     opens Markdown files. The tabs at the top of that window show two more
+#     pages: Code editor, for how code shows, and Key bindings, for the keys
+#     of each command. ⌘, again closes that window.
+#   - On the Key bindings page, choose the keys of VS Code, Sublime Text or
+#     Emacs, or click a command and press the keys you want for it.
+#   - ⌘/ makes a comment of a line of code. ⌘L selects a line, ⌘D copies it
+#     to the line under it, ⌘⇧K deletes it, and ⌘⌥[ and ⌘⌥] move it up and down.
 #   - ⌘W closes a window. Kaydown quits when its last window closes.
 #   - ⌘⌥I opens the layout inspector.
 #
@@ -742,6 +748,8 @@ isspread(g::Grid) = g.head > 0px
   code_scale::Float64 = CODE_SCALE      # how big code is, as a part of the size of the page's text
   code_font::String = CODE_FONT         # the font of code, by the name of its family
   guide::Int = 0                        # a faint line goes down a file of code after this many characters. 0 is no line.
+  bundle::String = "Kaydown"            # the bundle of key bindings: the shortcuts of every command
+  rebound::Dict{Symbol,String} = Dict{Symbol,String}()   # the shortcuts of each command that has other keys than the bundle's, as the settings file writes them
   popup::Symbol = :none                # :finder while the file finder is open
   picked::Int = 1                       # the file the finder will open
   scroll::Scroll = Scroll(width(grow=grow), height(grow=grow), scrollbar_inset=0px)   # the page's scrollbar is at the window's edge
@@ -780,6 +788,11 @@ end
 end
 "The file's name in the middle of the top bar. A right-click on it shows the file's menu."
 @def mutable struct Title <: SemanticUI end
+"A tab in the top bar of the settings window. A click on it shows its page of the settings."
+@def mutable struct SettingsTab <: SemanticUI
+  page::String = ""    # the name of the page's file
+  label::String = ""
+end
 @def mutable struct Count <: SemanticUI       # the word count in the top bar
   rect::NTuple{4,px} = (0px, 0px, 0px, 0px)
   quiet::Bool = false
@@ -2316,6 +2329,15 @@ sandbox(e) = get!(e.nodes, :sandbox) do
   # ... and after how many characters a faint line goes down a file of code. 0 is no line.
   Core.eval(m, :(const code_guide = $(() -> (reads!(e, :guide); e.guide))))
   Core.eval(m, :(const code_guide! = $(n -> guide!(e, Int(n)))))
+  # ... and the key bindings. `key_bundles()` gives the names of the bundles, and `key_bundle()` the one that's chosen.
+  # `key_list()` shows each command with its keys, and a click on one changes them. `keys_changed()` is true when a
+  # command has other keys than the bundle's, and `key_reset!()` gives every command the bundle's keys again.
+  Core.eval(m, :(const key_bundles = $(() -> String[first(b) for b in BUNDLES])))
+  Core.eval(m, :(const key_bundle = $(() -> (reads!(e, :bundle); e.bundle))))
+  Core.eval(m, :(const key_bundle! = $(name -> bundle!(e, String(name)))))
+  Core.eval(m, :(const key_list = $(() -> own!(e, KeyList()))))
+  Core.eval(m, :(const keys_changed = $(() -> (reads!(e, :bundle); reads!(e, :rebound); !isempty(e.rebound)))))
+  Core.eval(m, :(const key_reset! = $(() -> bundle!(e, e.bundle))))
   # ... and the app that opens Markdown files: `markdown_app()` gives its name, like "Kaydown", or "" when macOS can't say.
   # `default_app!()` asks macOS to make that app Kaydown. It gives false when the Kaydown app isn't installed.
   # `app_installed()` is true when the Kaydown app is on this Mac.
@@ -4800,9 +4822,9 @@ onkey(a::PlanArea, ::KeyPress{K}) where K = begin
   if K in (Keys.backspace, Keys.delete)
     # While something is being drawn, Delete takes its last corner back
     return isempty(v.draft) ? remove_picked!(v) : (pop!(v.draft); handled)
-  elseif K == Keys.z && held(a, Keys.cmd)
+  elseif (command = command_of(editor(v), window_of(a), K)) in (:undo, :redo)
     b = editor(v).buf
-    held(a, Keys.shft) ? redo!(b) : undo!(b)
+    command == :redo ? redo!(b) : undo!(b)
     return handled
   end
   nothing
@@ -6460,9 +6482,9 @@ onkey(a::ChartArea, ::KeyPress{K}) where K = begin
     Schedules.unlink!(v.data, v.tasks, from, to)
     commit!(v)
     return handled
-  elseif K == Keys.z && held(a, Keys.cmd)
+  elseif (command = command_of(editor(v), window_of(a), K)) in (:undo, :redo)
     b = editor(v).buf
-    held(a, Keys.shft) ? redo!(b) : undo!(b)
+    command == :redo ? redo!(b) : undo!(b)
     return handled
   end
   nothing
@@ -6759,8 +6781,8 @@ const ZOOM_EDGE = 24.0   # px of room round a picture that fits the window
 const BAR_ROOM = 64px    # the bottom of the window, where the bar of buttons is
 const MOST_ZOOM = 8.0    # the biggest a picture gets: this many times its own size, or the size that fits the window if that's bigger
 const ZOOM_STEP = 1.25   # how much bigger the + button, and ⌘+, make a picture
-"The keys with ⌘ that do what they always do while a picture fills the window. The rest would change the page under it."
-const PAGE_KEYS = (Keys.s, Keys.o, Keys.p, Keys.w, Keys.comma, Keys.backslash)
+"The commands that do what they always do while a picture fills the window. The rest would change the page under it."
+const PAGE_COMMANDS = (:save, :open, :print, :close, :settings, :sidebar, :sidebar_keys)
 
 "What fills the window, over the page"
 @def mutable struct ZoomView <: SemanticUI
@@ -7257,23 +7279,25 @@ end
 # Two fingers that move apart or together on the trackpad make the picture bigger or smaller, round the mouse
 onpinch(a::ZoomArea, ev::Pinch) = zoom_by!(a.of, ev.scale, num(ev.window.mouse[1]), num(ev.window.mouse[2]))
 
-# The keys are the view's, so none of them change the page under it. A right-click has no menu here.
-onkey(a::ZoomArea, ev::KeyPress{K}) where K = ismouse(K) && K != Keys.mouse_right ? nothing : zoom_key!(a.of, K, ev.window)
+# The keys are the view's, so none of them change the page under it: the editor gives each key to `zoom_key!`
+# when the key comes up to it. A right-click has no menu here.
+onkey(a::ZoomArea, ::KeyPress{Keys.mouse_right}) = handled
 ontype(::ZoomArea, ::Typed) = handled
 
 """
-Do what the key `K` does while `v` fills the window. It's `handled`, or nothing
-for a key with ⌘ that the page still takes, like ⌘S.
+Do what the key `K` does while `v` fills the window. `command` is the command
+that the key bindings give the key, or nothing. It's `handled`, or nothing for
+the key of a command that the page still takes, like the one that saves. The
+keys that change the size of the page's text change the size of the picture.
 """
-zoom_key!(v::ZoomView, K, w) = begin
-  cmd = Keys.cmd in w.keys
+zoom_key!(v::ZoomView, K, w, command) = begin
   K == Keys.escape && return zoom_out!(v)
-  cmd && K in PAGE_KEYS && return nothing
+  command in PAGE_COMMANDS && return nothing
   v.what[1] == :node && return handled
-  cmd && K == Keys.equal && return zoom_by!(v, ZOOM_STEP, view_middle(v)...)
-  cmd && K == Keys.minus && return zoom_by!(v, 1 / ZOOM_STEP, view_middle(v)...)
-  cmd && K == getproperty(Keys, Symbol(0)) && return fit_now!(v)
-  !cmd && v.what[1] == :pdf && K in (Keys.left, Keys.right) && return turn!(v, K == Keys.left ? -1 : 1)
+  command == :bigger && return zoom_by!(v, ZOOM_STEP, view_middle(v)...)
+  command == :smaller && return zoom_by!(v, 1 / ZOOM_STEP, view_middle(v)...)
+  command == :usual_size && return fit_now!(v)
+  !(Keys.cmd in w.keys) && v.what[1] == :pdf && K in (Keys.left, Keys.right) && return turn!(v, K == Keys.left ? -1 : 1)
   handled
 end
 
@@ -8100,19 +8124,21 @@ end
 
 """
 How far a key scrolls the page while it's read, or nothing for a key that doesn't
-scroll it: ↑ and ↓ a little, Page Up, Page Down and Space a screen less a little, so a
-line or two stays in sight, and Home, End, ⌘↑ and ⌘↓ to the top or the bottom.
+scroll it. `command` is the command that the key runs while the page isn't read.
+The keys that move the caret up and down scroll a little. The keys that move it
+a screen, and Space, scroll a screen less a little, so a line or two stays in
+sight. Home, End and the keys that move the caret to the top or the bottom of
+the page scroll that far.
 """
-read_step(e, K, cmd, shift) = begin
+read_step(e, K, command, shift) = begin
   screen = e.scroll.viewport - 40px
-  K == Keys.up ? (cmd ? px(-Inf) : -50px) :
-  K == Keys.down ? (cmd ? px(Inf) : 50px) :
-  cmd ? nothing :
-  K == Keys.pageup ? -screen :
-  K == Keys.pagedown ? screen :
-  K == Keys.space ? (shift ? -screen : screen) :
-  K == Keys.home ? px(-Inf) :
-  K == Keys._end ? px(Inf) : nothing
+  command == :up ? -50px :
+  command == :down ? 50px :
+  command == :page_up ? -screen :
+  command == :page_down ? screen :
+  command == :doc_start || (K == Keys.home && command in (nothing, :line_start)) ? px(-Inf) :
+  command == :doc_end || (K == Keys._end && command in (nothing, :line_end)) ? px(Inf) :
+  command === nothing && K == Keys.space ? (shift ? -screen : screen) : nothing
 end
 
 "Scroll the page by `by`, as far as it goes"
@@ -8609,47 +8635,608 @@ end
 
 ismouse(k) = k in (Keys.mouse_left, Keys.mouse_right, Keys.mouse_middle)
 
-# The keys that do something with ⌘ while the page shows a file that's only shown: ⌘O, ⌘\ and the
-# keys that change the size of the text. A file that shows as text takes ⌘A, ⌘C, ⌘F and ⌘G too.
-# ⌘W and ⌘, work in every window, so they aren't here.
-const READ_KEYS = (Keys.o, Keys.backslash, Keys.equal, Keys.minus, getproperty(Keys, Symbol(0)))
-const TEXT_KEYS = (Keys.a, Keys.c, Keys.f, Keys.g)
+# --- key bindings ------------------------------------------------------------------------
+#
+# Each thing that a key does is a command with a name, like `:save`. A shortcut
+# is the keys that run a command: one key with the keys that are held with it,
+# like ⌘S, or two of those pressed one after the other, like ⌃X ⌃S. A bundle
+# gives every command its shortcuts. Kaydown starts with the bundle called
+# "Kaydown". Each other bundle has the keys of another editor. The key bindings
+# page of the settings chooses the bundle, and gives any one command another
+# shortcut. The bundle and those changes are settings: every window has the
+# same keys, and the settings file keeps them.
+#
+# A command's kind says where it works:
+#   :window  whatever has the keyboard, and on a file that's only shown
+#   :look    while the text has the keyboard, and on a file that's only shown as text
+#   :edit    while the text has the keyboard. It changes the text.
+#   :move    it moves the caret. With ⇧ held too, it grows the selection.
+#   :type    it changes the text at the caret, like ⌫. While the page is read it does nothing.
+#
+# Return, esc and Space have no command. What each does depends on where the caret is.
 
+"A key, and the keys of ⌃, ⌘, ⌥ and ⇧ that are held with it"
+struct Stroke
+  held::Keys
+  key::Keys
+end
+
+"The keys that run a command: one stroke, or two that are pressed one after the other"
+const Shortcut = Tuple{Vararg{Stroke}}
+
+# The keys that are held with another key: the name that the settings file has for each, and the Mac's sign for it
+const HOLDS = ((Keys.ctrl, "ctrl", "⌃"), (Keys.cmd, "cmd", "⌘"), (Keys.opt, "opt", "⌥"), (Keys.shft, "shift", "⇧"))
+const HELD = Keys.ctrl | Keys.cmd | Keys.opt | Keys.shft
+
+"Each key that a shortcut can have, by the name that the settings file has for it, like \"z\", \"f5\" or \"pageup\""
+const KEY_NAMES = Dict{String,Keys}(lstrip(string(name), '_') => getproperty(Keys, name) for name in keys(instances(Keys))
+                                    if !(name in (:shft, :cmd, :opt, :ctrl, :capslock, :fn, :mouse_left, :mouse_right, :mouse_middle)))
+const KEY_OF = Dict{Keys,String}(key => name for (name, key) in KEY_NAMES)
+
+"What the key bindings page shows for a key that isn't a letter, a number or an F key"
+const KEY_SIGNS = Dict{Keys,String}(
+  Keys.enter => "Return", Keys.tab => "Tab", Keys.space => "Space", Keys.backspace => "⌫", Keys.delete => "⌦", Keys.escape => "esc",
+  Keys.left => "←", Keys.right => "→", Keys.up => "↑", Keys.down => "↓",
+  Keys.home => "Home", Keys._end => "End", Keys.pageup => "Page Up", Keys.pagedown => "Page Down",
+  Keys.tilde => "`", Keys.minus => "-", Keys.equal => "=", Keys.left_bracket => "[", Keys.right_bracket => "]", Keys.semicolon => ";",
+  Keys.apostrophe => "'", Keys.comma => ",", Keys.period => ".", Keys.slash => "/", Keys.backslash => "\\", Keys.plus => "+", Keys.times => "*")
+
+const TYPING_KEYS = ("tilde", "minus", "equal", "left_bracket", "right_bracket", "semicolon", "apostrophe", "comma", "period", "slash",
+                     "backslash", "times", "plus", "space")
+
+"True when the key `K` types a character: a letter, a number or a sign. A shortcut with it needs ⌘, ⌃ or ⌥ too."
+typing_key(K) = (name = get(KEY_OF, K, ""); length(name) == 1 || startswith(name, "num") || name in TYPING_KEYS)
+
+"The stroke that `text` writes, like \"cmd+shift+z\", or nothing when it writes none"
+read_stroke(text::AbstractString) = begin
+  parts = split(text, '+')
+  key = get(KEY_NAMES, last(parts), nothing)
+  key === nothing && return nothing
+  held = Keys(0)
+  for part in parts[1:end-1]
+    i = findfirst(h -> h[2] == part, HOLDS)
+    i === nothing && return nothing
+    held |= HOLDS[i][1]
+  end
+  Stroke(held, key)
+end
+
+"The shortcuts that `text` writes, with a comma between them, like \"cmd+z, ctrl+x u\". One that can't be read is left out."
+read_shortcuts(text::AbstractString) = begin
+  out = Shortcut[]
+  for part in split(text, ','; keepempty=false)
+    strokes = map(read_stroke, split(part))
+    (isempty(strokes) || length(strokes) > 2 || any(isnothing, strokes)) && continue
+    push!(out, Tuple(strokes))
+  end
+  out
+end
+
+"How the settings file writes a stroke, a shortcut or a command's shortcuts. `read_shortcuts` reads it back."
+written(s::Stroke) = join([[name for (key, name, _) in HOLDS if key in s.held]; KEY_OF[s.key]], '+')
+written(s::Shortcut) = join(map(written, s), ' ')
+written(list::Vector{Shortcut}) = join(map(written, list), ", ")
+
+"How a stroke or a shortcut reads, like ⌘⇧Z or ⌃X ⌃S"
+caps(s::Stroke) = join([sign for (key, _, sign) in HOLDS if key in s.held]) * get(() -> uppercase(KEY_OF[s.key]), KEY_SIGNS, s.key)
+caps(s::Shortcut) = join(map(caps, s), ' ')
+
+"""
+Something that a key does. `keys` are its shortcuts in the bundle called
+Kaydown. `run` gets the editor, its window, and true when ⇧ is held to grow
+the selection.
+"""
+struct Command
+  name::Symbol
+  title::String   # what the key bindings page calls it
+  kind::Symbol
+  keys::String
+  run::Function
+end
+
+"Move the caret one character left or right. With a selection and no ⇧, it goes to that end of the selection."
+caret_step!(e, by::Int, select::Bool) = begin
+  b = e.buf
+  lo, hi = selection(b)
+  move!(e, selecting(b) && !select ? (by < 0 ? lo : hi) : beside(b, b.caret, by), select; by)
+end
+
+"Move the caret most of a screen up or down"
+caret_page!(e, by::Int, select::Bool) = foreach(_ -> move!(e, vertical(e, by), select; keep_goal=true, by), 1:20)
+
+"What ⌫ does: it takes away a row of a table that has nothing in it, or what's before the caret"
+erase_back!(e) = begin
+  b = e.buf
+  emptyrow(b) && return backrow!(e)
+  blk = block(b, b.caret[1])
+  erase!(e, backstep(b, blk, length(indentation(e, blk))))
+end
+
+"Take away the rest of the caret's line. At the end of a line, it joins the next line to it."
+erase_line_end!(e) = (b = e.buf; at = line_end(b, b.caret[1]); erase!(e, at == b.caret ? beside(b, at, 1) : at))
+
+# --- commands for whole lines ---
+
+"The first and last line that the selection touches. A selection that ends at the start of a line doesn't touch that line."
+touched(b::Buffer) = begin
+  lo, hi = minmax(b.caret, b.anchor)
+  (lo[1], hi[2] == 0 && hi[1] > lo[1] ? hi[1] - 1 : hi[1])
+end
+
+"Put the caret at `caret` and the other end of the selection at `anchor`, each `by` lines further down, after their lines moved"
+follow_lines!(e, caret::Pos, anchor::Pos, by::Int) = begin
+  b = e.buf
+  place((i, col)) = i + by > length(b.lines) ? line_end(b, length(b.lines)) : (max(1, i + by), min(col, length(b.lines[max(1, i + by)])))
+  b.caret, b.anchor = place(caret), place(anchor)
+  touch!(e)
+end
+
+"Take away each line that the selection touches"
+delete_lines!(e) = begin
+  b = e.buf
+  s, t = touched(b)
+  col = b.caret[2]
+  if t < length(b.lines)
+    edit!(b, (s, 0), (t + 1, 0), "")
+  elseif s > 1
+    edit!(b, line_end(b, s - 1), line_end(b, t), "")
+  else
+    edit!(b, (1, 0), line_end(b, t), "")
+  end
+  i = min(s, length(b.lines))
+  b.caret = b.anchor = settle(b, (i, min(col, length(b.lines[i]))))
+  touch!(e)
+end
+
+"Put a copy of the lines that the selection touches under them. The caret goes to the copy."
+duplicate_lines!(e) = begin
+  b = e.buf
+  s, t = touched(b)
+  caret, anchor = b.caret, b.anchor
+  edit!(b, line_end(b, t), line_end(b, t), "\n" * join(b.lines[s:t], "\n"))
+  follow_lines!(e, caret, anchor, t - s + 1)
+end
+
+"Move the lines that the selection touches one line up or down"
+move_lines!(e, by::Int) = begin
+  b = e.buf
+  s, t = touched(b)
+  caret, anchor = b.caret, b.anchor
+  if by < 0
+    s > 1 || return
+    edit!(b, (s - 1, 0), line_end(b, t), join([b.lines[s:t]; b.lines[s-1]], "\n"))
+  else
+    t < length(b.lines) || return
+    edit!(b, (s, 0), line_end(b, t + 1), join([b.lines[t+1]; b.lines[s:t]], "\n"))
+  end
+  follow_lines!(e, caret, anchor, by)
+end
+
+"Select the whole of the caret's line. With a selection, it grows to the end of its last line. Again, it takes the next line too."
+select_lines!(e) = begin
+  b = e.buf
+  lo, hi = minmax(b.caret, b.anchor)
+  b.anchor = (lo[1], 0)
+  move!(e, hi[1] < length(b.lines) ? (hi[1] + 1, 0) : line_end(b, hi[1]), true; by=1)
+end
+
+"What starts a comment in each language of code, by the language's name or the end of its file's name"
+const COMMENT_MARKS = Dict{String,String}(
+  (lang => "#" for lang in ("jl", "julia", "ui", "py", "python", "rb", "ruby", "sh", "bash", "zsh", "fish", "toml", "yaml", "yml", "r", "perl", "pl", "make", "dockerfile"))...,
+  (lang => "//" for lang in ("js", "javascript", "jsx", "ts", "typescript", "tsx", "c", "h", "cpp", "hpp", "cc", "java", "swift", "rs", "rust", "go", "kt", "kotlin",
+                             "scala", "cs", "php", "dart", "zig"))...,
+  (lang => "--" for lang in ("lua", "sql", "hs", "haskell", "elm"))...,
+  (lang => ";" for lang in ("lisp", "el", "clj", "clojure", "scm", "scheme"))...,
+  (lang => "%" for lang in ("tex", "latex", "erl", "erlang"))..., "mermaid" => "%%")
+
+"""
+Make a comment of each line of code that the selection touches, or make code
+of them again if each is a comment already. A line with nothing on it stays
+as it is. Outside code, where a comment has no mark, nothing changes.
+"""
+toggle_comment!(e) = begin
+  b = e.buf
+  s, t = touched(b)
+  ks = kinds(b)
+  lines = [i for i in s:t if ks[i].kind == Kind.code && !isempty(strip(b.lines[i]))]
+  isempty(lines) && return
+  mark = get(COMMENT_MARKS, lowercase(ks[first(lines)].lang), nothing)
+  mark === nothing && return
+  indent(i) = length(b.lines[i]) - length(lstrip(b.lines[i]))
+  on = all(i -> startswith(lstrip(b.lines[i]), mark), lines)
+  at = minimum(indent, lines)   # every mark goes at the indent of the line that's furthest out
+  ends = Dict(:caret => b.caret, :anchor => b.anchor)
+  new = b.lines[s:t]
+  for i in lines
+    line = b.lines[i]
+    from = on ? indent(i) : at
+    # A comment's mark has a space after it, which goes with the mark
+    n = !on ? length(mark) + 1 : length(mark) + (startswith(rest(line, from + length(mark)), " ") ? 1 : 0)
+    new[i-s+1] = on ? head(line, from) * rest(line, from + n) : head(line, from) * mark * " " * rest(line, from)
+    for (name, (l, col)) in ends
+      l == i && (ends[name] = (i, on ? (col > from ? max(from, col - n) : col) : (col >= from ? col + n : col)))
+    end
+  end
+  # One change, so one ⌘Z puts every line back
+  edit!(b, (s, 0), line_end(b, t), join(new, "\n"))
+  b.caret, b.anchor = ends[:caret], ends[:anchor]
+  touch!(e)
+end
+
+"""
+The commands, in the groups and the order that the key bindings page shows
+them. Each has its shortcuts in the bundle called Kaydown.
+"""
+const COMMAND_GROUPS = [
+  "Files and windows" => [
+    Command(:save, "Save the file", :window, "cmd+s", (e, w, _) -> save_page!(e)),
+    Command(:open, "Find a file by name", :window, "cmd+o", (e, w, _) -> open_finder!(e)),
+    Command(:print, "Print the page", :window, "cmd+p", (e, w, _) -> print!(e, w)),
+    Command(:export, "Export the page as HTML", :window, "cmd+shift+e", (e, w, _) -> export_html!(e, w)),
+    Command(:close, "Close the window", :window, "cmd+w", (e, w, _) -> close(w)),
+    Command(:settings, "Show or hide the settings", :window, "cmd+comma", (e, w, _) -> toggle_settings!(e)),
+    Command(:sidebar, "Show or hide the sidebar", :window, "cmd+backslash", (e, w, _) -> toggle_panel!(e)),
+    Command(:sidebar_keys, "Give the sidebar the keyboard", :window, "cmd+shift+backslash", (e, w, _) -> focus_panel!(e)),
+    Command(:bigger, "Make the text bigger", :window, "cmd+equal", (e, w, _) -> zoom!(e, zoom_for(text_size(e) + 1))),
+    Command(:smaller, "Make the text smaller", :window, "cmd+minus", (e, w, _) -> zoom!(e, zoom_for(text_size(e) - 1))),
+    Command(:usual_size, "Put the text back to its usual size", :window, "cmd+0", (e, w, _) -> zoom!(e, 1.0)),
+    Command(:inspector, "Show or hide the layout inspector", :window, "cmd+opt+i", (e, w, _) -> toggle_inspector!(w))],
+  "The text" => [
+    Command(:undo, "Undo", :edit, "cmd+z", (e, w, _) -> (undo!(e.buf); touch!(e))),
+    Command(:redo, "Redo", :edit, "cmd+shift+z", (e, w, _) -> (redo!(e.buf); touch!(e))),
+    Command(:cut, "Cut", :edit, "cmd+x", (e, w, _) -> cut!(e)),
+    Command(:copy, "Copy", :look, "cmd+c", (e, w, _) -> copy_selection!(e)),
+    Command(:paste, "Paste", :edit, "cmd+v", (e, w, _) -> paste!(e)),
+    Command(:select_all, "Select all", :look, "cmd+a", (e, w, _) -> select_all!(e)),
+    Command(:find, "Find in the page", :look, "cmd+f", (e, w, _) -> open_find!(e)),
+    Command(:find_next, "Go to the next place that's found", :look, "cmd+g", (e, w, _) -> find_step!(e, 1)),
+    Command(:find_last, "Go to the place that's found before", :look, "cmd+shift+g", (e, w, _) -> find_step!(e, -1)),
+    Command(:bold, "Make the selection bold", :edit, "cmd+b", (e, w, _) -> e.buf.view == :markdown && surround!(e, "**")),
+    Command(:italic, "Make the selection italic", :edit, "cmd+i", (e, w, _) -> e.buf.view == :markdown && surround!(e, "*")),
+    # In a `julia` code block these run the code that the caret is in. Anywhere else, the first sends the page
+    # to the agent that waits for it, and with no agent, each starts a new line as Return does.
+    Command(:run, "Run the code at the caret, or nudge the agent", :edit, "cmd+enter",
+            (e, w, _) -> run_here!(e) || (isempty(agents(e)) ? newline!(e) : send!(e))),
+    Command(:run_step, "Run the code at the caret and go to the next line", :type, "shift+enter",
+            (e, w, _) -> run_here!(e, step=true) || newline!(e))],
+  "Lines" => [
+    Command(:select_line, "Select the line", :look, "cmd+l", (e, w, _) -> select_lines!(e)),
+    Command(:line_up, "Move the line up", :edit, "cmd+opt+left_bracket", (e, w, _) -> move_lines!(e, -1)),
+    Command(:line_down, "Move the line down", :edit, "cmd+opt+right_bracket", (e, w, _) -> move_lines!(e, 1)),
+    Command(:duplicate_line, "Copy the line to the line under it", :edit, "cmd+d", (e, w, _) -> duplicate_lines!(e)),
+    Command(:delete_line, "Delete the line", :edit, "cmd+shift+k", (e, w, _) -> delete_lines!(e)),
+    Command(:comment, "Make a line of code a comment, or code again", :edit, "cmd+slash", (e, w, _) -> toggle_comment!(e)),
+    Command(:indent, "Indent, or go to the next cell of a table", :type, "tab", (e, w, _) -> indent!(e, false)),
+    Command(:outdent, "Take an indent away, or go back a cell", :type, "shift+tab", (e, w, _) -> indent!(e, true))],
+  "The caret" => [
+    Command(:left, "Left", :move, "left", (e, w, select) -> caret_step!(e, -1, select)),
+    Command(:right, "Right", :move, "right", (e, w, select) -> caret_step!(e, 1, select)),
+    Command(:up, "Up", :move, "up", (e, w, select) -> move!(e, vertical(e, -1), select; keep_goal=true, by=-1)),
+    Command(:down, "Down", :move, "down", (e, w, select) -> move!(e, vertical(e, 1), select; keep_goal=true, by=1)),
+    Command(:word_left, "To the word before", :move, "opt+left", (e, w, select) -> move!(e, word_step(e.buf, e.buf.caret, -1), select; by=-1)),
+    Command(:word_right, "To the next word", :move, "opt+right", (e, w, select) -> move!(e, word_step(e.buf, e.buf.caret, 1), select; by=1)),
+    Command(:line_start, "To the start of the line", :move, "cmd+left, home", (e, w, select) -> move!(e, screen_edge(e, -1), select; by=-1)),
+    Command(:line_end, "To the end of the line", :move, "cmd+right, end", (e, w, select) -> move!(e, screen_edge(e, 1), select; by=1)),
+    Command(:doc_start, "To the top of the page", :move, "cmd+up", (e, w, select) -> move!(e, (1, 0), select; by=-1)),
+    Command(:doc_end, "To the bottom of the page", :move, "cmd+down", (e, w, select) -> move!(e, line_end(e.buf, length(e.buf.lines)), select; by=1)),
+    Command(:page_up, "Up a screen", :move, "pageup", (e, w, select) -> caret_page!(e, -1, select)),
+    Command(:page_down, "Down a screen", :move, "pagedown", (e, w, select) -> caret_page!(e, 1, select))],
+  "Deleting" => [
+    Command(:erase_back, "Delete what's before the caret", :type, "backspace", (e, w, _) -> erase_back!(e)),
+    Command(:erase, "Delete what's after the caret", :type, "delete", (e, w, _) -> erase!(e, beside(e.buf, e.buf.caret, 1))),
+    Command(:erase_word_back, "Delete to the start of the word", :type, "opt+backspace", (e, w, _) -> erase!(e, word_step(e.buf, e.buf.caret, -1))),
+    Command(:erase_word, "Delete to the end of the word", :type, "opt+delete", (e, w, _) -> erase!(e, word_step(e.buf, e.buf.caret, 1))),
+    Command(:erase_line_start, "Delete to the start of the line", :type, "cmd+backspace", (e, w, _) -> erase!(e, (e.buf.caret[1], 0))),
+    Command(:erase_line_end, "Delete to the end of the line", :type, "ctrl+k", (e, w, _) -> erase_line_end!(e))]]
+
+"Each command, by its name"
+const COMMANDS = Dict{Symbol,Command}(c.name => c for (_, cs) in COMMAND_GROUPS for c in cs)
+
+"""
+The bundles of key bindings, in the order that the key bindings page offers
+them. Each lists only the commands whose shortcuts are different from the
+ones in the bundle called Kaydown, with the shortcuts it gives them.
+"""
+const BUNDLES = [
+  "Kaydown" => Pair{Symbol,String}[],
+  # ⌘P finds a file, as Quick Open does, so printing has another key
+  "VS Code" => [
+    :open => "cmd+p, cmd+o", :print => "cmd+opt+p",
+    :line_up => "opt+up", :line_down => "opt+down", :duplicate_line => "opt+shift+down, opt+shift+up"],
+  "Sublime Text" => [
+    :open => "cmd+p, cmd+o", :print => "cmd+opt+p", :sidebar => "cmd+k cmd+b, cmd+backslash", :redo => "cmd+shift+z, cmd+y",
+    :line_up => "ctrl+cmd+up", :line_down => "ctrl+cmd+down", :duplicate_line => "cmd+shift+d", :delete_line => "ctrl+shift+k",
+    :erase_line_start => "cmd+backspace, cmd+k cmd+backspace", :erase_line_end => "ctrl+k, cmd+k cmd+k"],
+  # Emacs's own keys come first, and the Mac's keys still work where Emacs has no other use for them
+  "Emacs" => [
+    :save => "ctrl+x ctrl+s, cmd+s", :open => "ctrl+x ctrl+f, cmd+o", :close => "ctrl+x ctrl+c, cmd+w",
+    :undo => "ctrl+slash, ctrl+x u, cmd+z", :cut => "ctrl+w, cmd+x", :copy => "opt+w, cmd+c", :paste => "ctrl+y, cmd+v",
+    :select_all => "ctrl+x h, cmd+a", :find => "ctrl+s, cmd+f", :find_last => "ctrl+r, cmd+shift+g", :comment => "opt+semicolon, cmd+slash",
+    :left => "ctrl+b, left", :right => "ctrl+f, right", :up => "ctrl+p, up", :down => "ctrl+n, down",
+    :word_left => "opt+b, opt+left", :word_right => "opt+f, opt+right",
+    :line_start => "ctrl+a, cmd+left, home", :line_end => "ctrl+e, cmd+right, end",
+    :doc_start => "opt+shift+comma, cmd+up", :doc_end => "opt+shift+period, cmd+down",
+    :page_up => "opt+v, pageup", :page_down => "ctrl+v, pagedown",
+    :erase => "ctrl+d, delete", :erase_word => "opt+d, opt+delete"]]
+
+"The shortcuts that the bundle called `name` gives each command"
+bundle_keys(name::AbstractString) = begin
+  theirs = Dict(last(BUNDLES[something(findfirst(b -> first(b) == name, BUNDLES), 1)]))
+  Dict{Symbol,Vector{Shortcut}}(c.name => read_shortcuts(get(theirs, c.name, c.keys)) for c in values(COMMANDS))
+end
+
+"""
+The key bindings as they are now. `of` has the shortcuts of each command: the
+bundle's, with the ones that the key bindings page changed. `commands` has the
+command of each shortcut, and `starts` each stroke that starts a shortcut of two.
+"""
+keys_now(e) = begin
+  made = get(e.nodes, :keys, nothing)
+  made !== nothing && made.bundle == e.bundle && made.rebound === e.rebound && return made
+  of = bundle_keys(e.bundle)
+  for (name, text) in e.rebound
+    haskey(of, name) && (of[name] = read_shortcuts(text))
+  end
+  commands = Dict{Shortcut,Symbol}()
+  # A shortcut that two commands have runs the one that the page lists first
+  for (_, cs) in COMMAND_GROUPS, c in cs, s in of[c.name]
+    get!(commands, s, c.name)
+  end
+  starts = Set{Stroke}(first(s) for s in keys(commands) if length(s) == 2)
+  e.nodes[:keys] = (bundle=e.bundle, rebound=e.rebound, of=of, commands=commands, starts=starts)
+end
+
+"The command that the key `K` runs by itself in window `w`, with the keys that are held there, or nothing"
+command_of(e, w, K) = get(keys_now(e).commands, (Stroke(w.keys & HELD, K),), nothing)
+
+"""
+The command that the key `K` runs in window `w`, with the keys that are held
+there, and true when ⇧ is held to grow the selection. The command is `:wait`
+for a key that does nothing by itself: the first key of a shortcut of two, or
+a second key that ends no shortcut. It's nothing for a key with no command.
+"""
+command!(e, w, K) = begin
+  (ismouse(K) || K in HELD || K == Keys.capslock || K == Keys.fn) && return (nothing, false)
+  ks = keys_now(e)
+  s = Stroke(w.keys & HELD, K)
+  before = pop!(e.nodes, :stroke, nothing)
+  name, select = if before !== nothing
+    (get(ks.commands, (before, s), :wait), false)
+  elseif haskey(ks.commands, (s,))
+    (ks.commands[(s,)], false)
+  elseif s in ks.starts
+    e.nodes[:stroke] = s
+    (:wait, false)
+  else
+    # ⇧ with the keys of a command that moves the caret grows the selection. With a key like ⌫, it changes nothing.
+    found = Keys.shft in s.held ? get(ks.commands, (Stroke(setdiff(s.held, Keys.shft), K),), nothing) : nothing
+    kind = found === nothing ? :none : COMMANDS[found].kind
+    kind == :move ? (found, true) : kind == :type ? (found, false) : (nothing, false)
+  end
+  # A key that types a character types nothing when it's the key of a command, like ⌥F in the Emacs bundle
+  name !== nothing && typing_key(K) && !(Keys.cmd in s.held) && !(Keys.ctrl in s.held) && (e.nodes[:mute] = time())
+  (name, select)
+end
+
+"Run the command called `name` in the window `w` of `e`"
+run!(e, w, name::Symbol, select::Bool=false) = COMMANDS[name].run(e, w, select)
+
+"The first shortcut of the command `name` with two spaces before it, to end a tooltip with, or nothing when the command has no keys"
+hint(e, name::Symbol) = (list = keys_now(e).of[name]; isempty(list) ? "" : "  " * caps(first(list)))
+
+"True when one of the shortcuts `a` and `b` starts with the other, so the keys of one would run the other"
+clashes(a::Shortcut, b::Shortcut) = (n = min(length(a), length(b)); a[1:n] == b[1:n])
+
+"""
+Use the bundle called `bundle`, with the shortcuts in `rebound` for the commands
+that have other keys than the bundle's. Every window gets them, and they're kept.
+"""
+keys!(e, bundle::String, rebound::Dict{Symbol,String}) = begin
+  usual = bundle_keys(bundle)
+  # A command that has the bundle's own shortcuts again isn't changed any more
+  e.bundle, e.rebound = bundle, filter(((name, text),) -> haskey(usual, name) && read_shortcuts(text) != usual[name], rebound)
+  delete!(e.nodes, :stroke)
+  save_settings!(e)
+  rerun!(e, :bundle)
+  rerun!(e, :rebound)
+  e
+end
+
+"Use the bundle of key bindings called `name`. Every command gets the bundle's keys, so the keys that were changed go back too."
+bundle!(e, name::String) = begin
+  any(b -> first(b) == name, BUNDLES) || error("The bundles of key bindings are $(join(first.(BUNDLES), ", ", " and ")). $name isn't one of them.")
+  keys!(e, name, Dict{Symbol,String}())
+end
+
+"""
+Give the command `name` the shortcut `s`, and no other. A command that had
+those keys, or keys that start the same way, loses them. Returns the names
+of the commands that lost a shortcut.
+"""
+rebind!(e, name::Symbol, s::Shortcut) = begin
+  new = copy(e.rebound)
+  lost = Symbol[]
+  for (other, list) in keys_now(e).of
+    other == name && continue
+    kept = filter(o -> !clashes(o, s), list)
+    length(kept) == length(list) && continue
+    new[other] = written(kept)
+    push!(lost, other)
+  end
+  new[name] = written(Shortcut[s])
+  keys!(e, e.bundle, new)
+  lost
+end
+
+"Give the command `name` the bundle's shortcuts again. A command that has one of them now loses it."
+put_back!(e, name::Symbol) = begin
+  new = copy(e.rebound)
+  delete!(new, name)
+  lost = Symbol[]
+  for s in bundle_keys(e.bundle)[name], (other, list) in keys_now(e).of
+    other == name && continue
+    kept = filter(o -> !clashes(o, s), read_shortcuts(get(new, other, written(list))))
+    length(kept) == length(list) && continue
+    new[other] = written(kept)
+    other in lost || push!(lost, other)
+  end
+  keys!(e, e.bundle, new)
+  lost
+end
+
+# The key bindings page shows the commands in a list. Each row has the command's shortcuts at its right.
+# A click on a row waits for the keys of its new shortcut.
+
+"The list of the commands on the key bindings page"
+@def mutable struct KeyList <: SemanticUI end
+"A command's row in that list. A click on it waits for the command's new keys."
+@def mutable struct KeyRow <: SemanticUI
+  name::Symbol = :save
+end
+"The words in a row that give its command the bundle's keys again"
+@def mutable struct KeyReset <: SemanticUI
+  name::Symbol = :save
+end
+
+const KEY_ROW_H = 34px
+
+"A shortcut as the list shows it: its keys in a box"
+keycap(s::Shortcut) = Box(height(22px), padding(7px, 0px), radius(5px), background(colours.float), border(1px, :solid, colours.line),
+                          label(caps(s), 12px, color=colours.ink))
+
+"The command whose row waits for new keys, or nothing"
+key_asking(e) = get(e.nodes, :key_asking, nothing)
+
+"Stop waiting for a command's new keys, and give the keyboard back to the text"
+stop_asking_keys!(e) = (delete!(e.nodes, :key_asking); focus(e); handled)
+
+"What the list says under the row of `name`, after its new keys took the keys of the commands in `lost`"
+lost_note!(e, name::Symbol, lost) = begin
+  isempty(lost) && return delete!(e.nodes, :key_note)
+  titles = [COMMANDS[other].title for other in lost]
+  none = [other for other in lost if isempty(keys_now(e).of[other])]
+  e.nodes[:key_note] = (name, "\"$(join(titles, "\", \"", "\" and \""))\" had $(length(lost) == 1 ? "this key" : "these keys") before." *
+                              (isempty(none) ? "" : length(lost) == 1 ? " It has no key now." : " $(length(none)) of them have no key now."))
+end
+
+describe(l::KeyList) = begin
+  e = editor(l)
+  row(name) = node!(() -> KeyRow(name=name), e, (:key_row, name))
+  Column(width(grow=grow), Alignment.Start, name="Key bindings",
+    Iterators.flatten(((Box(width(grow=grow), height(40px), padding(10px, 0px, 6px, 10px), Alignment.End,
+                            Row(width(grow=grow), label(group, 12px, color=colours.dim, weight="Semibold"))),
+                        map(c -> row(c.name), cs)...) for (group, cs) in COMMAND_GROUPS))...)
+end
+
+describe(r::KeyRow) = begin
+  e = editor(r)
+  w = window_of(e)
+  waits = key_asking(e) == r.name
+  # A click somewhere else gives the keyboard to something else, and the row stops waiting
+  waits && (w === nothing || w.focus !== r) && (delete!(e.nodes, :key_asking); waits = false)
+  list = keys_now(e).of[r.name]
+  under = get(e.nodes, :key_note, (:none, ""))
+  # Words by themselves would take half of the row, so each is in a box that's as wide as the words
+  right = waits ? (Box(label(get(e.nodes, :key_refused, "Press the new keys, or esc to keep these"), 12px, color=colours.accent)),) :
+          isempty(list) ? (Box(label("No keys", 12px, color=colours.faint)),) : map(keycap, list)
+  row = Row(width(grow=grow), height(KEY_ROW_H), padding(10px, 0px), radius(6px), child_gap=6px, name="Command",
+            background(waits ? colours.active : ishovered(r) ? colours.hover : clear),
+    Box(width(grow=grow), Alignment.Start, label(COMMANDS[r.name].title, 14px)),
+    (haskey(e.rebound, r.name) && !waits ? (node!(() -> KeyReset(name=r.name), e, (:key_reset, r.name)),) : ())...,
+    right...)
+  under[1] == r.name || return row
+  Column(width(grow=grow), Alignment.Start, row,
+    Box(width(grow=grow), padding(10px, 0px, 8px, 10px), Alignment.Start, label(under[2], 12px, color=colours.dim)))
+end
+
+cursor(::KeyRow) = :hand
+
+onkey(r::KeyRow, ::KeyPress{Keys.mouse_left}) = begin
+  e = editor(r)
+  e.nodes[:key_asking] = r.name
+  delete!(e.nodes, :key_refused)
+  delete!(e.nodes, :key_note)
+  focus(r)
+  handled
+end
+
+# While a row waits, the next key with the keys held with it is the command's new shortcut. esc leaves the command as it was.
+onkey(r::KeyRow, ev::KeyPress{K}) where K = begin
+  e = editor(r)
+  key_asking(e) == r.name || return nothing
+  ismouse(K) && return nothing
+  (K in HELD || K == Keys.capslock || K == Keys.fn) && return handled
+  K == Keys.escape && return stop_asking_keys!(e)
+  s = Stroke(ev.window.keys & HELD, K)
+  # The text gets the keyboard back before the key types its character, like the π of ⌥P, so the character is dropped
+  typing_key(K) && !(Keys.cmd in s.held) && !(Keys.ctrl in s.held) && (e.nodes[:mute] = time())
+  if typing_key(K) && !(Keys.cmd in s.held) && !(Keys.ctrl in s.held) && !(Keys.opt in s.held)
+    e.nodes[:key_refused] = "$(caps(s)) types a character. Hold ⌘, ⌃ or ⌥ with it."
+    return handled
+  elseif K == Keys.enter && s.held == Keys(0)
+    e.nodes[:key_refused] = "Return starts a new line. Hold ⌘, ⌃, ⌥ or ⇧ with it."
+    return handled
+  end
+  lost_note!(e, r.name, rebind!(e, r.name, (s,)))
+  stop_asking_keys!(e)
+end
+ontype(r::KeyRow, ::Typed) = key_asking(editor(r)) == r.name ? handled : nothing
+
+describe(b::KeyReset) = Box(height(22px), padding(7px, 0px), radius(5px), background(ishovered(b) ? colours.active : clear),
+                            label("Put back", 12px, color=colours.dim))
+cursor(::KeyReset) = :hand
+onkey(b::KeyReset, ::KeyPress{Keys.mouse_left}) = begin
+  e = editor(b)
+  lost_note!(e, b.name, put_back!(e, b.name))
+  handled
+end
+
+# A press of a mouse button that nothing under the mouse took comes here. It has a method of its own, so the
+# first click in a window doesn't wait for the code of the key bindings to be made ready.
+onkey(e::Editor, ev::Union{KeyPress{Keys.mouse_left},KeyPress{Keys.mouse_right},KeyPress{Keys.mouse_middle}}) = begin
+  pop!(e.nodes, :chose, false) && return
+  # While a picture or a model fills the window, a right-click has no menu
+  zooming(e) === nothing || e.popup != :none || return
+  ev isa KeyPress{Keys.mouse_right} && return context_menu!(e, ev.window)
+  nothing
+end
+
+"""
+What a key does. The key bindings say which command it runs. Return, esc and
+Space have no command: what they do depends on where the caret is.
+"""
 onkey(e::Editor, ev::KeyPress{K}) where K = begin
   # A key that the sidebar's tree took, like Return on a heading, comes here next. It isn't for the text.
   pop!(e.nodes, :chose, false) && return
-  # ⌘W closes the window and ⌘, shows the settings, whatever has the keyboard. A slider on the
-  # settings page takes the keyboard when it's dragged, and ⌘, still closes that window.
-  if Keys.cmd in ev.window.keys
-    K == Keys.w && return (close(ev.window); nothing)
-    K == Keys.comma && return (toggle_settings!(e); nothing)
-  end
-  # While a picture or a model fills the window, the keys are its own, and a right-click has no menu. Esc puts the page back.
-  zoomed = zooming(e)
-  zoomed === nothing || e.popup != :none || zoom_key!(zoomed, K, ev.window) !== handled || return
-  K == Keys.mouse_right && return context_menu!(e, ev.window)
-  ismouse(K) && return
   w = ev.window
-  shift, cmd, opt, ctrl = Keys.shft in w.keys, Keys.cmd in w.keys, Keys.opt in w.keys, Keys.ctrl in w.keys
+  # The first key of a shortcut of two, like ⌃X, does nothing but wait for the second
+  command, select = command!(e, w, K)
+  command == :wait && return
+  kind = command === nothing ? :none : COMMANDS[command].kind
+  # The commands that close the window and show the settings work whatever has the keyboard. A slider
+  # on the settings page takes the keyboard when it's dragged, and ⌘, still closes that window.
+  command in (:close, :settings) && return (run!(e, w, command); nothing)
+  # While a picture or a model fills the window, the keys are its own. Esc puts the page back.
+  zoomed = zooming(e)
+  zoomed === nothing || e.popup != :none || zoom_key!(zoomed, K, w, command) !== handled || return
+  shift, cmd, opt = Keys.shft in w.keys, Keys.cmd in w.keys, Keys.opt in w.keys
   b = e.buf
-  # While a part of a live block has the keyboard, the keys are its own and
-  # don't change the text. Escape gives the keyboard back to the text.
+  # While a part of a live block has the keyboard, the keys are its own and don't change the text.
+  # Escape gives the keyboard back to the text. A command for the window, like the one that saves, still runs.
   if w.focus !== e && w.focus !== input(e)
     if w.focus === find_input(e)
-      find_key!(e, K, shift, cmd)
+      find_key!(e, w, K, command)
     elseif w.focus === renamer(e)
       rename_key!(e, K)
     elseif K == Keys.escape
       hide_menu!(w)
       focus(e)
-    elseif cmd && K == Keys.s
-      save_page!(e)
-    elseif cmd && K == Keys.p
-      print!(e, w)
-    elseif cmd && K == Keys.backslash && w.focus === file_tree(e)
-      # ⌘\ hides the sidebar while it has the keyboard too, and the text gets the keyboard back
-      shift || toggle_panel!(e)
+    elseif command in (:sidebar, :sidebar_keys) && w.focus === file_tree(e)
+      # While the sidebar has the keyboard, its two commands give the keyboard back to the text, and the first hides it too
+      command == :sidebar && toggle_panel!(e)
       focus(e)
+    elseif kind == :window
+      run!(e, w, command)
     end
     return
   end
@@ -8657,16 +9244,16 @@ onkey(e::Editor, ev::KeyPress{K}) where K = begin
   # The list of names under a sheet's expression takes ↑, ↓, Return, Tab and esc
   !cmd && !opt && !shift && suggest_key!(e, K) && return nothing
   # While the page is read, there's no caret to move, so the keys that would move it scroll the
-  # page. A key that would change the text does nothing. Any other command with ⌘ still works,
-  # and one that moves the caret, like undo, puts it back.
+  # page. A key that would change the text at the caret does nothing. Any other command still
+  # works, and one that moves the caret, like undo, puts it back.
   if b.reading || readonly(b)
-    step = read_step(e, K, cmd, shift)
+    step = read_step(e, K, command, shift)
     step === nothing || return (scroll_page!(e, step); nothing)
-    cmd || K == Keys.escape || return nothing
+    K == Keys.escape || kind in (:window, :look, :edit) || return nothing
   end
   # A file that's only shown takes the commands that don't change it. Its text can be selected, copied and searched.
-  if readonly(b) && K != Keys.escape && !(cmd && opt && K == Keys.i)
-    K in READ_KEYS || (b.view != :file && K in TEXT_KEYS) || return nothing
+  if readonly(b) && K != Keys.escape
+    kind == :window || (kind == :look && b.view != :file) || return nothing
   end
   if K == Keys.escape && finding(e)
     close_find!(e)
@@ -8679,74 +9266,10 @@ onkey(e::Editor, ev::KeyPress{K}) where K = begin
       b.anchor = b.caret
       b.reading = true
     end
-  elseif cmd && opt && K == Keys.i
-    toggle_inspector!(w)
-  elseif cmd && K == Keys.s
-    save_page!(e)
-  elseif K == Keys.enter && (cmd || shift) && !opt && run_here!(e, step=!cmd)
-    # In a `julia` code block, ⌘Return and ⇧Return run the code that the caret is in
-  elseif cmd && K == Keys.enter && !isempty(agents(e))
-    send!(e)   # to the agent that waits for the page
-  elseif cmd && K == Keys.z
-    shift ? redo!(b) : undo!(b)
-    touch!(e)
-  elseif cmd && K == Keys.a
-    select_all!(e)
-  elseif cmd && K == Keys.c
-    copy_selection!(e)
-  elseif cmd && K == Keys.x
-    cut!(e)
-  elseif cmd && K == Keys.v
-    paste!(e)
-  elseif cmd && K == Keys.b
-    b.view == :markdown && surround!(e, "**")
-  elseif cmd && K == Keys.i
-    b.view == :markdown && surround!(e, "*")
-  elseif cmd && K == Keys.o
-    open_finder!(e)
-  elseif cmd && K == Keys.f
-    open_find!(e)
-  elseif cmd && K == Keys.g
-    find_step!(e, shift ? -1 : 1)
-  elseif cmd && shift && K == Keys.e
-    export_html!(e, w)
-  elseif cmd && K == Keys.p
-    print!(e, w)
-  elseif cmd && K == Keys.backslash
-    shift ? focus_panel!(e) : toggle_panel!(e)
-  elseif cmd && K == Keys.equal
-    zoom!(e, zoom_for(text_size(e) + 1))
-  elseif cmd && K == Keys.minus
-    zoom!(e, zoom_for(text_size(e) - 1))
-  elseif cmd && K == getproperty(Keys, Symbol(0))
-    zoom!(e, 1.0)
-  elseif K == Keys.left || K == Keys.right
-    by = K == Keys.left ? -1 : 1
-    lo, hi = selection(b)
-    to = cmd ? screen_edge(e, by) : opt ? word_step(b, b.caret, by) :
-         selecting(b) && !shift ? (by < 0 ? lo : hi) : beside(b, b.caret, by)
-    move!(e, to, shift; by)
-  elseif K == Keys.up || K == Keys.down
-    by = K == Keys.up ? -1 : 1
-    to = cmd ? (by < 0 ? (1, 0) : line_end(b, length(b.lines))) : vertical(e, by)
-    move!(e, to, shift; keep_goal=!cmd, by)
-  elseif K == Keys.pageup || K == Keys.pagedown
-    for _ in 1:20
-      by = K == Keys.pageup ? -1 : 1
-      move!(e, vertical(e, by), shift; keep_goal=true, by)
-    end
-  elseif K == Keys.home || K == Keys._end
-    move!(e, screen_edge(e, K == Keys.home ? -1 : 1), shift)
-  elseif K == Keys.backspace && !cmd && !opt && emptyrow(b)
-    backrow!(e)
-  elseif K == Keys.backspace
-    erase!(e, cmd ? (b.caret[1], 0) : opt ? word_step(b, b.caret, -1) : (blk = block(b, b.caret[1]); backstep(b, blk, length(indentation(e, blk)))))
-  elseif K == Keys.delete
-    erase!(e, opt ? word_step(b, b.caret, 1) : beside(b, b.caret, 1))
+  elseif command !== nothing
+    run!(e, w, command, select)
   elseif K == Keys.enter
     newline!(e)
-  elseif K == Keys.tab
-    indent!(e, shift)
   end
   nothing
 end
@@ -8755,6 +9278,8 @@ end
 # ß on a German keyboard, é from ⌥E and then E, and an emoji from the Mac's
 # emoji list. A key that's held with ⌘ types nothing.
 ontype(e::Editor, ev::Typed) = begin
+  # The key that types this just ran a command, like ⌥F in the Emacs bundle, so it types nothing
+  time() - pop!(e.nodes, :mute, 0.0) < 0.5 && return handled
   # A character that a part of a live block didn't take comes here next. It isn't for the text.
   ev.window.focus === e || return nothing
   zooming(e) === nothing || return handled   # the page under a picture that fills the window doesn't change
@@ -8971,11 +9496,11 @@ tip_label(words) = Box(padding(10px, 7px), label(words, 12px, color=TIP_INK))
 tip(b::ToolButton) = begin
   e = editor(b)
   if b.action == :panel
-    e.panel && return "Hide sidebar  ⌘\\"
+    e.panel && return "Hide sidebar" * hint(e, :sidebar)
     ws = elsewhere(e)
     # The dot beside the button is for the first of these
-    isempty(ws) && return "Show sidebar  ⌘\\"
-    return "$(uppercasefirst(first(ws).name)) waits for $(basename(first(ws).page))  ·  Show sidebar  ⌘\\"
+    isempty(ws) && return "Show sidebar" * hint(e, :sidebar)
+    return "$(uppercasefirst(first(ws).name)) waits for $(basename(first(ws).page))  ·  Show sidebar" * hint(e, :sidebar)
   end
   b.action == :marks && return marking(e) ? "Hide $(whose(e)) changes" : "Show $(whose(e)) changes"
   b.action == :job && return job_tip(e)
@@ -8986,7 +9511,7 @@ end
 tip(s::SendButton) = begin
   e = editor(s)
   ws = agents(e)
-  isempty(ws) ? "Nudged $(get(e.nodes, :agent, "the agent"))" : "Nudge $(first(ws).name) with what you changed  ⌘Return"
+  isempty(ws) ? "Nudged $(get(e.nodes, :agent, "the agent"))" : "Nudge $(first(ws).name) with what you changed" * hint(e, :run)
 end
 tip(c::Count) = begin
   s = after(STATS, editor(c).stat)
@@ -9288,7 +9813,8 @@ end
 describe(t::TopBar) = begin
   e = editor(t)
   b = e.buf
-  side = 250px
+  # The settings window is narrow, and its tabs need the room between the two ends of the bar
+  side = issettings(e) ? 130px : 250px
   ended_rename!(e)
   # The top bar lies over the top of the sidebar. The file's name is in the
   # middle of the space beside the sidebar, so it moves as the sidebar slides.
@@ -9302,7 +9828,8 @@ describe(t::TopBar) = begin
       (readonly(b) ? (Box(height(28px), padding(8px, 0px), label(isempty(b.about) ? "Read only" : b.about * "  ·  Read only", 12px, color=colours.dim)),
                       # The app that the Mac uses for the file can change it, so a button opens the file there
                       button(e, :outside, "box-arrow-up-right")) :
-                     (job_part(e)..., agent_part(e)..., node!(Count, e, :count)))...))
+                     # The pages of the settings are for choosing, not for writing, so they show no count
+                     issettings(e) ? () : (job_part(e)..., agent_part(e)..., node!(Count, e, :count)))...))
 end
 
 # The window has no title bar, so you move it by dragging the top bar
@@ -9315,6 +9842,9 @@ onkey(t::TopBar, ::KeyPress{Keys.mouse_left}) = drag_window!(window_of(t))
 describe(t::Title) = begin
   e = editor(t)
   b = e.buf
+  # The settings window has a tab for each page of the settings where another window has its file's name
+  issettings(e) && return Row(child_gap=2px, name="Settings tabs",
+    [node!(() -> SettingsTab(page=page, label=says), e, (:settings_tab, page)) for (page, says) in SETTINGS_PAGES]...)
   if !isempty(b.path) && renaming(e, :title) == b.path
     # The field grows as the name gets longer
     wide = clamp(measure(Face(SANS, "", 13px, colours.ink, false), renamer(e).text) + 24px, 160px, 420px)
@@ -9328,9 +9858,22 @@ end
 
 onkey(t::Title, ::KeyPress{Keys.mouse_right}) = begin
   e = editor(t)
-  isempty(e.buf.path) || file_menu!(e, window_of(t), e.buf.path; at=:title)
+  # A page of the settings is Kaydown's own, so it has no menu to rename it or move it to the Trash
+  issettings(e) || isempty(e.buf.path) || file_menu!(e, window_of(t), e.buf.path; at=:title)
   handled
 end
+
+describe(t::SettingsTab) = begin
+  e = editor(t)
+  here = e.buf.path == settings_page(t.page)
+  Box(height(26px), padding(11px, 0px), radius(6px), background(here ? colours.active : ishovered(t) ? colours.hover : clear),
+    label(t.label, 13px, color=here ? colours.ink : colours.dim, weight=here ? "Medium" : ""))
+end
+
+cursor(::SettingsTab) = :hand
+
+# A click on a tab shows its page in the settings window. Each page keeps the place it was scrolled to.
+onkey(t::SettingsTab, ::KeyPress{Keys.mouse_left}) = (open!(editor(t), settings_page(t.page)); handled)
 
 # --- the sidebar --------------------------------------------------------------------------
 
@@ -11058,17 +11601,17 @@ find_tick!(e) = begin
   go_found!(e, something(findfirst(p -> (p[1], p[2]) >= lo, places), 1))
 end
 
-"What a key does while the bar has the keyboard"
-find_key!(e, K, shift, cmd) = begin
+"What a key does while the bar has the keyboard. `command` is the command that the key bindings give the key, or nothing."
+find_key!(e, w, K, command) = begin
   if K == Keys.escape
     close_find!(e)
-  elseif K == Keys.enter || (cmd && K == Keys.g)
-    find_step!(e, shift ? -1 : 1)
-  elseif cmd && K == Keys.f
+  elseif K == Keys.enter
+    find_step!(e, Keys.shft in w.keys ? -1 : 1)
+  elseif command == :find
     i = find_input(e)
     i.anchor, i.cursor = 0, length(i.text)
-  elseif cmd && K == Keys.s
-    save_page!(e)
+  elseif command in (:find_next, :find_last) || (command !== nothing && COMMANDS[command].kind == :window)
+    run!(e, w, command)
   end
   nothing
 end
@@ -11347,10 +11890,8 @@ export_html!(e, w) = begin
   # A window that isn't on the screen, like one a test makes, has no panel to ask with
   (Sys.isapple() && !isempty(w.glfw)) || return nothing
   path = save_panel(e, title(e.buf.path) * ".html")
-  # The panel took the keyboard, so the window never heard the keys of ⌘⇧E come up
-  for key in (Keys.cmd, Keys.shft, Keys.e)
-    key in w.keys && (w.keys ⊻= key)
-  end
+  # The panel took the keyboard, so the window never heard the keys that opened it come up
+  w.keys = Keys(0)
   path === nothing && return nothing
   try
     write(path, page_html(e))
@@ -12015,23 +12556,30 @@ end
 # --- settings -----------------------------------------------------------------------------
 #
 # The settings are the page's colours, its font, the size of its text, its width,
-# what the count at the top right counts, how code shows and how wide the
-# sidebar is. ⌘, opens the settings page, a
-# Markdown file whose live blocks change them, in a window of its own. A
-# setting that changes in one window changes in every window. They are kept in
-# a file, so the next window opens with them.
+# what the count at the top right counts, how code shows, the key bindings and
+# how wide the sidebar is. ⌘, opens the settings in a window of their own.
+# They're on three pages, each a Markdown file whose live blocks change them:
+# General, Code editor and Key bindings. The top bar of the settings window has
+# a tab for each page. A setting that changes in one window changes in every
+# window. They are kept in a file, so the next window opens with them.
 
 "The folder of Kaydown's own pages. The built app changes it to the copies it writes out."
 const pages_dir = Ref(joinpath(@__DIR__, "pages"))
 
 "The settings that every window has the same: each is a field of the editor"
-const SHARED = (:theme, :font, :zoom, :widest, :stat, :spelling, :wrap, :numbers, :shade, :indent, :code_scale, :code_font, :guide, :side)
+const SHARED = (:theme, :font, :zoom, :widest, :stat, :spelling, :wrap, :numbers, :shade, :indent, :code_scale, :code_font, :guide, :bundle, :rebound, :side)
+
+"The pages of the settings, in the order of their tabs: the name of each page's file, and what its tab says"
+const SETTINGS_PAGES = ("settings.md" => "General", "code-editor.md" => "Code editor", "key-bindings.md" => "Key bindings")
+
+"Where the page of the settings is whose file is called `name`"
+settings_page(name=first(first(SETTINGS_PAGES))) = joinpath(pages_dir[], name)
 
 const SETTINGS_SIZE = (720px, 820px)   # of the settings window, when the window that asked for it is big enough
 const SETTINGS_DROP = 48px             # how far the settings window's top is below the top of the window that asked for it
 
-"True when `e` is the editor of the settings window. That window can go to another page, and then it's a window like any other."
-issettings(e) = e.settings && e.buf.path == joinpath(pages_dir[], "settings.md")
+"True when `e` is the editor of the settings window. That window can go to a page that isn't one of the settings, and then it's a window like any other."
+issettings(e) = e.settings && any(page -> e.buf.path == settings_page(first(page)), SETTINGS_PAGES)
 
 "The editor of the settings window, or nothing while that window isn't open"
 settings_editor() = (i = findfirst(issettings, editors); i === nothing ? nothing : editors[i])
@@ -12046,7 +12594,7 @@ toggle_settings!(e) = begin
   issettings(e) && return (close(by); e)
   s = settings_editor()
   s === nothing || return (front!(window_of(s)); e)
-  s = build_editor(joinpath(pages_dir[], "settings.md"))
+  s = build_editor(settings_page())
   s.settings = true
   foreach(name -> setfield!(s, name, getfield(e, name)), SHARED)
   s.remember = e.remember
@@ -12102,7 +12650,9 @@ save_settings!(e) = begin
   e.remember || return
   try
     mkpath(dirname(settings_file()))
-    write(settings_file(), "theme=$(e.theme)\nfont=$(e.font)\nzoom=$(e.zoom)\nwidth=$(e.widest.value)\ncount=$(e.stat)\nspelling=$(e.spelling)\nwrap=$(e.wrap)\nnumbers=$(e.numbers)\nshade=$(e.shade)\nindent=$(e.indent)\ncode=$(e.code_scale)\ncodefont=$(e.code_font)\nguide=$(e.guide)\nsidebar=$(e.side.value)\n")
+    # After the bundle of key bindings comes a line for each command that has other keys than the bundle's, like key.save=ctrl+s
+    changed = join(["key.$name=$(e.rebound[name])\n" for name in sort!(collect(keys(e.rebound)))])
+    write(settings_file(), "theme=$(e.theme)\nfont=$(e.font)\nzoom=$(e.zoom)\nwidth=$(e.widest.value)\ncount=$(e.stat)\nspelling=$(e.spelling)\nwrap=$(e.wrap)\nnumbers=$(e.numbers)\nshade=$(e.shade)\nindent=$(e.indent)\ncode=$(e.code_scale)\ncodefont=$(e.code_font)\nguide=$(e.guide)\nsidebar=$(e.side.value)\nkeys=$(e.bundle)\n$changed")
   catch
     # A file that can't be written only means the settings last as long as the window
   end
@@ -12149,6 +12699,12 @@ load_settings!(e) = begin
     elseif name == "sidebar"
       w = tryparse(Float64, value)
       w === nothing || (e.side = px(round(clamp(w, num(PANEL_MIN), num(PANEL_MAX)))))
+    elseif name == "keys"
+      any(b -> first(b) == value, BUNDLES) && (e.bundle = String(value))
+    elseif startswith(name, "key.")
+      # The shortcuts of one command. A window that has these already gets a new set, not a change to the one it shares.
+      command = Symbol(chopprefix(name, "key."))
+      haskey(COMMANDS, command) && (e.rebound = merge(e.rebound, Dict(command => written(read_shortcuts(value)))))
     end
   end
   e

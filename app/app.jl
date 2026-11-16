@@ -46,7 +46,7 @@ const page = read(WELCOME, String)
 const PAGES = dirname(WELCOME)
 "The text of each of the app's own pages, by file name. The model, the video, the recording and the plan that the pages show are here too, as the bytes of their files."
 const pages = Dict(name => read(joinpath(PAGES, name), String)
-                   for name in ("welcome.md", "components.md", "settings.md", "schedule.md", "widgets.jl", "knot.stl", "knot.mp4", "hello.m4a", "plan.pdf"))
+                   for name in ("welcome.md", "components.md", "settings.md", "code-editor.md", "key-bindings.md", "schedule.md", "widgets.jl", "knot.stl", "knot.mp4", "hello.m4a", "plan.pdf"))
 
 "The `user/repo/file` that a file Kip got from GitHub has there, or nothing for any other file"
 place(path) = begin
@@ -113,7 +113,7 @@ error. An editor only runs the blocks that are on screen, so this scrolls down
 each page a screen at a time.
 """
 check_pages(dir) =
-  for name in ("welcome.md", "components.md", "settings.md", "schedule.md")
+  for name in ("welcome.md", "components.md", "settings.md", "code-editor.md", "key-bindings.md", "schedule.md")
     empty!(problems)
     e = build_editor(joinpath(dir, name))
     w = Window(e, title="check", size=(1100px, 800px))

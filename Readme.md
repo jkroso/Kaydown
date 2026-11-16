@@ -61,6 +61,7 @@ julia --project=. zoom_test.jl           # a picture, a diagram or a page that f
 julia --project=. schedule_test.jl       # how a schedule is read, written and worked out
 julia --project=. schedule_view_test.jl  # the schedule's bars and links, in a window that isn't on the screen
 julia --project=. project_page_test.jl   # a video or a sound on the web, and the button that makes a job in Centient
+julia --project=. outcome_test.jl        # the code that ⌘Return runs in a `julia` block, and the box of what it comes to
 julia --project=. merge_test.jl
 julia --project=. pasteboard_test.jl
 ```

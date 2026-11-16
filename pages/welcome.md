@@ -64,6 +64,14 @@ end
 
 The line that opens a code block names its language, and the code is coloured to match. Try changing `julia` to `python`.
 
+Julia code runs where it is. Put the caret in a line of the block under this and press ⌘Return. The page runs the line, and shows what it comes to in a box after the line. ⇧Return runs the line and goes to the next one. A box with an arrow has more to show: click it. A box goes when you change its code, and Escape takes every box away.
+
+```julia
+width = 2.4
+area = width * 3.6
+grid = [row * column for row in 1:3, column in 1:4]
+```
+
 ## Live blocks
 
 A code block in the language `ui` holds Julia code. The page runs the code and shows what it makes: a node from any Julia module, or any other value as text.

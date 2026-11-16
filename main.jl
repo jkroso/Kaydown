@@ -60,6 +60,10 @@
 #     under the player writes down what's said, in a paragraph under it.
 #   - Start a list item with `- [ ]` to make a to-do item. Click its box to
 #     tick it.
+#   - Write a code block in the language `julia`, put the caret in a line of
+#     it and press ⌘Return. The page runs the line and shows what it comes to
+#     in a box after the line. ⇧Return runs the line and goes to the next one.
+#     Click a box that has an arrow to see the rest of its value.
 #   - Write !`code` in a line of text. The page runs the code and shows what
 #     it makes in the line: a node like a switch or a file path, or a value
 #     as text. Click the line to see the code again.
@@ -138,6 +142,12 @@
 const SANS = isfile("/System/Library/Fonts/SFNS.ttf") ? ".SF NS" : "Helvetica"
 const SERIF = "Charter"
 const MONO = "Menlo"
+# Code is drawn in the light weight of the Mac's own font with letters of one width, so it reads
+# lighter than the page's text. Menlo has no light weight. A Mac without that font draws code in
+# Menlo, and so does a character that the font lacks, like ∈.
+const CODE_FONT, CODE_STYLE = isfile("/System/Library/Fonts/SFNSMono.ttf") ? (".SF NS Mono", "Light") : (MONO, "")
+const CODE_SLANT = String(strip(CODE_STYLE * " Italic"))   # the style of a comment
+const SPARE_FONT = "Apple Symbols"   # it has the characters that Julia writes and Menlo lacks too, like the ⋮ in a big matrix
 const SYMBOL_FONT = "Lucida Grande"
 
 Base.@kwdef mutable struct Palette
@@ -886,14 +896,14 @@ face(e, line::Line) = begin
   k = line.kind
   k == Kind.heading ? Face(b, style="Bold", size=b.size * HEADINGS[line.level]) :
   k == Kind.blockquote ? Face(b, style="Italic", color=colours.dim) :
-  k in (Kind.code, Kind.fence, Kind.table, Kind.rule) ? Face(b, family=MONO, size=b.size * 0.86) : b
+  k in (Kind.code, Kind.fence, Kind.table, Kind.rule) ? Face(b, family=CODE_FONT, style=CODE_STYLE, size=b.size * 0.86) : b
 end
 
 "The face for one span of a line whose plain text is drawn in `base`"
 face(base::Face, s::Span) = begin
   s.markup && return Face(base, color=colours.faint)
   # Inline code that runs is Julia, so its parts get the colours they have in a code block
-  s.code && return Face(MONO, "", base.size * 0.86, base.color, true, s.live ? "julia" : "")
+  s.code && return Face(CODE_FONT, CODE_STYLE, base.size * 0.86, base.color, true, s.live ? "julia" : "")
   bold = s.bold || occursin("Bold", base.style)
   italic = s.italic || occursin("Italic", base.style)
   style = bold && italic ? "Bold Italic" : bold ? "Bold" : italic ? "Italic" : ""
@@ -918,7 +928,7 @@ pieces(e, text::String, line::Line, raw::Bool, i::Int=0) = begin
     m = match(r"^(\s*(?:-\s+)?)([^:#\s][^:#]*:)(.*)$", text)
     if startswith(lstrip(text), '#') || m === nothing
       comment = startswith(lstrip(text), '#')
-      isempty(text) || push!(out, piece(text, 0, comment ? Face(base, color=colours.comment, style="Italic") : base))
+      isempty(text) || push!(out, piece(text, 0, comment ? Face(base, color=colours.comment, style=CODE_SLANT) : base))
     else
       isempty(m[1]) || push!(out, piece(String(m[1]), 0, base))
       push!(out, piece(String(m[2]), length(m[1]), Face(base, color=colours.dim)))
@@ -930,7 +940,7 @@ pieces(e, text::String, line::Line, raw::Bool, i::Int=0) = begin
     # [table] line that starts a group of keys. A comment slants.
     m = match(r"^(\s*)((?:\"[^\"]*\"|'[^']*'|[\w.-])+\s*=)(.*)$", text)
     if startswith(lstrip(text), '#')
-      push!(out, piece(text, 0, Face(base, color=colours.comment, style="Italic")))
+      push!(out, piece(text, 0, Face(base, color=colours.comment, style=CODE_SLANT)))
     elseif startswith(lstrip(text), '[') && m === nothing
       push!(out, piece(text, 0, Face(base, color=colours.dim)))
     elseif m === nothing
@@ -952,7 +962,7 @@ pieces(e, text::String, line::Line, raw::Bool, i::Int=0) = begin
     # Each part of a line of code has its own colour, and comments slant
     for t in tokens(text, line.lang)
       colour = t.kind == :plain ? base.color : getfield(colours, t.kind)
-      push!(out, piece(t.text, t.col, Face(base, color=colour, style=t.kind == :comment ? "Italic" : "")))
+      push!(out, piece(t.text, t.col, Face(base, color=colour, style=t.kind == :comment ? CODE_SLANT : base.style)))
     end
     return out
   elseif k in (Kind.fence, Kind.table, Kind.rule)
@@ -1129,7 +1139,7 @@ end
 "Lay out `text`, line `i` of the document, which is a line of the kind `line`, for a page that's `wide`"
 laid(e, text, line::Line, raw::Bool, i::Int, wide=e.width) = begin
   base = face(e, line)
-  ps = pieces(e, text, line, raw, i)
+  ps = spare(pieces(e, text, line, raw, i))
   k = line.kind
   # A hidden ``` line leaves a little room at the top or bottom of its block
   lh = k == Kind.heading ? base.size * 1.35 : body(e).size * (k == Kind.fence && !raw ? 0.6 : 1.65)
@@ -1622,14 +1632,14 @@ has(face::Face, c::Char) =
 
 """
 `text` in runs, each with the face to draw it in. A character that the font of
-`face` doesn't have, like the raised minus of m⁻¹, is in the font of the code
-blocks, which has it.
+`face` doesn't have, like the raised minus of m⁻¹, is in Menlo, which has it.
+One that Menlo lacks too, like ⋮, is in a font of symbols.
 """
 runs(text::AbstractString, face::Face) = begin
-  spare = Face(face, family=MONO, style="")
+  spare, symbols = Face(face, family=MONO, style=""), Face(face, family=SPARE_FONT, style="")
   out = Tuple{String,Face}[]
   for c in text
-    f = has(face, c) || !has(spare, c) ? face : spare
+    f = isascii(c) || has(face, c) ? face : has(spare, c) ? spare : has(symbols, c) ? symbols : face
     if !isempty(out) && last(out)[2] === f
       out[end] = (last(out)[1] * c, f)
     else
@@ -1638,6 +1648,34 @@ runs(text::AbstractString, face::Face) = begin
   end
   out
 end
+
+"True when the font of `face` has every character of `text`"
+hasall(face::Face, text::AbstractString) = all(c -> isascii(c) || has(face, c), text)
+
+"""
+The pieces `ps` of a line, with each character that the code font lacks in a
+piece of its own, in a font that has it. A `code` chip stays one piece, and
+draws those characters itself.
+"""
+spare(ps::Vector{Piece}) = begin
+  whole(p) = p.face.family != CODE_FONT || p.face.chip || p.atomic || p.node !== nothing || hasall(p.face, p.text)
+  all(whole, ps) && return ps
+  out = Piece[]
+  for p in ps
+    whole(p) && (push!(out, p); continue)
+    col = p.col
+    for (part, f) in runs(p.text, p.face)
+      push!(out, Piece(part, col, length(part), f, false, p.link, nothing))
+      col += length(part)
+    end
+  end
+  out
+end
+
+"`text` in the face `f`, as the parts of a row. A character that the font lacks is in a font that has it."
+spared(text::AbstractString, f::Face) =
+  [Box(fixed(measure(pf, part)), Alignment.Start,
+     Text(part, size=pf.size, family=pf.family, subfamily=pf.style, color=pf.color, wrap=WrapMode.none)) for (part, pf) in runs(text, f)]
 
 "Lay out the sheet whose code block opens on line `from` and closes on line `to`"
 sheetgrid(e, from::Int, to::Int) = begin
@@ -2265,7 +2303,7 @@ present_inline(text::Text) = Box(Alignment.Start, text)
 present_inline(p::FSPath) = (l = present(p); l.inline = true; l)
 
 note(text, colour) = Box(width(grow=grow), padding(BLOCK_X, 10px), background(colours.block),
-  Text(String(text), size=13px, family=MONO, color=colour))
+  Text(String(text), size=13px, family=CODE_FONT, subfamily=CODE_STYLE, color=colour))
 
 """
 What a live block shows: the node that its code made. The code can make a
@@ -2644,8 +2682,9 @@ has: `lang` is the end of the file's name, like jl, and a file that isn't code
 is all one colour.
 """
 codeline(line, lang) = Row(height(LINE_H),
-  [Text(t.text, size=12px, family=MONO, subfamily=t.kind == :comment ? "Italic" : "", wrap=WrapMode.none,
-        color=t.kind == :plain ? colours.ink : getfield(colours, t.kind)) for t in tokens(line, lang)]...)
+  [part for t in tokens(line, lang)
+        for part in spared(t.text, Face(CODE_FONT, t.kind == :comment ? CODE_SLANT : CODE_STYLE, 12px,
+                                        t.kind == :plain ? colours.ink : getfield(colours, t.kind), false))]...)
 
 # --- the files in a zip -------------------------------------------------------------------
 
@@ -3038,7 +3077,7 @@ text_items(e, b::Buffer) = begin
   items = Vector{Item}(undef, length(b.lines))
   top = 0px
   for (i, text) in enumerate(b.lines)
-    f = wrap(pieces(e, text, ks[i], false, i), e.width; lh, size)
+    f = wrap(spare(pieces(e, text, ks[i], false, i)), e.width; lh, size)
     items[i] = Item(i, i, top, tall(f), f)
     top += tall(f)
   end
@@ -7196,16 +7235,20 @@ describe(seg::Seg) = begin
   seg.atomic && startswith(seg.link, '^') && !endswith(seg.text, ' ') && return Box(fixed(seg.w), height(f.size * 1.9), Alignment.Start, t)
   # A Text on its own would take a share of the spare room in its row
   f.chip || return Box(fixed(seg.w), Alignment.Start, t)
-  isempty(f.lang) || (t = Row(Alignment.Start, map(tok -> coloured(tok, f), tokens(seg.text, f.lang))...))
+  if !isempty(f.lang)
+    t = Row(Alignment.Start, [part for tok in tokens(seg.text, f.lang) for part in coloured(tok, f)]...)
+  elseif !hasall(f, seg.text)
+    t = Row(Alignment.Start, spared(seg.text, f)...)
+  end
   Box(fixed(seg.w), height(f.size * 1.5), padding(CHIP_X, 0px), radius(4px), background(colours.chip), border(1px, :solid, colours.chip_line), t)
 end
 
-"One part of a line of code in a chip, in the colour of its kind. It's as wide as its text measures, so the caret lines up with it."
-coloured(tok, f::Face) = begin
-  face = Face(f, color=tok.kind == :plain ? f.color : getfield(colours, tok.kind), style=tok.kind == :comment ? "Italic" : "")
-  Box(fixed(measure(f, tok.text)), Alignment.Start,
-    Text(tok.text, size=face.size, family=face.family, subfamily=face.style, color=face.color, wrap=WrapMode.none))
-end
+"""
+One part of a line of code in a chip, in the colour of its kind, as the parts
+of a row. Each is as wide as its text measures, so the caret lines up with it.
+"""
+coloured(tok, f::Face) =
+  spared(tok.text, Face(f, color=tok.kind == :plain ? f.color : getfield(colours, tok.kind), style=tok.kind == :comment ? CODE_SLANT : f.style))
 
 "The lines of a Flow, as rows of text. `edge` is the width of a border on its left."
 rows(f::Flow, edge=0px) =
@@ -8236,10 +8279,11 @@ onkey(e::Editor, ev::KeyPress{K}) where K = begin
   if K == Keys.escape && finding(e)
     close_find!(e)
   elseif K == Keys.escape
-    # Escape closes a popup. With none open, it hides the caret and every line shows as it reads.
+    # Escape closes a popup. With none open, it takes away what the page's code came to. With
+    # none of that either, it hides the caret and every line shows as it reads.
     if e.popup != :none
       e.popup = :none
-    else
+    elseif !forget_outcomes!(e)
       b.anchor = b.caret
       b.reading = true
     end
@@ -8247,6 +8291,8 @@ onkey(e::Editor, ev::KeyPress{K}) where K = begin
     toggle_inspector!(w)
   elseif cmd && K == Keys.s
     save_page!(e)
+  elseif K == Keys.enter && (cmd || shift) && !opt && run_here!(e, step=!cmd)
+    # In a `julia` code block, ⌘Return and ⇧Return run the code that the caret is in
   elseif cmd && K == Keys.enter && !isempty(agents(e))
     send!(e)   # to the agent that waits for the page
   elseif cmd && K == Keys.z
@@ -10966,6 +11012,392 @@ draw_fresh(ctx, e, ui) = begin
   end
 end
 
+# --- code that runs where it is ----------------------------------------------------------
+#
+# In a code block in the language `julia`, ⌘Return runs the expression that the
+# caret is in, and shows what it comes to in a small box after the end of the
+# expression's last line. ⇧Return does the same and then puts the caret at the
+# next expression, so pressing it again and again goes down the block. With a
+# selection, they run the code that's selected. With the caret in the line that
+# opens or closes the block, they run every expression of the block.
+#
+# The code of a page runs in a module of the page's own, so a name that one
+# block makes is there for the next, and isn't on another page. The module has
+# the names that a live block has, like Slider and px, and the units of a
+# sheet. Code can use any of those names for a thing of its own, like
+# `width = 2.4`. That doesn't change what the name means in a live block.
+#
+# The box shows the first line of the value. A value that has more, like a
+# matrix, has an arrow in its box: click the box to show the rest under it, and
+# click again to hide it. Text that the code printed shows before the value.
+# A value has the colours that a code block gives Julia code: its numbers, its
+# strings and the names of its types.
+# What went wrong shows in red. A value that's a UI node shows as the node. A
+# check mark means that the code came to nothing and printed nothing. Code that
+# ends with a semicolon shows no value, as it does at Julia's prompt.
+#
+# A box stays while its code is as it was when it ran. It goes when you change
+# that code, and Escape takes every box off the page.
+
+const JULIA = ("julia", "jl")   # the names of the language whose code blocks run
+const OUTCOME_GAP = 14px        # between the end of a line of code and the box of what it came to
+const OUTCOME_LINES = 30        # the most lines of a value that Julia writes
+const OUTCOME_COLS = 100        # and the most characters of each
+const OUTCOME_NODE_W = 420px    # how wide a value that's a UI node shows
+const OUTCOME_EDGE = 12px       # the least space between a box and the right edge of the window
+
+"The font of what code came to, which is the font of the code, at `size` and in the colour `ink`"
+outcome_face(size, ink=colours.ink) = Face(CODE_FONT, CODE_STYLE, size, ink, false)
+
+"What a piece of the code of a `julia` code block came to when it ran. It shows in a box after the code's last line."
+@def mutable struct Outcome <: SemanticUI
+  first::Int = 0                    # the lines of the document that ran
+  last::Int = 0
+  code::Vector{String} = String[]   # those lines as they were then
+  total::Int = 0                    # how many lines the document had when the code was last seen on those lines
+  brief::String = ""                # the first line of what it came to
+  full::String = ""                 # all of it
+  printed::Int = 0                  # how many lines of it, from the first, are text that the code printed
+  failed::Bool = false
+  node::Any = nothing               # a Shown, when the value is a UI node
+  open::Bool = false                # the rest shows under the box
+  body::Any = nothing               # the OutcomeBody that shows the rest
+  # Each frame sets these, for the room that the window has
+  shown::String = ""                # as much of `brief` as fits
+  rest::String = ""                 # what shows under the box when it's open
+  from::Int = 1                     # the line of `full` that `rest` starts at
+  more::Bool = false                # there's more than the box shows
+  size::px = 12px                   # of its text
+  high::px = 20px
+end
+
+"What shows under the box of an outcome that's open: the rest of the value, or the node that the value is"
+@def mutable struct OutcomeBody <: SemanticUI
+  of::Any = nothing
+end
+
+"""
+The first and last line of the code of the `julia` code block that line `i` is
+in, or nothing when the line isn't in one. The lines that open and close the
+block are in the block, and aren't code.
+"""
+julia_code(b::Buffer, i::Int) = begin
+  ks = kinds(b)
+  ks[i].kind in (Kind.fence, Kind.code) || return nothing
+  s, t = codeblock(b, i)
+  (t > s && ks[s].kind == Kind.fence && ks[s].level == 0 && ks[t].kind == Kind.fence && ks[t].level == 1) || return nothing
+  lowercase(ks[s].lang) in JULIA ? (s + 1, t - 1) : nothing
+end
+
+"""
+The lines of each piece of the Julia code in `lines` that runs on its own: an
+expression at the top level, with the comments above it. Expressions that
+share a line are one piece.
+"""
+statements(lines::AbstractVector{<:AbstractString}) = begin
+  out = UnitRange{Int}[]
+  isempty(lines) && return out
+  src = join(lines, "\n")
+  starts = cumsum([1; Int[ncodeunits(l) + 1 for l in lines[1:end-1]]])   # the byte that each line starts at
+  line_of(byte) = searchsortedlast(starts, byte)
+  pos = 1
+  while pos <= ncodeunits(src)
+    ex, next = try
+      Meta.parse(src, pos; raise=false)
+    catch
+      (Expr(:error), ncodeunits(src) + 1)
+    end
+    next > pos || break
+    # The parser takes the blank lines above an expression with it, and the end of the expression's last line
+    text = SubString(src, pos, prevind(src, next))
+    if ex !== nothing && !isempty(strip(text))
+      lo = line_of(pos + ncodeunits(text) - ncodeunits(lstrip(text)))
+      hi = line_of(pos + ncodeunits(rstrip(text)) - 1)
+      if !isempty(out) && lo <= last(out[end])
+        out[end] = first(out[end]):max(hi, last(out[end]))
+      else
+        push!(out, lo:hi)
+      end
+    end
+    pos = next
+  end
+  out
+end
+
+"""
+The module that the `julia` code blocks of the page run in. It has each name
+that a live block has, and each unit of a sheet that has no such name. They
+come in with `using`, so the page's code can give any of them a new meaning.
+"""
+workspace(e) = get!(e.nodes, (:workspace, e.buf.path)) do
+  from = sandbox(e)
+  usual = Module(:Usual)
+  # The modules can be new, so their names are asked for as they are now
+  share(source, name) = begin
+    hidden = startswith(string(name), '#') || name in (nameof(source), :eval, :include, :Kip, :SheetUnits)
+    (hidden || isdefined(usual, name) || !Base.invokelatest(isdefined, source, name)) && return
+    Core.eval(usual, :(const $name = $(Base.invokelatest(getglobal, source, name))))
+    Core.eval(usual, Expr(:export, name))
+  end
+  foreach(name -> share(from, name), Base.invokelatest(names, from, all=true, imported=true))
+  units = Base.invokelatest(getglobal, from, :SheetUnits)
+  foreach(name -> share(units, name), Base.invokelatest(names, units))
+  m = Module(:Page)
+  # Kip by the module that's loaded here, not by name, as the live blocks' module has it
+  Core.eval(m, :(const Kip = $Kip))
+  Core.eval(m, :(using .Kip))
+  Core.eval(m, :(const Usual = $usual))
+  Core.eval(m, :(using .Usual))
+  m
+end
+
+"""
+Run `code` in the module of the page's `julia` code blocks. It gives the
+value that the code came to, the text that the code printed, and true when the
+code failed. Then the value is the error.
+"""
+run_code(e, code::String) = begin
+  path = isempty(e.buf.path) ? joinpath(e.folder, "untitled.md") : e.buf.path
+  # Kip finds a path like "./widgets.jl" from the folder of the document, as it does for a live block
+  dir = isdir(docdir(e)) ? docdir(e) : pwd()
+  m = workspace(e)
+  # The code can load the drawing methods of a node, so the window draws one more frame soon after
+  e.nodes[:ran] = true
+  screen = stdout
+  rd, wr = redirect_stdout()
+  printed = @async read(rd, String)
+  value, failed = try
+    (cd(() -> include_string(m, code, path), dir), false)
+  catch err
+    (err isa LoadError ? err.error : err, true)
+  finally
+    redirect_stdout(screen)
+    close(wr)
+  end
+  (value, fetch(printed), failed)
+end
+
+"`value` as the text that Julia shows for it, with the middle of a long list or a big table left out"
+value_text(value) = begin
+  io = IOBuffer()
+  Base.invokelatest(show, IOContext(io, :limit => true, :displaysize => (OUTCOME_LINES, OUTCOME_COLS)), MIME"text/plain"(), value)
+  String(take!(io))
+end
+
+"No more of `text` than an outcome shows: a few more lines than Julia writes for a value, and a few more characters of each"
+clipped(text) = begin
+  lines = split(text, '\n')
+  length(lines) > OUTCOME_LINES + 10 && (lines = [lines[1:OUTCOME_LINES+10]; "…"])
+  join((length(l) > OUTCOME_COLS + 20 ? first(l, OUTCOME_COLS + 20) * "…" : l for l in lines), "\n")
+end
+
+"What the code of the page came to, for each piece of it that ran and hasn't changed since"
+outcomes(e) = get!(() -> Outcome[], e.nodes, (:outcomes, e.buf.path))::Vector{Outcome}
+
+"""
+Run the code on the lines `r` of the page, and show what it comes to after the
+last of them. `code` is the part of those lines that runs.
+"""
+outcome!(e, r::UnitRange{Int}, code::String=join(e.buf.lines[r], "\n")) = begin
+  b = e.buf
+  was = b.lines[r]
+  value, printed, failed = run_code(e, code)
+  # Code that ends with a semicolon shows no value, as it does at Julia's prompt
+  !failed && endswith(rstrip(code), ';') && (value = nothing)
+  node = nothing
+  text = try
+    if failed
+      Base.invokelatest(sprint, showerror, value)
+    elseif value isa Union{SemanticUI,GeometricUI}
+      node = own!(e, Shown(value=value, inline=true))
+      string(nameof(typeof(value)))
+    else
+      value === nothing ? "" : value_text(value)
+    end
+  catch err
+    # A value whose own `show` fails
+    failed = true
+    sprint(showerror, err)
+  end
+  said = String(rstrip(printed))
+  full = clipped(join(filter(!isempty, [said, text]), "\n"))
+  # A node shows at once, because its name alone says little
+  o = own!(e, Outcome(first=first(r), last=last(r), code=was, total=length(b.lines), brief=String(first(split(full, '\n'))),
+                      full=full, printed=isempty(said) ? 0 : count('\n', said) + 1, failed=failed, node=node, open=node !== nothing))
+  list = outcomes(e)
+  # It takes the place of what any of those lines came to before
+  Base.filter!(p -> p.last < o.first || p.first > o.last, list)
+  push!(list, o)
+  o
+end
+
+"""
+Run the code that the caret is in, for ⌘Return and ⇧Return. It's false when
+the caret isn't in a `julia` code block, so the key does what it does in other
+places. With `step`, the caret goes on to the next expression.
+"""
+run_here!(e; step=false) = begin
+  b = e.buf
+  (b.reading || readonly(b)) && return false
+  found = julia_code(b, b.caret[1])
+  (found !== nothing && julia_code(b, b.anchor[1]) == found) || return false
+  from, to = found
+  lo, hi = minmax(b.caret, b.anchor)
+  if lo != hi
+    # The code that's selected. A selection that ends at the start of a line doesn't take that line.
+    code = excerpt(b, lo, hi)
+    until = hi[2] == 0 && hi[1] > lo[1] ? hi[1] - 1 : hi[1]
+    lo[1] >= from && until <= to && !isempty(strip(code)) && outcome!(e, lo[1]:until, code)
+    touch!(e)
+    return true
+  end
+  runs = [r .+ (from - 1) for r in statements(b.lines[from:to])]
+  i = b.caret[1]
+  if i < from || i > to
+    # The line that opens or closes the block runs all of it, as far as the first piece that fails
+    for r in runs
+      outcome!(e, r).failed && break
+    end
+  else
+    k = findfirst(r -> i in r, runs)
+    # A blank line runs the piece above it
+    k === nothing && (k = findlast(r -> last(r) < i, runs))
+    if k !== nothing
+      outcome!(e, runs[k])
+      step && (b.caret = b.anchor = k < length(runs) ? (first(runs[k+1]), 0) : line_end(b, last(runs[k])))
+    end
+  end
+  touch!(e)
+  true
+end
+
+"""
+Put each outcome of the page on the lines that its code is on now, and forget
+the ones whose code changed. Lines that were added or taken away above an
+outcome move its code down or up by that many lines.
+"""
+follow_outcomes!(e) = begin
+  b = e.buf
+  list = get(e.nodes, (:outcomes, b.path), nothing)
+  list === nothing && return Outcome[]
+  n = length(b.lines)
+  Base.filter!(list) do o
+    at(i) = i >= 1 && i + length(o.code) - 1 <= n && all(k -> b.lines[i+k-1] == o.code[k], eachindex(o.code))
+    i = at(o.first) ? o.first : o.first + n - o.total
+    at(i) || return false
+    o.first, o.last, o.total = i, i + length(o.code) - 1, n
+    true
+  end
+end
+
+"Take every outcome off the page, for Escape. It's false when the page had none."
+forget_outcomes!(e) = begin
+  list = get(e.nodes, (:outcomes, e.buf.path), nothing)
+  (list === nothing || isempty(list)) && return false
+  empty!(list)
+  true
+end
+
+"""
+The boxes of the page's outcomes, over the page. Each is after the end of the
+last line of its code, and one that has no room there is under that line. The
+rest of an outcome that's open is under its box.
+"""
+outcome_over(e) = begin
+  list = follow_outcomes!(e)
+  (isempty(list) || isempty(e.layout) || readonly(e.buf)) && return ()
+  (zooming(e) === nothing && full_block(e) === nothing && e.popup == :none) || return ()
+  w, h = window_size(e)
+  # The page's text is in the middle of the space beside the file panel
+  side = panel_w(e) * opened(e)
+  x0 = side + max(PAGE_X, (w - side - e.width) / 2)
+  y0 = TOPBAR_H + PAGE_TOP - e.scroll.offset
+  size = body(e).size * 0.8
+  wide = measure(outcome_face(size), "0")   # every character of the font is this wide
+  high = size * 1.7
+  at(top, left, node) = Row(width(grow=grow), height(grow=grow), Alignment.Start, padding(top, 0px, 0px, left), node)
+  # How many characters a box that starts at `left` has room for, beside its padding, its border and its arrow
+  fits(left) = floor(Int, num(w - left - OUTCOME_EDGE - 34px) / num(wide))
+  boxes, bodies = Any[], Any[]
+  for o in list
+    it = item(e, o.last)
+    f = it.content
+    f isa Flow || continue
+    vl = last(f.lines)
+    left = x0 + xcol(vl, vl.to) + OUTCOME_GAP
+    top = y0 + it.top + line_top(f, length(f.lines)) + (vl.high - high) / 2
+    # A line that ends too near the edge of the window has the box under it
+    fits(left) < min(length(o.brief), 16) && ((left, top) = (x0 + vl.x, top + vl.high))
+    (top >= TOPBAR_H && top + high <= h) || continue
+    n = max(fits(left), 1)
+    o.shown = length(o.brief) > n ? first(o.brief, n - 1) * "…" : o.brief
+    # The box of an outcome that's open shows the first line, so the rest starts at the second
+    o.rest = o.shown == o.brief ? String(chopprefix(chopprefix(o.full, o.brief), "\n")) : o.full
+    o.from = o.shown == o.brief ? 2 : 1
+    o.more = o.node !== nothing || !isempty(o.rest)
+    o.size, o.high = size, high
+    push!(boxes, at(top, left, o))
+    (o.open && o.more) || continue
+    o.body === nothing && (o.body = own!(e, OutcomeBody(of=o)))
+    across = (o.node === nothing ? wide * maximum(length, split(o.rest, '\n')) : OUTCOME_NODE_W) + 22px
+    push!(bodies, at(top + high + 3px, max(side + 8px, min(left, w - across - OUTCOME_EDGE)), o.body))
+  end
+  # The rest of an open outcome goes over the boxes of the lines under it
+  (boxes..., bodies...)
+end
+
+"""
+One line of what code came to, as a row of text. With `code`, its parts have
+the colours that a code block gives Julia code. A character that the code font
+lacks is drawn in a font that has it, in the room of one character, so the
+columns of a matrix stay in line under it.
+"""
+value_row(text::AbstractString, o::Outcome; code=true) = begin
+  face = outcome_face(o.size, o.failed ? SPELL_RED : colours.ink)
+  cell = measure(face, "0")
+  parts = Any[]
+  for tok in tokens(text, code ? "julia" : "")
+    f = tok.kind == :plain ? face : Face(face, color=getfield(colours, tok.kind), style=tok.kind == :comment ? CODE_SLANT : face.style)
+    for (part, pf) in runs(tok.text, f)
+      # A character from another font gets the room of one of this font's, so the columns of a matrix stay in line
+      wide = pf.family == face.family ? measure(pf, part) : cell * length(part)
+      push!(parts, Box(fixed(wide), Alignment.Start,
+        Text(part, size=pf.size, family=pf.family, subfamily=pf.style, color=pf.color, wrap=WrapMode.none)))
+    end
+  end
+  Row(height(o.size * 1.45), Alignment.Center, parts...)
+end
+
+"True when line `k` of all that the outcome `o` shows is a value, not text that the code printed or what went wrong"
+isvalue(o::Outcome, k::Int) = !o.failed && k > o.printed
+
+describe(o::Outcome) = begin
+  arrow = o.more ? (Icon(o.open ? "chevron-down" : "chevron-right", size=o.size * 0.8, color=colours.dim),) : ()
+  what = isempty(o.full) && o.node === nothing ? Box(Icon("check", size=o.size, color=colours.dim)) :
+         value_row(o.shown, o, code=isvalue(o, 1) && o.node === nothing)
+  Row(height(o.high), padding(7px, 0px), child_gap=4px, Alignment.Center, radius(5px), name="Outcome",
+      background(o.more && ishovered(o) ? colours.hover : colours.float),
+      border(1px, :solid, o.failed ? RGBA(SPELL_RED, 0.45) : colours.line),
+      arrow..., what)
+end
+
+describe(d::OutcomeBody) = begin
+  o = d.of
+  inner = o.node !== nothing ? Box(fixed(OUTCOME_NODE_W), Alignment.Start, o.node) :
+          Column(Alignment.Start, [value_row(line, o, code=isvalue(o, o.from + k - 1)) for (k, line) in enumerate(split(o.rest, '\n'))]...)
+  Box(padding(10px, 8px), radius(7px), background(colours.float), border(1px, :solid, colours.line), lifted, Alignment.Start,
+      name="Outcome body", inner)
+end
+
+cursor(o::Outcome) = o.more ? :hand : :arrow
+cursor(::OutcomeBody) = :arrow
+# A click on a box shows the rest of what the code came to, or hides it. It doesn't move the caret.
+onkey(o::Outcome, ::KeyPress{Keys.mouse_left}) = (o.more && (o.open = !o.open); handled)
+onmouse(::Outcome, ::MouseMove) = handled
+# A click on the rest is not a click on the text under it
+onkey(::OutcomeBody, ::KeyPress{Keys.mouse_left}) = handled
+onmouse(::OutcomeBody, ::MouseMove) = handled
+
 # --- the whole window ---------------------------------------------------------------------
 
 describe(e::Editor) = begin
@@ -11011,7 +11443,7 @@ describe(e::Editor) = begin
       node!(Page, e, :page)))
   popup = e.popup == :none ? () : (node!(Backdrop, e, :backdrop), finder(e))
   Stack(width(grow=grow), height(grow=grow), Alignment.Start, name="Editor",
-    body, panel_edge(e)..., tablebar(e)..., suggestbox(e)..., findbar(e)..., sound_over(e)..., fill_over(e)..., task_over(e)..., takeoff_over(e)..., zoom_over(e)..., node!(TopBar, e, :topbar), popup...)
+    body, panel_edge(e)..., tablebar(e)..., suggestbox(e)..., outcome_over(e)..., findbar(e)..., sound_over(e)..., fill_over(e)..., task_over(e)..., takeoff_over(e)..., zoom_over(e)..., node!(TopBar, e, :topbar), popup...)
 end
 
 # --- windows ------------------------------------------------------------------------------

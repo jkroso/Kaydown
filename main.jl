@@ -86,9 +86,9 @@
 #   - ⌘+ and ⌘- change the text size by a pixel. ⌘0 puts it back.
 #   - ⌘P prints the page, or saves it as a PDF. ⌘⇧E saves it as a page of HTML.
 #   - ⌘, opens the settings page in a window of its own, where you choose the
-#     colours, the font, the text size, the width of the page and what the
-#     count at the top right counts. A button there makes Kaydown the app that
-#     opens Markdown files. ⌘, again closes that window.
+#     colours, the font, the text size, the width of the page, what the
+#     count at the top right counts and how code shows. A button there makes
+#     Kaydown the app that opens Markdown files. ⌘, again closes that window.
 #   - ⌘W closes a window. Kaydown quits when its last window closes.
 #   - ⌘⌥I opens the layout inspector.
 #
@@ -100,7 +100,7 @@
 # `place_window_buttons!` to line its close, minimise and zoom buttons up with the top bar.
 
 @use "github.com/jkroso/Prospects.jl" @def
-@use "github.com/jkroso/MiniFB.jl/skia" measure_text rectangle rounded_rectangle sk_color
+@use "github.com/jkroso/MiniFB.jl/skia" measure_text rectangle rounded_rectangle sk_color fontmgr
 @use Skia
 @use "github.com/jkroso/MiniFB.jl"... onfiledrop onscroll
 @use "github.com/jkroso/UI.jl/Interface/Geometric"...
@@ -151,6 +151,17 @@ const MONO = "Menlo"
 # Menlo, and so does a character that the font lacks, like ∈.
 const CODE_FONT, CODE_STYLE = isfile("/System/Library/Fonts/SFNSMono.ttf") ? (".SF NS Mono", "Light") : (MONO, "")
 const CODE_SLANT = String(strip(CODE_STYLE * " Italic"))   # the style of a comment
+const CODE_SCALE = 0.86   # how big code is beside the page's text, until the settings page changes it
+
+"""
+The font of code and its weight, for the window that's being laid out and
+drawn. Each window sets them from its settings as it starts a frame, so each
+part of the window that shows code uses the font that the settings page chose.
+"""
+const code_type = Ref((CODE_FONT, CODE_STYLE))
+codefont() = code_type[][1]
+codestyle() = code_type[][2]
+codeslant() = String(strip(codestyle() * " Italic"))   # the style of a comment
 const SPARE_FONT = "Apple Symbols"   # it has the characters that Julia writes and Menlo lacks too, like the ⋮ in a big matrix
 const SYMBOL_FONT = "Lucida Grande"
 
@@ -506,6 +517,7 @@ Base.@kwdef mutable struct Buffer
   saved::Int = 0                        # the version that's in the file
   typed::Float64 = 0.0                  # when a character was last typed, to undo words not letters
   offset::px = 0px                      # how far it's scrolled
+  across::px = 0px                      # how far it's scrolled to the right, in a file of code whose long lines don't wrap
   kinds::Vector{Line} = Line[]
   kinds_at::Int = -1
   words::Int = 0
@@ -723,7 +735,14 @@ isspread(g::Grid) = g.head > 0px
   settings::Bool = false                # this window opened to show the settings page
   stat::Symbol = :words                 # what the count at the top right counts
   spelling::Bool = true                 # put a line of dots under each word that's spelt wrong
-  popup::Symbol = :none                 # :finder while the file finder is open
+  wrap::Bool = true                     # a line of a file of code that's too long for the window goes on under itself
+  numbers::Bool = true                  # a file of code shows the number of each line beside it
+  shade::Bool = false                   # the line of a file of code that the caret is on is shaded
+  indent::Int = 2                       # how many spaces one step of indentation is, in code
+  code_scale::Float64 = CODE_SCALE      # how big code is, as a part of the size of the page's text
+  code_font::String = CODE_FONT         # the font of code, by the name of its family
+  guide::Int = 0                        # a faint line goes down a file of code after this many characters. 0 is no line.
+  popup::Symbol = :none                # :finder while the file finder is open
   picked::Int = 1                       # the file the finder will open
   scroll::Scroll = Scroll(width(grow=grow), height(grow=grow), scrollbar_inset=0px)   # the page's scrollbar is at the window's edge
   files_scroll::Scroll = Scroll(width(grow=grow), height(grow=grow))
@@ -733,6 +752,7 @@ isspread(g::Grid) = g.head > 0px
   shown::UnitRange{Int} = 1:0           # the items that were built for the last frame
   width::px = PROSE_W                   # how wide the text is
   widest::px = PROSE_W                  # the widest the text gets, before zooming. The settings page sets it.
+  reach::px = 0px                       # how far the longest line goes, in a file of code whose long lines don't wrap
   origin::Tuple{px,px} = (0px, 0px)     # where the page's text was last drawn in the window
   goal::Union{Nothing,px} = nothing     # where ↑ and ↓ try to keep the caret
   reveal::Bool = false                  # scroll to the caret before the next frame
@@ -920,14 +940,16 @@ face(e, line::Line) = begin
   k = line.kind
   k == Kind.heading ? Face(b, style="Bold", size=b.size * HEADINGS[line.level]) :
   k == Kind.blockquote ? Face(b, style="Italic", color=colours.dim) :
-  k in (Kind.code, Kind.fence, Kind.table, Kind.rule) ? Face(b, family=CODE_FONT, style=CODE_STYLE, size=b.size * 0.86) : b
+  # Code is the size that the settings page chooses. The markup of a table or a rule is code's usual size.
+  k in (Kind.code, Kind.fence) ? Face(b, family=codefont(), style=codestyle(), size=code_size(e)) :
+  k in (Kind.table, Kind.rule) ? Face(b, family=codefont(), style=codestyle(), size=b.size * CODE_SCALE) : b
 end
 
 "The face for one span of a line whose plain text is drawn in `base`"
 face(base::Face, s::Span) = begin
   s.markup && return Face(base, color=colours.faint)
   # Inline code that runs is Julia, so its parts get the colours they have in a code block
-  s.code && return Face(CODE_FONT, CODE_STYLE, base.size * 0.86, base.color, true, s.live ? "julia" : "")
+  s.code && return Face(codefont(), codestyle(), base.size * 0.86, base.color, true, s.live ? "julia" : "")
   bold = s.bold || occursin("Bold", base.style)
   italic = s.italic || occursin("Italic", base.style)
   style = bold && italic ? "Bold Italic" : bold ? "Bold" : italic ? "Italic" : ""
@@ -935,6 +957,74 @@ face(base::Face, s::Span) = begin
 end
 
 piece(text, col, face; atomic=false, n=length(text), link="", node=nothing) = Piece(text, col, n, face, atomic, link, node)
+
+# --- the font of code ------------------------------------------------------------------
+#
+# Code is drawn in a font whose letters are all one width. The settings page
+# lists each such font on the Mac, and code is drawn in the one you choose. It's
+# drawn in the font's light weight when the font has one, as SF Mono has, so
+# that code reads lighter than the page's text.
+
+"The weight of the face of `family` nearest to `weight`, or 0 when the Mac has no font of that family"
+installed_weight(family::AbstractString, weight::Integer) = begin
+  style = Skia.sk_fontstyle_new(Int32(weight), Int32(Skia.SK_FONT_STYLE_WIDTH_NORMAL), Skia.SK_FONT_STYLE_SLANT_UPRIGHT)
+  typeface = Skia.sk_fontmgr_match_family_style(fontmgr[], String(family), style)
+  Skia.sk_fontstyle_delete(style)
+  typeface == C_NULL && return 0
+  found = Skia.sk_typeface_get_fontstyle(typeface)
+  w = Int(Skia.sk_fontstyle_get_weight(found))
+  Skia.sk_fontstyle_delete(found)
+  Skia.sk_typeface_unref(typeface)
+  w
+end
+
+"The weight that code in `family` is drawn in: Light when the font has it, and its usual weight when it doesn't"
+const code_styles = Dict{String,String}(CODE_FONT => CODE_STYLE)
+code_style(family) = get!(() -> installed_weight(family, 300) == 300 ? "Light" : "", code_styles, family)
+
+"Draw code in the font that `e`'s settings choose, from now until another window starts to draw"
+use_code_font!(e) = (code_type[] = (e.code_font, code_style(e.code_font)); e)
+
+"True when every letter of `family` is as wide as every other, as in a font for code"
+isfixed(family) = begin
+  f = Face(family, "", 20px, colours.ink, false)
+  all(c -> has(f, c), "iMw0") && measure(f, "i") == measure(f, "M") == measure(f, "0")
+end
+
+# The Mac's own font for code has a hidden name, and the list calls it SF Mono
+font_label(family) = family == ".SF NS Mono" ? "SF Mono" : family
+font_family(label) = label == "SF Mono" && CODE_FONT == ".SF NS Mono" ? CODE_FONT : label
+
+const fixed_fonts = String[]
+
+"""
+The names in `fonts` with each font once, where a font comes in copies whose
+letters are the same. A Nerd Font comes as X Nerd Font, X Nerd Font Mono and X
+Nerd Font Propo, whose icons differ. A variable font, X Var, is X with its
+weights in one file. The plain X stays, or the one there is.
+"""
+once_each(fonts) = filter(f -> !(endswith(f, COPIES) && replace(f, COPIES => "") in fonts), fonts)
+const COPIES = r"(?<= Nerd Font) (Mono|Propo)$| Var$"
+
+# Fonts of pictures, not letters, though each picture is as wide as the next
+const PICTURE_FONTS = ("Webdings", "Wingdings", "Wingdings 2", "Wingdings 3", "Symbol", "Zapf Dingbats", "Bodoni Ornaments")
+
+"The families of the fonts on this Mac whose letters are all one width, in order, with the one that code is drawn in at first"
+code_fonts() = begin
+  if isempty(fixed_fonts)
+    names = String[]
+    name = Skia.sk_string_new_empty()
+    for i in 0:Skia.sk_fontmgr_count_families(fontmgr[])-1
+      Skia.sk_fontmgr_get_family_name(fontmgr[], Cint(i), name)
+      push!(names, unsafe_string(Skia.sk_string_get_c_str(name)))
+    end
+    Skia.sk_string_delete(name)
+    # A font whose name starts with a dot is the Mac's own, for its menus and windows
+    found = filter(f -> !startswith(f, '.') && font_family(f) == f && !(f in PICTURE_FONTS) && isfixed(f), unique(names))
+    append!(fixed_fonts, sort!(once_each(found), by=lowercase))
+  end
+  unique([CODE_FONT; fixed_fonts])
+end
 
 # The text that stands for the box of a to-do item. The box is drawn in its place, so only the text's width matters.
 # Both hold the same characters, so an empty box and a ticked one are the same width.
@@ -952,7 +1042,7 @@ pieces(e, text::String, line::Line, raw::Bool, i::Int=0) = begin
     m = match(r"^(\s*(?:-\s+)?)([^:#\s][^:#]*:)(.*)$", text)
     if startswith(lstrip(text), '#') || m === nothing
       comment = startswith(lstrip(text), '#')
-      isempty(text) || push!(out, piece(text, 0, comment ? Face(base, color=colours.comment, style=CODE_SLANT) : base))
+      isempty(text) || push!(out, piece(text, 0, comment ? Face(base, color=colours.comment, style=codeslant()) : base))
     else
       isempty(m[1]) || push!(out, piece(String(m[1]), 0, base))
       push!(out, piece(String(m[2]), length(m[1]), Face(base, color=colours.dim)))
@@ -964,7 +1054,7 @@ pieces(e, text::String, line::Line, raw::Bool, i::Int=0) = begin
     # [table] line that starts a group of keys. A comment slants.
     m = match(r"^(\s*)((?:\"[^\"]*\"|'[^']*'|[\w.-])+\s*=)(.*)$", text)
     if startswith(lstrip(text), '#')
-      push!(out, piece(text, 0, Face(base, color=colours.comment, style=CODE_SLANT)))
+      push!(out, piece(text, 0, Face(base, color=colours.comment, style=codeslant())))
     elseif startswith(lstrip(text), '[') && m === nothing
       push!(out, piece(text, 0, Face(base, color=colours.dim)))
     elseif m === nothing
@@ -986,7 +1076,7 @@ pieces(e, text::String, line::Line, raw::Bool, i::Int=0) = begin
     # Each part of a line of code has its own colour, and comments slant
     for t in tokens(text, line.lang)
       colour = t.kind == :plain ? base.color : getfield(colours, t.kind)
-      push!(out, piece(t.text, t.col, Face(base, color=colour, style=t.kind == :comment ? CODE_SLANT : base.style)))
+      push!(out, piece(t.text, t.col, Face(base, color=colour, style=t.kind == :comment ? codeslant() : base.style)))
     end
     return out
   elseif k in (Kind.fence, Kind.table, Kind.rule)
@@ -1172,6 +1262,8 @@ laid(e, text, line::Line, raw::Bool, i::Int, wide=e.width) = begin
   k = line.kind
   # A hidden ``` line leaves a little room at the top or bottom of its block
   lh = k == Kind.heading ? base.size * 1.35 : body(e).size * (k == Kind.fence && !raw ? 0.6 : 1.65)
+  # Lines of bigger code are further apart
+  k in (Kind.code, Kind.fence) && (lh *= e.code_scale / CODE_SCALE)
   left = k in (Kind.code, Kind.fence) ? BLOCK_X : k == Kind.blockquote ? QUOTE_X : 0px
   # Lines that a list item wraps onto start under its text, not under its bullet
   hang = k in (Kind.bullet, Kind.ordered, Kind.todo) ? sum(p -> measure(p.face, p.text), ps[1:min(end, line.level > 0 ? 2 : 1)], init=0px) : left
@@ -1687,7 +1779,7 @@ piece of its own, in a font that has it. A `code` chip stays one piece, and
 draws those characters itself.
 """
 spare(ps::Vector{Piece}) = begin
-  whole(p) = p.face.family != CODE_FONT || p.face.chip || p.atomic || p.node !== nothing || hasall(p.face, p.text)
+  whole(p) = p.face.family != codefont() || p.face.chip || p.atomic || p.node !== nothing || hasall(p.face, p.text)
   all(whole, ps) && return ps
   out = Piece[]
   for p in ps
@@ -2128,7 +2220,7 @@ suggestbox(e) = begin
   elseif s isa Flow
     # In a code block, the list is under the line of the screen that the name is on
     k, x = spot(s, start)
-    face = Face(CODE_FONT, CODE_STYLE, s.size, colours.ink, false)
+    face = Face(codefont(), codestyle(), s.size, colours.ink, false)
     across, down = x, line_top(s, k) + s.lines[k].high
   else
     return ()
@@ -2202,6 +2294,28 @@ sandbox(e) = get!(e.nodes, :sandbox) do
   # ... and whether the page checks its spelling
   Core.eval(m, :(const page_spelling = $(() -> (reads!(e, :spelling); e.spelling))))
   Core.eval(m, :(const page_spelling! = $(on -> spelling!(e, Bool(on)))))
+  # ... and whether a line of a file of code that's too long for the window goes on under itself
+  Core.eval(m, :(const code_wrap = $(() -> (reads!(e, :wrap); e.wrap))))
+  Core.eval(m, :(const code_wrap! = $(on -> wrap!(e, Bool(on)))))
+  # ... and whether it shows the number of each line, and shades the line that the caret is on
+  Core.eval(m, :(const code_numbers = $(() -> (reads!(e, :numbers); e.numbers))))
+  Core.eval(m, :(const code_numbers! = $(on -> numbers!(e, Bool(on)))))
+  Core.eval(m, :(const code_shade = $(() -> (reads!(e, :shade); e.shade))))
+  Core.eval(m, :(const code_shade! = $(on -> shade!(e, Bool(on)))))
+  # ... and how many spaces one step of indentation is in code: 2 or 4
+  Core.eval(m, :(const code_indent = $(() -> (reads!(e, :indent); e.indent))))
+  Core.eval(m, :(const code_indent! = $(n -> indent_width!(e, Int(n)))))
+  # ... and how big code is, in pixels. It grows and shrinks with the page's text.
+  Core.eval(m, :(const code_text_size = $(() -> (reads!(e, :code_scale); reads!(e, :zoom); code_size(e).value))))
+  Core.eval(m, :(const code_text_size! = $(size -> code_size!(e, size))))
+  # ... and the font of code, by the name in the list of `code_fonts()`. `code_family(name)` gives the font's own name, to draw the name in.
+  Core.eval(m, :(const code_fonts = $(() -> font_label.(unique([code_fonts(); e.code_font])))))
+  Core.eval(m, :(const code_family = $(name -> font_family(String(name)))))
+  Core.eval(m, :(const code_font = $(() -> (reads!(e, :code_font); font_label(e.code_font)))))
+  Core.eval(m, :(const code_font! = $(name -> code_font!(e, font_family(String(name))))))
+  # ... and after how many characters a faint line goes down a file of code. 0 is no line.
+  Core.eval(m, :(const code_guide = $(() -> (reads!(e, :guide); e.guide))))
+  Core.eval(m, :(const code_guide! = $(n -> guide!(e, Int(n)))))
   # ... and the app that opens Markdown files: `markdown_app()` gives its name, like "Kaydown", or "" when macOS can't say.
   # `default_app!()` asks macOS to make that app Kaydown. It gives false when the Kaydown app isn't installed.
   # `app_installed()` is true when the Kaydown app is on this Mac.
@@ -2344,7 +2458,7 @@ present_inline(text::Text) = Box(Alignment.Start, text)
 present_inline(p::FSPath) = (l = present(p); l.inline = true; l)
 
 note(text, colour) = Box(width(grow=grow), padding(BLOCK_X, 10px), background(colours.block),
-  Text(String(text), size=13px, family=CODE_FONT, subfamily=CODE_STYLE, color=colour))
+  Text(String(text), size=13px, family=codefont(), subfamily=codestyle(), color=colour))
 
 """
 What a live block shows: the node that its code made. The code can make a
@@ -2724,7 +2838,7 @@ is all one colour.
 """
 codeline(line, lang) = Row(height(LINE_H),
   [part for t in tokens(line, lang)
-        for part in spared(t.text, Face(CODE_FONT, t.kind == :comment ? CODE_SLANT : CODE_STYLE, 12px,
+        for part in spared(t.text, Face(codefont(), t.kind == :comment ? codeslant() : codestyle(), 12px,
                                         t.kind == :plain ? colours.ink : getfield(colours, t.kind), false))]...)
 
 # --- the files in a zip -------------------------------------------------------------------
@@ -3117,14 +3231,17 @@ end
 
 const NUMBER_GAP = 14px   # between the numbers of the lines and the text
 
-"True when the page shows the number of each line: it shows a whole file of code or of text"
+"True when the page shows a whole file of code or of text, which can have the number of each line beside it"
 numbered(b::Buffer) = b.view == :code || (b.view == :text && !(lowercase(splitext(b.path)[2]) in ZIPS))
 
 "The font of the numbers of the lines: a little smaller and fainter than the code"
 number_face(e) = (code = face(e, Line(Kind.code, 0, 0, "")); Face(code, size=code.size * 0.9, color=colours.faint))
 
+"True when the page shows the number of each line beside it: a file of code or of text, unless the settings page hid them"
+numbers(e) = numbered(e.buf) && e.numbers
+
 "How much room the numbers of the page's lines take beside the text, with the gap between them. A page with no numbers takes none."
-gutter(e) = numbered(e.buf) ? measure(number_face(e), "0") * max(2, ndigits(length(e.buf.lines))) + NUMBER_GAP : 0px
+gutter(e) = numbers(e) ? measure(number_face(e), "0") * max(2, ndigits(length(e.buf.lines))) + NUMBER_GAP : 0px
 
 const capitals = Dict{Tuple{String,String,Float32},px}()
 
@@ -3135,10 +3252,10 @@ capital(face::Face) = get!(capitals, (face.family, face.style, Float32(num(face.
   px(metrics[].capHeight)
 end
 
-"Write the number of each line on screen beside the line, where `ui` is the page's text"
-draw_numbers(ctx, e, ui) = begin
+"Write the number of each line on screen beside the line. The page's text starts at `left`, and its first line is at `top`."
+draw_numbers(ctx, e, left, top) = begin
   b = e.buf
-  numbered(b) || return
+  numbers(e) || return
   f = number_face(e)
   # A number stands on the line that its line of code stands on
   rise = capital(face(e, Line(Kind.code, 0, 0, "")))
@@ -3147,15 +3264,114 @@ draw_numbers(ctx, e, ui) = begin
     flow isa Flow || continue
     words = string(it.first)
     here = !b.reading && !readonly(b) && it.first == b.caret[1]
-    x = ui.left - NUMBER_GAP - measure(f, words)
-    y = ui.top + it.top + line_top(flow, 1) + (flow.lines[1].high + rise) / 2
+    x = left - NUMBER_GAP - measure(f, words)
+    y = top + it.top + line_top(flow, 1) + (flow.lines[1].high + rise) / 2
     write_ink(ctx, words, num(x), num(y), here ? Face(f, color=colours.dim) : f)
   end
 end
 
+# A line of a file of code or of text that's too long for the window goes on
+# under itself, at the window's right edge. The part under it starts one step of
+# indentation further in than the line does, so it doesn't look like a line of
+# its own. The settings page can turn that off. Then a long line goes on past
+# the edge of the window, and the page scrolls sideways to show the rest of it,
+# under the numbers of the lines. The caret stays in sight as it moves.
+#
+# The settings page has more for code. A file of code can show the numbers of
+# its lines or not, shade the line that the caret is on, and have a faint line
+# down it after a number of characters, to show where a line gets too long. In
+# all code, in a file or in a page, it sets how big the code is and how many
+# spaces one step of indentation is.
+
+const INDENTS = (2, 4)                  # the steps of indentation that the settings page offers
+const GUIDES = (0, 80, 92, 100, 120)    # the places for the line down a file of code. 0 is no line.
+const CODE_SCALES = (0.4, 2.5)          # the least and most that code can be, beside the page's text
+const SIDE_ROOM = 40px   # how near the caret gets to the left or right of the window before the page scrolls sideways
+
+"True when the long lines of the page go on under themselves. Only a file of code or of text can have them go on past the window."
+wraps(e) = e.wrap || !numbered(e.buf)
+
+"How far the page is scrolled to the right"
+sideways(e) = wraps(e) ? 0px : e.buf.across
+
+"How far the page can scroll to the right: as far as the longest line goes past the right of the window"
+sideways_room(e) = max(0px, e.reach + SIDE_ROOM - e.width)
+
+"Scroll the page `by` to the right, as far as it goes"
+scroll_sideways!(e, by) = (e.buf.across = clamp(e.buf.across + by, 0px, sideways_room(e)); e)
+
+"""
+Two fingers that move sideways on the trackpad, or the wheel with ⇧ held,
+scroll the page sideways. Their move up or down still scrolls the page up or down.
+"""
+swipe!(e, ev::MouseScroll) = begin
+  (wraps(e) || ev.delta[1] == 0px) && return nothing
+  scroll_sideways!(e, -30ev.delta[1])
+  ev.delta[2] == 0px ? handled : nothing
+end
+onscroll(d::Document, ev::MouseScroll) = swipe!(editor(d), ev)
+onscroll(p::Page, ev::MouseScroll) = swipe!(editor(p), ev)
+
+"How far the lines of `f` go, from the left of the text"
+extent(f::Flow) = maximum(vl -> isempty(vl.segs) ? vl.x : last(vl.segs).x + last(vl.segs).w, f.lines)
+
+"Turn on or off the wrapping of a line of a file of code that's too long for the window"
+wrap!(e, on::Bool) = (e.wrap = on; save_settings!(e); rerun!(e, :wrap); restyle!(e))
+
+"Show or hide the numbers of the lines of a file of code"
+numbers!(e, on::Bool) = (e.numbers = on; save_settings!(e); rerun!(e, :numbers); restyle!(e))
+
+"Shade the line of a file of code that the caret is on, or don't"
+shade!(e, on::Bool) = (e.shade = on; save_settings!(e); rerun!(e, :shade); e)
+
+"Make one step of indentation in code `n` spaces: 2 or 4"
+indent_width!(e, n::Int) = begin
+  n in INDENTS || error("A step of indentation is 2 or 4 spaces. $n isn't one of them.")
+  e.indent = n
+  save_settings!(e)
+  rerun!(e, :indent)
+  restyle!(e)
+end
+
+"Put the faint line down a file of code after `n` characters. 0 takes the line away."
+guide!(e, n::Int) = begin
+  n in GUIDES || error("The line goes after 80, 92, 100 or 120 characters, or 0 for none. $n isn't one of them.")
+  e.guide = n
+  save_settings!(e)
+  rerun!(e, :guide)
+  e
+end
+
+"Draw code in the font called `family`, in its light weight if it has one"
+code_font!(e, family::String) = begin
+  installed_weight(family, 400) > 0 || error("This Mac has no font called $family.")
+  e.code_font = family
+  use_code_font!(e)
+  save_settings!(e)
+  rerun!(e, :code_font)
+  restyle!(e)
+end
+
+"How big code is: a part of the size of the page's text, so it grows and shrinks with it"
+code_size(e) = body(e).size * e.code_scale
+
+"Make code `size` pixels tall, for a live block. The text of the page stays the size it is."
+code_size!(e, size) = (e.code_scale = clamp(size / num(body(e).size), CODE_SCALES...); rewrap!(e))
+
+"The spaces of one step of indentation, in a block of the kind `block`. In code the settings page chooses how many."
+indentation(e, block) = block === CodeBlock ? " "^e.indent : STEP
+
 "Lay out `text`, line `i` of a file that shows as text. It has no background of its own and starts at the edge of the page."
-file_line(e, text, line::Line, i::Int) =
-  wrap(spare(pieces(e, text, line, false, i)), e.width; lh=body(e).size * 1.5, size=face(e, line).size)
+file_line(e, text, line::Line, i::Int) = begin
+  ps = spare(pieces(e, text, line, false, i))
+  # Lines of bigger code are further apart
+  lh, size = code_size(e) * 1.5 / CODE_SCALE, face(e, line).size
+  wraps(e) || return wrap(ps, px(Inf); lh, size)
+  # The spaces at the start of the line, and one step more, though half the page is always left for the text
+  indent = match(r"^[ \t]*", text).match
+  hang = min(measure(face(e, line), indent * " "^e.indent), e.width / 2)
+  wrap(ps, e.width; lh, size, hang)
+end
 
 """
 The lines of a file that shows as text, laid out. Each is a line of code. The
@@ -7166,18 +7382,21 @@ text_width(e) = begin
   # While the sidebar slides, the text keeps the width it has beside the
   # sidebar, so it doesn't wrap again on each frame
   # The numbers of a file's lines have room on the left of the text
-  clamp(w - (e.panel || sliding(e) ? panel_w(e) : 0px) - 2PAGE_X - gutter(e), 240px, e.widest * e.zoom)
+  room = w - (e.panel || sliding(e) ? panel_w(e) : 0px) - 2PAGE_X - gutter(e)
+  # A file of code or of text takes all the room that the window has. A page is no wider than the settings say.
+  numbered(e.buf) ? max(room, 240px) : clamp(room, 240px, e.widest * e.zoom)
 end
 
 """
 How far the left edge of the page's text is from the left edge of the window.
 A page's text is in the middle of the space beside the file panel. A file with
-numbered lines starts at the left of that space, after its numbers.
+numbered lines starts at the left of that space, after its numbers, unless it's
+scrolled to the right.
 """
 text_left(e) = begin
   w, _ = window_size(e)
   side = panel_w(e) * opened(e)
-  numbered(e.buf) ? side + PAGE_X + gutter(e) : side + max(PAGE_X, (w - side - e.width) / 2)
+  numbered(e.buf) ? side + PAGE_X + gutter(e) - sideways(e) : side + max(PAGE_X, (w - side - e.width) / 2)
 end
 
 "Work out what the page shows and how tall each part is, for text that's `width` wide"
@@ -7304,9 +7523,16 @@ reveal!(e) = begin
   it = item(e, e.buf.caret[1])
   top, bottom = it.top, it.top + it.tall
   if it.content isa Flow
-    k, _ = spot(it.content, e.buf.caret[2])
+    k, x = spot(it.content, e.buf.caret[2])
     top = it.top + line_top(it.content, k)
     bottom = top + it.content.lines[k].high
+    # A long line that doesn't wrap scrolls sideways to show the caret, with a little of the line on each side of it
+    if !wraps(e)
+      b = e.buf
+      x < b.across + SIDE_ROOM && (b.across = x - SIDE_ROOM)
+      x > b.across + e.width - SIDE_ROOM && (b.across = x - e.width + SIDE_ROOM)
+      scroll_sideways!(e, 0px)
+    end
   elseif it.content isa Sheet
     r = clamp(e.buf.caret[1] - it.first, 1, length(it.content.rows))
     top = it.top + row_top(it.content, r)
@@ -7350,7 +7576,7 @@ One part of a line of code in a chip, in the colour of its kind, as the parts
 of a row. Each is as wide as its text measures, so the caret lines up with it.
 """
 coloured(tok, f::Face) =
-  spared(tok.text, Face(f, color=tok.kind == :plain ? f.color : getfield(colours, tok.kind), style=tok.kind == :comment ? CODE_SLANT : f.style))
+  spared(tok.text, Face(f, color=tok.kind == :plain ? f.color : getfield(colours, tok.kind), style=tok.kind == :comment ? codeslant() : f.style))
 
 "The lines of a Flow, as rows of text. `edge` is the width of a border on its left."
 rows(f::Flow, edge=0px) =
@@ -7438,7 +7664,8 @@ describe(d::Document) = begin
   lo = something(findfirst(it -> it.top + it.tall >= from, items), length(items))
   hi = something(findlast(it -> it.top <= to, items), lo)
   e.shown = lo:hi
-  Column(fixed(e.width), Alignment.Start, name="Document",
+  # Each row of text cuts off what's past its end, so long lines that don't wrap need a page as wide as the longest
+  Column(fixed(wraps(e) ? e.width : max(e.width, e.reach + SIDE_ROOM)), Alignment.Start, name="Document",
     spacer(items[lo].top),
     [x isa Item ? describe(e, x) : x for x in blocks(d, items[lo:hi])]...,
     spacer(total - items[hi].top - items[hi].tall))
@@ -7464,10 +7691,28 @@ page_bottom(e) = numbered(e.buf) ? max(PAGE_BOTTOM, e.scroll.viewport - CODE_END
 
 describe(p::Page) = begin
   e = editor(p)
-  reuse!(e.scroll,
+  # Long lines that don't wrap go on to the right edge of the window. The text moves left as the page
+  # scrolls sideways. None of it shows past the edges of the page, and the numbers of the lines go over it.
+  page = wraps(e) ?
     Row(width(grow=grow), Alignment.Start, justify=numbered(e.buf) ? Alignment.Start : Alignment.Center,
         padding(PAGE_TOP, PAGE_X, page_bottom(e), PAGE_X + gutter(e)),
-      node!(Document, e, :document)))
+      node!(Document, e, :document)) :
+    Row(width(grow=grow), Alignment.Start, padding(PAGE_TOP, 0px, page_bottom(e), PAGE_X + gutter(e)), clip_x=true,
+      Box(Alignment.Start, offset_x=-sideways(e), node!(Document, e, :document)))
+  reuse!(e.scroll, guide_under(e, page))
+end
+
+"""
+Put a faint line down a file of code, under the text of `page`, after the
+number of characters that the settings page chooses. It moves with the text
+when the page scrolls sideways.
+"""
+guide_under(e, page) = begin
+  (e.guide > 0 && numbered(e.buf)) || return page
+  x = PAGE_X + gutter(e) + measure(face(e, Line(Kind.code, 0, 0, "")), "0") * e.guide - sideways(e)
+  Stack(width(grow=grow), Alignment.Start,
+    Box(fixed(1px), height(grow=grow), background(colours.line), offset_x=x),
+    page)
 end
 
 "The part of line `i` that's selected, as columns, and whether the selection goes on past it"
@@ -7619,11 +7864,45 @@ draw(ctx, size, ui::ConcreteRect, d::Document) = begin
     end
   end
   fill_selection(ctx, rects)
-  draw_numbers(ctx, e, ui)
-  draw_fresh(ctx, e, ui)
   annotate(ctx, e, ui)
   # A file that's only shown has a selection and no caret
-  (b.reading || readonly(b)) && return
+  (b.reading || readonly(b)) || carets(ctx, e, ui)
+  margin(ctx, e, ui)
+end
+
+"""
+Draw the numbers of the lines, and the bars beside the lines that just changed,
+in the room on the left of the text. The text of a page that's scrolled to the
+right goes under that room, so the room is filled with the page's colour first.
+"""
+margin(ctx, e, ui) = begin
+  across = sideways(e)
+  left = ui.left + across   # where the text starts when it isn't scrolled
+  room = PAGE_X + gutter(e)
+  across > 0px && rectangle(ctx, left - room, ui.top, room, ui.height, background=colours.bg, border=0px)
+  shade_line(ctx, e, left - room, ui.top)
+  draw_numbers(ctx, e, left, ui.top)
+  draw_fresh(ctx, e, left, ui.top)
+end
+
+const SHADE = 0.05   # how much of the colour of the text the shade of the caret's line has
+
+"""
+Shade the line that the caret is on, from `x` to the right edge of the window,
+in a file of code whose settings ask for it. The shade is faint, so the text
+shows through it. There's none while text is selected.
+"""
+shade_line(ctx, e, x, top) = begin
+  b = e.buf
+  (e.shade && numbered(b) && !b.reading && !readonly(b) && !selecting(b) && !isempty(e.layout)) || return
+  it = item(e, b.caret[1])
+  w, _ = window_size(e)
+  rectangle(ctx, x, top + it.top, w - x, it.tall, background=RGBA(colours.ink, SHADE), border=0px)
+end
+
+"Draw the caret on the page, whose text is at `ui`"
+carets(ctx, e, ui) = begin
+  b = e.buf
   for it in e.layout[e.shown]
     top = ui.top + it.top
     if it.content isa Grid
@@ -7645,7 +7924,8 @@ end
 
 "The place in the document under a point in the window"
 locate(e, (x, y)) = begin
-  dx, dy = x - e.origin[1], y - e.origin[2]
+  # On a page that's scrolled sideways, a point on the numbers of the lines is on the first part of the line that shows
+  dx, dy = max(x - e.origin[1], sideways(e)), y - e.origin[2]
   items = e.layout
   it = items[something(findlast(it -> it.top <= dy, items), 1)]
   if it.content isa Grid
@@ -8084,7 +8364,7 @@ newline!(e, ::Type{CodeBlock}) = begin
   end
   line.kind == Kind.fence && return type!(e, "\n")
   before = head(b.lines[i], col)
-  type!(e, "\n" * match(r"^ *", before).match * (opens(before, line.lang) ? STEP : ""))
+  type!(e, "\n" * match(r"^ *", before).match * (opens(before, line.lang) ? indentation(e, CodeBlock) : ""))
 end
 
 const STEP = "  "   # one step of indentation
@@ -8100,15 +8380,15 @@ opens(text::AbstractString, lang::AbstractString) = begin
   occursin(r"\b(begin|do( [\w, ]+)?)$", s) || (occursin(OPENERS, s) && !occursin(r"\bend$", s))
 end
 
-"Where backspace deletes back to from the caret: one character, or one step of the spaces that start a line"
-backstep(b::Buffer, block) = begin
+"Where backspace deletes back to from the caret: one character, or one step of `n` of the spaces that start a line"
+backstep(b::Buffer, block, n=length(STEP)) = begin
   i, col = b.caret
   indented = col > 0 && !selecting(b) && all(==(' '), head(b.lines[i], col))
-  indented ? (i, col - (col - 1) % length(STEP) - 1) : beside(b, b.caret, -1)
+  indented ? (i, col - (col - 1) % n - 1) : beside(b, b.caret, -1)
 end
 
 # In a table the spaces belong to a cell
-backstep(b::Buffer, ::Type{Table}) = beside(b, b.caret, -1)
+backstep(b::Buffer, ::Type{Table}, n=0) = beside(b, b.caret, -1)
 
 "Tab moves text in, and shift-Tab moves it back out. What they move depends on the block the caret is in."
 indent!(e, out::Bool) = begin
@@ -8123,14 +8403,15 @@ indent!(e, out::Bool, block) = out ? nothing : type!(e, STEP)
 # In code, Tab goes to the next step. With a selection, or with shift, it moves every line the selection touches.
 indent!(e, out::Bool, ::Type{CodeBlock}) = begin
   b = e.buf
-  out || selecting(b) || return type!(e, " " ^ (length(STEP) - b.caret[2] % length(STEP)))
+  tab = indentation(e, CodeBlock)   # as many spaces as the settings page says
+  out || selecting(b) || return type!(e, " " ^ (length(tab) - b.caret[2] % length(tab)))
   ends = Dict(:caret => b.caret, :anchor => b.anchor)
   lo, hi = minmax(b.caret, b.anchor)
   for i in lo[1]:hi[1]
     kinds(b)[i].kind == Kind.code || continue
-    n = out ? min(length(STEP), length(match(r"^ *", b.lines[i]).match)) : length(STEP)
+    n = out ? min(length(tab), length(match(r"^ *", b.lines[i]).match)) : length(tab)
     isempty(b.lines[i]) && continue
-    edit!(b, (i, 0), (i, out ? n : 0), out ? "" : STEP)
+    edit!(b, (i, 0), (i, out ? n : 0), out ? "" : tab)
     for (name, (l, col)) in ends
       l == i && (ends[name] = (i, max(0, col + (out ? -n : n))))
     end
@@ -8459,7 +8740,7 @@ onkey(e::Editor, ev::KeyPress{K}) where K = begin
   elseif K == Keys.backspace && !cmd && !opt && emptyrow(b)
     backrow!(e)
   elseif K == Keys.backspace
-    erase!(e, cmd ? (b.caret[1], 0) : opt ? word_step(b, b.caret, -1) : backstep(b, block(b, b.caret[1])))
+    erase!(e, cmd ? (b.caret[1], 0) : opt ? word_step(b, b.caret, -1) : (blk = block(b, b.caret[1]); backstep(b, blk, length(indentation(e, blk)))))
   elseif K == Keys.delete
     erase!(e, opt ? word_step(b, b.caret, 1) : beside(b, b.caret, 1))
   elseif K == Keys.enter
@@ -11113,8 +11394,8 @@ fresh(e) = begin
   runs[1:0]
 end
 
-"Draw a bar in the margin beside each item on screen that shows a line that just changed"
-draw_fresh(ctx, e, ui) = begin
+"Draw a bar in the margin beside each item on screen that shows a line that just changed. The text starts at `left`, and its first line is at `top`."
+draw_fresh(ctx, e, left, top) = begin
   # The button in the top bar keeps the bars of all the agent's changes on the page. They don't fade.
   kept = marking(e) ? theirs(e) : UnitRange{Int}[]
   runs = isempty(kept) ? fresh(e) : kept
@@ -11123,7 +11404,7 @@ draw_fresh(ctx, e, ui) = begin
   ink = RGBA(colours.accent, strength * 0.7)
   for it in e.layout[e.shown]
     any(r -> first(r) <= it.last && last(r) >= it.first, runs) || continue
-    rectangle(ctx, ui.left - 16px, ui.top + it.top, 3px, it.tall, background=ink, border=0px)
+    rectangle(ctx, left - 16px, top + it.top, 3px, it.tall, background=ink, border=0px)
   end
 end
 
@@ -11162,7 +11443,7 @@ const OUTCOME_NODE_W = 420px    # how wide a value that's a UI node shows
 const OUTCOME_EDGE = 12px       # the least space between a box and the right edge of the window
 
 "The font of what code came to, which is the font of the code, at `size` and in the colour `ink`"
-outcome_face(size, ink=colours.ink) = Face(CODE_FONT, CODE_STYLE, size, ink, false)
+outcome_face(size, ink=colours.ink) = Face(codefont(), codestyle(), size, ink, false)
 
 "What a piece of the code of a `julia` code block came to when it ran. It shows in a box after the code's last line."
 @def mutable struct Outcome <: SemanticUI
@@ -11444,7 +11725,8 @@ outcome_over(e) = begin
     top = y0 + it.top + line_top(f, length(f.lines)) + (vl.high - high) / 2
     # A line that ends too near the edge of the window has the box under it
     fits(left) < min(length(o.brief), 16) && ((left, top) = (x0 + vl.x, top + vl.high))
-    (top >= TOPBAR_H && top + high <= h) || continue
+    # On a page that's scrolled sideways, a box that would go over the numbers of the lines doesn't show
+    (top >= TOPBAR_H && top + high <= h && left >= x0 + sideways(e)) || continue
     n = max(fits(left), 1)
     o.shown = length(o.brief) > n ? first(o.brief, n - 1) * "…" : o.brief
     # The box of an outcome that's open shows the first line, so the rest starts at the second
@@ -11473,7 +11755,7 @@ value_row(text::AbstractString, o::Outcome; code=true) = begin
   cell = measure(face, "0")
   parts = Any[]
   for tok in tokens(text, code ? "julia" : "")
-    f = tok.kind == :plain ? face : Face(face, color=getfield(colours, tok.kind), style=tok.kind == :comment ? CODE_SLANT : face.style)
+    f = tok.kind == :plain ? face : Face(face, color=getfield(colours, tok.kind), style=tok.kind == :comment ? codeslant() : face.style)
     for (part, pf) in runs(tok.text, f)
       # A character from another font gets the room of one of this font's, so the columns of a matrix stay in line
       wide = pf.family == face.family ? measure(pf, part) : cell * length(part)
@@ -11637,6 +11919,7 @@ end
 
 describe(e::Editor) = begin
   use!(getproperty(THEMES, e.theme))
+  use_code_font!(e)
   win = window_of(e)
   if win !== nothing && e.applied != e.theme
     set_dark!(win, e.theme == :night)
@@ -11655,6 +11938,11 @@ describe(e::Editor) = begin
   job_tick!(e)
   zoom_tick!(e)
   layout!(e)
+  # A page whose long lines don't wrap scrolls sideways as far as its longest line goes, and no further when the window grows
+  if !wraps(e)
+    e.reach = maximum(it -> it.content isa Flow ? extent(it.content) : 0px, e.layout, init=0px)
+    scroll_sideways!(e, 0px)
+  end
   # A live block that changed the size of the text stays where it was in the window
   hold = pop!(e.nodes, :hold, nothing)
   hold === nothing || (e.scroll.offset = max(0px, item(e, hold[1]).top - hold[2]))
@@ -11726,8 +12014,9 @@ end
 
 # --- settings -----------------------------------------------------------------------------
 #
-# The settings are the page's colours, its font, the size of its text, its width
-# and what the count at the top right counts. ⌘, opens the settings page, a
+# The settings are the page's colours, its font, the size of its text, its width,
+# what the count at the top right counts, how code shows and how wide the
+# sidebar is. ⌘, opens the settings page, a
 # Markdown file whose live blocks change them, in a window of its own. A
 # setting that changes in one window changes in every window. They are kept in
 # a file, so the next window opens with them.
@@ -11736,7 +12025,7 @@ end
 const pages_dir = Ref(joinpath(@__DIR__, "pages"))
 
 "The settings that every window has the same: each is a field of the editor"
-const SHARED = (:theme, :font, :zoom, :widest, :stat, :spelling, :side)
+const SHARED = (:theme, :font, :zoom, :widest, :stat, :spelling, :wrap, :numbers, :shade, :indent, :code_scale, :code_font, :guide, :side)
 
 const SETTINGS_SIZE = (720px, 820px)   # of the settings window, when the window that asked for it is big enough
 const SETTINGS_DROP = 48px             # how far the settings window's top is below the top of the window that asked for it
@@ -11813,7 +12102,7 @@ save_settings!(e) = begin
   e.remember || return
   try
     mkpath(dirname(settings_file()))
-    write(settings_file(), "theme=$(e.theme)\nfont=$(e.font)\nzoom=$(e.zoom)\nwidth=$(e.widest.value)\ncount=$(e.stat)\nspelling=$(e.spelling)\nsidebar=$(e.side.value)\n")
+    write(settings_file(), "theme=$(e.theme)\nfont=$(e.font)\nzoom=$(e.zoom)\nwidth=$(e.widest.value)\ncount=$(e.stat)\nspelling=$(e.spelling)\nwrap=$(e.wrap)\nnumbers=$(e.numbers)\nshade=$(e.shade)\nindent=$(e.indent)\ncode=$(e.code_scale)\ncodefont=$(e.code_font)\nguide=$(e.guide)\nsidebar=$(e.side.value)\n")
   catch
     # A file that can't be written only means the settings last as long as the window
   end
@@ -11839,6 +12128,24 @@ load_settings!(e) = begin
       e.stat = Symbol(value)
     elseif name == "spelling"
       e.spelling = value != "false"
+    elseif name == "wrap"
+      e.wrap = value != "false"
+    elseif name == "numbers"
+      e.numbers = value != "false"
+    elseif name == "shade"
+      e.shade = value == "true"
+    elseif name == "indent"
+      n = tryparse(Int, value)
+      n in INDENTS && (e.indent = n)
+    elseif name == "code"
+      c = tryparse(Float64, value)
+      c === nothing || (e.code_scale = clamp(c, CODE_SCALES...))
+    elseif name == "guide"
+      n = tryparse(Int, value)
+      n in GUIDES && (e.guide = n)
+    elseif name == "codefont"
+      # A font that's no longer on the Mac leaves code in the usual one
+      installed_weight(value, 400) > 0 && (e.code_font = String(value))
     elseif name == "sidebar"
       w = tryparse(Float64, value)
       w === nothing || (e.side = px(round(clamp(w, num(PANEL_MIN), num(PANEL_MAX)))))
@@ -12003,12 +12310,15 @@ and return the bytes of the PDF. The editor is left as it was.
 print_pdf(e, paper=paper_size()) = begin
   pw, ph = paper
   b = e.buf
-  caret, anchor = b.caret, b.anchor
+  caret, anchor, wrapped = b.caret, b.anchor, e.wrap
   stream = Skia.sk_dynamic_memory_wstream_new()
   try
     # With the caret on no line, each line hides its markup and each live block shows what it made
     b.caret = b.anchor = (0, 0)
+    # Paper doesn't scroll sideways, so a long line of code goes on under itself
+    e.wrap = true
     use!(PAPER)
+    use_code_font!(e)
     empty!(e.flows)
     # From pixels on screen to points on paper. The text is as wide as the paper allows.
     scale = PRINT_TEXT / num(body(e).size)
@@ -12059,7 +12369,7 @@ print_pdf(e, paper=paper_size()) = begin
     bytes
   finally
     Skia.sk_dynamic_memory_wstream_delete(stream)
-    b.caret, b.anchor = caret, anchor
+    b.caret, b.anchor, e.wrap = caret, anchor, wrapped
     use!(getproperty(THEMES, e.theme))
     empty!(e.flows)
     layout!(e)

@@ -206,4 +206,4 @@ Right-click the page to cut, copy or paste. The menu's Insert item adds a new bl
 
 A file can start with front matter: lines like `title: Notes` between two lines of `---`. Kaydown shows it as a block of its own, and leaves it out of the word count.
 
-Press ⌘, to open the settings in a window of their own: the colours, the font, the size of the text, the width of the page and what the count at the top right shows. A button there makes Kaydown the app that opens your Markdown files.
+Press ⌘, to open the settings in a window of their own: the colours, the font, the size of the text, the width of the page, what the count at the top right shows, and how code shows: its font, its size, its indent, its line numbers and whether a long line wraps. A button there makes Kaydown the app that opens your Markdown files.

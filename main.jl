@@ -114,7 +114,7 @@
 @use "github.com/jkroso/MiniFB.jl"... onfiledrop onscroll
 @use "github.com/jkroso/UI.jl/Interface/Geometric"...
 @use "github.com/jkroso/UI.jl/Interface/Specific"...
-@use "github.com/jkroso/UI.jl/Interface/abstract" SemanticUI GeometricUI WrapMode Theme with_theme adopt_theme! light describe describe! reuse! detach! add_child! window_of focus handled carry!
+@use "github.com/jkroso/UI.jl/Interface/abstract" SemanticUI GeometricUI WrapMode Theme with_theme adopt_theme! light describe describe! reuse! detach! add_child! window_of focus handled carry! inputs version
 @use "github.com/jkroso/UI.jl/Interface/draw" ui draw ishovered cursor open_url viewport show_tooltip! hide_tooltip! hittest show_menu! hide_menu! redraw_in! rect popup! close_popup! MouseScroll Pinch onpinch placed! with_clip with_round_clip clipboard!
 @use "github.com/jkroso/UI.jl/Interface/objc" libobjc cls sel msg nsstring jstring with_pool send
 @use "github.com/jkroso/UI.jl/Interface/fonts" skia_font register_font weight_of weight_name isitalic installed_faces
@@ -381,16 +381,19 @@ const INLINE_GAP = 4px   # the least room above and below a node in a line of te
 wrap(pieces, limit::px; lh, size, left=0px, hang=left, above=0px, below=0px, kind=Kind.paragraph, raw=false) = begin
   lines = VLine[]
   segs = Seg[]
-  x = start = left
-  top = 0px
+  # `flush!` and `add!` change these. A variable that a closure assigns to is
+  # boxed, and Julia looks at its type again each time it's used: that was a
+  # sixth of the time a page took to describe. A `Ref` keeps its type.
+  x, start, top = Ref(left), Ref(left), Ref(0px)
   flush!() = begin
     from = isempty(segs) ? (isempty(lines) ? 0 : last(lines).to) : first(segs).col
     to = isempty(segs) ? from : last(segs).col + last(segs).n
     high = max(lh, maximum(s -> s.node === nothing ? 0px : s.node.h + INLINE_GAP, segs, init=0px))
-    push!(lines, VLine(segs, start, from, to, top, high))
-    top += high
-    segs = Seg[]
-    x = start = hang
+    # The line keeps a copy, and `segs` starts the next line empty
+    push!(lines, VLine(copy(segs), start[], from, to, top[], high))
+    top[] += high
+    empty!(segs)
+    x[] = start[] = hang
   end
   # Add `text`, which is `n` characters from `col`, to the line being built
   add!(p::Piece, text, col, n) = begin
@@ -399,11 +402,11 @@ wrap(pieces, limit::px; lh, size, left=0px, hang=left, above=0px, below=0px, kin
       s = pop!(segs)
       joined = s.text * text
       push!(segs, Seg(joined, s.col, s.n + n, s.face, false, s.link, s.x, measure(s.face, joined) + pad, nothing))
-      x = s.x + last(segs).w
+      x[] = s.x + last(segs).w
     else
       w = p.node === nothing ? measure(p.face, text) + pad : p.node.w
-      push!(segs, Seg(text, col, n, p.face, p.atomic, p.link, x, w, p.node))
-      x += w
+      push!(segs, Seg(text, col, n, p.face, p.atomic, p.link, x[], w, p.node))
+      x[] += w
     end
   end
   # Cut the pieces into words, each with the spaces after it. What inline code made is one word.
@@ -434,18 +437,19 @@ wrap(pieces, limit::px; lh, size, left=0px, hang=left, above=0px, below=0px, kin
     while j < length(words) && !endswith(words[j][2], r"\s") && !startswith(words[j+1][2], r"\s")
       j += 1
     end
-    w = sum(k -> reach(words[k], k == j), i:j)
+    stop = j   # the closure below sees this, which is never assigned again, so it isn't boxed as `j` would be
+    w = sum(k -> reach(words[k], k == stop), i:stop)
     if w <= limit - hang
-      x + w > limit && x > start && flush!()
-      foreach(k -> add!(words[k][1], words[k][2:4]...), i:j)
+      x[] + w > limit && x[] > start[] && flush!()
+      foreach(k -> add!(words[k][1], words[k][2:4]...), i:stop)
     else
       # Words that are too wide for a whole line together break where they must
-      for k in i:j
-        x + reach(words[k], k == j) > limit && x > start && flush!()
+      for k in i:stop
+        x[] + reach(words[k], k == stop) > limit && x[] > start[] && flush!()
         add!(words[k][1], words[k][2:4]...)
       end
     end
-    i = j + 1
+    i = stop + 1
   end
   flush!()
   Flow(lines, lh, size, above, below, kind, raw)
@@ -1382,9 +1386,10 @@ flow(e, i::Int, raw::Bool=israw(e.buf, i)) = begin
   build() = laid(e, text, line, raw, i)
   # What inline code made can change its size, so its line is laid out again each time
   !raw && occursin(INLINE, text) && !(line.kind in (Kind.code, Kind.fence, Kind.rule)) && return build()
-  # A footnote's number comes from the rest of the document, so its line is laid out again each time too
-  !raw && occursin("[^", text) && return build()
   length(e.flows) > 4000 && empty!(e.flows)
+  # A footnote's number comes from the rest of the document, which `notes` reads once for each
+  # version of it. So the line is kept for that version, and laid out again after a change.
+  !raw && occursin("[^", text) && return get!(build, e.flows, (text, line, raw, :notes, e.buf.path, e.buf.version))
   get!(build, e.flows, (text, line, raw))
 end
 
@@ -3841,6 +3846,8 @@ end
   sort::Any = nothing                     # the column that the table of measures is sorted by, and which way: (:cost, :desc)
   filters::Dict{Symbol,String} = Dict{Symbol,String}()   # the words that a column's text must have for the table to show a measure
   order::Vector{Int} = Int[]              # the measures that the table shows, in the order that it shows them
+  reads::UInt = UInt(0)                   # what its parts read, as one number. See `shown_state`.
+  measured::Int = -1                      # the `version` of its geometry when `tall` was measured
 end
 
 "The part of a takeoff that shows the plan"
@@ -4089,9 +4096,14 @@ takeoff_item(e, i, t, n) = begin
   reread!(v, e.buf.lines[i+1:t-1])
   # A takeoff that fills the window is drawn over the page, and its room in the page stays empty
   v.full && return Live(Box(width(grow=grow), height(v.tall)), v.tall + 2LIVE_GAP)
-  # Lay it out once to learn how tall it is
-  concrete = describe(Column(fixed(e.width), Alignment.Start, geometry(v)), (e.width, 9999px))
-  v.tall = concrete.height
+  # Lay it out once to learn how tall it is. While nothing that it shows changes, its geometry
+  # is kept (see `shown_state`), and so is its height. Laid out again here at another height
+  # than the page gives it, the page's layout of it couldn't be used again either.
+  g = geometry(v)
+  if version(v) == 0 || version(v) != v.measured
+    v.tall = describe(Column(fixed(e.width), Alignment.Start, g), (e.width, 9999px)).height
+    v.measured = version(v)
+  end
   Live(v, v.tall + 2LIVE_GAP)
 end
 
@@ -5929,6 +5941,42 @@ describe(v::TakeoffView) = begin
 end
 
 cursor(::TakeoffView) = :arrow
+
+# --- what a takeoff's parts read -----------------------------------------------------------
+#
+# UI.jl describes a node again only when its `inputs` have changed, and otherwise
+# uses its last geometry and layout. A takeoff's parts read its measures, its
+# state and the page around it. So each part gives one number for all of that,
+# which the takeoff works out once a frame, and the fields of its own that it
+# reads. On a frame where nothing changed, nothing in the takeoff is described
+# or laid out again: that was half the time a page with a takeoff took to
+# describe. The lists that float over the page, of a search, of units and of a
+# column's menu, have no `inputs`, so they're described on each frame while
+# they're open. So is the takeoff while its text field shows, which has none.
+
+"""
+Everything that the parts of takeoff `v` read as they're described, as values.
+A part that shows something that isn't here has to add it, or it won't change
+when that does.
+"""
+shown_state(v::TakeoffView) = begin
+  e = editor(v)
+  (Plans.written(v.data), v.asking, v.current, v.filters, v.full, v.known, v.quoting === nothing, v.said, v.sort,
+   v.tool, v.wrong, e.width, e.zoom, window_size(e), plan_path(v), plan_size(v), plan_pages(v), Centient.available(),
+   ntuple(k -> getfield(colours, k), nfields(colours)))
+end
+
+# UI.jl asks for the takeoff's inputs before those of its parts on each frame
+inputs(v::TakeoffView) = (v.reads = hash(shown_state(v)); (v.reads,))
+inputs(a::PlanArea) = (a.of.reads,)
+# A schedule's buttons are PlanButtons too. They're described on each frame, as the schedule is.
+inputs(b::PlanButton) = b.of isa TakeoffView ? (b.action, b.icon, b.words, b.tip, b.off, b.quiet, b.of.reads) : nothing
+inputs(r::MeasureRow) = (r.i, r.of.reads)
+inputs(c::AmountCell) = (c.i, c.of.reads)
+inputs(u::UnitWord) = (u.of.i, u.of.of.reads)
+inputs(c::MeasureCell) = (c.i, c.what, c.rect[3], c.of.reads)   # its width cuts its words short. Where it is doesn't matter.
+inputs(h::ColumnHead) = (h.key, h.side, h.of.reads)
+inputs(w::HeadWords) = (w.of.key, w.of.side, ishovered(w.of), w.of.of.reads)   # it's lit while the mouse is over its heading
 # A click beside a button is the block's, and takes the keyboard from the text field
 onkey(v::TakeoffView, ::KeyPress{Keys.mouse_left}) = (focus(part!(() -> PlanArea(of=v), v, :area)); handled)
 onmouse(v::TakeoffView, ::MouseMove) = held(v, Keys.mouse_left) ? handled : nothing

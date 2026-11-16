@@ -7753,8 +7753,10 @@ The boxes that cover the selected part of each line of `f`, whose top left
 corner is at (x, y). The first and last boxes take in the space above and below
 the lines, so the boxes of one line of the document meet those of the next.
 With `margin`, a box that starts at the start of its line also takes in the
-space to the left of the text, like the inset of a code block. That keeps the
-left edge of the selection straight from one kind of line to the next.
+space to the left of the text, like the inset of a code block. That's for a
+line that the selection came into from the line above: it keeps the left edge
+of the selection straight from one kind of line to the next. The line that the
+selection starts in has no `margin`, so its box starts where its text does.
 """
 marks(f::Flow, x, y, (from, to, more); margin=true) = begin
   out = Rect[]
@@ -7765,7 +7767,8 @@ marks(f::Flow, x, y, (from, to, more); margin=true) = begin
     x2 = xcol(vl, min(to, vl.to))
     # A little extra shows that the end of the line is selected too
     (to > vl.to || (more && k == n)) && (x2 += 7px)
-    x2 > x1 || continue
+    # A line with none of its text selected has no box, not even over its margin
+    x2 > max(x1, vl.x) || continue
     top = k == 1 ? 0px : line_top(f, k)
     bottom = line_top(f, k) + vl.high + (k == n ? f.below : 0px)
     push!(out, (num(x + x1), num(y + top), num(x + x2), num(y + bottom)))
@@ -7884,7 +7887,8 @@ draw(ctx, size, ui::ConcreteRect, d::Document) = begin
         push!(rects, (num(ui.left), num(top), num(ui.left + e.width), num(top + it.tall)))
     else
       sel = selected(b, it.first)
-      sel === nothing || append!(rects, marks(it.content, ui.left, top, sel))
+      # A line takes in the space left of its text only when the selection came into it from the line above
+      sel === nothing || append!(rects, marks(it.content, ui.left, top, sel, margin=selection(b)[1][1] < it.first))
     end
   end
   fill_selection(ctx, rects)

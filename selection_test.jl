@@ -1,0 +1,74 @@
+# Tests for where the colour of the selection goes. See `marks` in main.jl.
+# Run them with `julia --project=. selection_test.jl`. They select text in a
+# window that isn't on the screen.
+
+@use Test: @test, @testset
+@use "./main" => K
+@use "github.com/jkroso/MiniFB.jl" Window
+@use "github.com/jkroso/UI.jl/Interface/draw" frame
+const px = K.px
+
+const dir = mktempdir()
+const file = joinpath(dir, "walls.md")
+write(file, """
+# Walls
+
+Some words here.
+
+```julia
+width = 2.4
+height = 3.6
+```
+
+> a quote
+""")
+
+const e = K.build_editor(file)
+const w = Window(e, size=(1000px, 800px))
+frames(n=2) = foreach(_ -> frame(w), 1:n)
+frames()
+
+"The boxes of the selection on line `i`, as the page draws them, from the left edge of the page's text"
+boxes(i) = begin
+  sel = K.selected(e.buf, i)
+  sel === nothing ? K.Rect[] : K.marks(K.item(e, i).content, 0px, 0px, sel, margin=K.selection(e.buf)[1][1] < i)
+end
+select!(lo, hi) = (e.buf.anchor = lo; e.buf.caret = hi; frames())
+"Where the text of line `i` starts"
+inset(i) = K.num(K.item(e, i).content.lines[1].x)
+
+@testset "the selection starts where the text does" begin
+  @test inset(7) > 0 && inset(10) > 0   # code and quotes are set in from the edge of the page
+  # A word at the start of a line of code
+  select!((7, 0), (7, 6))
+  @test length(boxes(7)) == 1
+  @test boxes(7)[1][1] == inset(7)
+  # A word at the start of a quote, with its `> `
+  select!((10, 0), (10, 3))
+  @test boxes(10)[1][1] == inset(10)
+  # A word that isn't at the start of its line
+  select!((7, 9), (7, 12))
+  @test boxes(7)[1][1] > inset(7)
+end
+
+@testset "the lines after the first go to the edge of the page" begin
+  # The line it starts in begins at its text. Each line after it goes to the edge of the page.
+  select!((3, 5), (7, 6))
+  @test boxes(3)[1][1] > 0
+  @test all(i -> boxes(i)[1][1] == 0, 4:7)
+  select!((6, 0), (7, 6))
+  @test boxes(6)[1][1] == inset(6)
+  @test boxes(7)[1][1] == 0
+end
+
+@testset "a line with none of its text selected has no box" begin
+  # A whole line and the line break after it. The caret is at the start of the next line.
+  select!((7, 0), (8, 0))
+  @test length(boxes(7)) == 1
+  @test isempty(boxes(8))
+  # A line with no text in a selection still shows
+  select!((3, 0), (5, 3))
+  @test length(boxes(4)) == 1
+end
+
+exit()

@@ -37,9 +37,9 @@ The top of `agent.jl` says how the command and Kaydown talk to each other.
 
 ## Measure from a plan
 
-A code block in the language `takeoff` shows a page of a PDF file, or a picture. Drop the file on the block. Set the scale, then count fittings, measure lengths and measure areas with the tools at the top left of the block. The table under the plan shows what each measure comes to, and its headings sort and search it. A button makes the block fill the window, so that the plan is as big as it can be. `pages/welcome.md` has one to try, and `takeoff.jl` says how the block is written.
+A code block in the language `takeoff` shows a page of a PDF file, or a picture. Drop the file on the block. Set the scale, then count fittings, measure lengths and measure areas with the tools at the top left of the block. Corners snap to the lines of a PDF plan, and one tool cuts a shape out of an area, like a window out of a wall. The table under the plan shows what each measure comes to, and its headings sort and search it. A button makes the block fill the window, so that the plan is as big as it can be. `pages/welcome.md` has one to try, and `takeoff.jl` says how the block is written.
 
-Kaydown works with [Centient](https://centient.com.au) if it's on your Mac. Each measure can have an item from Centient, with its price: one of your own items, or a product from a supplier's catalogue that you choose with ⌥. The item's unit says what a new measure is, and chooses the tool: a length for an item sold by the metre, an area for one sold by the square metre, and a count for the rest. **Make quote in Centient** makes a quote in Centient's books with a line for each measure. Centient's app doesn't have to be open.
+Kaydown works with [Centient](https://centient.com.au) if it's on your Mac. Two buttons under the table start a measure. **Add a measure** asks for a few words that describe what it measures, and its item is defined later, in Centient. **Add from catalogue** asks for a specific item from Centient, with its price: one of your own items, or a product from a supplier's catalogue that you choose with ⌥. The item's unit says what the measure is, and chooses the tool: a length for an item sold by the metre, an area for one sold by the square metre, and a count for the rest. **Make quote in Centient** makes a quote in Centient's books with a line for each measure. Centient's app doesn't have to be open.
 
 Kaydown doesn't read Centient's books itself. It starts Centient's MCP server, `sidecar/mcp_server.jl` in Centient's folder, and that program runs Centient's own commands. `centient.jl` says where Kaydown looks for it. To use a Centient that's somewhere else, set `CENTIENT_SIDECAR` to its `sidecar` folder.
 
@@ -68,6 +68,7 @@ julia -O0 --project=. code_settings_test.jl  # the settings of code: long lines,
 julia -O0 --project=. weight_test.jl         # the weights of the page's text and of code: the weights a font has, bold text, the settings file
 julia -O0 --project=. keys_test.jl           # the key bindings: the commands, the bundles of shortcuts and the page that changes them
 julia -O0 --project=. highlight_test.jl      # the colours of the parts of a line of code, and of the code in a string
+julia -O0 --project=. detail_test.jl         # what the box of a function and of a module shows when it's open
 julia -O0 --project=. update_test.jl         # the app's own updates: a newer version comes, is checked and takes the app's place
 julia -O0 --project=. merge_test.jl
 julia -O0 --project=. pasteboard_test.jl

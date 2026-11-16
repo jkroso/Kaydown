@@ -225,4 +225,185 @@ pdf_part(path::AbstractString, n::Integer, k::Real, x::Real, y::Real, w::Integer
   end
 end
 
-export picture, natural, thumbnail, pdf_pages, pdf_page, pdf_size, pdf_part
+# --- the lines of a page of a PDF file ------------------------------------------------
+#
+# A page of a PDF file is a list of things to draw: move here, a line to there,
+# stroke it. macOS reads the list and calls a function for each kind of step.
+# The functions below follow the steps that make lines, and keep each line that
+# the page paints. A takeoff snaps to those lines.
+
+const Place = NTuple{6,Float64}   # how a step's points are moved, turned and scaled, as a PDF file writes it
+const Line = NTuple{4,Float64}     # from one point to another
+
+"What follows the steps of a page: where its points go, the path that's being made, and the lines so far"
+mutable struct Reader
+  place::Place
+  kept::Vector{Place}           # the ones that `q` put by, for `Q` to put back
+  path::Vector{Line}             # the lines of the path that's being made. A step that paints keeps them.
+  path_ends::Vector{UInt8}
+  start::NTuple{2,Float64}       # where the path's part began, for a step that closes it
+  at::NTuple{2,Float64}
+  lines::Vector{Line}
+  ends::Vector{UInt8}            # the ends of each line that are corners: 1 is its start, 2 its end, 3 both
+  table::Object                  # macOS's table of the functions
+  depth::Int                     # how many drawings inside drawings it's in
+end
+
+const MOST_LINES = 1_500_000   # a page with more lines than this gives its first ones
+const CURVE_PIECES = 8         # the straight lines that stand for a curve
+
+"`m`, then `n`"
+times(m::Place, n::Place) = (m[1] * n[1] + m[2] * n[3], m[1] * n[2] + m[2] * n[4], m[3] * n[1] + m[4] * n[3], m[3] * n[2] + m[4] * n[4],
+                               m[5] * n[1] + m[6] * n[3] + n[5], m[5] * n[2] + m[6] * n[4] + n[6])
+through(m::Place, x, y) = (x * m[1] + y * m[3] + m[5], x * m[2] + y * m[4] + m[6])
+
+reader(info::Object) = unsafe_pointer_to_objref(info)::Reader
+
+"The last number before the step. A step's numbers come off last first."
+number(scanner::Object) = (x = Ref(0.0); ccall((:CGPDFScannerPopNumber, CoreGraphics), Bool, (Object, Ref{Float64}), scanner, x); x[])
+"The point before the step, where the page shows it"
+point(r::Reader, scanner::Object) = (y = number(scanner); x = number(scanner); through(r.place, x, y))
+
+line!(r::Reader, to, ends=0x03) = (push!(r.path, (r.at..., to...)); push!(r.path_ends, ends); r.at = to; nothing)
+
+"A curve from where the path is to `c`, pulled towards `a` and then `b`. Only its two ends are corners."
+curve!(r::Reader, a, b, c) = begin
+  p = r.at
+  for k in 1:CURVE_PIECES
+    t = k / CURVE_PIECES
+    u = 1 - t
+    line!(r, (u^3 * p[1] + 3u^2 * t * a[1] + 3u * t^2 * b[1] + t^3 * c[1], u^3 * p[2] + 3u^2 * t * a[2] + 3u * t^2 * b[2] + t^3 * c[2]),
+          k == 1 ? 0x01 : k == CURVE_PIECES ? 0x02 : 0x00)
+  end
+end
+
+"The path was painted, so its lines are on the page"
+keep!(r::Reader) = begin
+  length(r.lines) < MOST_LINES && (append!(r.lines, r.path); append!(r.ends, r.path_ends))
+  drop!(r)
+end
+drop!(r::Reader) = (empty!(r.path); empty!(r.path_ends); nothing)
+close!(r::Reader) = (r.at == r.start || isempty(r.path) || line!(r, r.start); nothing)
+
+# The steps. Each is named for the letters that a PDF file writes for it.
+step_q(::Object, info::Object)::Cvoid = (r = reader(info); push!(r.kept, r.place); nothing)
+step_Q(::Object, info::Object)::Cvoid = (r = reader(info); isempty(r.kept) || (r.place = pop!(r.kept)); nothing)
+step_cm(scanner::Object, info::Object)::Cvoid = begin
+  r = reader(info)
+  f, e, d, c, b, a = number(scanner), number(scanner), number(scanner), number(scanner), number(scanner), number(scanner)
+  r.place = times((a, b, c, d, e, f), r.place)
+  nothing
+end
+step_m(scanner::Object, info::Object)::Cvoid = (r = reader(info); r.start = r.at = point(r, scanner); nothing)
+step_l(scanner::Object, info::Object)::Cvoid = (r = reader(info); line!(r, point(r, scanner)))
+step_c(scanner::Object, info::Object)::Cvoid = (r = reader(info); c = point(r, scanner); b = point(r, scanner); a = point(r, scanner); curve!(r, a, b, c))
+step_v(scanner::Object, info::Object)::Cvoid = (r = reader(info); c = point(r, scanner); b = point(r, scanner); curve!(r, r.at, b, c))
+step_y(scanner::Object, info::Object)::Cvoid = (r = reader(info); c = point(r, scanner); a = point(r, scanner); curve!(r, a, c, c))
+step_h(::Object, info::Object)::Cvoid = close!(reader(info))
+step_re(scanner::Object, info::Object)::Cvoid = begin
+  r = reader(info)
+  h, w, y, x = number(scanner), number(scanner), number(scanner), number(scanner)
+  r.start = r.at = through(r.place, x, y)
+  line!(r, through(r.place, x + w, y))
+  line!(r, through(r.place, x + w, y + h))
+  line!(r, through(r.place, x, y + h))
+  line!(r, r.start)
+end
+step_paint(::Object, info::Object)::Cvoid = keep!(reader(info))
+step_close_paint(::Object, info::Object)::Cvoid = (r = reader(info); close!(r); keep!(r))
+# A path that isn't painted only says where the next things may show
+step_n(::Object, info::Object)::Cvoid = drop!(reader(info))
+
+# A page can draw another drawing that the file holds, like a title block that every page has
+step_Do(scanner::Object, info::Object)::Cvoid = begin
+  r = reader(info)
+  name = Ref{Cstring}(C_NULL)
+  ccall((:CGPDFScannerPopName, CoreGraphics), Bool, (Object, Ref{Cstring}), scanner, name) || return nothing
+  r.depth < 12 || return nothing
+  stream = ccall((:CGPDFScannerGetContentStream, CoreGraphics), Object, (Object,), scanner)
+  object = ccall((:CGPDFContentStreamGetResource, CoreGraphics), Object, (Object, Cstring, Cstring), stream, "XObject", name[])
+  object == C_NULL && return nothing
+  form = Ref{Object}(C_NULL)
+  # 9 asks for the steps of a drawing
+  ccall((:CGPDFObjectGetValue, CoreGraphics), Bool, (Object, Int32, Ref{Object}), object, 9, form) || return nothing
+  about = ccall((:CGPDFStreamGetDictionary, CoreGraphics), Object, (Object,), form[])
+  kind = Ref{Cstring}(C_NULL)
+  # A picture is drawn this way too, and has no lines
+  (ccall((:CGPDFDictionaryGetName, CoreGraphics), Bool, (Object, Cstring, Ref{Cstring}), about, "Subtype", kind) && unsafe_string(kind[]) == "Form") || return nothing
+  place = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+  array = Ref{Object}(C_NULL)
+  if ccall((:CGPDFDictionaryGetArray, CoreGraphics), Bool, (Object, Cstring, Ref{Object}), about, "Matrix", array) &&
+     ccall((:CGPDFArrayGetCount, CoreGraphics), Csize_t, (Object,), array[]) == 6
+    x = Ref(0.0)
+    place = ntuple(i -> (ccall((:CGPDFArrayGetNumber, CoreGraphics), Bool, (Object, Csize_t, Ref{Float64}), array[], i - 1, x); x[]), 6)
+  end
+  resources = Ref{Object}(C_NULL)
+  ccall((:CGPDFDictionaryGetDictionary, CoreGraphics), Bool, (Object, Cstring, Ref{Object}), about, "Resources", resources)
+  inner = ccall((:CGPDFContentStreamCreateWithStream, CoreGraphics), Object, (Object, Object, Object), form[], resources[], stream)
+  inner == C_NULL && return nothing
+  was, kept = r.place, r.kept
+  r.place, r.kept = times(place, r.place), Place[]
+  r.depth += 1
+  follow!(r, inner)
+  r.depth -= 1
+  r.place, r.kept = was, kept
+  ccall((:CGPDFContentStreamRelease, CoreGraphics), Cvoid, (Object,), inner)
+  nothing
+end
+
+"Follow the steps of `stream`"
+follow!(r::Reader, stream::Object) = begin
+  scanner = ccall((:CGPDFScannerCreate, CoreGraphics), Object, (Object, Object, Any), stream, r.table, r)
+  ccall((:CGPDFScannerScan, CoreGraphics), Bool, (Object,), scanner)
+  ccall((:CGPDFScannerRelease, CoreGraphics), Cvoid, (Object,), scanner)
+  nothing
+end
+
+"macOS's table of the function for each step"
+steps() = begin
+  table = ccall((:CGPDFOperatorTableCreate, CoreGraphics), Object, ())
+  set(name, f) = ccall((:CGPDFOperatorTableSetCallback, CoreGraphics), Cvoid, (Object, Cstring, Ptr{Cvoid}), table, name, f)
+  set("q", @cfunction(step_q, Cvoid, (Object, Object)))
+  set("Q", @cfunction(step_Q, Cvoid, (Object, Object)))
+  set("cm", @cfunction(step_cm, Cvoid, (Object, Object)))
+  set("m", @cfunction(step_m, Cvoid, (Object, Object)))
+  set("l", @cfunction(step_l, Cvoid, (Object, Object)))
+  set("c", @cfunction(step_c, Cvoid, (Object, Object)))
+  set("v", @cfunction(step_v, Cvoid, (Object, Object)))
+  set("y", @cfunction(step_y, Cvoid, (Object, Object)))
+  set("h", @cfunction(step_h, Cvoid, (Object, Object)))
+  set("re", @cfunction(step_re, Cvoid, (Object, Object)))
+  # The steps that stroke a path, fill it, or do both
+  foreach(name -> set(name, @cfunction(step_paint, Cvoid, (Object, Object))), ("S", "f", "F", "f*", "B", "B*"))
+  # The ones that close it first
+  foreach(name -> set(name, @cfunction(step_close_paint, Cvoid, (Object, Object))), ("s", "b", "b*"))
+  set("n", @cfunction(step_n, Cvoid, (Object, Object)))
+  set("Do", @cfunction(step_Do, Cvoid, (Object, Object)))
+  table
+end
+
+"""
+The lines that page `n` of the PDF file at `path` draws, and which ends of each
+are corners: 1 is its start, 2 its end and 3 both. A curve is a few straight
+lines, and only its two ends are corners. A line goes from one point to
+another, each measured in points from the top left of the page as it shows,
+like the points of `pdf_size`. A page that's a scan of paper has none. It's
+nothing when there's no such page.
+"""
+pdf_lines(path::AbstractString, n::Integer) = begin
+  found = pdf_box(pdf(path), n)
+  found === nothing && return nothing
+  page, w, h = found
+  with_pool() do
+    # This puts the page in a box of its own size, the right way up. macOS measures up from the bottom, so the last part turns it over.
+    place = ccall((:CGPDFPageGetDrawingTransform, CoreGraphics), Place, (Object, Int32, Rect, Int32, Bool), page, 1, (0.0, 0.0, w, h), 0, true)
+    r = Reader(times(place, (1.0, 0.0, 0.0, -1.0, 0.0, h)), Place[], Line[], UInt8[], (0.0, 0.0), (0.0, 0.0), Line[], UInt8[], steps(), 0)
+    stream = ccall((:CGPDFContentStreamCreateWithPage, CoreGraphics), Object, (Object,), page)
+    stream == C_NULL || GC.@preserve r follow!(r, stream)
+    stream == C_NULL || ccall((:CGPDFContentStreamRelease, CoreGraphics), Cvoid, (Object,), stream)
+    ccall((:CGPDFOperatorTableRelease, CoreGraphics), Cvoid, (Object,), r.table)
+    (r.lines, r.ends)
+  end
+end
+
+export picture, natural, thumbnail, pdf_pages, pdf_page, pdf_size, pdf_part, pdf_lines

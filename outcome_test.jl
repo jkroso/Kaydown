@@ -306,7 +306,11 @@ end
   o = outcome(4)
   click(middle(rect(o)))
   @test occursin("⋮", o.rest)
-  @test [t.family for t in texts(K.describe(o.body)) if t.content == "⋮"] == [K.SPARE_FONT]
+  @test K.font_with('⋮') != K.CODE_FONT && !isempty(K.font_with('⋮'))
+  @test [t.family for t in texts(K.describe(o.body)) if t.content == "⋮"] == [K.font_with('⋮')]
+  # macOS finds a font for any character, like the star that starts the name of a module that Kip loaded
+  @test !isempty(K.font_with('⭒')) && K.has(K.Face(K.font_with('⭒'), "", 12px, K.colours.ink, false), '⭒')
+  @test [f.family for (_, f) in K.runs("Main.⭒Paint", K.outcome_face(12px))] == [K.CODE_FONT, K.font_with('⭒'), K.CODE_FONT]
   shot("colours")
 end
 

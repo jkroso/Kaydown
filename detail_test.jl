@@ -1,0 +1,263 @@
+# Tests for what the box of a function and of a module shows when it's open.
+# See "what a function and a module have to show" in main.jl. Run them with
+# `julia -O0 --project=. detail_test.jl`. They press keys, click and type in a
+# window that isn't on the screen.
+
+@use Test: @test, @testset
+@use "./main" => K
+@use "github.com/jkroso/MiniFB.jl" Window KeyPress MouseMove Keys onkey onmouse onscroll Typed ontype
+@use "github.com/jkroso/UI.jl/Interface/draw" frame rect popups
+@use "github.com/jkroso/UI.jl/Interface/save" save_png
+@use GeometryBasics: Vec2
+const px = K.px
+
+const dir = mktempdir()
+# A module in a folder that has a readme
+write(joinpath(dir, "Readme.md"), "# Paint\n\nWorks out the paint for a wall.\n\n- one coat\n- two coats\n")
+write(joinpath(dir, "paint.jl"), "const COATS = 2\nlitres(area) = COATS * area / 12\nstruct Tin; size::Float64 end\n")
+const page = joinpath(dir, "notes.md")
+write(page, """
+# Notes
+
+```julia
+length
+"Doubles a number"
+double(n) = 2n
+Base.Iterators
+@use "./paint.jl"
+x -> x + 1
+```
+
+Some words.
+""")
+
+const e = K.build_editor(page)
+const w = Window(e, size=(1000px, 800px))
+const b = e.buf
+frames(n=2) = foreach(_ -> frame(w), 1:n)
+frames()
+K.focus(e)
+
+caret!(line, col=0) = (b.caret = b.anchor = (line, col); frames())
+key(k, held...) = begin
+  foreach(h -> w.keys |= h, held)
+  onkey(w, KeyPress{k}(0, w))
+  foreach(h -> w.keys ⊻= h, held)
+  frames()
+end
+typed(s) = (foreach(c -> ontype(w, Typed(c, w)), s); frames())
+at((x, y)) = (w.mouse = typeof(w.mouse)(px(x), px(y)); onmouse(w, MouseMove(Vec2{px}(px(x), px(y)), w)); frames(1))
+click(place) = (at(place); w.keys |= Keys.mouse_left; onkey(w, KeyPress{Keys.mouse_left}(0, w)); w.keys ⊻= Keys.mouse_left; frames())
+middle(r) = (K.num(r.left) + K.num(r.width) / 2, K.num(r.top) + K.num(r.height) / 2)
+outcome(line) = (k = findfirst(o -> o.last == line, K.outcomes(e)); k === nothing ? nothing : K.outcomes(e)[k])
+"Run the code on `line`, and open the box of what it comes to. Returns what the open box shows."
+opened!(line) = begin
+  key(Keys.escape)
+  K.focus(e)
+  b.reading = false
+  caret!(line)
+  key(Keys.enter, Keys.cmd)
+  o = outcome(line)
+  click(middle(rect(o)))
+  frames()
+  o.body.detail
+end
+"Each Text in the layout `node`, in the order they read"
+texts(node, out=String[]) = begin
+  node isa K.Text ? push!(out, node.content) : node isa K.GeometricUI && foreach(n -> texts(n, out), node.children)
+  out
+end
+
+const shots = get(ENV, "DETAIL_SHOTS", "")
+shot(name) = isempty(shots) || save_png(joinpath(shots, name * ".png"), w)
+
+@testset "the box of a function opens to its documentation and its methods" begin
+  caret!(4)
+  key(Keys.enter, Keys.cmd)
+  o = outcome(4)
+  @test o.more && !o.open && o.subject === length
+  t = opened!(4)   # runs the line again, so the box is a new one
+  o = outcome(4)
+  @test o.open && t !== nothing
+  @test any(line -> occursin("length(", line), t.lines)
+  @test "```julia" in t.lines   # what the function takes is a block of code
+  @test t.what == "method" && length(t.rows) == length(methods(length))
+  @test all(row -> !occursin(" @ ", row[1]) && occursin(":", row[3]), t.rows)
+  @test t.search === nothing
+  r = rect(o.body)
+  @test r !== nothing && K.num(r.height) <= K.num(K.DETAIL_H) + 2
+  @test K.num(r.left) + K.num(r.width) <= 1000
+  @test "$(length(t.rows)) methods" in texts(K.describe(o.body))
+  shot("function")
+end
+
+@testset "the wheel moves through the box, not through the page" begin
+  o = outcome(4)
+  t = o.body.detail
+  was = e.scroll.offset
+  at(middle(rect(o.body)))
+  onscroll(w, Vec2{px}(0px, -5px)); frames()
+  @test t.scroll.offset > 0px
+  @test e.scroll.offset == was
+  far = t.scroll.offset
+  foreach(_ -> onscroll(w, Vec2{px}(0px, -400px)), 1:20); frames()
+  @test t.scroll.offset > far
+  @test rect(o.body) !== nothing
+  shot("methods")
+end
+
+@testset "a function that the page wrote shows what the page wrote of it" begin
+  t = opened!(6)
+  @test outcome(6).first == 5   # the words above it are its documentation, and run with it
+  @test t.lines == ["Doubles a number"]
+  @test length(t.rows) == 1 && startswith(t.rows[1][1], "double(n)")
+  @test "1 method" in texts(K.describe(outcome(6).body))
+  # A function with no name has methods and no documentation
+  t = opened!(9)
+  @test isempty(t.lines) && length(t.rows) == 1
+end
+
+@testset "the box of a module opens to its documentation and its names" begin
+  t = opened!(7)
+  o = outcome(7)
+  @test o.subject === Base.Iterators
+  @test !isempty(t.lines)   # Julia's words about the module, which has no readme
+  @test t.what == "name"
+  names = first.(t.rows)
+  @test "zip" in names && "Enumerate" in names
+  @test !any(startswith("#"), names)
+  @test t.rows[findfirst(==("zip"), names)][2] == "function"
+  # About has the first sentence of what Julia says of each name
+  about = Dict(row[1] => row[3] for row in t.rows)
+  @test startswith(about["zip"], "Run multiple iterators at the same time")
+  @test endswith(about["zip"], ".") && !occursin('\n', about["zip"])
+  @test about["Base"] == "The base library of Julia."
+  @test count(!isempty, values(about)) > length(about) / 2
+  @test t.rows[findfirst(==("Enumerate"), names)][2] == "type"
+  @test "$(length(t.rows)) names" in texts(K.describe(o.body))
+  shot("module")
+end
+
+@testset "the field over a module's names searches them" begin
+  o = outcome(7)
+  t = o.body.detail
+  r = rect(t.search)
+  @test r !== nothing
+  click(middle(r))
+  @test w.focus === t.search
+  typed("enum")
+  @test t.search.text == "enum"
+  found = [t.rows[i][1] for i in K.sought!(t)]
+  @test !isempty(found) && all(name -> occursin("enum", lowercase(name)), found)
+  @test startswith(lowercase(first(found)), "enum")   # the names that start with the words come first
+  @test "$(length(found)) of $(length(t.rows)) names" in texts(K.describe(o.body))
+  @test b.lines[7] == "Base.Iterators"   # the typing went to the field, not to the page
+  shot("search")
+  # esc gives the keyboard back to the page
+  key(Keys.escape)
+  @test w.focus === e
+end
+
+@testset "the headings of a module's table sort it and show fewer of its rows" begin
+  t = opened!(7)
+  o = outcome(7)
+  shown() = [t.rows[i] for i in K.sought!(t)]
+  menu() = any(p -> p.key == K.NAMES_KEY, popups(w))
+  head(column) = t.heads[(:head, column)]
+  press(node) = (onkey(node, KeyPress{Keys.mouse_left}(0, w)); frames())
+  @test all(column -> rect(head(column)) !== nothing, 1:3)
+  @test "Name" in texts(K.describe(o.body)) && "Kind" in texts(K.describe(o.body))
+  all_rows = length(t.rows)
+  # The Kind heading: its menu lists the kinds, and a click on one shows only that kind
+  click(middle(rect(head(2))))
+  @test menu() && t.asking == 2
+  @test K.kinds_of(t) == sort(unique(row[2] for row in t.rows))
+  press(t.heads[(:kind, "type")])
+  @test !isempty(shown()) && all(row -> row[2] == "type", shown())
+  @test length(shown()) < all_rows
+  @test "$(length(shown())) of $all_rows names" in texts(K.describe(o.body))
+  # ... and its two orders put the kinds in order
+  press(t.heads[(:kind, "type")])
+  @test length(shown()) == all_rows
+  press(t.heads[(:sort, :desc)])
+  @test t.sort == (2, :desc) && issorted([row[2] for row in shown()], rev=true)
+  press(t.heads[(:sort, :desc)])   # a second click takes the order away
+  @test t.sort === nothing
+  key(Keys.enter)
+  @test !menu() && w.focus === e
+  # The Name heading: Z–A, and a field that keeps the names that have its words
+  click(middle(rect(head(1))))
+  @test menu() && t.asking == 1 && w.focus === t.field
+  press(t.heads[(:sort, :desc)])
+  names = [K.sort_words(row[1]) for row in shown()]
+  @test issorted(names, rev=true) && length(names) == all_rows
+  typed("zi")
+  @test !isempty(shown()) && all(row -> occursin("zi", lowercase(row[1])), shown())
+  shot("heading")
+  key(Keys.enter)   # Return keeps it
+  @test !menu() && t.filters == Dict(1 => "zi")
+  # esc puts back what the field held before
+  click(middle(rect(head(1))))
+  typed("p")
+  @test t.filters == Dict(1 => "zip")
+  key(Keys.escape)
+  @test !menu() && t.filters == Dict(1 => "zi")
+  @test b.lines[7] == "Base.Iterators"   # none of it went to the page
+end
+
+@testset "a module with a readme shows the readme" begin
+  t = opened!(8)
+  o = outcome(8)
+  @test o.subject isa Module && !o.failed
+  @test t.lines[1] == "# Paint" && "- two coats" in t.lines
+  rows = Dict(row[1] => row for row in t.rows)
+  @test rows["litres"][2] == "function"
+  @test rows["Tin"][2] == "type"
+  @test rows["COATS"][2:3] == ("value", "2")
+  @test rows["litres"][3] == "1 method"   # a name with no documentation says what it can
+  shot("readme")
+end
+
+@testset "a click on a name shows its value under its row" begin
+  o = outcome(8)
+  t = o.body.detail
+  place(name) = findfirst(row -> row[1] == name, t.rows)
+  row(name) = t.parts[place(name)]
+  tall() = K.num(rect(o.body).height)
+  closed = tall()
+  # A function: what the module wrote of it, and its methods
+  click(middle(rect(row("litres"))))
+  @test t.open == place("litres") && t.inner.what == "method"
+  @test length(t.inner.rows) == 1 && startswith(t.inner.rows[1][1], "litres(area)")
+  @test "1 method" in texts(K.describe(o.body))
+  @test tall() > closed   # the box makes room for it
+  shot("row")
+  # A type: as code declares it, with its fields inside
+  click(middle(rect(row("Tin"))))
+  @test t.open == place("Tin")   # one name shows at a time
+  @test t.inner.lines == ["```julia", "struct Tin", "  size::Float64", "end", "```"]
+  @test isempty(t.inner.rows)
+  @test K.declaration(Base.Iterators.Enumerate) == ["struct Enumerate{I}", "  itr::I", "end"]
+  @test K.declaration(AbstractFloat) == ["abstract type AbstractFloat <: Real end"]
+  @test K.declaration(Float64) == ["primitive type Float64 <: AbstractFloat 64 end"]
+  @test K.declaration(Base.RefValue)[1] == "mutable struct RefValue{T} <: Ref{T}"
+  # Any other value, as Julia writes it
+  click(middle(rect(row("COATS"))))
+  @test t.inner.lines == ["`Int64`", "", "```julia", "2", "```"] && isempty(t.inner.rows)
+  @test !("0 s" in texts(K.describe(o.body)))   # no table, so no words over one
+  shot("value")
+  # A second click hides it
+  click(middle(rect(row("COATS"))))
+  @test t.open == 0 && t.inner === nothing
+  @test tall() ≈ closed atol=1
+  @test b.caret == (8, 0)   # none of the clicks moved the caret
+end
+
+@testset "a box closes with a click, and the page is as it was" begin
+  o = outcome(8)
+  click(middle(rect(o)))
+  @test !o.open
+  key(Keys.escape)
+  @test isempty(K.outcomes(e))
+  @test b.lines[4] == "length"
+end

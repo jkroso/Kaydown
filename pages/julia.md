@@ -49,6 +49,15 @@ Type the first two letters of a name that the page's code has, like `ar` or `pa`
 
 ```
 
+## Functions and modules
+
+The box of a function opens to show the function's documentation and a table of its methods. The box of a module opens to show the module's readme, or its documentation, and a table of the names that it defines. Type in the field over that table to search the names. The wheel moves through an open box.
+
+```julia
+length
+Base.Iterators
+```
+
 ## The whole block, a selection and a node
 
 Put the caret in the line that opens a block, the one with the three backticks, and ⌘Return runs every line of the block. Select part of a line, like `1:6` in the grid above, and ⌘Return runs that part alone.

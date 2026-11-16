@@ -49,6 +49,8 @@ const w = Window(e, size=(1000px, 1300px))
 frames(n=2) = foreach(_ -> frame(w), 1:n)
 frames()
 const v = only(node for node in values(e.nodes) if node isa K.TakeoffView)
+# The tests click at places that they work out, so corners don't snap to the plan's lines until the tests of that
+v.snap = false
 
 at((x, y)) = (w.mouse = typeof(w.mouse)(px(x), px(y)); onmouse(w, MouseMove(Vec2{px}(px(x), px(y)), w)))
 press(place) = (at(place); w.keys |= Keys.mouse_left; onkey(w, KeyPress{Keys.mouse_left}(0, w)))
@@ -193,17 +195,42 @@ end
 end
 
 @testset "the list of measures" begin
-  # A new measure is a count until its item or a tool says what it is
+  found() = [p for p in popups(w) if p.key == K.FOUND_KEY]
+  # Two buttons start a measure. Add a measure asks for the words that describe it, and its item is defined later.
   button(:add)
   @test length(v.data.measures) == 4 && v.data.measures[4].name == "Count 2" && v.tool == :count
-  # It asks for its item, and takes the item's name. The conduit is sold by the metre, so it's a length, with the tool for one.
-  # The search looks in the business's own items first.
+  @test v.asking == (:name, 4) && K.plan_input(v).text == "Count 2"
+  # No list of Centient's items shows. What's typed is what the measure is called, in place of the name it was made with.
+  typed("Skirting board")
+  frames(5)
+  @test isempty(found()) && v.search === nothing && isempty(v.rows)
+  key(Keys.enter)
+  @test v.asking === nothing && v.data.measures[4].name == "Skirting board" && v.data.measures[4].item == ""
+  @test block()[end] == "count | Skirting board"
+  # The tool that's chosen next says what a measure with no item and nothing drawn is
+  typed("l")
+  @test v.data.measures[4].kind == :length && v.tool == :length && v.current == 4 && !v.wrong
+  @test block()[end] == "length | Skirting board"
+  # A click on the words of the measure that's chosen changes them, and no list shows
+  click(part((:cell, 4, :item)))
+  @test v.asking == (:name, 4) && K.plan_input(v).text == "Skirting board" && isempty(found())
+  key(Keys.escape)
+  @test K.item_name(v, v.data.measures[4]) == "Skirting board" && K.item_words(v, v.data.measures[4]) == "Skirting board"
+  # Its line of a quote has its words and names no item
+  @test !haskey(K.quote_line(v.data.measures[4], 2.0), "ref") && K.quote_line(v.data.measures[4], 2.0)["note"] == "Skirting board"
+  button((:delete, 4))
+  @test length(v.data.measures) == 3
+
+  # Add from catalogue asks for an item of Centient's, and the measure takes the item's name. The conduit is sold by
+  # the metre, so it's a length, with the tool for one. The search looks in the business's own items first.
+  K.tool!(v, :count)
+  button(:add_item)
+  @test length(v.data.measures) == 4 && v.data.measures[4].name == "Count 2" && v.tool == :count
   @test v.asking == (:item, 4) && K.ITEM_FROM[] == (:own,) && K.catalogue_words() == "Our catalogue"
   typed("conduit")
   @test settle(() -> !isempty(v.rows))
   @test v.search === nothing && [r["ref"] for r in v.rows] == ["item 1"]
   # What's found shows in a list that floats beside the text field, not on it, and goes when an item is chosen
-  found() = [p for p in popups(w) if p.key == K.FOUND_KEY]
   field, list = rect(K.plan_input(v)), only(found()).scene
   @test list.top >= field.top + field.height || list.top + list.height <= field.top
   # A click in the text field is the field's, and the list stays
@@ -218,37 +245,36 @@ end
   @test v.asking === nothing && v.data.measures[4].item == "item 1" && v.data.measures[4].name == "20mm conduit"
   @test v.data.measures[4].kind == :length && v.tool == :length && v.current == 4 && !v.wrong
   @test block()[end] == "length | 20mm conduit | item 1"
+  @test K.quote_line(v.data.measures[4], 2.0)["ref"] == "item 1"
   plan_click(1, 7); plan_click(5, 7); key(Keys.enter)
   @test amounts()[4] ≈ 4 atol=0.02
-  # The table has no column for a measure's name. Its item says what it is: the item's name, then where it's from.
+  # The table has no column for a measure's name. A measure with an item shows the item's name, then where it's from.
   @test !haskey(v.parts, (:cell, 4, :name)) && !haskey(v.parts, (:head, :name))
   @test K.item_name(v, v.data.measures[4]) == "20mm conduit" && K.item_words(v, v.data.measures[4]) == "20mm conduit  ·  Your items"
-  # A measure with no item shows the name that it has in the block. One with the name it was made with shows none.
-  @test K.item_name(v, v.data.measures[2]) == "Cable" && K.item_name(v, P.Measure(:count, "Count 9")) == ""
-  # The first click on a measure chooses it, and a click on its item then asks for another
+  @test K.item_name(v, v.data.measures[1]) == "Double power point"
+  # A measure with no item shows the words that it has in the block, and so does one with the name it was made with
+  @test K.item_name(v, v.data.measures[2]) == "Cable" && K.item_name(v, P.Measure(:count, "Count 9")) == "Count 9"
+  # The first click on a measure chooses it. A click on the item of the one that's chosen then asks for another item.
   click(part((:cell, 1, :item)))
   @test v.current == 1 && v.asking === nothing && v.tool == :count
   click(part((:cell, 1, :item)))
-  @test v.asking == (:item, 1)
+  @test v.asking == (:item, 1) && length(found()) == 1
   key(Keys.escape)
-  # A measure with no item is chosen and asks for its item at one click
+  @test v.asking === nothing && v.data.measures[1].item == "acme 77"
+  # A click on a measure with no item chooses it and asks nothing. The next click changes its words.
   click(part((:cell, 2, :item)))
-  @test v.current == 2 && v.tool == :length && v.asking == (:item, 2)
-  key(Keys.escape)
-  @test v.asking === nothing && v.data.measures[2].item == ""
+  @test v.current == 2 && v.tool == :length && v.asking === nothing
   # What's typed is kept when the click goes somewhere else
   click(part((:cell, 2, :extra)))
   @test v.asking == (:extra, 2) && K.plan_input(v).text == "10"
   command(Keys.a); typed("15")
-  click(part((:cell, 2, :item)))   # this click closes the field and asks for the item
-  @test v.data.measures[2].extra == 0.15 && v.asking == (:item, 2)
-  key(Keys.escape)
-  @test v.asking === nothing
-  # A name is changed in the item's cell. That's what a click there does on a Mac with no Centient.
-  K.ask!(v, (:name, 2), "Cable"); frames()
+  click(part((:cell, 2, :item)))   # this click closes the field and asks for the measure's words
+  @test v.data.measures[2].extra == 0.15 && v.asking == (:name, 2) && isempty(found())
+  frames()
+  # The words are changed in the item's cell
   @test abs(K.num(rect(K.plan_input(v)).left - rect(v.parts[(:head, :item)]).left)) <= 12
   command(Keys.a); typed("Cable | 2.5mm"); key(Keys.enter)
-  @test v.data.measures[2].name == "Cable / 2.5mm"   # a | would end the name in the block
+  @test v.data.measures[2].name == "Cable / 2.5mm" && v.data.measures[2].item == ""   # a | would end the name in the block
   # A click on a measure chooses the tool of its kind, from the arrow too
   button((:tool, :select))
   r = rect(v.parts[(:row, 3)])
@@ -266,10 +292,13 @@ end
   # Once something is drawn it stays what it is. Another tool draws for the last measure of its own kind.
   typed("c")
   @test v.current == 1 && v.data.measures[4].kind == :length
-  # An item with another unit doesn't change it then. The block says that the price is for something else.
+  button((:delete, 4))
+  # An item with another unit doesn't change a measure that has something drawn. The block says that the price is for something else.
   # ⌥ in the empty field shows the suppliers whose catalogues Centient holds. One of them opens its catalogue.
-  click(part((:cell, 4, :item)))
-  @test v.asking == (:item, 4)
+  K.tool!(v, :length)
+  button(:add_item)
+  @test v.asking == (:item, 4) && v.data.measures[4].kind == :length
+  push!(v.data.measures[4].shapes, P.Shape(1, [house(1, 6), house(5, 6)]))
   key(Keys.opt)
   @test K.ITEM_FROM[] == (:suppliers,) && K.catalogue_words() == "Pick a catalogue"
   @test settle(() -> !isempty(v.rows))
@@ -286,7 +315,7 @@ end
   @test v.wrong && occursin("is for each one, and this measure is a length", v.said)
   # The next search starts in the catalogue that the item came from. A click on the list's foot does what ⌥ does:
   # back to the suppliers, then to the business's own items.
-  click(part((:cell, 4, :item))); click(part((:cell, 4, :item)))
+  click(part((:cell, 4, :item))); v.asking === nothing && click(part((:cell, 4, :item)))
   @test v.asking == (:item, 4) && K.catalogue_words() == "Acme Electrical"
   @test settle(() -> !isempty(v.rows))
   click(part(:catalogue_foot))
@@ -297,8 +326,25 @@ end
   @test [r["ref"] for r in v.rows] == ["item 1"]
   key(Keys.escape)
   @test v.asking === nothing
+  # An empty field takes the item away. The measure keeps its name, as words, and its line names no item.
+  click(part((:cell, 4, :item)))
+  @test v.asking == (:item, 4)
+  K.browse!(v, (:suppliers,)); K.browse!(v, (:catalogue, "none", "None"))
+  v.rows = Any[]; v.search = nothing; v.typed = 0.0; v.query = ""
+  key(Keys.enter)
+  @test v.asking === nothing && v.data.measures[4].item == "" && v.data.measures[4].name == "Double power point"
+  K.ITEM_FROM[] = (:own,)
   button((:delete, 4))
   @test length(v.data.measures) == 3
+  # The table has columns for the price and the cost while a measure has an item, and none when no measure has one.
+  # Without them, the item's column has their room.
+  K.tool!(v, :select); frames()
+  wide = rect(v.parts[(:cell, 2, :item)]).width
+  @test K.has_items(v) && K.has_price(v)
+  v.data.measures[1].item = ""; frames(3)
+  @test !K.has_items(v) && !K.has_price(v) && rect(v.parts[(:cell, 2, :item)]).width >= wide + 180px
+  v.data.measures[1].item = "acme 77"; frames(3)
+  @test rect(v.parts[(:cell, 2, :item)]).width == wide
 end
 
 @testset "the columns of the table" begin
@@ -355,7 +401,7 @@ end
   command(Keys.a); typed("o")
   click(K.window_point(v, house(14, 3)))
   @test isempty(menus()) && v.sort === nothing && names() == ["Power points", "Floor"]
-  # The search is of the item's name and where it's from, and not of a name that the table doesn't show
+  # The search is of what the table calls each measure: an item's name and where it's from, and not a name that the table doesn't show
   head(:item); command(Keys.a); typed("acme"); key(Keys.enter)
   @test names() == ["Power points"]
   head(:item); command(Keys.a); typed("points"); key(Keys.enter)
@@ -416,7 +462,7 @@ end
   @test cable.unit == "ft" && startswith(line(cable), "length in ft | ")
   # A quote's line is in the measure's unit, and a cost is for the unit that the item is priced in
   q = K.quote_line(cable, 3.048)
-  @test q["unit"] == "ft" && q["quantity"] == 10
+  @test q["unit"] == "ft" && q["quantity"] == 10 && q["note"] == cable.name && !haskey(q, "ref")
   @test K.cost_of(cable, 3.048, Dict("unit" => "ft", "price" => 2.0)) ≈ 20
   @test K.cost_of(cable, 3.048, Dict("unit" => "m", "price" => 2.0)) ≈ 6.096
   # The price shows for one of the measure's unit: \$2 a metre is 61c a foot. A price a piece can't be.
@@ -461,7 +507,7 @@ end
   @test name.left ≈ rect(v.parts[(:head, :item)]).left && waste.left ≈ rect(v.parts[(:head, :extra)]).left
   @test name.left + name.width <= waste.left
   # Its words end with … and fit in the cell, and the mouse over it shows them whole
-  whole = m.name * "  ·  Choose an item"
+  whole = m.name
   shown = K.elide(whole, 13px, name.width)
   @test endswith(shown, "…") && K.measure(K.Face(K.SANS, "", 13px, K.colours.ink, false), shown) <= name.width
   @test cell.full == whole
@@ -543,7 +589,7 @@ end
   @test v.asking == (:item, 1)
   key(Keys.escape)
   # What a button says is whole, though the button is at the left edge or the bottom of the window
-  for b in (:add, :quote)
+  for b in (:add, :add_item, :quote)
     at(part((:button, b))); frames()
     tip = only(popups(w)).scene
     @test tip.left >= 0px && tip.left + tip.width <= 1000px
@@ -551,20 +597,19 @@ end
   end
   at((500, 400)); frames()
   @test isempty(popups(w))
-  # The table is at the foot of the window, where a long list of items has no room under its field. So the list is
-  # over the field from the first, while Centient still searches and the list is one line, and it stays there.
-  click(part((:cell, 1, :item)))
-  @test v.asking == (:item, 1)
+  # The customer's field is at the foot of the window, where a long list of contacts has no room under it. So the
+  # list is over the field from the first, while Centient still searches and the list is one line, and it stays there.
+  button(:customer)
+  @test v.asking == (:customer,)
   over() = (list = only(p for p in popups(w) if p.key == K.FOUND_KEY).scene; list.top + list.height <= rect(K.plan_input(v)).top)
+  frames()
   @test isempty(v.rows) && over()
+  typed("smith")
   @test settle(() -> !isempty(v.rows))
   @test over()
-  key(Keys.opt)
-  @test over()
-  @test settle(() -> !isempty(v.rows))
-  @test over()
-  key(Keys.opt); key(Keys.escape)
-  @test v.asking === nothing && K.ITEM_FROM[] == (:own,)
+  key(Keys.escape)
+  @test v.asking === nothing && isempty(popups(w))
+  click(K.window_point(v, house(14, 3)))   # the keyboard goes back to the plan
   typed("c")
   n = amounts()[1]
   plan_click(3, 3)
@@ -640,14 +685,138 @@ end
   @test v.tool == :select && K.done_box(v) === nothing
 end
 
-# A Mac with no Centient has no catalogue to choose from. The change is made between two testsets, so that the next one sees it.
+@testset "corners snap to the lines of the plan" begin
+  K.tool!(v, :select); v.zoom = 0.0; frames()
+  v.snap = true
+  @test !isempty(K.lines_of(v))
+  # A place that's 3 points to the right of a place of the house, and 3 up
+  beside(x, y) = (p = house(x, y); (p[1] + 3, p[2] - 3))
+  hover(p) = (at(K.window_point(v, p)); frames(1))
+  on(p, q) = all(isapprox.(p, q, atol=0.01))
+  lengths() = v.data.measures[findfirst(m -> m.kind == :length, v.data.measures)].shapes
+  button((:tool, :length))
+  n = length(lengths())
+  # Beside a corner of the house, the next corner goes on it, and the plan marks the place
+  hover(beside(16, 0))
+  @test v.aim == :corner && on(v.mouse, house(16, 0))
+  sleep(0.4); click(K.window_point(v, beside(16, 0)))
+  @test on(v.draft[1], house(16, 0))
+  # Beside a wall, it goes on the wall's line
+  hover(beside(16, 5))
+  @test v.aim == :line && isapprox(v.mouse[1], house(16, 0)[1], atol=0.01)
+  sleep(0.4); click(K.window_point(v, beside(16, 5)))
+  @test isapprox(v.draft[2][1], house(16, 0)[1], atol=0.01) && isapprox(v.draft[2][2], beside(16, 5)[2], atol=0.01)
+  # Where the plan has no line, it goes where the mouse is
+  hover(house(14.5, 3))
+  @test v.aim === nothing && on(v.mouse, house(14.5, 3))
+  # With ⌘ held, it goes where the mouse is beside a corner of the house too
+  w.keys |= Keys.cmd
+  hover(beside(16, 10))
+  @test v.aim === nothing && on(v.mouse, beside(16, 10))
+  sleep(0.4); click(K.window_point(v, beside(16, 10)))
+  w.keys ⊻= Keys.cmd
+  @test length(v.draft) == 3 && on(v.draft[3], beside(16, 10))
+  key(Keys.enter)
+  @test length(lengths()) == n + 1 && on(lengths()[end].points[1], house(16, 0))
+  @test any(l -> occursin(written(house(16, 0)), l), block())
+  # The magnet turns snapping off, and on again
+  button(:snap)
+  @test !v.snap
+  hover(beside(16, 0))
+  @test v.aim === nothing && on(v.mouse, beside(16, 0))
+  button(:snap)
+  @test v.snap
+  hover(beside(16, 0))
+  @test v.aim == :corner
+  # A corner that's dragged snaps too: the one that ⌘ left beside the corner of the house goes on it
+  K.tool!(v, :select)
+  sleep(0.4); press(K.window_point(v, beside(16, 10)))
+  @test v.grab !== nothing && v.grab[1] == :corner
+  at(K.window_point(v, (beside(16, 10)[1] + 1, beside(16, 10)[2])))
+  @test v.aim == :corner
+  release()
+  @test on(lengths()[end].points[3], house(16, 10))
+  # It snaps to a corner of what's already measured, where the plan has no line
+  floor = v.data.measures[findfirst(m -> m.name == "Floor", v.data.measures)].shapes[1].points[3]
+  @test P.snap(K.lines_of(v), floor, K.SNAP / v.zoom) === nothing
+  button((:tool, :length))
+  hover((floor[1] + 3, floor[2] + 2))
+  @test v.aim == :corner && on(v.mouse, floor)
+  # The mark of a count goes where the mouse is
+  button((:tool, :count))
+  hover(beside(16, 0))
+  @test v.aim === nothing && on(v.mouse, beside(16, 0))
+  K.tool!(v, :select)
+  v.snap = false
+end
+
+@testset "cutting a shape out of an area" begin
+  K.tool!(v, :select); v.zoom = 0.0; frames()
+  push!(v.data.measures, P.Measure(:area, "Wall"))
+  wall = v.current = length(v.data.measures)
+  K.commit!(v); frames()
+  shapes() = v.data.measures[wall].shapes
+  # A wall of 4 m by 3 m, beside the house
+  button((:tool, :area))
+  for p in ((17, 1), (21, 1), (21, 4), (17, 4)); plan_click(p...); end
+  key(Keys.enter)
+  @test length(shapes()) == 1 && isapprox(amounts()[wall], 12, atol=0.05)
+  # X chooses the tool that cuts a shape out. A window of 1 m by 1 m is subtracted from the wall.
+  typed("x")
+  @test v.tool == :cut
+  for p in ((18, 2), (19, 2), (19, 3)); plan_click(p...); end
+  @test K.done_box(v) !== nothing
+  plan_click(18, 3)
+  key(Keys.enter)
+  @test isempty(v.draft) && [s.cut for s in shapes()] == [false, true]
+  @test isapprox(amounts()[wall], 11, atol=0.05)
+  @test count(l -> startswith(l, "  cut "), block()) == 1
+  @test v.tool == :cut && v.current == wall   # the tool stays, for the next window
+  # A click on its first corner ends a cut-out too. Half of this one is outside the wall, so half of it is subtracted.
+  for p in ((20.5, 2), (21.5, 2), (21.5, 3), (20.5, 3)); plan_click(p...); end
+  plan_click(20.5, 2)
+  @test isempty(v.draft) && length(shapes()) == 3 && isapprox(amounts()[wall], 10.5, atol=0.05)
+  # Over no area, a cut-out is dropped, and the foot of the block says why
+  for p in ((17, 6), (18, 6), (18, 7)); plan_click(p...); end
+  @test K.cut_text(v, nothing, v.draft) == "Not over an area"
+  key(Keys.enter)
+  @test isempty(v.draft) && length(shapes()) == 3 && v.said == K.CUT_NOWHERE && v.wrong
+  # The next one that's over an area takes those words away
+  for p in ((17.2, 3.2), (17.6, 3.2), (17.6, 3.6)); plan_click(p...); end
+  key(Keys.enter)
+  @test length(shapes()) == 4 && v.said == ""
+  # With the arrow, a click in a cut-out selects it, and the plan shows what it takes away beside it
+  K.tool!(v, :select)
+  plan_click(18.5, 2.5)
+  @test v.picked == (wall, 2)
+  @test K.size_text(v, v.data.measures[wall], 2) == "−1 m²"
+  @test K.size_text(v, v.data.measures[wall], 1) == "10.42 m²"
+  frames()
+  # Delete takes it away, and ⌘Z puts it back
+  key(Keys.backspace)
+  @test length(shapes()) == 3 && isapprox(amounts()[wall], 11.42, atol=0.05)
+  command(Keys.z)
+  @test length(shapes()) == 4 && isapprox(amounts()[wall], 10.42, atol=0.05)
+  # A corner of a cut-out moves like any other. This makes the window 1.75 m².
+  sleep(0.4); press(K.window_point(v, house(19, 3))); at(K.window_point(v, house(20, 3.5))); release()
+  @test isapprox(amounts()[wall], 12 - 1.75 - 0.5 - 0.08, atol=0.05)
+  # The wall takes its cut-outs with it
+  plan_click(19.5, 1.3)
+  @test v.picked == (wall, 1)
+  key(Keys.backspace)
+  @test isempty(shapes()) && !any(l -> startswith(l, "  cut "), block())
+  command(Keys.z)
+  @test length(shapes()) == 4
+  # The page as HTML has the wall without its cut-outs
+  @test occursin("<td>Wall</td><td>9.67 m²</td>", K.page_html(e))
+end
+
+# A Mac with no Centient shows a measure's words and changes them the same way. The change is made between two testsets, so that the next one sees it.
 @eval K.Centient available() = false
 @testset "with no Centient, a measure shows its name and a click changes it" begin
   floor = findfirst(m -> m.name == "Floor", v.data.measures)
   v.current = 0
   frames()
-  # A name that a measure was made with shows too, as there's no item to take its place
-  @test K.item_name(v, P.Measure(:count, "Count 9")) == "Count 9"
   click(part((:cell, floor, :item)))
   @test v.current == floor && v.asking === nothing && v.tool == :area
   click(part((:cell, floor, :item)))

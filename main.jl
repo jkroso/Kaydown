@@ -25,8 +25,10 @@
 #     a video, and click the button beside its top right corner to make it fill the window.
 #     Pinch, or scroll with ⌘ held, to zoom it there, and drag it to move it.
 #   - Write a code block in the language `takeoff` to measure from a plan: drop
-#     a PDF file on it, count fittings, measure lengths and areas, choose each
-#     item from Centient's catalogue and make a quote in Centient.
+#     a PDF file on it, count fittings, measure lengths and areas, say what
+#     each measure is or choose its item from Centient's catalogue, and make a
+#     quote in Centient. Corners snap to the plan's lines, and a shape can be
+#     cut out of an area.
 #   - Write a code block in the language `schedule` to plan the page's to-do
 #     items: each one is a bar on a line of days. Drag a bar's end to say how
 #     long the task takes, and drag from the circle at its end to the task that
@@ -133,7 +135,7 @@
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Mermaid" Mermaid problem
 @use "github.com/jkroso/UI.jl/Interface/media" silence! recording picture_size
 @use "github.com/jkroso/UI.jl/Interface/Semantic/ThreeMF" => ThreeMF
-@use "./pictures" picture natural thumbnail pdf_pages pdf_page pdf_size pdf_part
+@use "./pictures" picture natural thumbnail pdf_pages pdf_page pdf_size pdf_part pdf_lines
 @use "./spelling" misspelt guesses learn!
 @use "./transcribe" Transcription check! finished phrases words_between
 @use "./html" html footnotes NOTE escape
@@ -161,7 +163,7 @@ const SERIF = "Charter"
 const MONO = "Menlo"
 # Code is drawn in the light weight of the Mac's own font with letters of one width, so it reads
 # lighter than the page's text. Menlo has no light weight. A Mac without that font draws code in
-# Menlo, and so does a character that the font lacks, like ∈.
+# Menlo. A character that the font lacks, like ∈, is in the font that macOS picks for it.
 const CODE_FONT, CODE_STYLE = isfile("/System/Library/Fonts/SFNSMono.ttf") ? (".SF NS Mono", "Light") : (MONO, "")
 const CODE_SLANT = String(strip(CODE_STYLE * " Italic"))   # the style of a comment
 const CODE_SCALE = 0.86   # how big code is beside the page's text, until the settings page changes it
@@ -175,7 +177,6 @@ const code_type = Ref((CODE_FONT, CODE_STYLE))
 codefont() = code_type[][1]
 codestyle() = code_type[][2]
 codeslant() = String(strip(codestyle() * " Italic"))   # the style of a comment
-const SPARE_FONT = "Apple Symbols"   # it has the characters that Julia writes and Menlo lacks too, like the ⋮ in a big matrix
 const SYMBOL_FONT = "Lucida Grande"
 
 Base.@kwdef mutable struct Palette
@@ -1894,16 +1895,35 @@ has(face::Face, c::Char) =
     Skia.sk_font_unichar_to_glyph(skia_font(face.family, face.size, face.style).raw, Int32(c)) != 0
   end
 
+const stand_ins = Dict{Char,String}()
+
+"""
+The name of a font on this Mac that has the character `c`, or "" when none
+has. macOS picks it, as it does for the text of an app: Menlo when Menlo has
+the character, and if not a font of symbols, of another script or of emoji.
+"""
+font_with(c::Char) = get!(stand_ins, c) do
+  style = Skia.sk_fontstyle_new(Int32(400), Int32(Skia.SK_FONT_STYLE_WIDTH_NORMAL), Skia.SK_FONT_STYLE_SLANT_UPRIGHT)
+  found = Skia.sk_fontmgr_match_family_style_character(Skia.sk_fontmgr_ref_default(), MONO, style, C_NULL, Int32(0), Int32(c))
+  Skia.sk_fontstyle_delete(style)
+  found == C_NULL && return ""
+  name = Skia.sk_typeface_get_family_name(found)
+  family = unsafe_string(Skia.sk_string_get_c_str(name))
+  Skia.sk_string_delete(name)
+  # The font is asked for by its name from here on, so it has to answer to that name
+  has(Face(family, "", 12px, colours.ink, false), c) ? family : ""
+end
+
 """
 `text` in runs, each with the face to draw it in. A character that the font of
-`face` doesn't have, like the raised minus of m⁻¹, is in Menlo, which has it.
-One that Menlo lacks too, like ⋮, is in a font of symbols.
+`face` doesn't have is in a font that has it: Menlo for the raised minus of
+m⁻¹, a font of symbols for the ⋮ in a big matrix, and so on.
 """
 runs(text::AbstractString, face::Face) = begin
-  spare, symbols = Face(face, family=MONO, style=""), Face(face, family=SPARE_FONT, style="")
   out = Tuple{String,Face}[]
   for c in text
-    f = isascii(c) || has(face, c) ? face : has(spare, c) ? spare : has(symbols, c) ? symbols : face
+    family = isascii(c) || has(face, c) ? face.family : font_with(c)
+    f = family == face.family || isempty(family) ? face : Face(face, family=family, style="")
     if !isempty(out) && last(out)[2] === f
       out[end] = (last(out)[1] * c, f)
     else
@@ -3745,16 +3765,22 @@ end
 #   - Drop a PDF file or a picture on the block, or click it, to choose the plan.
 #   - Set the scale: type it, like 1:100, or choose the ruler, click the two ends
 #     of a length that you know and type how long it is.
-#   - Add a measure starts one. Choose its item from Centient's catalogue, then
-#     click on the plan. The item's unit says what the measure is and chooses the
-#     tool: a length for an item sold by the metre, an area for one sold by the
-#     square metre, and a count for the rest. A measure with nothing drawn yet
-#     and no item is what the tool you choose makes it. A click on a measure in
-#     the list chooses its tool too.
-#   - The table has no column for a measure's name. Its item says what it is:
-#     the item's name, then the catalogue that it's from. A measure with no item
-#     shows the name that it has in the block. On a Mac with no Centient, a click
-#     on that name changes it.
+#   - Two buttons under the table start a measure. Add a measure asks what it
+#     measures: type a few words that describe it, like "Double power point".
+#     Its item is defined later: the measure is matched to one in Centient.
+#     Add from catalogue asks for an item of Centient's catalogue, and shows
+#     only on a Mac that has Centient. The item gives the measure its name, and
+#     its unit says what the measure is and chooses the tool: a length for an
+#     item sold by the metre, an area for one sold by the square metre, and a
+#     count for the rest.
+#   - A measure with no item and nothing drawn yet is what the tool you choose
+#     makes it. A click on a measure in the list chooses its tool too.
+#   - The table has no column for a measure's name. A measure with no item
+#     shows its words, and a click on them, when it's the measure that's
+#     chosen, changes them. A measure with an item shows the item's name, then
+#     the catalogue that it's from, and the same click chooses another item.
+#   - The table has columns for the price of one and for the cost while a
+#     measure has an item. With none, there's no price to show.
 #   - What a search of Centient finds shows in a list that floats beside the
 #     text field. The search for an item looks in one catalogue at a time: the
 #     business's own items, or a supplier's that ⌥ lets you choose. The headings of the table of measures sort and search it.
@@ -3767,16 +3793,25 @@ end
 #     each click. To end one, click the Done button beside its last corner,
 #     click twice, or press Return. An area also ends with a click on its
 #     first corner.
+#   - A corner snaps to the lines of a PDF plan: to the end of a line, to the
+#     place where two lines cross, or to the nearest point of a line. A small
+#     mark shows where it will go. It snaps to the corners of what's already
+#     measured too. The magnet turns snapping off, and so does ⌘ while it's held.
+#   - The tool after the area tool cuts a shape out of an area, like a window
+#     out of a wall. Draw its outline over the area. What the area comes to is
+#     then without the part of the cut-out that's in it. A cut-out is selected,
+#     moved and taken away like any outline, and it goes when its area does.
 #   - With the arrow, click a mark or a line to select it, drag a corner to move
 #     it, and press Delete to take it away. Drag the plan to move it.
 #   - ⌘ and the scroll wheel make the plan bigger and smaller. Once you've
 #     clicked the plan, two fingers move it. A plan that shows whole stays put.
 #   - The button with four arrows makes the block fill the window, with the list
 #     of measures beside the plan or under it. Esc puts it back in the page.
-#   - V, C, L, A and S choose the tools. Esc drops what's half drawn. ⌘Z takes
+#   - V, C, L, A, X and S choose the tools. Esc drops what's half drawn. ⌘Z takes
 #     the last change back.
 #   - Choose the customer, then Make quote in Centient. Centient makes a quote
-#     with a line for each measure, priced from its catalogue.
+#     with a line for each measure. A measure with an item is priced from the
+#     catalogue. One with none is a line of its words, to price in Centient.
 #
 # Every change is written into the block's lines, so the file holds the whole
 # takeoff. The catalogue, the contacts and the quote come from Centient through
@@ -3785,6 +3820,7 @@ end
 const TAKEOFF = Plans.TAKEOFF
 const PLAN_LEAST = 220px      # how tall the plan's view is at the least
 const REACH = 7.0             # px. A corner or a line that's this near the mouse is under it.
+const SNAP = 8.0              # px. A corner that's put this near a line of the plan goes on the line.
 const NEAR = 24.0             # the most px to a point of the page: as big as the plan gets
 const SETTLED = 0.15          # seconds after the plan last moved until a plan that's slow to draw is drawn sharp
 const QUICK = 0.012           # seconds. A plan that's drawn in less is drawn sharp while it moves.
@@ -3795,11 +3831,12 @@ const HUES = (colorant"rgb(222,72,58)", colorant"rgb(38,120,214)", colorant"rgb(
 "The tools of a takeoff, in the order of their buttons: the icon of each, what it says of itself, and the letter that chooses it"
 const PLAN_TOOLS = (:select => ("cursor", "Select and move  V", 'v'), :count => ("plus-circle", "Count  C", 'c'),
                     :length => ("vector-pen", "Measure a length  L", 'l'), :area => ("pentagon", "Measure an area  A", 'a'),
+                    :cut => ("subtract", "Cut a shape out of an area  X", 'x'),
                     :scale => ("rulers", "Set the scale from a length that you know  S", 's'))
 "Every icon that a takeoff can show. The built app reads them all when it's made."
 const PLAN_ICONS = ["cursor", "plus-circle", "vector-pen", "pentagon", "rulers", "chevron-left", "chevron-right", "zoom-out", "zoom-in",
                     "aspect-ratio", "file-earmark-pdf", "x-lg", "plus-lg", "map", "person", "receipt", "arrows-fullscreen", "fullscreen-exit",
-                    "chevron-up", "chevron-down", "check"]
+                    "chevron-up", "chevron-down", "check", "subtract", "magnet", "box-seam"]
 
 "True when the page's theme is a dark one"
 dark_page() = RGBA(colours.bg).r < 0.5
@@ -3835,7 +3872,9 @@ end
   at::Plans.Point = (0.0, 0.0)            # the point of the page at the view's top left
   box::NTuple{4,Float64} = (0.0, 0.0, 0.0, 0.0)   # where the view was last drawn in the window: its left, top, width and height
   fitted::Any = nothing                   # the file and the page that the zoom is for
-  mouse::Any = nothing                    # the point of the page under the mouse
+  mouse::Any = nothing                    # the point of the page under the mouse, or the one near it that a corner snaps to
+  aim::Any = nothing                      # what `mouse` snapped to: :corner, :crossing or :line, or nothing when it's where the mouse is
+  snap::Bool = true                       # corners snap to the lines of the plan
   grab::Any = nothing                     # a drag: of the plan, or of a corner
   clicked::NTuple{3,Float64} = (0.0, 0.0, 0.0)   # when and where the plan was last clicked
   moved::Float64 = 0.0                    # when the view last moved
@@ -4167,11 +4206,14 @@ end
 """
 The line of a quote for measure `m`, which comes to `amount` of its kind's own
 unit. The line is in the measure's unit, and Centient prices it from the item
-in that unit.
+in that unit. A measure with no item names none, and its line is its words,
+to match to an item in Centient.
 """
 quote_line(m, amount::Real) = begin
   unit = Plans.unit(m)
-  Dict{String,Any}("ref" => m.item, "quantity" => round(Plans.in_unit(amount, unit), sigdigits=6), "unit" => unit, "note" => m.name)
+  line = Dict{String,Any}("quantity" => round(Plans.in_unit(amount, unit), sigdigits=6), "unit" => unit, "note" => m.name)
+  isempty(m.item) || (line["ref"] = m.item)
+  line
 end
 
 "Ask Centient for a quote with a line for each measure"
@@ -4415,6 +4457,36 @@ page_point(v::TakeoffView, x, y) = (v.at[1] + (x - v.box[1]) / v.zoom, v.at[2] +
 "The place in the window of a point of the page"
 window_point(v::TakeoffView, p) = (v.box[1] + (p[1] - v.at[1]) * v.zoom, v.box[2] + (p[2] - v.at[2]) * v.zoom)
 
+# The lines of the pages of PDF plans that were last shown, each with a grid that finds the ones near the mouse.
+# Each is kept under its file, when the file last changed, and its page.
+const plan_lines = Dict{Any,Plans.Lines}()
+
+"The lines of the page that shows, for corners to snap to. A picture has none, and nor has a PDF file that's a scan of paper."
+lines_of(v::TakeoffView) = begin
+  path = plan_path(v)
+  (isempty(path) || !ispdf(path)) && return Plans.Lines()
+  key = (path, mtime(path), v.data.page)
+  kept = get(plan_lines, key, nothing)
+  kept === nothing || return kept
+  length(plan_lines) >= 4 && empty!(plan_lines)
+  s = pdf_size(path, v.data.page)
+  found = pdf_lines(path, v.data.page)
+  plan_lines[key] = s === nothing || found === nothing ? Plans.Lines() : Plans.Lines(found[1], s[1], s[2], found[2])
+end
+
+"""
+The point of the page where a corner goes when the mouse is at a place in the
+window, and what it snapped to there: :corner, :crossing or :line. With the
+magnet off or ⌘ held, and where nothing is near, it's the point under the
+mouse, and nothing. `skip` is a corner that it doesn't snap to: the one that's
+being dragged.
+"""
+aim(v::TakeoffView, w, x, y; skip=nothing) = begin
+  p = page_point(v, x, y)
+  (v.snap && !(Keys.cmd in w.keys)) || return (p, nothing)
+  something(Plans.snap(v.data, lines_of(v), v.data.page, p, SNAP / v.zoom, skip=skip), (p, nothing))
+end
+
 "The px of white that the view keeps round the paper, so that the paper's edge and its shadow show"
 const PAPER_EDGE = 14.0
 
@@ -4598,23 +4670,68 @@ ink(colour, wide=0.0) = begin
   paint
 end
 
-"Draw a line through the places `ps`. `fill` colours what's inside it. `closed` joins its end to its start."
-trace(ctx, ps, colour, wide; fill=nothing, closed=false) = begin
-  length(ps) < 2 && return
+"Skia's path through the places `ps`. `closed` joins its end to its start."
+path_through(ps, closed) = begin
   shape = Skia.sk_path_new()
   for (i, (x, y)) in enumerate(ps)
     i == 1 ? Skia.sk_path_move_to(shape, Float32(x), Float32(y)) : Skia.sk_path_line_to(shape, Float32(x), Float32(y))
   end
   closed && Skia.sk_path_close(shape)
+  shape
+end
+
+"""
+Draw a line through the places `ps`. `fill` colours what's inside it, but not
+what's inside one of the outlines `holes`. `closed` joins its end to its start.
+`dashed` draws it in dashes.
+"""
+trace(ctx, ps, colour, wide; fill=nothing, closed=false, holes=(), dashed=false) = begin
+  length(ps) < 2 && return
+  shape = path_through(ps, closed)
   if fill !== nothing
     paint = ink(fill)
+    Skia.sk_canvas_save(ctx)
+    for hole in holes
+      length(hole) < 3 && continue
+      cut = path_through(hole, true)
+      Skia.sk_canvas_clip_path_with_operation(ctx, cut, Skia.SK_CLIP_OP_DIFFERENCE, true)
+      Skia.sk_path_delete(cut)
+    end
     Skia.sk_canvas_draw_path(ctx, shape, paint)
+    Skia.sk_canvas_restore(ctx)
     Skia.sk_paint_delete(paint)
   end
   paint = ink(colour, wide)
+  if dashed
+    dashes = Float32[6, 5]
+    effect = Skia.sk_path_effect_create_dash(dashes, Cint(2), 0f0)
+    Skia.sk_paint_set_path_effect(paint, effect)
+    Skia.sk_path_effect_unref(effect)
+  end
   Skia.sk_canvas_draw_path(ctx, shape, paint)
   Skia.sk_paint_delete(paint)
   Skia.sk_path_delete(shape)
+end
+
+"""
+Show where the next corner snaps to: a square on a corner of the plan, a cross
+where two of its lines cross, and a ring on a line.
+"""
+snap_mark(ctx, (x, y), kind) = begin
+  r = 5.0
+  # White under the colour, so that it shows on a dark part of the plan
+  for (colour, wide) in ((colorant"white", 3.5), (colours.accent, 1.5))
+    if kind == :corner
+      trace(ctx, [(x - r, y - r), (x + r, y - r), (x + r, y + r), (x - r, y + r)], colour, wide, closed=true)
+    elseif kind == :crossing
+      trace(ctx, [(x - r, y - r), (x + r, y + r)], colour, wide)
+      trace(ctx, [(x - r, y + r), (x + r, y - r)], colour, wide)
+    else
+      paint = ink(colour, wide)
+      Skia.sk_canvas_draw_circle(ctx, Float32(x), Float32(y), Float32(r), paint)
+      Skia.sk_paint_delete(paint)
+    end
+  end
 end
 
 "Draw a dot of radius `r` at the place `(x, y)`, with a white edge"
@@ -4645,6 +4762,30 @@ size_text(v::TakeoffView, kind, shape, unit=Plans.own_unit(kind)) = begin
   a === nothing ? "" : Plans.shown(kind, a, unit)
 end
 
+"""
+What shape `j` of measure `m` comes to in the measure's unit, as the plan shows
+it beside the shape: an outline without its cut-outs, and a cut-out as what it
+takes away, with a minus. It's "" when its page has no scale.
+"""
+size_text(v::TakeoffView, m::Plans.Measure, j::Int) = begin
+  a = Plans.amount(v.data, m, j)
+  a === nothing ? "" : (m.shapes[j].cut ? "−" : "") * Plans.shown(m.kind, a, Plans.unit(m))
+end
+
+"""
+What a cut-out with the corners `points` takes from the outline at the place
+`from`, as the plan shows it while the cut-out is drawn. Over no outline, it
+says so.
+"""
+cut_text(v::TakeoffView, from, points) = begin
+  length(points) < 3 && return ""
+  from === nothing && return "Not over an area"
+  n = Plans.scale(v.data, v.data.page)
+  n === nothing && return ""
+  m = v.data.measures[from[1]]
+  "−" * Plans.shown(:area, Plans.takes(m, from[2], points) * Plans.metres(n)^2, Plans.unit(m))
+end
+
 "Draw what's measured on the page that shows, and what's being drawn"
 draw_shapes(ctx, v::TakeoffView) = begin
   t = v.data
@@ -4660,24 +4801,41 @@ draw_shapes(ctx, v::TakeoffView) = begin
       continue
     end
     area = m.kind == :area
-    trace(ctx, ps, colour, on ? 4 : 2.5, fill=area ? RGBA(colour, 0.22) : nothing, closed=area)
+    if s.cut
+      # A cut-out is an outline of dashes. Its area's colour stops at it.
+      trace(ctx, ps, colour, on ? 3 : 1.5, closed=true, dashed=true)
+    else
+      holes = area ? [[window_point(v, p) for p in m.shapes[k].points] for k in Plans.cuts(m, j)] : ()
+      trace(ctx, ps, colour, on ? 4 : 2.5, fill=area ? RGBA(colour, 0.22) : nothing, closed=area, holes=holes)
+    end
     # The corners show on the measure that the tools draw for, so that you can take hold of one
     (on || v.current == i) && foreach(p -> dot(ctx, p, on ? 4 : 3, colour), ps)
-    on && tag(ctx, ps[end], size_text(v, m.kind, s, Plans.unit(m)))
+    on && tag(ctx, ps[end], size_text(v, m, j))
   end
-  isempty(v.draft) && return
+  # Where the next corner goes, when it snaps to something
+  marked = v.aim !== nothing && v.mouse !== nothing && v.asking === nothing && ishovered(part!(() -> PlanArea(of=v), v, :area))
+  if isempty(v.draft)
+    marked && snap_mark(ctx, window_point(v, v.mouse), v.aim)
+    return
+  end
   # What's being drawn runs on to the mouse
-  kind = v.tool
-  colour = kind == :scale ? colours.accent : hue(v.current > 0 && t.measures[v.current].kind == kind ? v.current : length(t.measures) + 1)
+  cut = v.tool == :cut
+  kind = cut ? :area : v.tool
   # With the mouse over the Done button, it shows what a click there leaves
   done = over_done(v)
   points = v.mouse === nothing || v.asking !== nothing || done ? copy(v.draft) : [v.draft; [v.mouse]]
+  # A cut-out has the colour of the area that it's cut from
+  from = cut ? Plans.cut_from(t, t.page, points, v.current) : nothing
+  colour = kind == :scale ? colours.accent : cut ? (from === nothing ? colours.dim : hue(from[1])) :
+           hue(v.current > 0 && t.measures[v.current].kind == kind ? v.current : length(t.measures) + 1)
   ps = [window_point(v, p) for p in points]
-  trace(ctx, ps, colour, 2, fill=kind == :area && length(ps) > 2 ? RGBA(colour, 0.15) : nothing, closed=kind == :area && length(ps) > 2)
+  closed = kind == :area && length(ps) > 2
+  trace(ctx, ps, colour, 2, fill=closed && !cut ? RGBA(colour, 0.15) : nothing, closed=closed, dashed=cut)
   foreach(p -> dot(ctx, p, 3, colour), ps[1:length(v.draft)])
   # In the unit of the measure that it's for
   unit = v.current > 0 && t.measures[v.current].kind == kind ? Plans.unit(t.measures[v.current]) : Plans.own_unit(kind)
-  kind == :scale || tag(ctx, ps[end], size_text(v, kind, Plans.Shape(t.page, points), unit))
+  kind == :scale || tag(ctx, ps[end], cut ? cut_text(v, from, points) : size_text(v, kind, Plans.Shape(t.page, points), unit))
+  marked && !done && snap_mark(ctx, window_point(v, v.mouse), v.aim)
   draw_done(ctx, v, done)
 end
 
@@ -4697,7 +4855,7 @@ Where the Done button is in the window: its left, its top, its width and its
 height. It's nothing while there's no line or outline with corners enough to end.
 """
 done_box(v::TakeoffView) = begin
-  (v.tool in (:length, :area) && v.zoom > 0) || return nothing
+  (v.tool in (:length, :area, :cut) && v.zoom > 0) || return nothing
   n = length(v.draft)
   n >= (v.tool == :length ? 2 : 3) || return nothing
   (x, y), (x0, y0) = window_point(v, v.draft[n]), window_point(v, v.draft[n-1])
@@ -4731,7 +4889,7 @@ end
 over_done(v::TakeoffView) = (w = window_of(v); w !== nothing && on_done(v, num(w.mouse[1]), num(w.mouse[2])))
 
 "What the Done button's tooltip says"
-done_tip(v::TakeoffView) = (v.tool == :area ? "End the outline" : "End the line") * "  Return"
+done_tip(v::TakeoffView) = (v.tool == :length ? "End the line" : "End the outline") * "  Return"
 
 "Draw the Done button. It's lighter while the mouse is over it."
 draw_done(ctx, v::TakeoffView, over::Bool) = begin
@@ -4838,10 +4996,27 @@ measure!(v::TakeoffView, kind::Symbol) = begin
   last(ms)
 end
 
-"End the line or the outline that's being drawn. One with too few corners is dropped."
+"What the foot of the block says when a cut-out is drawn where there's no area to cut it from"
+const CUT_NOWHERE = "A cut-out goes over an area that's measured. Measure the area first, then cut the shape out of it."
+
+"""
+End the line or the outline that's being drawn. One with too few corners is
+dropped. A cut-out goes to the area that it's over, and one that's over none is
+dropped too.
+"""
 finish_shape!(v::TakeoffView) = begin
   kind = v.tool
-  if kind in (:length, :area) && length(v.draft) >= (kind == :length ? 2 : 3)
+  if kind == :cut && length(v.draft) >= 3
+    made = Plans.cut!(v.data, v.data.page, copy(v.draft), v.current)
+    empty!(v.draft)
+    if made === nothing
+      say!(v, CUT_NOWHERE, true)
+    else
+      v.current = made[1]
+      v.said == CUT_NOWHERE && say!(v, "")
+      commit!(v)
+    end
+  elseif kind in (:length, :area) && length(v.draft) >= (kind == :length ? 2 : 3)
     push!(measure!(v, kind).shapes, Plans.Shape(v.data.page, copy(v.draft)))
     empty!(v.draft)
     commit!(v)
@@ -4886,11 +5061,8 @@ remove_picked!(v::TakeoffView) = begin
   p = v.picked
   p === nothing && return handled
   m = v.data.measures[p[1]]
-  if length(p) == 3
-    Plans.remove!(m, p[2], p[3])
-  else
-    deleteat!(m.shapes, p[2])
-  end
+  # An outline takes its cut-outs with it
+  length(p) == 3 ? Plans.remove!(m, p[2], p[3]) : Plans.remove!(m, p[2])
   v.picked = nothing
   commit!(v)
   handled
@@ -4913,13 +5085,13 @@ onkey(a::PlanArea, ev::KeyPress{Keys.mouse_left}) = begin
   if v.tool == :count
     Plans.mark!(measure!(v, :count), page, p)
     commit!(v)
-  elseif v.tool in (:length, :area)
-    closes = v.tool == :area && length(v.draft) >= 3 && hypot(v.draft[1][1] - p[1], v.draft[1][2] - p[2]) <= reach
-    # The first click of two put the last corner down
-    (twice && !isempty(v.draft)) || closes ? finish_shape!(v) : push!(v.draft, p)
+  elseif v.tool in (:length, :area, :cut)
+    closes = v.tool != :length && length(v.draft) >= 3 && hypot(v.draft[1][1] - p[1], v.draft[1][2] - p[2]) <= reach
+    # The first click of two put the last corner down. A corner snaps to the plan's lines.
+    (twice && !isempty(v.draft)) || closes ? finish_shape!(v) : push!(v.draft, aim(v, w, x, y)[1])
   elseif v.tool == :scale
     length(v.draft) >= 2 && empty!(v.draft)
-    push!(v.draft, p)
+    push!(v.draft, aim(v, w, x, y)[1])
     length(v.draft) == 2 && ask!(v, (:length, v.draft[1], v.draft[2]), "", "metres")
   else
     corner = Plans.corner(v.data, page, p, reach)
@@ -4942,10 +5114,13 @@ onmouse(a::PlanArea, ev::MouseMove) = begin
   v = a.of
   v.zoom > 0 || return nothing
   x, y = num(ev.position[1]), num(ev.position[2])
-  v.mouse = page_point(v, x, y)
+  g = v.grab
+  # A corner that a tool is about to put down snaps to the plan's lines, and so does one that's dragged. A mark of a count doesn't.
+  drawing = g === nothing && v.tool in (:length, :area, :cut, :scale) && !on_done(v, x, y)
+  dragged = g !== nothing && g[1] == :corner && v.data.measures[g[2][1]].kind != :count
+  v.mouse, v.aim = drawing ? aim(v, ev.window, x, y) : dragged ? aim(v, ev.window, x, y, skip=g[2]) : (page_point(v, x, y), nothing)
   # The Done button says what it does, and the key that does the same
   on_done(v, x, y) && show_tooltip!(ev.window, tip_label(done_tip(v)), px.(done_box(v))..., placement=:bottom, gap=6px)
-  g = v.grab
   g === nothing && return handled
   Keys.mouse_left in ev.window.keys || (drop!(v); return handled)
   if g[1] == :pan
@@ -5019,7 +5194,8 @@ end
 describe(b::PlanButton) = begin
   v = b.of
   ishovered(b) || (b.quiet = false)
-  on = b.action isa Tuple && b.action[1] == :tool && v.tool == b.action[2]
+  # The tool in use is lit, and so is the magnet while corners snap
+  on = (b.action isa Tuple && b.action[1] == :tool && v.tool == b.action[2]) || (b.action == :snap && v.snap)
   colour = b.off ? colours.faint : on ? colours.accent : colours.dim
   Box(height(26px), padding(7px, 0px), radius(6px), Alignment.Center, name="Button",
       background(on ? colours.active : ishovered(b) && !b.off ? colours.hover : clear),
@@ -5089,6 +5265,9 @@ act!(v::TakeoffView, action, w) = begin
     zoom_plan!(v, action[2], v.box[1] + v.box[3] / 2, v.box[2] + v.box[4] / 2)
   elseif a == :fit
     v.zoom = 0.0
+  elseif a == :snap
+    v.snap = !v.snap
+    v.aim = nothing
   elseif a == :full
     full!(v, !v.full)
   elseif a == :scale
@@ -5096,7 +5275,7 @@ act!(v::TakeoffView, action, w) = begin
     ask!(v, (:scale,), s === nothing ? "1:100" : Plans.scale_text(s))
   elseif a == :choose
     choose_plan!(v, w)
-  elseif a == :add
+  elseif a in (:add, :add_item)
     # It starts as what the tool in use measures, or as a count. Its item's unit, or the next tool, can change that.
     kind = v.tool in Plans.KINDS ? v.tool : :count
     empty!(v.filters)   # a search of the table could hide the new measure
@@ -5104,8 +5283,9 @@ act!(v::TakeoffView, action, w) = begin
     v.current = length(t.measures)
     tool!(v, kind)
     commit!(v)
-    # The item comes first. The measure takes its name, and its unit says what the measure is.
-    Centient.available() && ask!(v, (:item, v.current))
+    # A measure from the catalogue asks for its item: it takes the item's name, and the item's unit says what it is.
+    # Another asks for the words that describe it. Typing takes the place of the name that it was made with.
+    a == :add_item ? ask!(v, (:item, v.current)) : ask!(v, (:name, v.current), last(t.measures).name, "What it measures")
   elseif a == :delete && action[2] <= length(t.measures)
     deleteat!(t.measures, action[2])
     v.current = v.current == action[2] ? 0 : v.current > action[2] ? v.current - 1 : v.current
@@ -5156,19 +5336,14 @@ elide(s::AbstractString, size, wide) = begin
   rstrip(String(cs[1:lo])) * "…"
 end
 
-"True when measure `m` waits for an item: it has none, and Centient is here to choose one from"
-wants_item(m) = isempty(m.item) && Centient.available()
-
 """
-What the table calls measure `m`. It's the name of its item. With no item, or
-one that Centient hasn't told of, it's the name that the measure has in the
-block. A measure that waits for an item, with the name it was made with, has
-none.
+What the table calls measure `m`. With an item that Centient has told of, it's
+the item's name. With no item, it's the words that describe the measure, which
+are its name in the block.
 """
 item_name(v::TakeoffView, m) = begin
   row = known(v, m.item)
-  row === nothing || return string(row["name"])
-  wants_item(m) && occursin(FIRST_NAME, m.name) ? "" : isempty(m.name) ? m.item : m.name
+  row === nothing ? (isempty(m.name) ? m.item : m.name) : string(row["name"])
 end
 
 "The words `shown`, which start the words of `parts` and may end with …, as a text for each part in its colour"
@@ -5189,7 +5364,7 @@ describe(c::MeasureCell) = begin
   m = v.data.measures[i]
   wide = c.what == :extra ? fixed(52px) : width(grow=grow)
   c.full = ""
-  # The item's cell holds the field for the item, and the field for the name on a Mac with no Centient
+  # The item's cell holds the field for the item, and the field for the words of a measure with none
   a = v.asking
   a !== nothing && a[1] in (c.what == :item ? (:item, :name) : (:extra,)) && a[2] == i && return field(v, wide)
   # The words are in a row with no width of its own, so long words take no room from the cells beside them.
@@ -5203,9 +5378,7 @@ describe(c::MeasureCell) = begin
   c.what == :extra && return words((m.extra > 0 ? "+" * Plans.number(100m.extra) * "%" : "+0%", m.extra > 0 ? colours.ink : colours.faint))
   name, row = item_name(v, m), known(v, m.item)
   # An item that Centient knows shows where it's from after its name
-  row === nothing || return words((name, colours.ink), ("  ·  " * string(row["source"]), colours.dim))
-  wants_item(m) || return words((name, colours.ink))
-  isempty(name) ? words(("Choose an item", colours.accent)) : words((name, colours.ink), ("  ·  ", colours.dim), ("Choose an item", colours.accent))
+  row === nothing ? words((name, colours.ink)) : words((name, colours.ink), ("  ·  " * string(row["source"]), colours.dim))
 end
 
 cursor(::MeasureCell) = :hand
@@ -5226,13 +5399,12 @@ onkey(c::MeasureCell, ::KeyPress{Keys.mouse_left}) = begin
   i <= length(v.data.measures) || return handled
   m = v.data.measures[i]
   # The first click on a row chooses it. A click on the row that's chosen changes the part that's clicked.
-  # A measure that waits for an item is chosen and asks for its item at one click.
   chosen = v.current == i
   chosen || choose_measure!(v, i)
-  (chosen || (c.what == :item && wants_item(m))) || return handled
+  chosen || return handled
   c.what == :extra && return ask!(v, (:extra, i), m.extra > 0 ? Plans.number(100m.extra) : "", "%")
-  # With no Centient there's no catalogue to choose from, so the click changes the measure's name
-  Centient.available() ? ask!(v, (:item, i)) : ask!(v, (:name, i), m.name)
+  # A measure from the catalogue chooses another item. One with no item changes the words that describe it.
+  isempty(m.item) || !Centient.available() ? ask!(v, (:name, i), m.name, "What it measures") : ask!(v, (:item, i))
 end
 
 describe(r::MeasureRow) = begin
@@ -5252,15 +5424,17 @@ describe(r::MeasureRow) = begin
   cost = right(88px, row === nothing || amount === nothing ? "" : dollars(cost_of(m, amount, row)), colours.ink)
   remove = button!(v, (:delete, i), (:delete, i), icon="x-lg", tip="Remove this measure")
   # The panel beside a plan that fills the window is narrow, so a measure has two lines there
+  # The cost and the price have columns only while a measure has an item to price it
+  costs = has_items(v) ? (cost,) : ()
   v.beside && return Column(width(grow=grow), Alignment.Start, padding(10px, 4px), name="Measure", back, line...,
     Row(width(grow=grow), height(26px), child_gap=8px, Alignment.Center, swatch(m.kind, hue(i)), cell(:item), size),
-    Row(width(grow=grow), height(26px), child_gap=8px, Alignment.Center, Box(width(14px)), cell(:extra), Box(width(grow=grow)), cost, remove))
+    Row(width(grow=grow), height(26px), child_gap=8px, Alignment.Center, Box(width(14px)), cell(:extra), Box(width(grow=grow)), costs..., remove))
   Row(width(grow=grow), height(32px), padding(10px, 0px), child_gap=10px, Alignment.Center, name="Measure", back, line...,
     swatch(m.kind, hue(i)), cell(:item), cell(:extra), size,
     # A narrow block has no room for the price of one, so it shows what the measure comes to and no more
     # The price is for one of the measure's unit, so it needs no unit after it. One that the measure can't be in says its own.
     (has_price(v) ? (right(96px, row === nothing ? "" : (p = unit_price(m, row); p === nothing ? price_text(row) : dollars(p)), colours.dim),) : ())...,
-    cost, remove)
+    costs..., remove)
 end
 
 cursor(::MeasureRow) = :hand
@@ -5796,6 +5970,8 @@ toolbar(v::TakeoffView) = begin
   Row(width(grow=grow), height(38px), padding(6px, 0px), child_gap=2px, Alignment.Center, background(colours.block),
     [button!(v, (:tool, tool), (:tool, tool), icon=icon, tip=tip) for (tool, (icon, tip, _)) in PLAN_TOOLS]...,
     rule(),
+    button!(v, :snap, :snap, icon="magnet", tip=v.snap ? "Corners snap to the lines of the plan. Click to stop that, or hold ⌘." : "Snap corners to the lines of the plan"),
+    rule(),
     button!(v, :scale, :scale, words=s === nothing ? "Set the scale" : Plans.scale_text(s), tip="Type the scale of this page, like 1:100"),
     (n > 1 ? (rule(), button!(v, :back, (:page, -1), icon="chevron-left", tip="The page before", off=t.page <= 1),
               label("Page $(t.page) of $n", 12px, color=colours.dim),
@@ -5819,13 +5995,20 @@ prompt(v::TakeoffView) = begin
      label(words, 12px), field(v, fixed(110px)), label(hint, 12px, color=colours.dim)),)
 end
 
-"True when the table of measures has room for the price of one of each item"
-has_price(v::TakeoffView) = editor(v).width >= 720px
+"""
+True when a measure has an item of Centient's catalogue. Only then is there a
+price to show, so only then has the table its columns for the price and the cost.
+"""
+has_items(v::TakeoffView) = any(m -> !isempty(m.item), v.data.measures)
+
+"True when the table of measures shows the price of one of each item: when a measure has an item, and there's room"
+has_price(v::TakeoffView) = has_items(v) && editor(v).width >= 720px
 
 """
 The headings of the table of measures. Each is as wide as the cells under it.
 The panel beside a plan has two lines for each measure, so it has two
-headings and no more: the item and its cost.
+headings and no more: the item and its cost. The cost and the price have
+headings only while a measure has an item.
 """
 table_head(v::TakeoffView) = begin
   # Each heading fills its cell, so the mouse can use it anywhere over its column
@@ -5833,12 +6016,13 @@ table_head(v::TakeoffView) = begin
   right(wide, key) = Row(wide, height(grow=grow), Alignment.Center, clip=true, (key === nothing ? () : (head(v, key, :end),))...)
   # With no Centient on the Mac there are no prices, so the columns for them have no headings
   ours(key) = Centient.available() ? key : nothing
+  cost = has_items(v) ? (right(fixed(88px), ours(:cost)),) : ()
   look = (width(grow=grow), height(26px), Alignment.Center, background(colours.head), border(1px, :solid, colours.line)[:bottom])
   v.beside && return Row(look..., padding(10px, 0px), child_gap=8px, name="Headings",
-    Box(width(14px)), left(:item), right(fixed(88px), ours(:cost)), Box(width(28px)))
+    Box(width(14px)), left(:item), cost..., Box(width(28px)))
   Row(look..., padding(10px, 0px), child_gap=10px, name="Headings",
     Box(width(14px)), left(:item), Row(fixed(52px), height(grow=grow), Alignment.Center, clip=true, head(v, :extra, :start)),
-    right(fixed(AMOUNT_W), :amount), (has_price(v) ? (right(fixed(96px), ours(:price)),) : ())..., right(fixed(88px), ours(:cost)),
+    right(fixed(AMOUNT_W), :amount), (has_price(v) ? (right(fixed(96px), ours(:price)),) : ())..., cost...,
     Box(width(28px)))   # over the buttons that remove a measure
 end
 
@@ -5853,12 +6037,17 @@ table(v::TakeoffView, rows; tall=false) =
            background(colours.bg), clip=true, name="Measures",
       table_head(v), rows, adders(v)))
 
-"The button at the foot of the table that starts a new measure"
+"""
+The buttons at the foot of the table that start a new measure. One starts a
+measure that you describe in words. The other starts one for an item of
+Centient's catalogue, and shows only on a Mac that has Centient.
+"""
 adders(v::TakeoffView) =
   Row(width(grow=grow), height(36px), padding(6px, 0px), child_gap=2px, Alignment.Center, border(1px, :solid, colours.line)[:top],
     button!(v, :add, :add, icon="plus-lg", words="Add a measure",
-            tip=Centient.available() ? "Choose an item. Its unit chooses the tool: count, length or area." :
-                                       "Then choose a tool: count, length or area"))
+            tip="Say what it measures. Then choose a tool: count, length or area."),
+    (Centient.available() ? (button!(v, :add_item, :add_item, icon="box-seam", words="Add from catalogue",
+                                     tip="Choose an item of Centient's catalogue. Its unit chooses the tool."),) : ())...)
 
 "The rows of the table of measures: those that the columns' searches keep, in the order of the column that's sorted"
 measure_rows(v::TakeoffView) = begin
@@ -5871,13 +6060,15 @@ end
 "The line at the foot of the block: the customer, what the measures come to, and the button that makes the quote"
 foot(v::TakeoffView) = begin
   t = v.data
-  total, priced = 0.0, false
+  total, priced, all_priced = 0.0, false, true
   for m in t.measures
     amount, row = Plans.amount(t, m), known(v, m.item)
-    (amount === nothing || row === nothing) && continue
+    (amount === nothing || row === nothing) && (all_priced = false; continue)
     total += cost_of(m, amount, row)
     priced = true
   end
+  # The total is of the measures that have an item. While a measure has none, the words say that the total leaves it out.
+  total_words = all_priced ? "At catalogue prices" : "Catalogue items only"
   asking = v.asking == (:customer,)
   busy = v.quoting !== nothing
   said = isempty(v.said) ? (isempty(t.made) ? "" : "Quote $(t.made)") : v.said
@@ -5891,7 +6082,7 @@ foot(v::TakeoffView) = begin
   # In the panel beside a plan that fills the window, each part of the foot has a line of its own
   v.beside && return Column(width(grow=grow), Alignment.Start, padding(10px, 8px), child_gap=6px, line,
     Row(width(grow=grow), height(28px), child_gap=8px, Alignment.Center, Icon("person", size=14px, color=colours.dim), customer),
-    (priced ? (Row(width(grow=grow), height(22px), Alignment.Center, Box(label("At catalogue prices", 12px, color=colours.dim)),
+    (priced ? (Row(width(grow=grow), height(22px), Alignment.Center, Box(label(total_words, 12px, color=colours.dim)),
                    Box(width(grow=grow)), Box(label(dollars(total), 13px, weight="Semibold"))),) : ())...,
     (isempty(said) ? () : (Box(width(grow=grow), Alignment.Start, Text(said, size=12px, family=SANS, color=colour, wrap=WrapMode.words)),))...,
     Row(width(grow=grow), justify=Alignment.End, maker))
@@ -5899,7 +6090,7 @@ foot(v::TakeoffView) = begin
     Icon("person", size=14px, color=colours.dim), customer,
     Row(width(grow=grow), clip=true, justify=Alignment.End, Box(label(said, 12px, color=colour))),
     # The catalogue's prices, before the GST and the margins that Centient adds to a quote
-    (priced ? (label("At catalogue prices", 12px, color=colours.dim), label(dollars(total), 13px, weight="Semibold")) : ())...,
+    (priced ? (label(total_words, 12px, color=colours.dim), label(dollars(total), 13px, weight="Semibold")) : ())...,
     maker)
 end
 
@@ -5975,7 +6166,7 @@ when that does.
 shown_state(v::TakeoffView) = begin
   e = editor(v)
   (Plans.written(v.data), v.asking, v.current, v.filters, v.full, v.known, v.quoting === nothing, v.said, v.sort,
-   v.tool, v.wrong, e.width, e.zoom, window_size(e), plan_path(v), plan_size(v), plan_pages(v), Centient.available(),
+   v.tool, v.snap, v.wrong, e.width, e.zoom, window_size(e), plan_path(v), plan_size(v), plan_pages(v), Centient.available(),
    ntuple(k -> getfield(colours, k), nfields(colours)))
 end
 
@@ -12322,7 +12513,11 @@ end
 # click again to hide it. Text that the code printed shows before the value.
 # A value has the colours that a code block gives Julia code: its numbers, its
 # strings and the names of its types.
-# What went wrong shows in red. A value that's a UI node shows as the node. A
+# What went wrong shows in red. A value that's a UI node shows as the node. The
+# box of a function opens to show its documentation and a table of its methods.
+# The box of a module opens to show its readme, or its documentation when it has
+# no readme, and a table of the names that it defines, with a field that
+# searches them. A
 # check mark means that the code came to nothing and printed nothing. Code that
 # ends with a semicolon shows no value, as it does at Julia's prompt.
 #
@@ -12350,6 +12545,7 @@ outcome_face(size, ink=colours.ink) = Face(codefont(), codestyle(), size, ink, f
   printed::Int = 0                  # how many lines of it, from the first, are text that the code printed
   failed::Bool = false
   node::Any = nothing               # a Shown, when the value is a UI node
+  subject::Any = nothing            # the value itself, when it's a function or a module, which has more to show than its text
   open::Bool = false                # the rest shows under the box
   body::Any = nothing               # the OutcomeBody that shows the rest
   # Each frame sets these, for the room that the window has
@@ -12364,6 +12560,7 @@ end
 "What shows under the box of an outcome that's open: the rest of the value, or the node that the value is"
 @def mutable struct OutcomeBody <: SemanticUI
   of::Any = nothing
+  detail::Any = nothing   # the Detail of a function or a module, made when the box first opens
 end
 
 """
@@ -12513,9 +12710,11 @@ outcome!(e, r::UnitRange{Int}, code::String=join(e.buf.lines[r], "\n")) = begin
   end
   said = String(rstrip(printed))
   full = clipped(join(filter(!isempty, [said, text]), "\n"))
+  subject = !failed && value isa Union{Function,Module} ? value : nothing
   # A node shows at once, because its name alone says little
   o = own!(e, Outcome(first=first(r), last=last(r), code=was, total=length(b.lines), brief=String(first(split(full, '\n'))),
-                      full=full, printed=isempty(said) ? 0 : count('\n', said) + 1, failed=failed, node=node, open=node !== nothing))
+                      full=full, printed=isempty(said) ? 0 : count('\n', said) + 1, failed=failed, node=node, subject=subject,
+                      open=node !== nothing))
   list = outcomes(e)
   # It takes the place of what any of those lines came to before
   Base.filter!(p -> p.last < o.first || p.first > o.last, list)
@@ -12626,12 +12825,13 @@ outcome_over(e) = begin
     # The box of an outcome that's open shows the first line, so the rest starts at the second
     o.rest = o.shown == o.brief ? String(chopprefix(chopprefix(o.full, o.brief), "\n")) : o.full
     o.from = o.shown == o.brief ? 2 : 1
-    o.more = o.node !== nothing || !isempty(o.rest)
+    o.more = o.node !== nothing || o.subject !== nothing || !isempty(o.rest)
     o.size, o.high = size, high
     push!(boxes, at(top, left, o))
     (o.open && o.more) || continue
     o.body === nothing && (o.body = own!(e, OutcomeBody(of=o)))
-    across = (o.node === nothing ? wide * maximum(length, split(o.rest, '\n')) : OUTCOME_NODE_W) + 22px
+    across = o.subject !== nothing ? detail_wide(e) + 2px :
+             (o.node === nothing ? wide * maximum(length, split(o.rest, '\n')) : OUTCOME_NODE_W) + 22px
     push!(bodies, at(top + high + 3px, max(side + 8px, min(left, w - across - OUTCOME_EDGE)), o.body))
   end
   # The rest of an open outcome goes over the boxes of the lines under it
@@ -12675,6 +12875,7 @@ end
 
 describe(d::OutcomeBody) = begin
   o = d.of
+  o.subject === nothing || return detail_view(editor(d), d)
   inner = o.node !== nothing ? Box(fixed(OUTCOME_NODE_W), Alignment.Start, o.node) :
           Column(Alignment.Start, [value_row(line, o, code=isvalue(o, o.from + k - 1)) for (k, line) in enumerate(split(o.rest, '\n'))]...)
   Box(padding(10px, 8px), radius(7px), background(colours.float), border(1px, :solid, colours.line), lifted, Alignment.Start,
@@ -12689,6 +12890,648 @@ onmouse(::Outcome, ::MouseMove) = handled
 # A click on the rest is not a click on the text under it
 onkey(::OutcomeBody, ::KeyPress{Keys.mouse_left}) = handled
 onmouse(::OutcomeBody, ::MouseMove) = handled
+# The wheel moves through the documentation and the table of a function or a module, not through the page under them
+onscroll(d::OutcomeBody, ev::MouseScroll) = begin
+  d.detail === nothing && return nothing
+  s = d.detail.scroll
+  s.offset = clamp(s.offset - ev.delta[2] * 30, 0px, max(0px, s.content_height - s.viewport))
+  handled
+end
+
+# --- what a function and a module have to show -----------------------------------------------
+#
+# The open box of a function shows the function's documentation as it reads,
+# and under it a table of the function's methods: what each one takes, and the
+# module, the file and the line that it's in.
+#
+# The open box of a module shows the module's readme, from the folder of its
+# code or a folder above that. A module with no readme shows its documentation.
+# Under that is a table of the names that the module defines, with what kind of
+# thing each one is. A field over the table searches the names. While it has
+# words in it, the box shows only the names that have them.
+#
+# The table of a module's names has a heading over each column: Name, Kind and
+# About. A click on a heading opens a menu, as a heading of a takeoff's table
+# does. The menu has the column's two orders, and a way to show fewer rows: a
+# field that keeps the rows that have its words in that column, or for Kind a
+# list of the kinds to show. Return keeps what the field holds, and esc puts
+# back what it held before. A heading whose column shows fewer rows is in the
+# accent colour.
+#
+# A click on a name in that table shows the name's value under its row, and a
+# second click hides it: the documentation and the methods of a function, a
+# type as code declares it, with its fields inside, and its documentation, the
+# names of a module, and any other value as Julia writes it. One name shows its
+# value at a time.
+
+const DETAIL_W = 660px      # the widest that the open box of a function or a module is
+const DETAIL_H = 430px      # the tallest that its documentation and table are. The wheel moves through the rest.
+const DETAIL_ROW = 24px     # the height of a row of its table
+const DETAIL_HEAD = 34px    # the height of the words over the table
+const DETAIL_PAD = 14px     # on each side of what it shows
+const SEARCH_H = 34px       # the height of the field that searches a module's names
+
+"What the open box of a function or a module shows: its documentation as it reads, and a table under that"
+mutable struct Detail
+  of::Any                           # the function, the module or the other value that it's about
+  lines::Vector{String}             # the documentation, as Markdown
+  page::Any                         # those lines laid out, as a FilePage, or nothing when there are none
+  key::Any                          # what they were laid out for: a width, and the size, colours and font of the page's text
+  rows::Vector{NTuple{3,String}}    # the table. A method: what it takes, "", and where it is. A name: the name, its kind, and more about it.
+  what::String                      # what a row is: "method", "name" or "field", or "" for no table
+  scroll::Scroll
+  search::Any                       # the text field that searches the table of a module, or nothing
+  sought::Any                       # what the rows were last found for: the field's words, the order, and what each column keeps
+  found::Vector{Int}                # the rows that the table shows, in the order that it shows them
+  sort::Any                         # the column that the rows are in order of and :asc or :desc, or nothing for the order of the names
+  filters::Dict{Int,String}         # the words that a column's rows must have, for each column that has some
+  only::Set{String}                 # the kinds of name that show. Every kind shows while it's empty.
+  asking::Int                       # the column whose menu is open, or 0
+  was::String                       # what that column's field held when the menu opened, which esc puts back
+  field::Any                        # the text field of the menu
+  heads::Dict{Any,Any}              # the nodes of the headings and of the menu's lines
+  open::Int                         # the row of a module's table whose value shows under it, or 0
+  inner::Any                        # the Detail of that value
+  parts::Dict{Int,Any}              # the node of each row of a module's table that has been in view. It takes the row's clicks.
+  wide::px                          # how wide the rows were last drawn
+end
+
+Detail(of, lines, rows, what; search=nothing) =
+  Detail(of, lines, nothing, nothing, rows, what, Scroll(width(grow=grow), height(grow=grow)), search, nothing, Int[],
+         nothing, Dict{Int,String}(), Set{String}(), 0, "", nothing, Dict{Any,Any}(), 0, nothing, Dict{Int,Any}(), 0px)
+
+"A row of a module's table of names. A click on it shows the name's value under it, or hides it."
+@def mutable struct NameRow <: SemanticUI
+  of::Any = nothing   # the OutcomeBody that the table is in
+  i::Int = 0          # which row of the table
+end
+
+"How wide the open box of a function or a module is: as wide as the window has room for, up to `DETAIL_W`"
+detail_wide(e) = (w = window_size(e)[1]; clamp(w - panel_w(e) * opened(e) - 2OUTCOME_EDGE - 16px, 280px, DETAIL_W))
+
+"""
+The documentation that Julia has for the name `name` of the module `m`, as
+Markdown: each piece that a module that's loaded wrote for it. Julia writes
+what a function takes on lines that start with four spaces. They become a
+block of Julia code, so they have its colours. A note's words, which start with
+four spaces too, stay words.
+"""
+doc_lines(m::Module, name::Symbol) = begin
+  binding = Base.Docs.Binding(m, name)
+  lines = String[]
+  for mod in Base.Docs.modules
+    multi = get(Base.invokelatest(Base.Docs.meta, mod), binding, nothing)
+    multi === nothing && continue
+    for sig in multi.order
+      doc = multi.docs[sig]
+      text = isempty(doc.text) ? string(doc.object) : join(doc.text)
+      isempty(strip(text)) && continue
+      isempty(lines) || append!(lines, ["", "---", ""])
+      incode = fenced = noting = false
+      for line in split(rstrip(text), '\n')
+        startswith(line, "```") && (fenced = !fenced; line = fenced ? "```julia" : "```")
+        # A note starts with a line like `!!! note`, and its words are on lines that start with four spaces
+        note = fenced ? nothing : match(r"^!!! +(\w+)", line)
+        note === nothing || (noting = true; line = "**" * titlecase(note[1]) * "**")
+        noting && note === nothing && !isempty(strip(line)) && !startswith(line, "    ") && (noting = false)
+        noting && note === nothing && (line = lstrip(line))
+        indented = !fenced && !noting && startswith(line, "    ")
+        indented && !incode && push!(lines, "```julia")
+        !indented && incode && !isempty(strip(line)) && (push!(lines, "```"); incode = false)
+        incode |= indented
+        (incode && isempty(strip(line))) || push!(lines, indented ? String(chopprefix(line, "    ")) : String(line))
+      end
+      incode && push!(lines, "```")
+    end
+  end
+  lines
+end
+
+"The lines of the readme of the module `m`, or nothing when it has none: a file called readme in the folder of its code, or in a folder above that"
+readme_lines(m::Module) = begin
+  # Kip knows the file of a module that it loaded. Julia knows the file of a package.
+  file = something(findfirst(mod -> mod === m, Kip.modules), pathof(m), Some(nothing))
+  file === nothing && return nothing
+  dir = dirname(file)
+  # A package keeps its code in a folder of its own, so its readme can be a folder or two up
+  for _ in 1:3
+    isdir(dir) || break
+    k = findfirst(name -> occursin(r"^readme(\.md|\.markdown|\.txt)?$"i, name), readdir(dir))
+    if k !== nothing
+      found = try reading(joinpath(dir, readdir(dir)[k]), tidy=false) catch; nothing end
+      return found === nothing ? nothing : found[1]
+    end
+    # The folder that holds a package or a repository is as far up as its readme can be
+    (ispath(joinpath(dir, ".git")) || isfile(joinpath(dir, "Project.toml"))) && break
+    dir = dirname(dir)
+  end
+  nothing
+end
+
+"One row of the table for each method of `f`: what it takes, and the module, the file and the line that it's in"
+method_rows(f) = map(collect(Base.invokelatest(methods, f))) do m
+  takes = String(first(split(Base.invokelatest(sprint, show, m), " @ ")))
+  (takes, "", string(m.module, " · ", basename(string(m.file)), ":", m.line))
+end
+
+"What kind of thing the value `v` is, which a module calls `name`"
+kind_of(name::String, v) =
+  startswith(name, '@') ? "macro" : v isa Module ? "module" : v isa Function ? "function" :
+  v isa Type ? (isabstracttype(v) ? "abstract type" : "type") : "value"
+
+const documents = Ref{Any}((0, Dict{Any,Vector{Any}}()))
+
+"""
+The documentation that each module that's loaded has, by the name that it's
+for. It's read once and kept until something makes a new name or a new
+method, so that the table of a big module like Base is made in a moment.
+"""
+documented() = begin
+  world = Base.get_world_counter()
+  documents[][1] == world && return documents[][2]
+  found = Dict{Any,Vector{Any}}()
+  for mod in Base.Docs.modules, (binding, multi) in Base.invokelatest(Base.Docs.meta, mod)
+    push!(get!(() -> Any[], found, binding), multi)
+  end
+  documents[] = (world, found)
+  found
+end
+
+"""
+The first sentence of the documentation that Julia has for the name `name` of
+the module `m`, or "" when it has none. The lines that say what a function
+takes, and blocks of code, aren't sentences.
+"""
+doc_sentence(m::Module, name::Symbol) = begin
+  for multi in get(documented(), Base.Docs.Binding(m, name), ())
+    for sig in multi.order
+      doc = multi.docs[sig]
+      words, fenced = "", false
+      for line in split(isempty(doc.text) ? string(doc.object) : join(doc.text), '\n')
+        startswith(line, "```") && (fenced = !fenced; continue)
+        plain = strip(line)
+        # A sentence can run over two or three lines, and stops at a blank line
+        (fenced || startswith(line, "    ") || startswith(plain, '#') || startswith(plain, "!!!")) && (isempty(words) ? continue : break)
+        isempty(plain) && (isempty(words) ? continue : break)
+        words = isempty(words) ? String(plain) : words * " " * plain
+        (occursin(". ", words) || endswith(words, '.') || length(words) > 160) && break
+      end
+      isempty(words) && continue
+      stop = findfirst(". ", words)
+      words = stop === nothing ? words : words[1:first(stop)]
+      return length(words) > 120 ? first(words, 119) * "…" : words
+    end
+  end
+  ""
+end
+
+"""
+A few words about the value `v`, which the module `m` calls `name`, for the
+About column of the table of the module's names. They're the first sentence of
+its documentation. A name with no documentation has what can be said without
+it: how many methods a function has, what a type is a kind of, and any other
+value as Julia writes it, or its type and size when it's big.
+"""
+about(m::Module, name::Symbol, v) = begin
+  if v isa Union{Function,Module,Type}
+    # A name that a module borrows has its documentation where the thing was made
+    words = try doc_sentence(parentmodule(v), nameof(v)) catch; "" end
+    isempty(words) && (words = try doc_sentence(m, name) catch; "" end)
+    isempty(words) || return words
+    v isa Function && return (n = length(Base.invokelatest(methods, v)); n == 1 ? "1 method" : "$n methods")
+    v isa DataType && supertype(v) !== Any && return "a kind of $(supertype(v))"
+    return ""
+  end
+  # A small value is written out. A big one is named by its type and its size: its row shows all of it when it's open.
+  text = try
+    v isa Union{Number,Symbol,Char,Nothing,Missing} ? repr(v) :
+    v isa AbstractString ? repr(length(v) > 60 ? first(v, 60) * "…" : v) :
+    v isa Union{AbstractArray,AbstractDict,AbstractSet} ? Base.invokelatest(summary, v) : string(typeof(v))
+  catch
+    string(typeof(v))
+  end
+  text = replace(text, r"\s*\n\s*" => " ")
+  length(text) > 80 ? first(text, 79) * "…" : text
+end
+
+"One row of the table for each name that the module `m` defines: the name, its kind, and more about it"
+name_rows(m::Module) = begin
+  rows = NTuple{3,String}[]
+  for name in sort!(Base.invokelatest(names, m, all=true), by=n -> lowercase(lstrip(string(n), ('@', '_'))))
+    s = string(name)
+    (startswith(s, '#') || name in (:eval, :include, nameof(m))) && continue
+    (Base.invokelatest(isdefined, m, name) && !Base.isdeprecated(m, name)) || continue
+    v = Base.invokelatest(getglobal, m, name)
+    push!(rows, (s, kind_of(s, v), about(m, name, v)))
+  end
+  rows
+end
+
+"What the open box of the function `f` shows"
+Detail(f::Function) = Detail(f, doc_lines(parentmodule(f), nameof(f)), method_rows(f), "method")
+
+"What the open box of the module `m` shows"
+Detail(m::Module) = begin
+  lines = something(readme_lines(m), doc_lines(parentmodule(m), nameof(m)))
+  search = TextInput(placeholder="Search the names", font_family=SANS, font_size=13px,
+                     look=(_, text) -> Row(width(grow=grow), height(grow=grow), clip=true, text))
+  Detail(m, lines, name_rows(m), "name"; search)
+end
+
+"""
+The type `T` as Julia code declares it: `struct`, `mutable struct`, `abstract
+type` or `primitive type`, its name with its parameters, what it's a kind of
+when that isn't `Any`, and a line for each field with the field's type.
+"""
+declaration(T::Type) = begin
+  inside = Base.unwrap_unionall(T)
+  inside isa DataType || return [string(T)]
+  name = string(nameof(inside)) * (isempty(inside.parameters) ? "" : "{" * join(inside.parameters, ", ") * "}")
+  supertype(inside) === Any || (name *= " <: $(supertype(inside))")
+  isabstracttype(inside) && return ["abstract type $name end"]
+  isprimitivetype(inside) && return ["primitive type $name $(8sizeof(inside)) end"]
+  fields = ["  " * (isconst(inside, i) && ismutabletype(inside) ? "const " : "") * "$(fieldname(inside, i))::$(fieldtype(inside, i))"
+            for i in 1:fieldcount(inside)]
+  [(ismutabletype(inside) ? "mutable struct " : "struct ") * name, fields..., "end"]
+end
+
+"What shows of the type `T` under its name in a module's table: the type as code declares it, with its fields, and its documentation"
+Detail(T::Type) = begin
+  lines = ["```julia", declaration(T)..., "```"]
+  doc = try doc_lines(parentmodule(T), nameof(T)) catch; String[] end
+  isempty(doc) || append!(lines, ["", doc...])
+  Detail(T, lines, NTuple{3,String}[], "")
+end
+
+"What shows of any other value under its name in a module's table: its type, and the value as Julia writes it"
+Detail(v) = begin
+  text = try clipped(value_text(v)) catch; "" end
+  Detail(v, ["`$(typeof(v))`", "", "```julia", String.(split(text, '\n'))..., "```"], NTuple{3,String}[], "")
+end
+
+"Show the value of row `i` of the table of the module's box `d` under the row, or hide it when it shows already"
+open_row!(d::OutcomeBody, i::Int) = begin
+  t = d.detail
+  if t.open == i
+    t.open, t.inner = 0, nothing
+    return
+  end
+  inner = try
+    Base.invokelatest(Detail, Base.invokelatest(getglobal, t.of, Symbol(t.rows[i][1])))
+  catch err
+    Detail(nothing, [sprint(showerror, err)], NTuple{3,String}[], "")
+  end
+  inner.search = nothing   # the table under a row has no search of its own
+  t.open, t.inner = i, inner
+end
+
+"Lay out the documentation of `t` for a box that's `wide`, if it isn't laid out for that yet. Its text is a little smaller than the page's."
+page!(e, t::Detail, wide) = begin
+  key = (wide, e.zoom, e.theme, e.font, e.weight)
+  (t.key == key || isempty(t.lines)) && return t
+  kinds = classify(t.lines)
+  zoom = e.zoom
+  e.zoom = zoom * PAGE_ZOOM
+  # -1 says that a line isn't one of the document's, so its inline code isn't run
+  flows = try
+    [laid(e, t.lines[i], kinds[i], false, -1, wide) for i in eachindex(t.lines)]
+  finally
+    e.zoom = zoom
+  end
+  tops = accumulate(+, map(tall, flows)) .- map(tall, flows)
+  t.page = FilePage(flows, tops, sum(tall, flows, init=0px), false, t.scroll)
+  t.key = key
+  t
+end
+
+"A name as the table puts it in order: without its capitals, and without the @ or the _ that it starts with"
+sort_words(text) = lowercase(lstrip(text, ('@', '_')))
+
+"True while the table of `t` shows fewer rows than it has: the search field has words, or a column keeps only some rows"
+narrowed(t::Detail) = t.sought !== nothing && (!isempty(t.sought[1]) || !isempty(t.sought[3]) || !isempty(t.sought[4]))
+
+"""
+The rows that the table of `t` shows, in the order that it shows them. They
+are the rows whose names have the search field's words, that have each
+column's words in that column, and whose kind is one that shows. They're in
+the order of the column that's chosen. With none chosen, they're in the order
+of the names, and while the search field has words, the names that start with
+the words come first.
+"""
+sought!(t::Detail) = begin
+  words = t.search === nothing ? "" : String(lowercase(strip(t.search.text)))
+  key = (words, t.sort, copy(t.filters), copy(t.only))
+  key == t.sought && return t.found
+  # A new search starts at the top of what it finds
+  t.sought === nothing || (t.scroll.offset = 0px)
+  keep = [i for (i, row) in enumerate(t.rows) if
+            occursin(words, sort_words(row[1])) &&
+            all(((column, has),) -> occursin(lowercase(has), lowercase(row[column])), t.filters) &&
+            (isempty(t.only) || row[2] in t.only)]
+  if t.sort !== nothing
+    column, way = t.sort
+    sort!(keep, by=i -> sort_words(t.rows[i][column]), rev=way == :desc)
+  elseif !isempty(words)
+    starts(i) = startswith(sort_words(t.rows[i][1]), words)
+    keep = [filter(starts, keep); filter(!starts, keep)]
+  end
+  t.sought, t.found = key, keep
+  keep
+end
+
+"""
+One row of the table of `t`, in a box that's `wide`. `open` says whether the
+row's value shows under it, for a row that a click opens: such a row starts
+with an arrow. `lit` is true while the mouse is over it.
+"""
+detail_row(e, t::Detail, row::NTuple{3,String}, wide; open=nothing, lit=false) = begin
+  code = Face(codefont(), codestyle(), body(e).size * 0.72, colours.ink, false)
+  cell = measure(code, "0")
+  small = 11px
+  short(text, room) = (n = max(1, floor(Int, num(room) / num(cell))); length(text) > n ? first(text, n - 1) * "…" : text)
+  plain = Face(SANS, "", small, colours.dim, false)
+  # Words that are too long for their column stop with an …
+  fit(text, room) = begin
+    while measure(plain, text) > room && length(text) > 1
+      text = first(text, max(1, floor(Int, (length(text) - 1) * num(room) / num(measure(plain, text))) - 1)) * "…"
+    end
+    text
+  end
+  words(text, room) = Row(fixed(room), height(DETAIL_ROW), Alignment.Center, clip=true, spared(fit(text, room), plain)...)
+  # As tall as the row, so that the tails of letters like g and y aren't cut off
+  parts(text, room) = Row(fixed(room), height(DETAIL_ROW), Alignment.Center, clip=true,
+    [part for tok in tokens(short(text, room), "julia") for part in coloured(tok, code)]...)
+  if isempty(row[2])
+    # What a method takes, or the name of a field, has most of the row. Where the method is, or the field's type, has the rest.
+    place = min(measure(plain, row[3]) + 4px, wide * 0.4)
+    return Row(width(grow=grow), height(DETAIL_ROW), Alignment.Center, child_gap=10px, parts(row[1], wide - place - 10px), words(row[3], place))
+  end
+  arrow = open === nothing ? 0px : 16px
+  name, kind = wide * 0.4, 96px
+  Row(width(grow=grow), height(DETAIL_ROW), Alignment.Center, child_gap=10px, radius(4px), background(lit ? colours.hover : clear),
+      (open === nothing ? () : (Box(fixed(arrow - 10px), Icon(open ? "chevron-down" : "chevron-right", size=9px, color=colours.dim)),))...,
+      parts(row[1], name - arrow), words(row[2], kind),
+      # A value is code, and the words about anything else are a sentence
+      (row[2] == "value" ? parts : words)(row[3], wide - name - kind - 20px))
+end
+
+"The node of row `i` of the table of the module's box `d`"
+name_row!(d::OutcomeBody, i::Int) = get!(() -> own!(d, NameRow(of=d, i=i)), d.detail.parts, i)
+
+describe(r::NameRow) = (t = r.of.detail; detail_row(editor(r), t, t.rows[r.i], t.wide; open=t.open == r.i, lit=ishovered(r)))
+cursor(::NameRow) = :hand
+onkey(r::NameRow, ::KeyPress{Keys.mouse_left}) = (open_row!(r.of, r.i); handled)
+onmouse(::NameRow, ::MouseMove) = handled
+onscroll(r::NameRow, ev::MouseScroll) = onscroll(r.of, ev)
+
+"""
+The lines of `page` that are between `from` and `to` under its top, with room
+for the lines that aren't: the part of some documentation that's in view.
+"""
+page_part(e, page, from, to) = begin
+  (to <= 0px || from >= page.tall) && return (spacer(page.tall),)
+  lo = something(findlast(<=(from), page.tops), 1)
+  hi = something(findfirst(>(to), page.tops), length(page.tops) + 1) - 1
+  (spacer(page.tops[lo]), [describe(e, Item(0, 0, 0px, tall(f), f), f) for f in page.flows[lo:hi]]...,
+   spacer(page.tall - page.tops[hi] - tall(page.flows[hi])))
+end
+
+"""
+The rows of a table of `n` rows that are between `from` and `to` under its
+top, with room for the rows that aren't. `row(k)` makes row `k`.
+"""
+rows_part(row, n::Int, from, to) = begin
+  lo = clamp(floor(Int, num(from) / num(DETAIL_ROW)) + 1, 1, n + 1)
+  hi = clamp(ceil(Int, num(to) / num(DETAIL_ROW)), lo - 1, n)
+  (spacer(DETAIL_ROW * (lo - 1)), [row(k) for k in lo:hi]..., spacer(DETAIL_ROW * (n - hi)))
+end
+
+"The words over the table of `t`: how many rows it has, or how many of them `n` rows are"
+count_words(t::Detail, n::Int=length(t.rows)) =
+  n < length(t.rows) || narrowed(t) ? "$n of $(length(t.rows)) $(t.what)s" : n == 1 ? "1 $(t.what)" : "$n $(t.what)s"
+
+"The words over a table, in a row of their own"
+table_head(words) = Row(width(grow=grow), height(DETAIL_HEAD), Alignment.Center, label(words, 12px, color=colours.dim, weight="Semibold"))
+
+"How tall the documentation of `t` is, with the space under it"
+doc_tall(t::Detail) = t.page === nothing ? 0px : t.page.tall + TEXT_PAD
+
+"How tall what shows under an open row is: the documentation of the row's value, and the table of its methods or its fields"
+inner_tall(t::Detail) = TEXT_PAD + doc_tall(t) + (isempty(t.rows) ? 0px : DETAIL_HEAD + DETAIL_ROW * length(t.rows))
+
+const INNER_X = 22px   # how far in from the table what shows under an open row is
+
+# --- the headings of a module's table of names ---------------------------------------------
+
+const NAMES_KEY = :names_column
+const NAME_COLUMNS = ("Name", "Kind", "About")
+
+"The heading of a column of a module's table of names. A click on it opens the column's menu."
+@def mutable struct NameHead <: SemanticUI
+  of::Any = nothing   # the OutcomeBody that the table is in
+  column::Int = 1
+end
+"The menu of a column of a module's table: its two orders, and what narrows it"
+@def mutable struct NameMenu <: SemanticUI
+  of::Any = nothing
+  column::Int = 1
+end
+"One of the two orders in the menu of a column"
+@def mutable struct NameSort <: SemanticUI
+  of::Any = nothing
+  way::Symbol = :asc
+end
+"A kind of name in the menu of the Kind column. A click on it shows that kind, or stops showing it."
+@def mutable struct KindRow <: SemanticUI
+  of::Any = nothing
+  kind::String = ""
+end
+
+"Keep only the rows that have `words` in the column `column`. No words takes that away."
+keep!(t::Detail, column::Int, words) = begin
+  words = String(strip(words))
+  isempty(words) ? delete!(t.filters, column) : (t.filters[column] = words)
+  t
+end
+
+"The kinds of name that the table of `t` has, in the order of the alphabet"
+kinds_of(t::Detail) = sort!(unique(row[2] for row in t.rows))
+
+"A node of the headings or of the menu of the table that's in the box `d`, kept between frames"
+head_part!(make, d::OutcomeBody, key) = get!(() -> own!(d, make()), d.detail.heads, key)
+
+"The headings over a module's table of names, in a row that's `wide`, with `count` at its right end"
+names_head(d::OutcomeBody, wide, count) = begin
+  name, kind = wide * 0.4, 96px
+  head(column) = head_part!(() -> NameHead(of=d, column=column), d, (:head, column))
+  # Each heading is over its column of the rows under it, which start with an arrow
+  Row(width(grow=grow), height(DETAIL_HEAD), Alignment.Center, child_gap=10px,
+      Box(fixed(6px)), Row(fixed(name - 16px), Alignment.Center, head(1)), Row(fixed(kind), Alignment.Center, head(2)),
+      Row(fixed(wide - name - kind - 20px), Alignment.Center, head(3), Box(width(grow=grow)), Box(label(count, 11px, color=colours.dim))))
+end
+
+describe(h::NameHead) = begin
+  t = h.of.detail
+  way = t.sort !== nothing && t.sort[1] == h.column ? t.sort[2] : nothing
+  lit = ishovered(h) || t.asking == h.column
+  fewer = haskey(t.filters, h.column) || (h.column == 2 && !isempty(t.only))
+  colour = fewer ? colours.accent : lit || way !== nothing ? colours.ink : colours.dim
+  # The arrow of the order that the column has. With none, the mouse over the heading shows that it opens.
+  mark = way !== nothing ? (Icon(way == :asc ? "chevron-up" : "chevron-down", size=9px, color=colours.ink),) :
+         lit ? (Icon("chevron-down", size=9px, color=colours.faint),) : ()
+  Row(height(20px), child_gap=4px, Alignment.Center, Box(label(NAME_COLUMNS[h.column], 11px, color=colour, weight="Semibold")), mark...)
+end
+
+cursor(::NameHead) = :hand
+onmouse(::NameHead, ::MouseMove) = handled
+onscroll(h::NameHead, ev::MouseScroll) = onscroll(h.of, ev)
+
+onkey(h::NameHead, ev::KeyPress{Keys.mouse_left}) = begin
+  d = h.of
+  t = d.detail
+  t.asking, t.was = h.column, get(t.filters, h.column, "")
+  # The menu's field starts with what the column keeps, which esc puts back
+  t.field === nothing && (t.field = own!(d, TextInput(placeholder="Contains…", font_family=SANS, font_size=13px,
+                                                      look=(_, text) -> Row(width(grow=grow), height(grow=grow), clip=true, text))))
+  t.field.text = t.was
+  t.field.cursor = t.field.anchor = length(t.was)
+  menu = head_part!(() -> NameMenu(of=d), d, :menu)
+  menu.column = h.column
+  # A click outside the menu closes it and keeps what's typed
+  popup!(ev.window, menu, anchor=h, placement=:bottom, gap=6px, width=210px, key=NAMES_KEY,
+         onclose=() -> (t.asking = 0; focus(editor(d))), theme=component_theme(editor(d).zoom))
+  h.column == 2 || focus(t.field)
+  handled
+end
+
+"Close the menu of the table that's in the box `d`, and give the keyboard back to the page"
+close_menu!(d::OutcomeBody) = begin
+  d.detail.asking = 0
+  w = window_of(d)
+  w === nothing || close_popup!(w, NAMES_KEY)
+  focus(editor(d))
+  handled
+end
+
+describe(m::NameMenu) = begin
+  d, c = m.of, found_colours()
+  t = d.detail
+  section(words) = Row(width(grow=grow), height(22px), padding(8px, 0px), Alignment.Center, label(words, 10px, color=c.dim, weight="Semibold"))
+  order(way) = head_part!(() -> NameSort(of=d, way=way), d, (:sort, way))
+  fewer = m.column == 2 ?
+    (section("SHOW"), [head_part!(() -> KindRow(of=d, kind=kind), d, (:kind, kind)) for kind in kinds_of(t)]...) :
+    (section("FILTER FOR"),
+     Box(width(grow=grow), padding(4px, 2px),
+       Box(width(grow=grow), height(28px), padding(8px, 0px), radius(6px), border(1px, :solid, c.line), background(c.frame), t.field)))
+  Box(width(grow=grow), padding(6px), radius(8px), background(c.frame), border(1px, :solid, c.line),
+      shadow(0, 6, 16, RGBA(60 / 255, 45 / 255, 20 / 255, 0.2)), name="Names menu",
+    Column(width(grow=grow), Alignment.Start,
+      section("SORT"), order(:asc), order(:desc),
+      Box(width(grow=grow), height(13px), Alignment.Center, Box(width(grow=grow), height(1px), background(c.rule))),
+      fewer...))
+end
+
+# The menu sees a key before its text field does. Return keeps what the field holds, and esc puts back what it held before.
+onkey(m::NameMenu, ::KeyPress{Keys.enter}) = close_menu!(m.of)
+onkey(m::NameMenu, ::KeyPress{Keys.escape}) = begin
+  t = m.of.detail
+  m.column == 2 || keep!(t, m.column, t.was)
+  close_menu!(m.of)
+end
+
+describe(r::NameSort) = begin
+  t, c = r.of.detail, found_colours()
+  on = t.sort == (t.asking, r.way)
+  Row(width(grow=grow), height(28px), padding(8px, 0px), radius(6px), child_gap=8px, Alignment.Center,
+      background(on || ishovered(r) ? c.pick : c.frame),
+    Icon(r.way == :asc ? "chevron-up" : "chevron-down", size=10px, color=on ? c.ink : c.dim),
+    label(r.way == :asc ? "A–Z" : "Z–A", 13px, color=on ? c.ink : c.dim, weight=on ? "Semibold" : ""))
+end
+
+cursor(::NameSort) = :hand
+onmouse(::NameSort, ::MouseMove) = handled
+# A click on the order that the table has takes it away
+onkey(r::NameSort, ::KeyPress{Keys.mouse_left}) = (t = r.of.detail; t.sort = t.sort == (t.asking, r.way) ? nothing : (t.asking, r.way); handled)
+
+describe(r::KindRow) = begin
+  t, c = r.of.detail, found_colours()
+  on = r.kind in t.only
+  Row(width(grow=grow), height(28px), padding(8px, 0px), radius(6px), child_gap=8px, Alignment.Center,
+      background(ishovered(r) ? c.pick : c.frame),
+    Box(fixed(10px), (on ? (Icon("check", size=10px, color=c.ink),) : ())...),
+    label(r.kind, 13px, color=on || isempty(t.only) ? c.ink : c.dim, weight=on ? "Semibold" : ""))
+end
+
+cursor(::KindRow) = :hand
+onmouse(::KindRow, ::MouseMove) = handled
+# A click shows that kind, or stops showing it. With every kind chosen, or none, every kind shows.
+onkey(r::KindRow, ::KeyPress{Keys.mouse_left}) = begin
+  t = r.of.detail
+  r.kind in t.only ? delete!(t.only, r.kind) : push!(t.only, r.kind)
+  length(t.only) == length(kinds_of(t)) && empty!(t.only)
+  handled
+end
+
+"What shows under an open row, `wide` across: the part of it between `from` and `to` under its top, with room for the rest"
+inner_view(e, t::Detail, wide, from, to) = begin
+  y = TEXT_PAD
+  doc = t.page === nothing ? () : (page_part(e, t.page, from - y, to - y)..., spacer(TEXT_PAD))
+  y += doc_tall(t) + DETAIL_HEAD
+  table = isempty(t.rows) ? () :
+    (table_head(count_words(t)), rows_part(j -> detail_row(e, t, t.rows[j], wide), length(t.rows), from - y, to - y)...)
+  # A line down its left side joins it to its row
+  Column(width(grow=grow), Alignment.Start, padding(0px, 0px, 0px, INNER_X - 2px), border(2px, :solid, colours.line)[:left],
+         spacer(TEXT_PAD), doc..., table...)
+end
+
+"""
+What the open box of a function or a module shows: the search field of a
+module, and under it the documentation and the table, which the wheel moves
+through. Only the lines and the rows in view are made.
+"""
+detail_view(e, d::OutcomeBody) = begin
+  d.detail === nothing && (d.detail = Detail(d.of.subject))
+  t = d.detail
+  t.search === nothing || own!(d, t.search)
+  wide = t.wide = detail_wide(e) - 2DETAIL_PAD
+  page!(e, t, wide)
+  # What the field of a heading's menu holds is what its column keeps, as it's typed
+  t.asking in (1, 3) && t.field !== nothing && keep!(t, t.asking, t.field.text)
+  found = sought!(t)
+  n = length(found)
+  # While the table shows fewer names than it has, the box shows only the names
+  page = narrowed(t) ? nothing : t.page
+  above = page === nothing ? 0px : page.tall + TEXT_PAD
+  # The open row, as its place among the rows that were found. Its value shows under it.
+  k = t.inner === nothing ? nothing : findfirst(==(t.open), found)
+  inner = k === nothing ? nothing : t.inner
+  inner === nothing || page!(e, inner, wide - INNER_X)
+  under = inner === nothing ? 0px : inner_tall(inner)
+  k = something(k, n)
+  total = TEXT_PAD + above + DETAIL_HEAD + DETAIL_ROW * n + under + TEXT_PAD
+  high = min(total, DETAIL_H)
+  from, to = t.scroll.offset, t.scroll.offset + high
+  # Each part starts `y` under the top of all that the wheel moves through
+  y = TEXT_PAD
+  doc = page === nothing ? () : (page_part(e, page, from - y, to - y)..., spacer(TEXT_PAD))
+  y += above + DETAIL_HEAD
+  row(j) = t.what == "name" ? name_row!(d, found[j]) : detail_row(e, t, t.rows[found[j]], wide)
+  before = rows_part(row, k, from - y, to - y)
+  y += DETAIL_ROW * k
+  section = inner === nothing ? () : (inner_view(e, inner, wide - INNER_X, from - y, to - y),)
+  y += under
+  after = rows_part(j -> row(k + j), n - k, from - y, to - y)
+  head = t.what == "name" ? names_head(d, wide, count_words(t, n)) : table_head(count_words(t, n))
+  inside = Column(width(grow=grow), Alignment.Start, padding(DETAIL_PAD, 0px),
+    spacer(TEXT_PAD), doc..., head, before..., section..., after..., spacer(TEXT_PAD))
+  field = t.search === nothing ? () :
+    (Row(width(grow=grow), height(SEARCH_H), Alignment.Center, padding(DETAIL_PAD, 0px), child_gap=8px,
+         border(1px, :solid, colours.line)[:bottom],
+         Icon("search", size=13px, color=colours.dim), Box(width(grow=grow), height(SEARCH_H - 12px), t.search)),)
+  Column(fixed(detail_wide(e)), Alignment.Start, radius(7px), background(colours.float), border(1px, :solid, colours.line), lifted,
+         clip=true, name="Outcome detail",
+         field..., Box(width(grow=grow), height(high), reuse!(t.scroll, inside)))
+end
 
 # --- the names a code block offers -------------------------------------------------------
 #

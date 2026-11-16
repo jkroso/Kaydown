@@ -16,7 +16,7 @@ include("start.jl")
 @use "github.com/jkroso/Font.jl/units" px
 @use "github.com/jkroso/UI.jl/Interface/abstract" focus window_of
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Icon" load_icon
-@use "github.com/jkroso/UI.jl/Interface/draw" frame
+@use "github.com/jkroso/UI.jl/Interface/draw" frame popups
 @use GeometryBasics: Vec2
 # What the live blocks of the example pages load. A file that's loaded now is
 # in the app. The app can't load a file that it hasn't seen.
@@ -195,13 +195,15 @@ warm_up() = begin
   right_click(60, 88); click(80, 104)
   press(Keys.a); press(Keys.escape); press(Keys.escape)
   # The menu of the page: open it and click away, then add a block of each kind from its Insert menu.
-  # Kaydown draws the menu here, 28px for each item, with Insert as its fifth item. A recording is
+  # Kaydown draws the menu, 28px for each item, with Insert as its fifth item. A menu that would run
+  # off the bottom of the window moves up, so `pick` clicks item `k` where the menu is. A recording is
   # left out, since it would record from the microphone while the app is built.
+  pick(k) = (menu = only(p for p in popups(w) if p.key == :menu).scene; click(540, round(Int, menu.top.value) + 1 + 28(k - 1) + 14))
   right_click(500, 300); click(900, 600)
   blocks = [x[1] for x in INSERTS if x isa Tuple]
   for n in eachindex(blocks)
     blocks[n] == "Recording" && continue
-    right_click(500, 300); click(540, 426); click(540, 286 + 28n)
+    right_click(500, 300); pick(5); pick(n)
     # Type in the new block, press Return and type again, then undo it all
     press(Keys.a); press(Keys.enter); press(Keys.b)
     press(Keys.z, Keys.cmd); press(Keys.z, Keys.cmd); press(Keys.z, Keys.cmd); press(Keys.z, Keys.cmd)
@@ -212,14 +214,14 @@ warm_up() = begin
   press(Keys.enter)
   press(Keys.z, Keys.cmd); press(Keys.z, Keys.cmd)
   # A to-do item, then a click on its box to tick it
-  right_click(500, 300); click(540, 426); click(540, 286 + 28 * 7)
+  right_click(500, 300); pick(5); pick(findfirst(==("To-do"), blocks))
   press(Keys.a); press(Keys.up, Keys.cmd)
   x = e.origin[1] + 6px
   y = findfirst(y -> todo_at(e, (x, px(y))) !== nothing, 80:4:780)
   y === nothing || click(x.value, (80:4:780)[y])
   press(Keys.z, Keys.cmd); press(Keys.z, Keys.cmd); press(Keys.z, Keys.cmd)
   # Select All from the menu. Nothing here cuts, copies or pastes, so the clipboard stays as it was.
-  right_click(500, 300); click(540, 342); press(Keys.escape)
+  right_click(500, 300); pick(2); press(Keys.escape)
   press(Keys.backslash, Keys.cmd)
   frame(w)
   press(Keys.o, Keys.cmd); press(Keys.n); press(Keys.escape)

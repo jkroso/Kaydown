@@ -1,5 +1,5 @@
 # Tests for where the colour of the selection goes. See `marks` in main.jl.
-# Run them with `julia --project=. selection_test.jl`. They select text in a
+# Run them with `julia -O0 --project=. selection_test.jl`. They select text in a
 # window that isn't on the screen.
 
 @use Test: @test, @testset

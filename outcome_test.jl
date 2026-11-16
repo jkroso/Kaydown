@@ -1,5 +1,5 @@
 # Tests for the code that runs where it is. See "code that runs where it is" in
-# main.jl. Run them with `julia --project=. outcome_test.jl`. They press keys
+# main.jl. Run them with `julia -O0 --project=. outcome_test.jl`. They press keys
 # and click in a window that isn't on the screen.
 
 @use Test: @test, @testset

@@ -1,6 +1,6 @@
 # Tests for the key bindings: the commands, the bundles of shortcuts, the key
 # bindings page that changes them, and the tabs of the settings window. See
-# "key bindings" in main.jl. Run them with `julia --project=. keys_test.jl`.
+# "key bindings" in main.jl. Run them with `julia -O0 --project=. keys_test.jl`.
 # They use windows that aren't on the screen.
 
 @use Test: @test, @testset, @test_throws

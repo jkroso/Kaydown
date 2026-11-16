@@ -1,6 +1,6 @@
 # Tests for the `takeoff` block of main.jl: the plan, the tools, the list of
 # measures and the work with Centient. Run them with
-# `julia --project=. takeoff_view_test.jl`. They click and type in a window
+# `julia -O0 --project=. takeoff_view_test.jl`. They click and type in a window
 # that isn't on the screen. Centient is centient_fake.jl, so they need no
 # Centient and change no books.
 

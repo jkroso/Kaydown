@@ -1,5 +1,5 @@
 # Tests for a Julia file that the page changes. See "A Julia file is one block
-# of code" in main.jl. Run them with `julia --project=. code_file_test.jl`.
+# of code" in main.jl. Run them with `julia -O0 --project=. code_file_test.jl`.
 # They type and press keys in a window that isn't on the screen.
 
 @use Test: @test, @testset

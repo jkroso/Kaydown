@@ -1,6 +1,6 @@
 # Tests for Kaydown's windows: the settings window that ⌘, opens, ⌘W, and the
 # settings that every window shares. See "windows" and "settings" in main.jl.
-# Run them with `julia --project=. window_test.jl`. They press keys in windows
+# Run them with `julia -O0 --project=. window_test.jl`. They press keys in windows
 # that aren't on the screen, and they don't write the settings file.
 
 @use Test: @test, @testset

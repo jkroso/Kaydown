@@ -1,4 +1,4 @@
-# Tests for pasteboard.jl. Run them with `julia --project=. pasteboard_test.jl`.
+# Tests for pasteboard.jl. Run them with `julia -O0 --project=. pasteboard_test.jl`.
 # They use a clipboard of their own, so the Mac's clipboard stays as it is.
 
 @use Test: @test, @testset

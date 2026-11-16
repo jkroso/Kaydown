@@ -1,5 +1,5 @@
 # Tests for the names that a code block offers while you type. See "the names
-# a code block offers" in main.jl. Run them with `julia --project=. names_test.jl`.
+# a code block offers" in main.jl. Run them with `julia -O0 --project=. names_test.jl`.
 # They type and press keys in a window that isn't on the screen.
 
 @use Test: @test, @testset

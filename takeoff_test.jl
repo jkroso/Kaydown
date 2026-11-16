@@ -1,4 +1,4 @@
-# Tests for takeoff.jl. Run them with `julia --project=. takeoff_test.jl`.
+# Tests for takeoff.jl. Run them with `julia -O0 --project=. takeoff_test.jl`.
 
 @use Test: @test, @testset
 @use "./takeoff" => T

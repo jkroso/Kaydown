@@ -1,4 +1,4 @@
-# Tests for merge.jl and agent.jl. Run them with `julia --project=. merge_test.jl`.
+# Tests for merge.jl and agent.jl. Run them with `julia -O0 --project=. merge_test.jl`.
 
 @use Test: @test, @testset
 @use Random

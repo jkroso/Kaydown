@@ -1,6 +1,6 @@
 # Tests for the `schedule` block of main.jl: the bars of the page's tasks, the
 # links between them, and the days that show beside a to-do item. Run them with
-# `julia --project=. schedule_view_test.jl`. They click and type in a window
+# `julia -O0 --project=. schedule_view_test.jl`. They click and type in a window
 # that isn't on the screen.
 
 @use Test: @test, @testset

@@ -1,5 +1,5 @@
 # Tests for the page of HTML that ⌘⇧E saves. Run them with
-# `julia --project=. html_test.jl`.
+# `julia -O0 --project=. html_test.jl`.
 
 @use Test: @test, @testset
 @use "github.com/jkroso/MiniFB.jl" Window

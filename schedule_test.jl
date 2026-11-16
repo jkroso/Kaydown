@@ -1,4 +1,4 @@
-# Tests for schedule.jl. Run them with `julia --project=. schedule_test.jl`.
+# Tests for schedule.jl. Run them with `julia -O0 --project=. schedule_test.jl`.
 
 @use Test: @test, @testset
 @use Dates: Date, Day

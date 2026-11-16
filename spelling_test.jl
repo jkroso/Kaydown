@@ -1,6 +1,6 @@
 # Tests for the spelling of the page: the red dots under a word that's spelt
 # wrong, and what the page's menu does with it. See "spelling" in main.jl. Run
-# them with `julia --project=. spelling_test.jl`. They draw in a window that
+# them with `julia -O0 --project=. spelling_test.jl`. They draw in a window that
 # isn't on the screen. They teach the Mac's dictionary a made-up word, and they
 # take it out again at the end.
 

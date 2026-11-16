@@ -1,6 +1,6 @@
 # Tests for the view that fills the window with a picture, a diagram, a page
 # of a PDF file or a model. See "a picture, a diagram or a page that fills the
-# window" in main.jl. Run them with `julia --project=. zoom_test.jl`. They
+# window" in main.jl. Run them with `julia -O0 --project=. zoom_test.jl`. They
 # click, pinch and type in a window that isn't on the screen. Set the
 # environment variable ZOOM_SHOTS to a folder to keep a picture of each step.
 

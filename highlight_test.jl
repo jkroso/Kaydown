@@ -1,5 +1,5 @@
 # Tests for the colours of the parts of a line of code. See highlight.jl. Run
-# them with `julia --project=. highlight_test.jl`.
+# them with `julia -O0 --project=. highlight_test.jl`.
 
 @use Test: @test, @testset
 @use "./highlight" tokens

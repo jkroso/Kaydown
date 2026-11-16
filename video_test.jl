@@ -1,6 +1,6 @@
 # Tests for a line that holds only a video file. See "video in the text" and
 # "what was said in a video" in main.jl. Run them with
-# `julia --project=. video_test.jl`. They need ffmpeg to make the video, and
+# `julia -O0 --project=. video_test.jl`. They need ffmpeg to make the video, and
 # macOS to play it. They click in a window that isn't on the screen.
 
 @use Test: @test, @testset

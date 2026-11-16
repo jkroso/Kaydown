@@ -1,4 +1,4 @@
-# Tests for centient.jl. Run them with `julia --project=. centient_test.jl`.
+# Tests for centient.jl. Run them with `julia -O0 --project=. centient_test.jl`.
 # They talk to a small program that answers as Centient's server does, so they
 # need no Centient and change no books.
 

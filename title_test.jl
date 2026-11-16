@@ -1,5 +1,5 @@
 # Tests for the menu of the file's name in the top bar. See "a right-click on
-# the file's name" in main.jl. Run them with `julia --project=. title_test.jl`.
+# the file's name" in main.jl. Run them with `julia -O0 --project=. title_test.jl`.
 # They right-click, type and press keys in a window that isn't on the screen,
 # so the menu is the one that Kaydown draws, not the Mac's own.
 

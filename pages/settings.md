@@ -17,6 +17,19 @@ fonts = unique([page_font(), "Charter", "Helvetica Neue", "Georgia", "Palatino",
 Box(width(240px), Dropdown(options=fonts, families=fonts, selected=1, onchange=dropdown -> page_font!(fonts[dropdown.selected])))
 ```
 
+## Font weight
+
+```ui
+weights = page_weights()
+length(weights) < 2 ? Text("$(page_font()) has one weight for text: $(page_weight()).", size=page_text_size() * 1px) :
+  Box(width(240px), Dropdown(options=weights, selected=something(findfirst(==(page_weight()), weights), 1),
+                             onchange=dropdown -> page_weight!(weights[dropdown.selected])))
+```
+
+The list has the weights that the font has, up to Semibold, by the names that the font gives them. Bold text and headings are heavier than the rest. Most of the fonts above have one weight for text. Helvetica Neue has five, from UltraLight to Medium.
+
+If you choose a font that doesn't have your weight, the text shows the font's nearest weight. Kaydown keeps your choice for the next font that has it.
+
 ## Text size
 
 ```ui

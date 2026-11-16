@@ -86,11 +86,11 @@
 #   - ⌘+ and ⌘- change the text size by a pixel. ⌘0 puts it back.
 #   - ⌘P prints the page, or saves it as a PDF. ⌘⇧E saves it as a page of HTML.
 #   - ⌘, opens the settings in a window of their own, where you choose the
-#     colours, the font, the text size, the width of the page and what the
-#     count at the top right counts. A button there makes Kaydown the app that
-#     opens Markdown files. The tabs at the top of that window show two more
-#     pages: Code editor, for how code shows, and Key bindings, for the keys
-#     of each command. ⌘, again closes that window.
+#     colours, the font and its weight, the text size, the width of the page
+#     and what the count at the top right counts. A button there makes
+#     Kaydown the app that opens Markdown files. The tabs at the top of that
+#     window show two more pages: Code editor, for how code shows, and Key
+#     bindings, for the keys of each command. ⌘, again closes that window.
 #   - On the Key bindings page, choose the keys of VS Code, Sublime Text or
 #     Emacs, or click a command and press the keys you want for it.
 #   - ⌘D selects the word that the caret is in. ⌘D again selects the next
@@ -117,7 +117,7 @@
 @use "github.com/jkroso/UI.jl/Interface/abstract" SemanticUI GeometricUI WrapMode Theme with_theme adopt_theme! light describe describe! reuse! detach! add_child! window_of focus handled carry!
 @use "github.com/jkroso/UI.jl/Interface/draw" ui draw ishovered cursor open_url viewport show_tooltip! hide_tooltip! hittest show_menu! hide_menu! redraw_in! rect popup! close_popup! MouseScroll Pinch onpinch placed! with_clip with_round_clip clipboard!
 @use "github.com/jkroso/UI.jl/Interface/objc" libobjc cls sel msg nsstring jstring with_pool send
-@use "github.com/jkroso/UI.jl/Interface/fonts" skia_font register_font
+@use "github.com/jkroso/UI.jl/Interface/fonts" skia_font register_font weight_of weight_name isitalic installed_faces
 @use "github.com/jkroso/UI.jl/Interface/image" image_aspect image_source has_image
 @use "github.com/jkroso/UI.jl/Interface/inspector" toggle_inspector!
 @use "github.com/jkroso/UI.jl/Interface/window" hide_titlebar! place_window_buttons! drag_window! set_dark! nswindow system_menu
@@ -772,6 +772,7 @@ isspread(g::Grid) = g.head > 0px
   theme::Symbol = :sepia
   applied::Symbol = :none               # the theme the window was last told about
   font::String = SERIF                  # of the page's text
+  weight::Int = 400                     # how heavy the page's text is: the Mac's number for a weight, like 300 for Light. 400 is Regular.
   zoom::Float64 = 1.0
   remember::Bool = false                # write the settings to a file when they change
   settings::Bool = false                # this window opened to show the settings page
@@ -783,6 +784,7 @@ isspread(g::Grid) = g.head > 0px
   indent::Int = 2                       # how many spaces one step of indentation is, in code
   code_scale::Float64 = CODE_SCALE      # how big code is, as a part of the size of the page's text
   code_font::String = CODE_FONT         # the font of code, by the name of its family
+  code_weight::Int = 300                # how heavy code is, like `weight`. A font without Light draws its nearest weight.
   guide::Int = 0                        # a faint line goes down a file of code after this many characters. 0 is no line.
   bundle::String = "Kaydown"            # the bundle of key bindings: the shortcuts of every command
   rebound::Dict{Symbol,String} = Dict{Symbol,String}()   # the shortcuts of each command that has other keys than the bundle's, as the settings file writes them
@@ -980,15 +982,15 @@ input(e) = e.nodes[:input]::TextInput
 # --- faces -----------------------------------------------------------------------------
 
 const TEXT_SIZE = 17px   # of the page's text, before it's zoomed
-body(e) = Face(e.font, "", TEXT_SIZE * e.zoom, colours.ink, false)
+body(e) = Face(e.font, nearest_weight(e.font, e.weight).style, TEXT_SIZE * e.zoom, colours.ink, false)
 const HEADINGS = (2.1, 1.75, 1.4, 1.2, 1.05, 1.0)
 
 "The face a line's plain text is drawn in"
 face(e, line::Line) = begin
   b = body(e)
   k = line.kind
-  k == Kind.heading ? Face(b, style="Bold", size=b.size * HEADINGS[line.level]) :
-  k == Kind.blockquote ? Face(b, style="Italic", color=colours.dim) :
+  k == Kind.heading ? Face(emboldened(b), size=b.size * HEADINGS[line.level]) :
+  k == Kind.blockquote ? Face(b, style=slanted(b.style), color=colours.dim) :
   # Code is the size that the settings page chooses. The markup of a table or a rule is code's usual size.
   k in (Kind.code, Kind.fence) ? Face(b, family=codefont(), style=codestyle(), size=code_size(e)) :
   k in (Kind.table, Kind.rule) ? Face(b, family=codefont(), style=codestyle(), size=b.size * CODE_SCALE) : b
@@ -999,20 +1001,106 @@ face(base::Face, s::Span) = begin
   s.markup && return Face(base, color=colours.faint)
   # Inline code that runs is Julia, so its parts get the colours they have in a code block
   s.code && return Face(codefont(), codestyle(), base.size * 0.86, base.color, true, s.live ? "julia" : "")
-  bold = s.bold || occursin("Bold", base.style)
-  italic = s.italic || occursin("Italic", base.style)
-  style = bold && italic ? "Bold Italic" : bold ? "Bold" : italic ? "Italic" : ""
-  Face(base, style=style, color=!isempty(s.link) ? colours.accent : s.strike ? colours.faint : base.color)
+  f = s.bold ? emboldened(base) : base
+  s.italic && !isitalic(f.style) && (f = Face(f, style=slanted(f.style)))
+  Face(f, color=!isempty(s.link) ? colours.accent : s.strike ? colours.faint : base.color)
 end
+
+# --- the weights of the page's text and of code --------------------------------------
+#
+# The page's text and code can each be lighter or heavier than the font's usual
+# weight. The settings pages list the weights that each font has, up to
+# Semibold, by the names that the font gives them. Code starts in Light, so
+# that it reads lighter than the page's text. Bold text and headings are
+# heavier than the rest: Bold, or Extra bold when the text is Semibold. A font
+# that lacks the weight you chose draws the one nearest to it, and the next
+# font that has the weight draws it again.
+#
+# A weight is kept as the Mac's number for it, like 300 for Light. Fonts don't
+# agree on names: Helvetica Neue's UltraLight is lighter than its Thin, and
+# Charter calls its usual weight Roman. The Mac's numbers don't always agree
+# with the names either: it says that Source Code Pro's ExtraLight weighs 300
+# and its Light 342. So a font's weights are in the order of the Mac's numbers,
+# with the font's own names, and each is drawn by its name.
+
+"What the settings pages call each weight of a font whose faces the Mac hides, like SF Mono, from 100 to 900"
+const WEIGHT_NAMES = ("Thin", "Extra light", "Light", "Regular", "Medium", "Semibold", "Bold", "Extra bold", "Black")
+const HEAVIEST = 650   # the heaviest that the page's text and code can be: Semibold. Heavier text would hide what's bold.
+
+weight_label(w::Integer) = WEIGHT_NAMES[clamp(round(Int, w / 100), 1, length(WEIGHT_NAMES))]
+
+"The style of a face of the weight `w`, as Skia reads it: \"\" for Regular, or like \"Light\" and \"Bold Italic\""
+text_style(w::Integer, italic::Bool=false) = begin
+  name = w == 400 ? "" : weight_name(w)
+  italic ? String(strip("$name Italic")) : name
+end
+
+"The style of the slanted face of `style`, like \"Light Italic\""
+slanted(style::AbstractString) = isempty(style) ? "Italic" : "$style Italic"
+
+"The weight of bold text among text of the weight `w`"
+bolder(w::Integer) = max(700, w + 200)
+
+"The face `f` made bold. A face that's bold already, like a heading's, stays as it is."
+emboldened(f::Face) = begin
+  w = weight_of(f.style)
+  w >= 700 ? f : Face(f, style=text_style(bolder(w), isitalic(f.style)))
+end
+
+"A weight of a font: what the settings pages call it, the style that draws it, and the Mac's number for it"
+const Weight = @NamedTuple{label::String, style::String, weight::Int}
+const font_weights = Dict{String,Vector{Weight}}()
+
+"""
+The weights of `family` that the page's text or code can be in, lightest
+first, by the names that the font gives them. A font whose faces the Mac
+hides, like SF Mono, has the weights that it draws when asked for 100, 200
+and so on. There are none when the Mac has no font of that family.
+"""
+text_weights(family::AbstractString) = get!(font_weights, String(family)) do
+  faces = filter(f -> !f.italic && f.width == Int(Skia.SK_FONT_STYLE_WIDTH_NORMAL), installed_faces(family))
+  found = if isempty(faces)
+    Weight[(label=weight_label(w), style=text_style(w), weight=w) for w in filter(>(0), [installed_weight(family, w) for w in 100:100:900])]
+  else
+    # The usual face draws with no style, as it did before there were weights to choose
+    usual(f) = f.weight == 400 && lowercase(f.name) in ("regular", "roman", "normal")
+    Weight[(label=f.name, style=usual(f) ? "" : f.name, weight=f.weight) for f in faces]
+  end
+  found = sort!(unique(w -> w.weight, found), by=w -> w.weight)
+  light = filter(w -> w.weight <= HEAVIEST, found)
+  # A font that has only heavy weights draws its lightest
+  isempty(light) ? found[1:min(1, end)] : light
+end
+
+"""
+The weight of `family` nearest to `w`: the one that text of the weight `w` is
+drawn in. Of two that are as near, it's the one nearer to Regular.
+"""
+nearest_weight(family::AbstractString, w::Integer) = begin
+  has = text_weights(family)
+  isempty(has) && return (label=weight_label(w), style=text_style(w), weight=Int(w))
+  argmin(x -> (abs(x.weight - w), abs(x.weight - 400)), has)
+end
+
+"The Mac's number for the weight of `family` called `name`, like \"Light\""
+weight_called(family::AbstractString, name::AbstractString) = begin
+  has = text_weights(family)
+  i = findfirst(w -> w.label == name, has)
+  i === nothing && error("The weights of $(font_label(family)) are $(join([w.label for w in has], ", ", " and ")). $name isn't one of them.")
+  has[i].weight
+end
+
+"`w` if text can be that heavy"
+text_weight(w::Integer) = 0 < w <= HEAVIEST ? Int(w) : error("A weight of text goes from 1, the lightest, to $HEAVIEST, which is Semibold. $w isn't one of them.")
 
 piece(text, col, face; atomic=false, n=length(text), link="", node=nothing) = Piece(text, col, n, face, atomic, link, node)
 
 # --- the font of code ------------------------------------------------------------------
 #
 # Code is drawn in a font whose letters are all one width. The settings page
-# lists each such font on the Mac, and code is drawn in the one you choose. It's
-# drawn in the font's light weight when the font has one, as SF Mono has, so
-# that code reads lighter than the page's text.
+# lists each such font on the Mac, and code is drawn in the one you choose, in
+# the weight you choose. Code starts in the font's light weight when the font
+# has one, as SF Mono has, so that code reads lighter than the page's text.
 
 "The weight of the face of `family` nearest to `weight`, or 0 when the Mac has no font of that family"
 installed_weight(family::AbstractString, weight::Integer) = begin
@@ -1027,12 +1115,8 @@ installed_weight(family::AbstractString, weight::Integer) = begin
   w
 end
 
-"The weight that code in `family` is drawn in: Light when the font has it, and its usual weight when it doesn't"
-const code_styles = Dict{String,String}(CODE_FONT => CODE_STYLE)
-code_style(family) = get!(() -> installed_weight(family, 300) == 300 ? "Light" : "", code_styles, family)
-
-"Draw code in the font that `e`'s settings choose, from now until another window starts to draw"
-use_code_font!(e) = (code_type[] = (e.code_font, code_style(e.code_font)); e)
+"Draw code in the font and weight that `e`'s settings choose, from now until another window starts to draw"
+use_code_font!(e) = (code_type[] = (e.code_font, nearest_weight(e.code_font, e.code_weight).style); e)
 
 "True when every letter of `family` is as wide as every other, as in a font for code"
 isfixed(family) = begin
@@ -1136,7 +1220,7 @@ pieces(e, text::String, line::Line, raw::Bool, i::Int=0) = begin
   lead = head(text, line.prefix)
   if k in (Kind.bullet, Kind.ordered, Kind.todo)
     line.level > 0 && push!(out, piece(head(lead, line.level), 0, base))
-    mark = Face(base, style="Bold", color=colours.marker)
+    mark = Face(emboldened(base), color=colours.marker)
     if k == Kind.bullet && !raw
       push!(out, piece("•  ", line.level, mark, atomic=true, n=line.prefix - line.level))
     elseif k == Kind.todo && !raw
@@ -1467,7 +1551,7 @@ grid(e, from::Int, to::Int) = begin
         # The cell with the caret shows its markup, and the spaces typed after its text
         active = caret !== nothing && caret[1] == i && within(cell, caret[2])
         cellpieces(e, i, b.lines[i], cell.lo, active ? max(cell.hi, caret[2]) : cell.hi,
-                   r == 1 ? Face(base, style="Bold") : base, active)
+                   r == 1 ? emboldened(base) : base, active)
       end
     end
     # Each column gets room in proportion to its longest cell
@@ -2334,6 +2418,11 @@ sandbox(e) = get!(e.nodes, :sandbox) do
   # ... and the font of the page's text, by name
   Core.eval(m, :(const page_font = $(() -> (reads!(e, :font); e.font))))
   Core.eval(m, :(const page_font! = $(name -> font!(e, String(name)))))
+  # ... and its weight, by name: `page_weights()` gives the weights that the font has, like "Light" and "Regular",
+  # and `page_weight()` the one that the text is drawn in
+  Core.eval(m, :(const page_weights = $(() -> (reads!(e, :font); [w.label for w in text_weights(e.font)]))))
+  Core.eval(m, :(const page_weight = $(() -> (reads!(e, :font); reads!(e, :weight); nearest_weight(e.font, e.weight).label))))
+  Core.eval(m, :(const page_weight! = $(name -> weight!(e, String(name)))))
   # ... and the width of the page, in pixels
   Core.eval(m, :(const page_width = $(() -> e.widest.value)))
   Core.eval(m, :(const page_width! = $(width -> page_width!(e, width))))
@@ -2362,6 +2451,10 @@ sandbox(e) = get!(e.nodes, :sandbox) do
   Core.eval(m, :(const code_family = $(name -> font_family(String(name)))))
   Core.eval(m, :(const code_font = $(() -> (reads!(e, :code_font); font_label(e.code_font)))))
   Core.eval(m, :(const code_font! = $(name -> code_font!(e, font_family(String(name))))))
+  # ... and its weight, by name: `code_weights()` gives the weights that the font has, and `code_weight()` the one that code is drawn in
+  Core.eval(m, :(const code_weights = $(() -> (reads!(e, :code_font); [w.label for w in text_weights(e.code_font)]))))
+  Core.eval(m, :(const code_weight = $(() -> (reads!(e, :code_font); reads!(e, :code_weight); nearest_weight(e.code_font, e.code_weight).label))))
+  Core.eval(m, :(const code_weight! = $(name -> code_weight!(e, String(name)))))
   # ... and after how many characters a faint line goes down a file of code. 0 is no line.
   Core.eval(m, :(const code_guide = $(() -> (reads!(e, :guide); e.guide))))
   Core.eval(m, :(const code_guide! = $(n -> guide!(e, Int(n)))))
@@ -2450,6 +2543,14 @@ page_width!(e, width) = (e.widest = px(clamp(10round(Int, width / 10), NARROWEST
 
 "Draw the page's text in the font called `name`"
 font!(e, name::String) = (e.font = name; save_settings!(e); rerun!(e, :font); restyle!(e))
+
+"Draw the page's text in the weight called `w`, like \"Light\", or in the weight `w`, like 300"
+weight!(e, w::Union{Integer,AbstractString}) = begin
+  e.weight = w isa Integer ? text_weight(w) : weight_called(e.font, w)
+  save_settings!(e)
+  rerun!(e, :weight)
+  restyle!(e)
+end
 
 "Use the colours called `name` for the page"
 theme!(e, name::Symbol) = begin
@@ -2999,11 +3100,11 @@ end
 "How wide what's under the breadcrumb `l` is"
 room(l::Breadcrumb) = (e = editor(l); (l.inline ? min(LISTING_W, e.width) : e.width - 2PANEL_PAD) - 12px)
 
-"The Markdown file at `path`, laid out for the breadcrumb `l`. It's laid out again when the page's text changes its size, font or colours."
+"The Markdown file at `path`, laid out for the breadcrumb `l`. It's laid out again when the page's text changes its size, font, weight or colours."
 filepage(l::Breadcrumb, path) = begin
   e = editor(l)
   wide = room(l) - 28px   # the page has 14px of room on each side
-  kept!(l, path, (:page, wide, e.zoom, e.theme, e.font)) do path
+  kept!(l, path, (:page, wide, e.zoom, e.theme, e.font, e.weight)) do path
     found = reading(path, tidy=false)
     found === nothing && return nothing
     lines, more = found
@@ -3400,13 +3501,22 @@ guide!(e, n::Int) = begin
   e
 end
 
-"Draw code in the font called `family`, in its light weight if it has one"
+"Draw code in the font called `family`, in the weight that the settings choose or the nearest one it has"
 code_font!(e, family::String) = begin
   installed_weight(family, 400) > 0 || error("This Mac has no font called $family.")
   e.code_font = family
   use_code_font!(e)
   save_settings!(e)
   rerun!(e, :code_font)
+  restyle!(e)
+end
+
+"Draw code in the weight called `w`, like \"Light\", or in the weight `w`, like 300"
+code_weight!(e, w::Union{Integer,AbstractString}) = begin
+  e.code_weight = w isa Integer ? text_weight(w) : weight_called(e.code_font, w)
+  use_code_font!(e)
+  save_settings!(e)
+  rerun!(e, :code_weight)
   restyle!(e)
 end
 
@@ -12737,9 +12847,10 @@ end
 
 # --- settings -----------------------------------------------------------------------------
 #
-# The settings are the page's colours, its font, the size of its text, its width,
-# what the count at the top right counts, how code shows, the key bindings and
-# how wide the sidebar is. ⌘, opens the settings in a window of their own.
+# The settings are the page's colours, its font and the font's weight, the size
+# of its text, its width, what the count at the top right counts, how code
+# shows, the key bindings and how wide the sidebar is. ⌘, opens the settings in
+# a window of their own.
 # They're on three pages, each a Markdown file whose live blocks change them:
 # General, Code editor and Key bindings. The top bar of the settings window has
 # a tab for each page. A setting that changes in one window changes in every
@@ -12749,7 +12860,7 @@ end
 const pages_dir = Ref(joinpath(@__DIR__, "pages"))
 
 "The settings that every window has the same: each is a field of the editor"
-const SHARED = (:theme, :font, :zoom, :widest, :stat, :spelling, :wrap, :numbers, :shade, :indent, :code_scale, :code_font, :guide, :bundle, :rebound, :side)
+const SHARED = (:theme, :font, :weight, :zoom, :widest, :stat, :spelling, :wrap, :numbers, :shade, :indent, :code_scale, :code_font, :code_weight, :guide, :bundle, :rebound, :side)
 
 "The pages of the settings, in the order of their tabs: the name of each page's file, and what its tab says"
 const SETTINGS_PAGES = ("settings.md" => "General", "code-editor.md" => "Code editor", "key-bindings.md" => "Key bindings")
@@ -12834,7 +12945,7 @@ save_settings!(e) = begin
     mkpath(dirname(settings_file()))
     # After the bundle of key bindings comes a line for each command that has other keys than the bundle's, like key.save=ctrl+s
     changed = join(["key.$name=$(e.rebound[name])\n" for name in sort!(collect(keys(e.rebound)))])
-    write(settings_file(), "theme=$(e.theme)\nfont=$(e.font)\nzoom=$(e.zoom)\nwidth=$(e.widest.value)\ncount=$(e.stat)\nspelling=$(e.spelling)\nwrap=$(e.wrap)\nnumbers=$(e.numbers)\nshade=$(e.shade)\nindent=$(e.indent)\ncode=$(e.code_scale)\ncodefont=$(e.code_font)\nguide=$(e.guide)\nsidebar=$(e.side.value)\nkeys=$(e.bundle)\n$changed")
+    write(settings_file(), "theme=$(e.theme)\nfont=$(e.font)\nweight=$(e.weight)\nzoom=$(e.zoom)\nwidth=$(e.widest.value)\ncount=$(e.stat)\nspelling=$(e.spelling)\nwrap=$(e.wrap)\nnumbers=$(e.numbers)\nshade=$(e.shade)\nindent=$(e.indent)\ncode=$(e.code_scale)\ncodefont=$(e.code_font)\ncodeweight=$(e.code_weight)\nguide=$(e.guide)\nsidebar=$(e.side.value)\nkeys=$(e.bundle)\n$changed")
   catch
     # A file that can't be written only means the settings last as long as the window
   end
@@ -12850,6 +12961,9 @@ load_settings!(e) = begin
       e.theme = Symbol(value)
     elseif name == "font" && !isempty(value)
       e.font = String(value)
+    elseif name == "weight"
+      w = tryparse(Int, value)
+      w !== nothing && 0 < w <= HEAVIEST && (e.weight = w)
     elseif name == "zoom"
       z = tryparse(Float64, value)
       z === nothing || (e.zoom = clamp(z, 0.6, 2.5))
@@ -12878,6 +12992,9 @@ load_settings!(e) = begin
     elseif name == "codefont"
       # A font that's no longer on the Mac leaves code in the usual one
       installed_weight(value, 400) > 0 && (e.code_font = String(value))
+    elseif name == "codeweight"
+      w = tryparse(Int, value)
+      w !== nothing && 0 < w <= HEAVIEST && (e.code_weight = w)
     elseif name == "sidebar"
       w = tryparse(Float64, value)
       w === nothing || (e.side = px(round(clamp(w, num(PANEL_MIN), num(PANEL_MAX)))))

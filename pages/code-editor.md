@@ -43,7 +43,20 @@ Box(width(300px), Dropdown(options=fonts, families=code_family.(fonts), selected
                            onchange=dropdown -> code_font!(fonts[dropdown.selected])))
 ```
 
-This is for all code, in a file or in a code block on a page. The list has each font on this Mac whose letters are all one width. Code shows in the font's light weight when it has one, as SF Mono does.
+This is for all code, in a file or in a code block on a page. The list has each font on this Mac whose letters are all one width.
+
+## Code weight
+
+```ui
+weights = code_weights()
+length(weights) < 2 ? Text("$(code_font()) has one weight for code: $(code_weight()).", size=page_text_size() * 1px) :
+  Box(width(300px), Dropdown(options=weights, selected=something(findfirst(==(code_weight()), weights), 1),
+                             onchange=dropdown -> code_weight!(weights[dropdown.selected])))
+```
+
+This is for all code too. The list has the weights that the code font has, up to Semibold, by the names that the font gives them. Code starts in Light, so that it reads lighter than the page's text.
+
+If the font doesn't have your weight, code shows the font's nearest weight. Menlo, for example, shows Regular in place of Light. Kaydown keeps your choice for the next font that has it.
 
 ## Code size
 

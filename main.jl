@@ -4012,7 +4012,7 @@ tick!(v::TakeoffView) = begin
   v.asking !== nothing && w !== nothing && w.focus !== plan_input(v) && settle_asking!(v)
   waiting = false
   # A column shows what its search finds while you type
-  v.asking !== nothing && v.asking[1] == :filter && filter!(v, v.asking[2], plan_input(v).text)
+  v.asking !== nothing && v.asking[1] == :filter && search_column!(v, v.asking[2], plan_input(v).text)
   # The list of units shows the ones that match what's typed. New words pick the unit that they name, or the first.
   if v.asking !== nothing && v.asking[1] == :unit
     words = String(strip(plan_input(v).text))
@@ -4171,7 +4171,7 @@ answer!(v::TakeoffView) = begin
   text = String(strip(plan_input(v).text))
   t = v.data
   # A column's search changes what the table shows, and nothing in the block
-  a[1] == :filter && return (filter!(v, a[2], text); stop_asking!(v))
+  a[1] == :filter && return (search_column!(v, a[2], text); stop_asking!(v))
   a[1] == :unit && return isempty(v.rows) ? stop_asking!(v) : unit!(v, a[2], v.rows[clamp(v.pick, 1, length(v.rows))])
   if a[1] in (:item, :customer)
     isempty(v.rows) || return choose_row!(v, v.pick)
@@ -5465,7 +5465,7 @@ column_value(v::TakeoffView, i, key) = begin
 end
 
 "Search the column `key` for `words`. No words takes its search away."
-filter!(v::TakeoffView, key::Symbol, words) = begin
+search_column!(v::TakeoffView, key::Symbol, words) = begin
   words = String(strip(words))
   isempty(words) ? delete!(v.filters, key) : (v.filters[key] = words)
   v
@@ -5586,7 +5586,7 @@ onkey(m::ColumnMenu, ::KeyPress{Keys.enter}) = answer!(m.of)
 onkey(m::ColumnMenu, ::KeyPress{Keys.escape}) = begin
   v = m.of
   a = v.asking
-  a !== nothing && a[1] == :filter && filter!(v, a[2], a[3])
+  a !== nothing && a[1] == :filter && search_column!(v, a[2], a[3])
   stop_asking!(v)
 end
 

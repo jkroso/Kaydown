@@ -41,6 +41,14 @@ sqrt(-1)
 total = sum(grid);
 ```
 
+## Names
+
+Type the first two letters of a name that the page's code has, like `ar` or `pa`, on the empty line of this block. A list under the caret shows the names that start that way. ↑ and ↓ choose one, Return or Tab types the rest of it, and Escape hides the list.
+
+```julia
+
+```
+
 ## The whole block, a selection and a node
 
 Put the caret in the line that opens a block, the one with the three backticks, and ⌘Return runs every line of the block. Select part of a line, like `1:6` in the grid above, and ⌘Return runs that part alone.

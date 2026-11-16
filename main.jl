@@ -4,7 +4,8 @@
 # the way it will read: headings are big, **bold** is bold, tables are tables.
 # The markup characters show again on the line the caret is in, so you can
 # change them. A table stays a table while you type in its cells. It opens the real files on your disk, and ⌘S writes your changes
-# to the file. It never writes anything until you press ⌘S.
+# to the file. It never writes anything until you press ⌘S. A Julia file opens as one block of
+# code that you change the same way: ⌘Return runs the expression that the caret is in.
 #
 # Give it a Markdown file or a folder, or it opens its own welcome page:
 #
@@ -64,6 +65,9 @@
 #     it and press ⌘Return. The page runs the line and shows what it comes to
 #     in a box after the line. ⇧Return runs the line and goes to the next one.
 #     Click a box that has an arrow to see the rest of its value.
+#   - Type the start of a name in a code block. A list under the caret shows
+#     the page's names that start the same way. ↑ and ↓ choose one, and Return
+#     or Tab types the rest of it.
 #   - Write !`code` in a line of text. The page runs the code and shows what
 #     it makes in the line: a node like a switch or a file path, or a value
 #     as text. Click the line to see the code again.
@@ -507,8 +511,9 @@ Base.@kwdef mutable struct Buffer
   chars::Int = 0
   # After Escape the caret is hidden, and every line shows as it reads, until a click puts the caret back
   reading::Bool = false
-  # How the file shows. A Markdown file is a document that you change. Any other file is only
-  # shown: :text shows its text, :hex shows its bytes, and :file shows a viewer of its kind.
+  # How the file shows. A Markdown file is a document that you change, and :code is a file of
+  # code that you change, which is one block of code. Any other file is only shown: :text shows
+  # its text, :hex shows its bytes, and :file shows a viewer of its kind.
   view::Symbol = :markdown
   about::String = ""                    # what the top bar says of a file that's only shown, like how much of it shows
   disk::Vector{String} = [""]           # the file's text as it was last read or written
@@ -517,17 +522,19 @@ Base.@kwdef mutable struct Buffer
   sent::Vector{String} = [""]           # the text as it was when you last sent it to an agent, or when the file was opened
 end
 
-"True when the file is only shown. Kaydown changes Markdown files and no others."
-readonly(b::Buffer) = b.view != :markdown
+"True when the file is only shown. Kaydown changes Markdown files and the files of code in `CODE_FILES`, and no others."
+readonly(b::Buffer) = !(b.view in (:markdown, :code))
 
 const stamp = Ref(0)
 
 load(path) = begin
   READ[path] = mtime(path)
-  ismarkdown(path) || return look(path)
+  code = !ismarkdown(path) && iscode(path)
+  ismarkdown(path) || code || return look(path)
   lines = text(path)
-  b = Buffer(path=path, lines=lines, disk=copy(lines), told=copy(lines))
+  b = Buffer(path=path, lines=lines, disk=copy(lines), told=copy(lines), view=code ? :code : :markdown)
   b.sent = b.told   # nothing has changed from outside yet
+  code && return b
   # The caret starts at the text, after any front matter, so the front matter shows as a card
   t = front_matter(b.lines)
   if t > 0
@@ -581,11 +588,12 @@ refresh!(b::Buffer) = begin
 end
 
 kinds(b::Buffer) = begin
-  if b.kinds_at != b.version && readonly(b)
-    # Each line of a file that's only shown is a line of code, in the language that the end of the file's name gives
+  if b.kinds_at != b.version && b.view != :markdown
+    # Each line of a file that isn't Markdown is a line of code, in the language that the end of the file's name gives
     lang = b.view == :hex ? HEX : String(lstrip(lowercase(splitext(b.path)[2]), '.'))
     b.kinds = fill(Line(Kind.code, 0, 0, lang), length(b.lines))
-    b.words = b.chars = 0
+    # A file that's only shown has no words to count
+    b.words, b.chars = b.view == :code ? (words(b.lines), sum(length, b.lines, init=0)) : (0, 0)
     b.kinds_at = b.version
   elseif b.kinds_at != b.version
     b.kinds = classify(b.lines)
@@ -822,6 +830,21 @@ node!(make, e, key) = get!(() -> own!(e, make()), e.nodes, key)
 
 const MARKDOWN = (".md", ".markdown", ".mdx")
 ismarkdown(path) = lowercase(splitext(path)[2]) in MARKDOWN
+
+# The files of code that the page changes, as it changes a Markdown file. The whole file is one block of code.
+const CODE_FILES = (".jl",)
+
+"""
+True when the file at `path` is code that the page can change: a kind of file
+in `CODE_FILES`, whose text shows whole. A file that's too long to show whole,
+or that isn't text, is only shown.
+"""
+iscode(path) = begin
+  (lowercase(splitext(path)[2]) in CODE_FILES && isfile(path)) || return false
+  filesize(path) == 0 && return true
+  found = try reading(path, tidy=false) catch; nothing end
+  found !== nothing && !found[2]
+end
 
 "Open the editor on a file, or on the first Markdown file in a folder"
 build_editor(path) = begin
@@ -1125,6 +1148,11 @@ israw(b::Buffer, i::Int) = !b.reading && i == b.caret[1] == b.anchor[1]
 "Lay out line `i` of the document"
 flow(e, i::Int, raw::Bool=israw(e.buf, i)) = begin
   text, line = e.buf.lines[i], kinds(e.buf)[i]
+  if e.buf.view == :code
+    # A line of a file of code is laid out as a line of a file that's only shown is
+    length(e.flows) > 4000 && empty!(e.flows)
+    return get!(() -> file_line(e, text, line, i), e.flows, (:file, text, line))
+  end
   # The lines that open and close a code block only show while the caret is in the block
   line.kind == Kind.fence && (raw = incode(e.buf, i))
   build() = laid(e, text, line, raw, i)
@@ -2017,7 +2045,8 @@ typed, or when one of its words does.
 offered(e) = begin
   b = e.buf
   i, col = b.caret
-  (!selecting(b) && insheet(b, i)) || return nothing
+  selecting(b) && return nothing
+  insheet(b, i) || return code_offered(e)   # a code block offers names too
   cs = sheetcells(b.lines[i])
   c = cs[end]
   (c.lo <= col <= c.limit && nearest(cs, col) == length(cs)) || return nothing
@@ -2050,9 +2079,13 @@ suggesting(e) = get!(() -> Ref{Any}((at=(0, 0), chosen=1, hidden=(0, 0))), e.nod
 suggestion(e) = begin
   e.buf.reading && return nothing
   found = offered(e)
+  state = suggesting(e)[]
+  # A list that esc hid stays hidden while its name is being typed, and no longer
+  if state.hidden != (0, 0) && (found === nothing || state.hidden != (found[1], found[2]))
+    state = suggesting(e)[] = (at=state.at, chosen=state.chosen, hidden=(0, 0))
+  end
   found === nothing && return nothing
   i, start, names = found
-  state = suggesting(e)[]
   state.hidden == (i, start) && return nothing
   (i, start, names, state.at == (i, start) ? clamp(state.chosen, 1, length(names)) : 1)
 end
@@ -2083,24 +2116,34 @@ suggestbox(e) = begin
   i, start, names, chosen = found
   it = item(e, i)
   s = it.content
-  s isa Sheet || return ()
-  r = findfirst(==(i), s.rows)
-  r === nothing && return ()
-  f, dx = cellflow(s, r, length(s.cells[r]))
-  k, x = spot(f, start)
-  face = Face(SHEET_FONT, SHEET_WEIGHT, s.size, colours.ink, false)
+  # Where the name starts, from the left of the page's text and from the top of the item, and the font of the list
+  if s isa Sheet
+    r = findfirst(==(i), s.rows)
+    r === nothing && return ()
+    f, dx = cellflow(s, r, length(s.cells[r]))
+    k, x = spot(f, start)
+    face = Face(SHEET_FONT, SHEET_WEIGHT, s.size, colours.ink, false)
+    across, down = dx + x, row_top(s, r) + f.lh * k
+  elseif s isa Flow
+    # In a code block, the list is under the line of the screen that the name is on
+    k, x = spot(s, start)
+    face = Face(CODE_FONT, CODE_STYLE, s.size, colours.ink, false)
+    across, down = x, line_top(s, k) + s.lines[k].high
+  else
+    return ()
+  end
   wide = max(150px, maximum(n -> measure(face, n), names) + 26px)
   list = Column(fixed(wide), Alignment.Start, padding(4px), radius(7px), background(colours.float), border(1px, :solid, colours.line), lifted,
     name="Names",
-    [Row(width(grow=grow), height(s.size * 1.8), Alignment.Center, padding(8px, 0px), radius(4px),
+    [Row(width(grow=grow), height(face.size * 1.8), Alignment.Center, padding(8px, 0px), radius(4px),
          background(j == chosen ? colours.active : clear),
-       Text(n, size=s.size, family=SHEET_FONT, subfamily=SHEET_WEIGHT, color=colours.ink, wrap=WrapMode.none))
+       Text(n, size=face.size, family=face.family, subfamily=face.style, color=colours.ink, wrap=WrapMode.none))
      for (j, n) in enumerate(names)]...)
   # The page's text is in the middle of the space beside the file panel
   w, _ = window_size(e)
   side = panel_w(e) * opened(e)
-  left = side + max(PAGE_X, (w - side - e.width) / 2) + dx + x - 9px
-  top = TOPBAR_H + PAGE_TOP + it.top - e.scroll.offset + row_top(s, r) + f.lh * k + 3px
+  left = side + max(PAGE_X, (w - side - e.width) / 2) + across - 9px
+  top = TOPBAR_H + PAGE_TOP + it.top - e.scroll.offset + down + 3px
   top >= TOPBAR_H || return ()
   (Row(width(grow=grow), height(grow=grow), Alignment.Start, padding(top, 0px, 0px, left), list),)
 end
@@ -2989,9 +3032,13 @@ end
 # --- a file that isn't Markdown, in the page -------------------------------------------------
 #
 # A click on a file in the sidebar shows the file in the page, whatever kind of
-# file it is. Kaydown changes Markdown files and no others, so any other file
+# file it is. Kaydown changes Markdown files and Julia files, so any other file
 # is only shown, and the top bar says "Read only". The button beside those
 # words opens the file in the app that the Mac uses for it.
+#
+# A Julia file is one block of code, with no lines that open and close it. You
+# type in it as in a `julia` code block of a page: ⌘Return runs the expression
+# that the caret is in, a list offers names, and ⌘S writes the file.
 #
 #   - A file of text shows its text. A file of code has the colours that a code
 #     block has. You can select the text, copy it and find words in it.
@@ -3065,6 +3112,10 @@ hex!(e) = begin
   e
 end
 
+"Lay out `text`, line `i` of a file that shows as text. It has no background of its own and starts at the edge of the page."
+file_line(e, text, line::Line, i::Int) =
+  wrap(spare(pieces(e, text, line, false, i)), e.width; lh=body(e).size * 1.5, size=face(e, line).size)
+
 """
 The lines of a file that shows as text, laid out. Each is a line of code. The
 whole page is code, so the lines have no background of their own and start at
@@ -3072,12 +3123,10 @@ the edge of the page.
 """
 text_items(e, b::Buffer) = begin
   ks = kinds(b)
-  size = face(e, ks[1]).size
-  lh = body(e).size * 1.5
   items = Vector{Item}(undef, length(b.lines))
   top = 0px
   for (i, text) in enumerate(b.lines)
-    f = wrap(spare(pieces(e, text, ks[i], false, i)), e.width; lh, size)
+    f = file_line(e, text, ks[i], i)
     items[i] = Item(i, i, top, tall(f), f)
     top += tall(f)
   end
@@ -8307,9 +8356,9 @@ onkey(e::Editor, ev::KeyPress{K}) where K = begin
   elseif cmd && K == Keys.v
     paste!(e)
   elseif cmd && K == Keys.b
-    surround!(e, "**")
+    b.view == :markdown && surround!(e, "**")
   elseif cmd && K == Keys.i
-    surround!(e, "*")
+    b.view == :markdown && surround!(e, "*")
   elseif cmd && K == Keys.o
     open_finder!(e)
   elseif cmd && K == Keys.f
@@ -8372,6 +8421,8 @@ ontype(e::Editor, ev::Typed) = begin
   # While the page is read, a key that would change the text does nothing. A file that's only shown is never changed.
   (e.buf.reading || readonly(e.buf)) && return nothing
   type!(e, string(c), typing=true)
+  # A code block offers names only just after a character is typed
+  e.nodes[:typed_at] = (e.buf.path, e.buf.version, e.buf.caret)
   handled
 end
 
@@ -8400,7 +8451,7 @@ markdown_for(e, path) = begin
 end
 
 onfiledrop(e::Editor, w::Window, paths) = begin
-  readonly(e.buf) && return nothing
+  e.buf.view == :markdown || return nothing   # a file goes into a page as Markdown
   # A PDF file or a picture that's dropped on a takeoff is its plan
   v = takeoff_at(e, w)
   plan = v === nothing ? nothing : findfirst(p -> isfile(p) && (ispdf(p) || ispicture(p)), paths)
@@ -8413,7 +8464,7 @@ put_files!(e, paths, at::Pos) = begin
   paths = [rstrip(String(p), '/') for p in paths if ispath(p)]
   isempty(paths) && return
   b = e.buf
-  readonly(b) && return   # a file that's only shown has no text for the path to go into
+  b.view == :markdown || return   # only a page has text for the path to go into, as Markdown
   pictures = [markdown_for(e, p) for p in paths if isfile(p) && ispicture(p)]
   others = [markdown_for(e, p) for p in paths if !(isfile(p) && ispicture(p))]
   if !isempty(others)
@@ -9719,6 +9770,8 @@ page_menu!(e, w) = begin
   front_matter(b.lines) == 0 || push!(off, (n + length(PAGE_MENU), length(INSERTS)))
   # Each item that would change the text is grey for a file that's only shown
   readonly(b) && append!(off, n .+ findall(x -> (x isa Pair ? first(x) : x) in ("Cut", "Paste", "Export as HTML…", "Insert"), PAGE_MENU))
+  # A file of code is no page, and has no place for a table or a recording
+  b.view == :code && append!(off, n .+ findall(x -> (x isa Pair ? first(x) : x) in ("Export as HTML…", "Insert"), PAGE_MENU))
   items = Any[spell..., PAGE_MENU...]
   system_menu(w, items, act; off) || drawn_menu!(w, items, act; off)
   nothing
@@ -10947,7 +11000,7 @@ end
 
 "Write the document as a page of HTML, to the file that you choose"
 export_html!(e, w) = begin
-  readonly(e.buf) && return nothing   # only a Markdown file is a page
+  e.buf.view == :markdown || return nothing   # only a Markdown file is a page
   # A window that isn't on the screen, like one a test makes, has no panel to ask with
   (Sys.isapple() && !isempty(w.glfw)) || return nothing
   path = save_panel(e, title(e.buf.path) * ".html")
@@ -11083,6 +11136,8 @@ block are in the block, and aren't code.
 """
 julia_code(b::Buffer, i::Int) = begin
   ks = kinds(b)
+  # A file of code is one block, with no lines that open and close it
+  b.view == :code && return lowercase(ks[i].lang) in JULIA ? (1, length(b.lines)) : nothing
   ks[i].kind in (Kind.fence, Kind.code) || return nothing
   s, t = codeblock(b, i)
   (t > s && ks[s].kind == Kind.fence && ks[s].level == 0 && ks[t].kind == Kind.fence && ks[t].level == 1) || return nothing
@@ -11398,6 +11453,125 @@ onmouse(::Outcome, ::MouseMove) = handled
 onkey(::OutcomeBody, ::KeyPress{Keys.mouse_left}) = handled
 onmouse(::OutcomeBody, ::MouseMove) = handled
 
+# --- the names a code block offers -------------------------------------------------------
+#
+# While you type a name in a code block, a list under the caret shows the names
+# that start the same way, as a sheet does. They are the names in the page's
+# other code of that language, the nearest first. Julia code also gets every
+# name that's in scope: the names that the page's code made when it ran, the
+# names of Julia's own functions and types, like `length`, its macros, like
+# `@show`, and the names that a live block has, like Slider. ↑ and ↓ choose a
+# name, Return or Tab types the rest of it, and esc hides the list.
+#
+# The list shows just after you type a character of a name, from the name's
+# second character. It doesn't show in a string or a comment, after a dot, for
+# a word of the language like `end`, or when what's typed is a whole name.
+
+const NAMES_SHOWN = 8                         # the most names in the list
+const NAME = r"[\p{L}_][\p{L}\p{N}_!]*"       # a name in code
+# The blocks that aren't code, and a block with no language
+const NO_NAMES = (MATTER, TOML_MATTER, HEX, SHEET, SPREADSHEET, DIAGRAM, TAKEOFF, SCHEDULE, "")
+
+"The language that code in `lang` shares its names with. `jl` and a live block are Julia."
+shared_lang(lang) = (l = lowercase(lang); l in JULIA || l == LIVE ? "julia" : l)
+
+"Each name in the page's code of the language `lang`, with the places it's written: a line and a column"
+page_names(e, lang) = get!(e.flows, (:names, e.buf.path, e.buf.version, lang)) do
+  b = e.buf
+  found = Dict{String,Vector{Pos}}()
+  for (i, line) in enumerate(kinds(b))
+    (line.kind == Kind.code && !(line.lang in NO_NAMES) && shared_lang(line.lang) == lang) || continue
+    for t in tokens(b.lines[i], lang)
+      t.kind in (:plain, :call, :type) || continue
+      for m in eachmatch(NAME, t.text)
+        # A column counts characters, and a match counts bytes
+        col = t.col + length(SubString(t.text, 1, prevind(t.text, m.offset)))
+        push!(get!(() -> Pos[], found, String(m.match)), (i, col))
+      end
+    end
+  end
+  found
+end
+
+"""
+The names in scope in Julia code on the page, as two lists: the ones that the
+page's code made when it ran, and the rest, like `length`, `@show` and Slider.
+A page whose code hasn't run has Julia's own names. The lists are kept until
+something makes a new name.
+"""
+scope_names(e) = begin
+  m = something(get(e.nodes, (:workspace, e.buf.path), nothing), get(e.nodes, :sandbox, nothing), Some(nothing))
+  world = Base.get_world_counter()
+  kept = get(e.nodes, :scope, nothing)
+  kept !== nothing && kept[1] === m && kept[2] == world && return kept[3]
+  named(list) = String[s for s in (string(n) for n in list) if occursin(r"^[\p{L}_@]", s)]
+  mine(n) = !(n in (nameof(m), :eval, :include, :Kip, :Usual, :SheetUnits))
+  lists = m === nothing ? (String[], named([names(Base); names(Core)])) :
+          (named(filter(mine, Base.invokelatest(names, m, all=true, imported=true))), named(Base.invokelatest(names, m, usings=true)))
+  e.nodes[:scope] = (m, world, lists)
+  lists
+end
+
+"""
+The names that the text before the caret could be the start of, in a code
+block: the line, the column where the name starts, and the names, the best
+first. Nothing when the caret isn't in code, or no name fits. A name fits when
+it starts with what's typed, or when one of its words does, like `length` in
+`wall_length`. The names that start with what's typed come first, and among
+them the page's own.
+"""
+code_offered(e) = begin
+  b = e.buf
+  i, col = b.caret
+  # Only just after a character was typed here. The caret can move through code with no list in
+  # its way, and a caret that comes back to where it was has no list either.
+  get(e.nodes, :typed_at, nothing) == (b.path, b.version, b.caret) || (delete!(e.nodes, :typed_at); return nothing)
+  line = kinds(b)[i]
+  (line.kind == Kind.code && !(line.lang in NO_NAMES)) || return nothing
+  chars = collect(b.lines[i])
+  # In the middle of a word, nothing is offered
+  col < length(chars) && isnamechar(chars[col+1]) && return nothing
+  start = col
+  while start > 0 && (isnamechar(chars[start]) || chars[start] == '!'); start -= 1 end
+  # 2n is two times n, so a name starts after the digits
+  while start < col && !(isletter(chars[start+1]) || chars[start+1] == '_'); start += 1 end
+  # The @ of a macro is part of its name
+  start > 0 && start < col && chars[start] == '@' && (start -= 1)
+  col - start >= 2 || return nothing
+  # What's after a dot is a part of a value, and the page doesn't know the parts of a value
+  start > 0 && chars[start] == '.' && return nothing
+  lang = shared_lang(line.lang)
+  # Not in a string or a comment, and not for a word of the language
+  for t in tokens(b.lines[i], lang)
+    t.col < col <= t.col + length(t.text) && t.kind in (:string, :comment, :keyword, :number) && return nothing
+  end
+  typed = lowercase(String(chars[start+1:col]))
+  found = Tuple{Int,Int,Int,String}[]   # how well it fits, where it's from, how far away it is, and the name
+  seen = Set{String}()
+  # False when the name is what's typed, so nothing is offered. A name that fits is noted.
+  note!(name, from, far) = begin
+    low = lowercase(name)
+    low == typed && return false
+    name in seen && return true
+    fit = startswith(low, typed) ? 0 : any(w -> startswith(w, typed), split(low, '_', keepempty=false)) ? 1 : 2
+    fit < 2 && (push!(seen, name); push!(found, (fit, from, far, name)))
+    true
+  end
+  for (name, places) in page_names(e, lang)
+    # The name that's being typed is in the page's code too, where the caret is
+    others = [abs(p[1] - i) for p in places if p != (i, start)]
+    isempty(others) || note!(name, 0, minimum(others)) || return nothing
+  end
+  if lang == "julia"
+    # The shortest name first, so `len` offers `length` before `lengthof`
+    for (from, list) in enumerate(scope_names(e)), name in list
+      note!(name, from, length(name)) || return nothing
+    end
+  end
+  isempty(found) && return nothing
+  (i, start, [name for (_, _, _, name) in first(sort!(found), NAMES_SHOWN)])
+end
+
 # --- the whole window ---------------------------------------------------------------------
 
 describe(e::Editor) = begin
@@ -11443,7 +11617,7 @@ describe(e::Editor) = begin
       node!(Page, e, :page)))
   popup = e.popup == :none ? () : (node!(Backdrop, e, :backdrop), finder(e))
   Stack(width(grow=grow), height(grow=grow), Alignment.Start, name="Editor",
-    body, panel_edge(e)..., tablebar(e)..., suggestbox(e)..., outcome_over(e)..., findbar(e)..., sound_over(e)..., fill_over(e)..., task_over(e)..., takeoff_over(e)..., zoom_over(e)..., node!(TopBar, e, :topbar), popup...)
+    body, panel_edge(e)..., tablebar(e)..., outcome_over(e)..., suggestbox(e)..., findbar(e)..., sound_over(e)..., fill_over(e)..., task_over(e)..., takeoff_over(e)..., zoom_over(e)..., node!(TopBar, e, :topbar), popup...)
 end
 
 # --- windows ------------------------------------------------------------------------------
@@ -11891,7 +12065,7 @@ print_listener() = begin
 end
 
 "Print the page: show the Mac's print panel with the page drawn for paper"
-print!(e, w) = readonly(e.buf) ? nothing : print_panel!(e, w, print_pdf(e), splitext(name(e.buf))[1])   # only a Markdown file is a page
+print!(e, w) = e.buf.view != :markdown ? nothing : print_panel!(e, w, print_pdf(e), splitext(name(e.buf))[1])   # only a Markdown file is a page
 
 if abspath(PROGRAM_FILE) == @__FILE__
   open_editor(ARGS)

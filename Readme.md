@@ -1,6 +1,6 @@
 # Kaydown
 
-A Markdown editor for the Mac, made with [UI.jl](https://github.com/jkroso/UI.jl). It draws each line the way it will read, and you type in it. A code block in the language `ui` runs its Julia code and shows what the code makes. In a code block in the language `julia`, ⌘Return runs the line that the caret is in, and shows what it comes to in a box after the line. A code block in the language `sheet` works things out, a row at a time. A code block in the language `spreadsheet` is a grid of cells with formulas. A code block in the language `mermaid` shows a diagram, like a flowchart. A button beside a diagram, a picture or a page of a PDF file makes it fill the window, where you zoom it with a pinch. A code block in the language `takeoff` shows a building plan that you measure from, and makes a quote from what you measure. A code block in the language `schedule` shows the page's to-do items as bars on a line of days, and you drag the bars to plan the work. A line that holds only a sound file shows a player, and the page's Insert menu records one from the microphone. A button under the player writes down what's said in it, on the Mac.
+A Markdown editor for the Mac, made with [UI.jl](https://github.com/jkroso/UI.jl). It draws each line the way it will read, and you type in it. A code block in the language `ui` runs its Julia code and shows what the code makes. In a code block in the language `julia`, ⌘Return runs the line that the caret is in, and shows what it comes to in a box after the line. A Julia file opens as one block of code that you change the same way, and a code block offers the names in scope as you type. A code block in the language `sheet` works things out, a row at a time. A code block in the language `spreadsheet` is a grid of cells with formulas. A code block in the language `mermaid` shows a diagram, like a flowchart. A button beside a diagram, a picture or a page of a PDF file makes it fill the window, where you zoom it with a pinch. A code block in the language `takeoff` shows a building plan that you measure from, and makes a quote from what you measure. A code block in the language `schedule` shows the page's to-do items as bars on a line of days, and you drag the bars to plan the work. A line that holds only a sound file shows a player, and the page's Insert menu records one from the microphone. A button under the player writes down what's said in it, on the Mac.
 
 "Kaydown" is a working name, after Alan Kay.
 
@@ -62,6 +62,8 @@ julia --project=. schedule_test.jl       # how a schedule is read, written and w
 julia --project=. schedule_view_test.jl  # the schedule's bars and links, in a window that isn't on the screen
 julia --project=. project_page_test.jl   # a video or a sound on the web, and the button that makes a job in Centient
 julia --project=. outcome_test.jl        # the code that ⌘Return runs in a `julia` block, and the box of what it comes to
+julia --project=. names_test.jl          # the list of names that a code block offers while you type
+julia --project=. code_file_test.jl      # a Julia file that the page changes, as one block of code
 julia --project=. merge_test.jl
 julia --project=. pasteboard_test.jl
 ```

@@ -245,6 +245,7 @@ const PROSE_W = 780px    # the widest the text gets, before zooming, until the s
 const PAGE_X = 32px      # the least space beside the text
 const PAGE_TOP = 28px
 const PAGE_BOTTOM = 160px
+const CODE_END = 100px   # how much of a code file still shows at the top of the window when it's scrolled to the end
 const CHIP_X = 5px       # space inside a `code` chip, left and right of its text
 const BLOCK_X = 16px     # space inside a code block, left of its text
 const QUOTE_X = 18px
@@ -2139,10 +2140,7 @@ suggestbox(e) = begin
          background(j == chosen ? colours.active : clear),
        Text(n, size=face.size, family=face.family, subfamily=face.style, color=colours.ink, wrap=WrapMode.none))
      for (j, n) in enumerate(names)]...)
-  # The page's text is in the middle of the space beside the file panel
-  w, _ = window_size(e)
-  side = panel_w(e) * opened(e)
-  left = side + max(PAGE_X, (w - side - e.width) / 2) + across - 9px
+  left = text_left(e) + across - 9px
   top = TOPBAR_H + PAGE_TOP + it.top - e.scroll.offset + down + 3px
   top >= TOPBAR_H || return ()
   (Row(width(grow=grow), height(grow=grow), Alignment.Start, padding(top, 0px, 0px, left), list),)
@@ -3110,6 +3108,49 @@ hex!(e) = begin
   e.scroll.offset = 0px
   focus(e)
   e
+end
+
+# A whole file of code or of text starts at the left of the page, not in the
+# middle of it as a page's text is, and has the number of each line beside it.
+# The number of the line that the caret is in is a little darker. The list of
+# the files in a zip has no numbers.
+
+const NUMBER_GAP = 14px   # between the numbers of the lines and the text
+
+"True when the page shows the number of each line: it shows a whole file of code or of text"
+numbered(b::Buffer) = b.view == :code || (b.view == :text && !(lowercase(splitext(b.path)[2]) in ZIPS))
+
+"The font of the numbers of the lines: a little smaller and fainter than the code"
+number_face(e) = (code = face(e, Line(Kind.code, 0, 0, "")); Face(code, size=code.size * 0.9, color=colours.faint))
+
+"How much room the numbers of the page's lines take beside the text, with the gap between them. A page with no numbers takes none."
+gutter(e) = numbered(e.buf) ? measure(number_face(e), "0") * max(2, ndigits(length(e.buf.lines))) + NUMBER_GAP : 0px
+
+const capitals = Dict{Tuple{String,String,Float32},px}()
+
+"How tall a capital letter of `face` is"
+capital(face::Face) = get!(capitals, (face.family, face.style, Float32(num(face.size)))) do
+  metrics = Ref{Skia.sk_font_metrics_t}()
+  Skia.sk_font_get_metrics(skia_font(face.family, face.size, face.style).raw, metrics)
+  px(metrics[].capHeight)
+end
+
+"Write the number of each line on screen beside the line, where `ui` is the page's text"
+draw_numbers(ctx, e, ui) = begin
+  b = e.buf
+  numbered(b) || return
+  f = number_face(e)
+  # A number stands on the line that its line of code stands on
+  rise = capital(face(e, Line(Kind.code, 0, 0, "")))
+  for it in e.layout[e.shown]
+    flow = it.content
+    flow isa Flow || continue
+    words = string(it.first)
+    here = !b.reading && !readonly(b) && it.first == b.caret[1]
+    x = ui.left - NUMBER_GAP - measure(f, words)
+    y = ui.top + it.top + line_top(flow, 1) + (flow.lines[1].high + rise) / 2
+    write_ink(ctx, words, num(x), num(y), here ? Face(f, color=colours.dim) : f)
+  end
 end
 
 "Lay out `text`, line `i` of a file that shows as text. It has no background of its own and starts at the edge of the page."
@@ -7124,7 +7165,19 @@ text_width(e) = begin
   w, _ = window_size(e)
   # While the sidebar slides, the text keeps the width it has beside the
   # sidebar, so it doesn't wrap again on each frame
-  clamp(w - (e.panel || sliding(e) ? panel_w(e) : 0px) - 2PAGE_X, 240px, e.widest * e.zoom)
+  # The numbers of a file's lines have room on the left of the text
+  clamp(w - (e.panel || sliding(e) ? panel_w(e) : 0px) - 2PAGE_X - gutter(e), 240px, e.widest * e.zoom)
+end
+
+"""
+How far the left edge of the page's text is from the left edge of the window.
+A page's text is in the middle of the space beside the file panel. A file with
+numbered lines starts at the left of that space, after its numbers.
+"""
+text_left(e) = begin
+  w, _ = window_size(e)
+  side = panel_w(e) * opened(e)
+  numbered(e.buf) ? side + PAGE_X + gutter(e) : side + max(PAGE_X, (w - side - e.width) / 2)
 end
 
 "Work out what the page shows and how tall each part is, for text that's `width` wide"
@@ -7402,10 +7455,18 @@ cursor(d::Document) = begin
   Keys.cmd in w.keys && link_at(e, w.mouse) !== nothing ? :hand : :ibeam
 end
 
+"""
+The room under the last line of the page. A code file scrolls on until its last
+lines are at the top of the window, so a box that opens under them has room to
+show.
+"""
+page_bottom(e) = numbered(e.buf) ? max(PAGE_BOTTOM, e.scroll.viewport - CODE_END) : PAGE_BOTTOM
+
 describe(p::Page) = begin
   e = editor(p)
   reuse!(e.scroll,
-    Row(width(grow=grow), Alignment.Start, justify=Alignment.Center, padding(PAGE_TOP, PAGE_X, PAGE_BOTTOM, PAGE_X),
+    Row(width(grow=grow), Alignment.Start, justify=numbered(e.buf) ? Alignment.Start : Alignment.Center,
+        padding(PAGE_TOP, PAGE_X, page_bottom(e), PAGE_X + gutter(e)),
       node!(Document, e, :document)))
 end
 
@@ -7558,6 +7619,7 @@ draw(ctx, size, ui::ConcreteRect, d::Document) = begin
     end
   end
   fill_selection(ctx, rects)
+  draw_numbers(ctx, e, ui)
   draw_fresh(ctx, e, ui)
   annotate(ctx, e, ui)
   # A file that's only shown has a selection and no caret
@@ -11363,9 +11425,8 @@ outcome_over(e) = begin
   (isempty(list) || isempty(e.layout) || readonly(e.buf)) && return ()
   (zooming(e) === nothing && full_block(e) === nothing && e.popup == :none) || return ()
   w, h = window_size(e)
-  # The page's text is in the middle of the space beside the file panel
   side = panel_w(e) * opened(e)
-  x0 = side + max(PAGE_X, (w - side - e.width) / 2)
+  x0 = text_left(e)
   y0 = TOPBAR_H + PAGE_TOP - e.scroll.offset
   size = body(e).size * 0.8
   wide = measure(outcome_face(size), "0")   # every character of the font is this wide

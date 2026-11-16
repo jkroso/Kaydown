@@ -58,6 +58,23 @@ shot(name) = isempty(shots) || save_png(joinpath(shots, name * ".png"), w)
   @test K.julia_code(b, 5) == (1, length(b.lines))
 end
 
+@testset "a file of code has room for the numbers of its lines, and a page has none" begin
+  @test K.numbered(e.buf)
+  @test K.gutter(e) > K.NUMBER_GAP
+  # The text starts at the left of the page, after the numbers' room
+  @test K.num(e.origin[1]) ≈ K.num(K.PAGE_X) + K.num(K.gutter(e)) atol=1
+  @test K.num(K.text_left(e)) ≈ K.num(e.origin[1]) atol=1
+  shot("numbers")
+  K.open!(e, joinpath(dir, "walls.py")); frames()
+  @test K.numbered(e.buf)   # a file that's only shown has them too
+  K.open!(e, notes); frames()
+  @test !K.numbered(e.buf) && K.gutter(e) == 0px
+  @test K.num(e.origin[1]) ≈ (1000 - K.num(e.width)) / 2 atol=1   # a page's text is in the middle
+  @test K.num(K.text_left(e)) ≈ K.num(e.origin[1]) atol=1
+  K.open!(e, file); frames()
+  K.focus(e)
+end
+
 @testset "typing changes the text, and ⌘S writes the file" begin
   b = e.buf
   caret!(3, length(b.lines[3]))
@@ -95,7 +112,9 @@ end
   caret!(9)
   key(Keys.enter, Keys.cmd)
   @test outcome(9).brief == string(4.2 * 2.45)
-  @test rect(outcome(9)) !== nothing
+  # The box is after the end of its line of code
+  vl = K.item(e, 9).content.lines[1]
+  @test K.num(rect(outcome(9)).left) ≈ K.num(e.origin[1]) + K.num(K.xcol(vl, vl.to)) + K.num(K.OUTCOME_GAP) atol=1
   shot("file")
   key(Keys.escape)
   @test isempty(K.outcomes(e))
@@ -130,4 +149,14 @@ end
   @test e.buf.view == :code
   @test K.item(e, 2).content.lines[1].x == 0px
   @test e.buf.lines[3] == "wall_height = 2.45"   # the file is as it was left
+end
+
+@testset "a code file scrolls on until its last line is near the top of the window, and a page doesn't" begin
+  K.open!(e, file); frames()
+  K.scroll_page!(e, px(Inf)); frames()
+  last = K.item(e, length(e.buf.lines))
+  @test K.PAGE_TOP + last.top - e.scroll.offset < K.CODE_END
+  K.open!(e, notes); frames()
+  K.scroll_page!(e, px(Inf)); frames()
+  @test e.scroll.offset == 0px   # a short page fits in the window
 end

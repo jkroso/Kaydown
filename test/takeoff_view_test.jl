@@ -1,6 +1,6 @@
 # Tests for the `takeoff` block of main.jl: the plan, the tools, the list of
 # measures and the work with Centient. Run them with
-# `julia -O0 --project=. takeoff_view_test.jl`. They click and type in a window
+# `julia -O0 --project=. test/takeoff_view_test.jl`. They click and type in a window
 # that isn't on the screen. Centient is centient_fake.jl, so they need no
 # Centient and change no books.
 
@@ -14,7 +14,7 @@ const dir = mktempdir()
 cp(joinpath(@__DIR__, "centient_fake.jl"), joinpath(dir, "mcp_server.jl"))
 ENV["CENTIENT_SIDECAR"] = dir
 
-@use "./main" => K
+@use "../main" => K
 const P, px = K.Plans, K.px
 
 # The example plan is of a house 16 m by 10 m, at 1:100. `house` gives the point of the page that's
@@ -23,7 +23,7 @@ const M = 72 / 25.4 * 10
 house(x, y) = (150 + x * M, 841.89 - (330 + y * M))
 written(p) = P.number(p[1]) * "," * P.number(p[2])
 
-cp(joinpath(@__DIR__, "pages", "plan.pdf"), joinpath(dir, "plan.pdf"))
+cp(joinpath(@__DIR__, "..", "pages", "plan.pdf"), joinpath(dir, "plan.pdf"))
 const page = joinpath(dir, "job.md")
 write(page, """
 # A job

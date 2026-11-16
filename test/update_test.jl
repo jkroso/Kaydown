@@ -1,5 +1,5 @@
 # Tests for the app's own updates: update.jl, and the part of the settings page
-# that shows them. Run them with `julia -O0 --project=. update_test.jl`.
+# that shows them. Run them with `julia -O0 --project=. test/update_test.jl`.
 #
 # They make small apps in a temporary folder, each signed for this Mac with a
 # name of its own, and a release of each as a zip file with a latest.txt. The
@@ -9,8 +9,8 @@
 # Kaydown's developer.
 
 @use Test: @test, @testset
-@use "./update" => Update
-@use "./main" => K
+@use "../update" => Update
+@use "../main" => K
 @use "github.com/jkroso/UI.jl/Interface/draw" frame
 const px = K.px
 
@@ -300,13 +300,13 @@ end
   Update.finish!(u)
   # Another Julia stands in for the Kaydown that quits: it finds the version that waits, and ends
   script = """
-    @use "$(joinpath(@__DIR__, "update"))" => Update
+    @use "$(joinpath(@__DIR__, "..", "update"))" => Update
     u = Update.Updater("$(u.app)", v"1.0.0"; feed="$(u.feed)", dir="$(u.dir)", rule="$(escape_string(RULE))", register="/usr/bin/true")
     u.next = Inf
     Update.tick!(u)
     Update.quit!(u) || exit(1)
     """
-  @test success(run(ignorestatus(`$(Base.julia_cmd()) --project=$(@__DIR__) -e $script`)))
+  @test success(run(ignorestatus(`$(Base.julia_cmd()) --project=$(dirname(@__DIR__)) -e $script`)))
   for _ in 1:100
     version_of(u.app) == "1.1.0" && break
     sleep(0.1)

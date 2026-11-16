@@ -1,5 +1,5 @@
 # Tests for the menu of the file's name in the top bar. See "a right-click on
-# the file's name" in main.jl. Run them with `julia -O0 --project=. title_test.jl`.
+# the file's name" in main.jl. Run them with `julia -O0 --project=. test/title_test.jl`.
 # They right-click, type and press keys in a window that isn't on the screen,
 # so the menu is the one that Kaydown draws, not the Mac's own.
 
@@ -9,7 +9,7 @@
 @use "github.com/jkroso/UI.jl/Interface/save" save_png
 @use GeometryBasics: Vec2
 
-@use "./main" => K
+@use "../main" => K
 const px = K.px
 
 const dir = mktempdir()

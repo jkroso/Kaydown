@@ -1,9 +1,9 @@
 # Tests for where the colour of the selection goes. See `marks` in main.jl.
-# Run them with `julia -O0 --project=. selection_test.jl`. They select text in a
+# Run them with `julia -O0 --project=. test/selection_test.jl`. They select text in a
 # window that isn't on the screen.
 
 @use Test: @test, @testset
-@use "./main" => K
+@use "../main" => K
 @use "github.com/jkroso/MiniFB.jl" Window
 @use "github.com/jkroso/UI.jl/Interface/draw" frame
 const px = K.px

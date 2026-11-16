@@ -1,14 +1,14 @@
 # Tests for the spelling of the page: the red dots under a word that's spelt
 # wrong, and what the page's menu does with it. See "spelling" in main.jl. Run
-# them with `julia -O0 --project=. spelling_test.jl`. They draw in a window that
+# them with `julia -O0 --project=. test/spelling_test.jl`. They draw in a window that
 # isn't on the screen. They teach the Mac's dictionary a made-up word, and they
 # take it out again at the end.
 
 @use Test: @test, @testset
 @use "github.com/jkroso/UI.jl/Interface/draw" frame
 @use "github.com/jkroso/UI.jl/Interface/objc" msg nsstring with_pool
-@use "./spelling" => Spelling
-@use "./main" => K
+@use "../spelling" => Spelling
+@use "../main" => K
 const px = K.px
 
 const WORD = "Zorblatixen"   # a word that no dictionary has

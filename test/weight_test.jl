@@ -1,13 +1,13 @@
 # Tests for the weights of the page's text and of code: the weights that a
 # font has, how bold text and headings are heavier than the rest, the settings
 # pages that choose the weights, and the settings file. See "the weights of the
-# page's text and of code" in main.jl. Run them with `julia --project=.
-# weight_test.jl`. They use windows that aren't on the screen, and they don't
+# page's text and of code" in main.jl. Run them with `julia -O0
+# --project=. test/weight_test.jl`. They use windows that aren't on the screen, and they don't
 # write the settings file. With WEIGHT_SHOTS set to a folder, they save
 # pictures of the page there.
 
 @use Test: @test, @testset, @test_throws
-@use "./main" => K
+@use "../main" => K
 @use "github.com/jkroso/MiniFB.jl" Window
 @use "github.com/jkroso/UI.jl/Interface/draw" frame draw scene
 @use "github.com/jkroso/UI.jl/Interface/save" save_png

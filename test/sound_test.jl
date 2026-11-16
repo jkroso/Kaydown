@@ -1,6 +1,6 @@
 # Tests for a line that holds only a sound file, and the Transcribe button
 # under its player. See "sound in the text" in main.jl. Run them with
-# `julia -O0 --project=. sound_test.jl`. They move the mouse in a window that isn't
+# `julia -O0 --project=. test/sound_test.jl`. They move the mouse in a window that isn't
 # on the screen, and they don't transcribe anything. Set the environment
 # variable SOUND_SHOTS to a folder to keep a picture of each step.
 
@@ -10,12 +10,12 @@
 @use "github.com/jkroso/UI.jl/Interface/save" save_png
 @use GeometryBasics: Vec2
 
-@use "./main" => K
+@use "../main" => K
 const px, num = K.px, K.num
 
 const dir = mktempdir()
-cp(joinpath(@__DIR__, "pages", "hello.m4a"), joinpath(dir, "hello.m4a"))
-cp(joinpath(@__DIR__, "pages", "hello.m4a"), joinpath(dir, "again.m4a"))
+cp(joinpath(@__DIR__, "..", "pages", "hello.m4a"), joinpath(dir, "hello.m4a"))
+cp(joinpath(@__DIR__, "..", "pages", "hello.m4a"), joinpath(dir, "again.m4a"))
 const page = joinpath(dir, "sound.md")
 write(page, """
 # A sound

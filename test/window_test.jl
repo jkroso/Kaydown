@@ -1,13 +1,13 @@
 # Tests for Kaydown's windows: the settings window that ⌘, opens, ⌘W, and the
 # settings that every window shares. See "windows" and "settings" in main.jl.
-# Run them with `julia -O0 --project=. window_test.jl`. They press keys in windows
+# Run them with `julia -O0 --project=. test/window_test.jl`. They press keys in windows
 # that aren't on the screen, and they don't write the settings file.
 
 @use Test: @test, @testset
 @use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease Keys onkey
 @use "github.com/jkroso/UI.jl/Interface/draw" frame
 
-@use "./main" => K
+@use "../main" => K
 const px, window_of, focus = K.px, K.window_of, K.focus
 
 const dir = mktempdir()

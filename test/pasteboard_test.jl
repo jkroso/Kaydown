@@ -1,9 +1,9 @@
-# Tests for pasteboard.jl. Run them with `julia -O0 --project=. pasteboard_test.jl`.
+# Tests for pasteboard.jl. Run them with `julia -O0 --project=. test/pasteboard_test.jl`.
 # They use a clipboard of their own, so the Mac's clipboard stays as it is.
 
 @use Test: @test, @testset
 @use "github.com/jkroso/UI.jl/Interface/objc" libobjc cls sel msg nsstring
-@use "./pasteboard" => P
+@use "../pasteboard" => P
 
 const Object = Ptr{Cvoid}
 const pb = P.private_board()
@@ -14,7 +14,7 @@ put_data(kind, bytes) = begin
   ccall((:objc_msgSend, libobjc), Bool, (Object, Object, Object, Object), pb, sel("setData:forType:"), data, nsstring(kind))
 end
 
-const PNG = read(joinpath(@__DIR__, "app", "icon.png"))
+const PNG = read(joinpath(@__DIR__, "..", "app", "icon.png"))
 const PDF = Vector{UInt8}("%PDF-1.4")
 
 @testset "what the clipboard holds" begin
@@ -36,7 +36,7 @@ end
 @testset "a TIFF picture comes out as a PNG" begin
   dir = mktempdir()
   tiff = joinpath(dir, "icon.tiff")
-  run(pipeline(`sips -s format tiff $(joinpath(@__DIR__, "app", "icon.png")) --out $tiff`, stdout=devnull, stderr=devnull))
+  run(pipeline(`sips -s format tiff $(joinpath(@__DIR__, "..", "app", "icon.png")) --out $tiff`, stdout=devnull, stderr=devnull))
   clear(); put_data("public.tiff", read(tiff))
   ext, bytes = P.media(pb)
   @test ext == "png"

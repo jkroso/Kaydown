@@ -1,9 +1,9 @@
 # Tests for the code that runs where it is. See "code that runs where it is" in
-# main.jl. Run them with `julia -O0 --project=. outcome_test.jl`. They press keys
+# main.jl. Run them with `julia -O0 --project=. test/outcome_test.jl`. They press keys
 # and click in a window that isn't on the screen.
 
 @use Test: @test, @testset
-@use "./main" => K
+@use "../main" => K
 @use "github.com/jkroso/MiniFB.jl" Window KeyPress MouseMove Keys onkey onmouse Typed ontype
 @use "github.com/jkroso/UI.jl/Interface/draw" frame rect
 @use "github.com/jkroso/UI.jl/Interface/save" save_png

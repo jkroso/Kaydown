@@ -1,10 +1,10 @@
 # Tests for the page of HTML that ⌘⇧E saves. Run them with
-# `julia -O0 --project=. html_test.jl`.
+# `julia -O0 --project=. test/html_test.jl`.
 
 @use Test: @test, @testset
 @use "github.com/jkroso/MiniFB.jl" Window
 
-@use "./main" => K
+@use "../main" => K
 const px = K.px
 
 const page = joinpath(mktempdir(), "diagrams.md")

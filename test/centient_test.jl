@@ -1,9 +1,9 @@
-# Tests for centient.jl. Run them with `julia -O0 --project=. centient_test.jl`.
+# Tests for centient.jl. Run them with `julia -O0 --project=. test/centient_test.jl`.
 # They talk to a small program that answers as Centient's server does, so they
 # need no Centient and change no books.
 
 @use Test: @test, @testset, @test_throws
-@use "./centient" => C
+@use "../centient" => C
 
 @testset "JSON" begin
   @test C.json(Dict("a" => [1, 2.5, "x", nothing, true])) == """{"a":[1,2.5,"x",null,true]}"""

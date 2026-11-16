@@ -1,10 +1,10 @@
 # Tests for what the box of a function and of a module shows when it's open.
 # See "what a function and a module have to show" in main.jl. Run them with
-# `julia -O0 --project=. detail_test.jl`. They press keys, click and type in a
+# `julia -O0 --project=. test/detail_test.jl`. They press keys, click and type in a
 # window that isn't on the screen.
 
 @use Test: @test, @testset
-@use "./main" => K
+@use "../main" => K
 @use "github.com/jkroso/MiniFB.jl" Window KeyPress MouseMove Keys onkey onmouse onscroll Typed ontype
 @use "github.com/jkroso/UI.jl/Interface/draw" frame rect popups
 @use "github.com/jkroso/UI.jl/Interface/save" save_png

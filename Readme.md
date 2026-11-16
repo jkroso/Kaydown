@@ -86,34 +86,34 @@ On a page with a schedule, a to-do item reads as it always does. Move the mouse 
 ## Test it
 
 ```sh
-julia -O0 --project=. takeoff_test.jl        # how a takeoff is read, written and worked out
-julia -O0 --project=. centient_test.jl       # how Kaydown talks to Centient's server
-julia -O0 --project=. takeoff_view_test.jl   # the block itself, in a window that isn't on the screen
-julia -O0 --project=. zoom_test.jl           # a picture, a diagram or a page that fills the window
-julia -O0 --project=. schedule_test.jl       # how a schedule is read, written and worked out
-julia -O0 --project=. schedule_view_test.jl  # the schedule's bars and links, in a window that isn't on the screen
-julia -O0 --project=. project_page_test.jl   # a video or a sound on the web, and the button that makes a job in Centient
-julia -O0 --project=. outcome_test.jl        # the code that ⌘Return runs in a `julia` block, and the box of what it comes to
-julia -O0 --project=. names_test.jl          # the list of names that a code block offers while you type
-julia -O0 --project=. code_file_test.jl      # a Julia file that the page changes, as one block of code
-julia -O0 --project=. code_settings_test.jl  # the settings of code: long lines, line numbers, the guide, the indent, the font and size
-julia -O0 --project=. weight_test.jl         # the weights of the page's text and of code: the weights a font has, bold text, the settings file
-julia -O0 --project=. keys_test.jl           # the key bindings: the commands, the bundles of shortcuts and the page that changes them
-julia -O0 --project=. highlight_test.jl      # the colours of the parts of a line of code, and of the code in a string
-julia -O0 --project=. detail_test.jl         # what the box of a function and of a module shows when it's open
-julia -O0 --project=. update_test.jl         # the app's own updates: a newer version comes, is checked and takes the app's place
-julia -O0 --project=. window_test.jl         # the settings window, ⌘W, and the settings that every window shares
-julia -O0 --project=. title_test.jl          # the menu of the file's name in the top bar
-julia -O0 --project=. selection_test.jl      # where the colour of the selection goes
-julia -O0 --project=. spelling_test.jl       # the red dots under a word that's spelt wrong, and what the page's menu does with it
-julia -O0 --project=. sound_test.jl          # a line that holds only a sound file, and the Transcribe button under its player
-julia -O0 --project=. video_test.jl          # a line that holds only a video file. It needs ffmpeg to make the video.
-julia -O0 --project=. html_test.jl           # the page of HTML that ⌘⇧E saves
-julia -O0 --project=. merge_test.jl          # your changes and an agent's changes to one page put together, and how the two talk
-julia -O0 --project=. pasteboard_test.jl     # what the Mac's clipboard holds: text, files and pictures
+julia -O0 --project=. test/takeoff_test.jl        # how a takeoff is read, written and worked out
+julia -O0 --project=. test/centient_test.jl       # how Kaydown talks to Centient's server
+julia -O0 --project=. test/takeoff_view_test.jl   # the block itself, in a window that isn't on the screen
+julia -O0 --project=. test/zoom_test.jl           # a picture, a diagram or a page that fills the window
+julia -O0 --project=. test/schedule_test.jl       # how a schedule is read, written and worked out
+julia -O0 --project=. test/schedule_view_test.jl  # the schedule's bars and links, in a window that isn't on the screen
+julia -O0 --project=. test/project_page_test.jl   # a video or a sound on the web, and the button that makes a job in Centient
+julia -O0 --project=. test/outcome_test.jl        # the code that ⌘Return runs in a `julia` block, and the box of what it comes to
+julia -O0 --project=. test/names_test.jl          # the list of names that a code block offers while you type
+julia -O0 --project=. test/code_file_test.jl      # a Julia file that the page changes, as one block of code
+julia -O0 --project=. test/code_settings_test.jl  # the settings of code: long lines, line numbers, the guide, the indent, the font and size
+julia -O0 --project=. test/weight_test.jl         # the weights of the page's text and of code: the weights a font has, bold text, the settings file
+julia -O0 --project=. test/keys_test.jl           # the key bindings: the commands, the bundles of shortcuts and the page that changes them
+julia -O0 --project=. test/highlight_test.jl      # the colours of the parts of a line of code, and of the code in a string
+julia -O0 --project=. test/detail_test.jl         # what the box of a function and of a module shows when it's open
+julia -O0 --project=. test/update_test.jl         # the app's own updates: a newer version comes, is checked and takes the app's place
+julia -O0 --project=. test/window_test.jl         # the settings window, ⌘W, and the settings that every window shares
+julia -O0 --project=. test/title_test.jl          # the menu of the file's name in the top bar
+julia -O0 --project=. test/selection_test.jl      # where the colour of the selection goes
+julia -O0 --project=. test/spelling_test.jl       # the red dots under a word that's spelt wrong, and what the page's menu does with it
+julia -O0 --project=. test/sound_test.jl          # a line that holds only a sound file, and the Transcribe button under its player
+julia -O0 --project=. test/video_test.jl          # a line that holds only a video file. It needs ffmpeg to make the video.
+julia -O0 --project=. test/html_test.jl           # the page of HTML that ⌘⇧E saves
+julia -O0 --project=. test/merge_test.jl          # your changes and an agent's changes to one page put together, and how the two talk
+julia -O0 --project=. test/pasteboard_test.jl     # what the Mac's clipboard holds: text, files and pictures
 ```
 
-The first three need no Centient. `centient_fake.jl` answers in its place.
+The tests are in the `test` folder. Run them from Kaydown's folder, as above. The first three need no Centient. `test/centient_fake.jl` answers in its place.
 
 `-O0` tells Julia not to optimise the code that it compiles while a test runs, so a test starts in about half the time. The compiled files that Kip keeps are still made with full optimisation, so the app runs at its usual speed.
 

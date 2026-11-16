@@ -1,6 +1,6 @@
 # Tests for the view that fills the window with a picture, a diagram, a page
 # of a PDF file or a model. See "a picture, a diagram or a page that fills the
-# window" in main.jl. Run them with `julia -O0 --project=. zoom_test.jl`. They
+# window" in main.jl. Run them with `julia -O0 --project=. test/zoom_test.jl`. They
 # click, pinch and type in a window that isn't on the screen. Set the
 # environment variable ZOOM_SHOTS to a folder to keep a picture of each step.
 
@@ -10,12 +10,12 @@
 @use "github.com/jkroso/UI.jl/Interface/save" save_png
 @use GeometryBasics: Vec2
 
-@use "./main" => K
+@use "../main" => K
 const px = K.px
 
 const dir = mktempdir()
-cp(joinpath(@__DIR__, "pages", "plan.pdf"), joinpath(dir, "plan.pdf"))
-cp(joinpath(@__DIR__, "pages", "knot.stl"), joinpath(dir, "knot.stl"))
+cp(joinpath(@__DIR__, "..", "pages", "plan.pdf"), joinpath(dir, "plan.pdf"))
+cp(joinpath(@__DIR__, "..", "pages", "knot.stl"), joinpath(dir, "knot.stl"))
 # The picture is the plan, made into a PNG file by macOS
 run(pipeline(`sips -s format png $(joinpath(dir, "plan.pdf")) --out $(joinpath(dir, "shot.png"))`, stdout=devnull, stderr=devnull))
 const page = joinpath(dir, "zoom.md")

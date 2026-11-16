@@ -1,6 +1,6 @@
 # Tests for the `schedule` block of main.jl: the bars of the page's tasks, the
 # links between them, and the days that show beside a to-do item. Run them with
-# `julia -O0 --project=. schedule_view_test.jl`. They click and type in a window
+# `julia -O0 --project=. test/schedule_view_test.jl`. They click and type in a window
 # that isn't on the screen.
 
 @use Test: @test, @testset
@@ -8,7 +8,7 @@
 @use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse Typed ontype onscroll
 @use "github.com/jkroso/UI.jl/Interface/draw" frame rect popups onpinch
 @use GeometryBasics: Vec2
-@use "./main" => K
+@use "../main" => K
 const S, px = K.Schedules, K.px
 
 # 9 November 2026 is a Monday

@@ -1,6 +1,6 @@
 # Tests for a line that holds only a video file. See "video in the text" and
 # "what was said in a video" in main.jl. Run them with
-# `julia -O0 --project=. video_test.jl`. They need ffmpeg to make the video, and
+# `julia -O0 --project=. test/video_test.jl`. They need ffmpeg to make the video, and
 # macOS to play it. They click in a window that isn't on the screen.
 
 @use Test: @test, @testset
@@ -9,7 +9,7 @@
 @use "github.com/jkroso/UI.jl/Interface/media" span ready
 @use GeometryBasics: Vec2
 
-@use "./main" => K
+@use "../main" => K
 const px = K.px
 
 @testset "a link names part of a file" begin

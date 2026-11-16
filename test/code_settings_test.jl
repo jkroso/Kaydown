@@ -1,12 +1,12 @@
 # Tests for the settings of code: wrapping long lines, the numbers of the lines,
 # the shade of the caret's line, the line-length guide, the indent, and the font
 # and size of code. See "A line of a file of code or of text that's too long for the
-# window" in main.jl. Run them with `julia -O0 --project=. code_settings_test.jl`.
+# window" in main.jl. Run them with `julia -O0 --project=. test/code_settings_test.jl`.
 # They use a window that isn't on the screen. With CODE_SHOTS set to a folder,
 # they save pictures of it there.
 
 @use Test: @test, @testset, @test_throws
-@use "./main" => K
+@use "../main" => K
 @use "github.com/jkroso/MiniFB.jl" Window KeyPress Keys onkey onscroll Typed ontype
 @use "github.com/jkroso/UI.jl/Interface/draw" frame rect draw scene
 @use Skia

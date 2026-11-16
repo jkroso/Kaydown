@@ -1,8 +1,8 @@
 # Tests for the colours of the parts of a line of code. See highlight.jl. Run
-# them with `julia -O0 --project=. highlight_test.jl`.
+# them with `julia -O0 --project=. test/highlight_test.jl`.
 
 @use Test: @test, @testset
-@use "./highlight" tokens
+@use "../highlight" tokens
 
 "Each part of `line` in `lang` as text => kind, without the plain parts that are only spaces"
 parts(line, lang="julia") = [t.text => t.kind for t in tokens(line, lang) if !(t.kind == :plain && all(isspace, t.text))]

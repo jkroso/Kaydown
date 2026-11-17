@@ -142,6 +142,8 @@
 #   - ⌘D selects the word that the caret is in. ⌘D again selects the next
 #     place that has that word as well, and what you type then goes in at
 #     each of them. Escape leaves the selection that you started with.
+#   - A word that's selected has a line round each other place on the page
+#     that has it. Those are the places that ⌘D goes to.
 #   - ⌘/ makes a comment of a line of code. ⌘L selects a line, ⌘⇧D copies it
 #     to the line under it, ⌘⇧K deletes it, and ⌘⌥[ and ⌘⌥] move it up and down.
 #   - ⌘W closes a window. Kaydown quits when its last window closes.
@@ -12207,6 +12209,7 @@ draw(ctx, size, ui::ConcreteRect, d::Document) = begin
   e.origin = (ui.left, ui.top)
   fill_selection(ctx, selection_boxes(ctx, e, ui))
   with_others(() -> fill_selection(ctx, selection_boxes(ctx, e, ui)), b)
+  outline_same_word(ctx, e, ui)
   ring_part(ctx, e, ui)
   annotate(ctx, e, ui)
   glow_bracket_pair(ctx, e, ui)
@@ -17156,6 +17159,60 @@ annotate(ctx, e, ui) = begin
         end
       end
     end
+  end
+end
+
+"""
+The word that's selected, or nothing. It's the text of a selection that has
+only the characters of a word, all in one line.
+"""
+selected_word(b::Buffer) = begin
+  lo, hi = selection(b)
+  (lo != hi && lo[1] == hi[1]) || return nothing
+  text = excerpt(b, lo, hi)
+  all(isword, text) ? text : nothing
+end
+
+"""
+The other places on screen that have the selected word. Each one is its line
+and its columns, then the text that it's in as it's laid out, and where the top
+left of that is from the top left of the page's text. A line of a table has
+them in each of its cells. The word is found only where it's a word by itself,
+as ⌘D finds it, so these are the places that ⌘D would select. A place that's
+selected already isn't one of them.
+"""
+same_word(e) = begin
+  b = e.buf
+  out = Tuple{Int,Int,Int,Flow,px,px}[]
+  word = selected_word(b)
+  word === nothing && return out
+  taken = [(b.anchor, b.caret); others(b)]
+  free(i, from, to) = !any(t -> clash(((i, from), (i, to)), t), taken)
+  for it in e.layout[e.shown]
+    g = it.content
+    if g isa Flow
+      i = it.first
+      for (from, to) in places(b.lines[i], word, true)
+        free(i, from, to) && push!(out, (i, from, to, g, 0px, it.top))
+      end
+    elseif g isa Grid
+      for (r, i) in enumerate(g.rows), (from, to) in places(b.lines[i], word, true)
+        c = findfirst(cell -> cell.lo <= from && to <= cell.limit, g.cells[r])
+        (c === nothing || !free(i, from, to)) && continue
+        x, y = cell_origin(g, r, c)
+        push!(out, (i, from, to, g.flows[r][c], x, it.top + y))
+      end
+    end
+  end
+  out
+end
+
+"Draw a line round each of the other places that have the word that's selected. The page's text is at `ui`."
+outline_same_word(ctx, e, ui) = begin
+  line = tint(colours.select, 0.8)
+  for (_, from, to, f, x, y) in same_word(e), (x1, x2, top, high) in stretches(f, from, to)
+    tall = num(f.size) * 1.35
+    round_box(ctx, num(ui.left + x + x1) - 1.5, num(ui.top + y + top) + (num(high) - tall) / 2, num(x2 - x1) + 3, tall, 3.0, line=line)
   end
 end
 

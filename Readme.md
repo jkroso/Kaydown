@@ -140,7 +140,7 @@ Click a line of the list to open its page at that line. Click the box of a to-do
 
 ## Read and write email
 
-Kaydown can keep a folder on your Mac that holds every email of an account. The folder has the same folders in it as your email server has, and each email is one `.eml` file:
+Kaydown can keep a folder on your Mac that holds every email of an account. It can do that for more than one account, each in a folder of its own. The folder has the same folders in it as your email server has, and each email is one `.eml` file:
 
 ```
 ~/Mail/you@example.com/
@@ -167,7 +167,9 @@ An email that you write is a Markdown page. ⌘⇧N starts one in a window of it
 
 The server is the one that's right. An email that another app deletes goes from the folder, and an email file that the Finder moves or deletes comes back. Each folder has a hidden list of its emails, which is only a copy: if it's lost, Kaydown makes it again from the files and the server, with no new download. `mail.jl` says how it works, and `mime.jl` how an email becomes a page.
 
-It works with one account, and with a server that takes a password. Outlook.com and Microsoft 365 only let an app sign in through Microsoft's own sign-in page, and Proton Mail needs its Bridge app. Kaydown works with neither yet, and the form says so.
+To add another account, click Add an account on the Email page, type its address and its password, and click Connect. The row over the form has each account's address, and a click on one shows that account. A new email goes from the account whose folder the sidebar shows, and an answer goes from the account that got the email. Remove this account takes an account away from Kaydown, and leaves its emails in their folder.
+
+It works with a server that takes a password. Outlook.com and Microsoft 365 only let an app sign in through Microsoft's own sign-in page, and Proton Mail needs its Bridge app. Kaydown works with neither yet, and the form says so.
 
 ### The emails with someone, in a page
 

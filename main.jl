@@ -118,9 +118,9 @@
 #     Kaydown the app that opens Markdown files. The tabs at the top of that
 #     window show two more pages: Code editor, for how code shows, and Key
 #     bindings, for the keys of each command. ⌘, again closes that window.
-#   - ⌘, then Email takes your email account. Kaydown then keeps a folder
-#     with every email in it, as an .eml file, in the folders that the
-#     email server has. ⌘⇧I shows the inbox: the sidebar lists the emails,
+#   - ⌘, then Email takes your email accounts. Kaydown then keeps a folder
+#     for each account with every email in it, as an .eml file, in the
+#     folders that the email server has. ⌘⇧I shows the inbox: the sidebar lists the emails,
 #     and the top bar of an email has buttons that answer it, archive it and
 #     delete it. ⌘⇧N starts a new email, which is a page like any other, and
 #     ⌘⇧Return sends it. mail.jl says how it works.
@@ -9683,15 +9683,16 @@ email. An email that's in two folders, as Gmail has them, is listed once.
 """
 emails!(v::EmailsView) = begin
   e = editor(v)
-  m = mailer(e)
-  (m === nothing || isempty(m.account.address)) &&
+  # The emails of every account are in the list
+  ready = [m for m in mailers(e) if Mail.ready(m.account)]
+  isempty(ready) &&
     return (rows=[], left=0, problem="Kaydown has no email account yet. Press ⌘, and choose Email to give it one.")
   # The list is worked out again no more than once a second, however fast email comes in
   key = (v.lines, floor(Int, time()), length(EMAIL_PEOPLE))
   v.shown !== nothing && v.shown[1] == key && return v.shown[2]
   w = v.data
   found, left, read = Dict{String,Any}(), 0, 0
-  for b in Mail.nested(Mail.root(m.account))
+  for m in ready, b in Mail.nested(Mail.root(m.account))
     b.role in (:drafts, :junk, :trash) && continue
     for l in b.letters
       Posts.about(w, l.subject) || continue
@@ -9771,7 +9772,8 @@ act!(v::EmailsView, action, w) = begin
   if action == :reply
     rows = emails!(v).rows
     isempty(rows) && return handled
-    draft = Mail.reply!(m, rows[1].path)
+    # The answer goes from the account that got the email
+    draft = Mail.reply!(something(mail_owner(e, rows[1].path), m), rows[1].path)
     mail_window!(e, draft, front_matter(String.(split(read(draft, String), '\n'))) + 2)
   elseif action == :new
     to = Posts.address(v.data)
@@ -13033,7 +13035,7 @@ making(e) = (j = get(e.nodes, :job_ask, nothing); j !== nothing && j.request !==
 "True for a button of the top bar that does nothing now: the one that makes the job, when the Mac has no Centient or Centient makes a job"
 off(b::ToolButton) = (b.action == :job && (!Centient.available() || making(editor(b)))) ||
                      # A draft that's on its way can't be sent again
-                     (b.action == :mail_send && (m = mailer(editor(b)); m !== nothing && Mail.sending(m, editor(b).buf.path)))
+                     (b.action == :mail_send && (m = mail_owner(editor(b), editor(b).buf.path); m !== nothing && Mail.sending(m, editor(b).buf.path)))
 
 "What the top bar shows for a project page: the button that makes the page's job in Centient"
 job_part(e) = progress_address(e) === nothing ? () : (button(e, :job, "hammer"), Box(width(4px)))
@@ -16615,8 +16617,13 @@ end
 #   - A draft is a page whose front matter names who it's to, with no date.
 #     The top bar of a draft has a button that sends it. A new draft, and an
 #     answer, open in a window of their own.
-#   - The Email page of the settings has the account, and says how far the
+#   - The Email page of the settings has the accounts, and says how far the
 #     look for new email has got.
+#   - There can be more than one account. Each has a mailer of its own, and a
+#     folder that's named for its address. A window works with the account
+#     whose folder it shows: see `mailer`. The Email page of the settings has
+#     a row of the accounts, and its form and its settings are for the one
+#     that's lit there.
 
 "How tall the row of an email is in the sidebar"
 const MAIL_ROW_H = 50px
@@ -16626,17 +16633,61 @@ const MAIL_ICONS = ["reply", "reply-all", "forward", "archive", "trash", "send",
 const MAIL_ACTIONS = (:mail_send, :mail_reply, :mail_reply_all, :mail_forward, :mail_archive, :mail_delete, :mail_check, :mail_new)
 
 """
-The mailer that this window's email comes from, or nothing. A window of the
-app has the app's own. A window that a test makes has the one that the test
-gave it.
+The mailers that this window's email comes from: one for each email account,
+in the order that the accounts were added. A window of the app has the app's
+own. A window that a test makes has the ones that the test gave it, or none.
 """
-mailer(e) = get(() -> e.remember ? Mail.own() : nothing, e.nodes, :mailer)
-
-"True when `path` is in the folder of the account's emails"
-mail_place(e, path) = begin
-  m = mailer(e)
-  m !== nothing && Mail.ready(m.account) && startswith(path, Mail.root(m.account) * "/")
+mailers(e) = begin
+  m = get(() -> e.remember ? Mail.own() : nothing, e.nodes, :mailer)
+  m === nothing ? Mail.Mailer[] : m isa Mail.Mailer ? Mail.Mailer[m] : m
 end
+
+"The mailer of the account whose folder is `path` or holds it, or nothing"
+mail_owner(e, path) = begin
+  isempty(path) && return nothing
+  all = mailers(e)
+  i = findfirst(m -> Mail.ready(m.account) && startswith(path * "/", Mail.root(m.account) * "/"), all)
+  i === nothing ? nothing : all[i]
+end
+
+"True when the window shows the Email page of the settings"
+on_mail_page(e) = e.buf.path == settings_page("email.md")
+
+"The mailer of the account that the Email page of the settings shows: the one that was clicked there, or the first one"
+mail_chosen(e) = begin
+  all = mailers(e)
+  isempty(all) && return nothing
+  chosen = get(e.nodes, :mail_chosen, nothing)
+  all[something(findfirst(m -> m === chosen, all), 1)]
+end
+
+"""
+The mailer of the account that the window is on, or nothing when the window
+has no email. The Email page of the settings is on the account that's chosen
+there. Any other window is on the account whose folder the sidebar lists, or
+else the account whose folder holds the page that shows. A window that shows
+neither is on the first account that's connected. What's done to the page
+that shows is done with `mail_for_page`, since the page can be an email of
+another account than the sidebar's.
+"""
+mailer(e) = begin
+  all = mailers(e)
+  isempty(all) && return nothing
+  on_mail_page(e) && return mail_chosen(e)
+  m = something(mail_owner(e, e.folder), mail_owner(e, e.buf.path), Some(nothing))
+  m === nothing || return m
+  all[something(findfirst(m -> Mail.ready(m.account), all), 1)]
+end
+
+"""
+The mailer of the account that holds the page that shows. For a page that's in
+no account's folder, it's the mailer that the window is on, when that has an
+account. Without one, the Email page of the settings opens, and this gives nothing.
+"""
+mail_for_page(e) = (m = mail_owner(e, e.buf.path); m === nothing ? mail_ready(e) : m)
+
+"True when `path` is in the folder of an account's emails"
+mail_place(e, path) = (m = mail_owner(e, path); m !== nothing && path != Mail.root(m.account))
 
 "The rows of the sidebar's folder when it's a folder of emails, newest first, or nothing"
 mail_rows(e) = isempty(e.folder) ? nothing : Mail.rows(e.folder)
@@ -16650,23 +16701,28 @@ an email that shows is marked as read, and a draft that went shows as the email
 that was sent.
 """
 mail_tick!(e) = begin
-  m = mailer(e)
-  m === nothing && return
-  wait = Mail.tick!(m)
+  all = mailers(e)
+  isempty(all) && return
+  # Each account's work gets its turn
+  wait = minimum(Mail.tick!, all)
   path = e.buf.path
   # The blocks of the settings page that show the email run again, no more than twice a second
-  if get(e.nodes, :mail_changed, -1) != m.changed && time() - get(e.nodes, :mail_ran, 0.0) > 0.5
-    e.nodes[:mail_changed] = m.changed
+  changed = sum(m -> m.changed, all)
+  if get(e.nodes, :mail_changed, -1) != changed && time() - get(e.nodes, :mail_ran, 0.0) > 0.5
+    e.nodes[:mail_changed] = changed
     e.nodes[:mail_ran] = time()
     rerun!(e, :mail)
   end
   # An email that shows is read
   if get(e.nodes, :mail_marked, "") != path
     e.nodes[:mail_marked] = path
-    Mail.seen!(m, path)
+    owner = mail_owner(e, path)
+    owner === nothing || Mail.seen!(owner, path)
   end
   going = get(e.nodes, :mail_going, "")
   if !isempty(going)
+    # The draft is in the folder of the account that sends it
+    m = something(mail_owner(e, going), first(all))
     to = get(m.moved, going, nothing)
     if to !== nothing
       # The draft went. Its page is in the folder of sent email now.
@@ -16729,7 +16785,7 @@ end
 
 "What the tooltip of an email button says"
 mail_tip(e, action) = begin
-  m = mailer(e)
+  m = mail_owner(e, e.buf.path)
   action == :mail_send ? (m !== nothing && Mail.sending(m, e.buf.path) ? "Sending" : "Send" * hint(e, :mail_send)) :
   action == :mail_reply ? "Reply" * hint(e, :mail_reply) :
   action == :mail_reply_all ? "Reply to everyone" * hint(e, :mail_reply_all) :
@@ -16774,9 +16830,8 @@ end
 "Look for new email now"
 mail_check!(e) = (m = mail_ready(e); m === nothing || Mail.check!(m); nothing)
 
-"Show the inbox in the sidebar"
-mail_inbox!(e) = begin
-  m = mail_ready(e)
+"Show the inbox of the account of `m` in the sidebar: the account that the window is on, unless another is given"
+mail_inbox!(e, m=mail_ready(e)) = begin
   m === nothing && return
   inbox = Mail.folder(m, :inbox)
   dir = inbox === nothing ? Mail.root(m.account) : inbox.path
@@ -16822,7 +16877,7 @@ end
 
 "Answer the email that shows: a draft opens, with the caret over the email's text. With `all`, it goes to everyone."
 mail_reply!(e; all=false) = begin
-  m = mail_ready(e)
+  m = mail_for_page(e)
   (m === nothing || !mail_shows(e)) && return
   dirty(e.buf) && save!(e.buf)
   draft = Mail.reply!(m, e.buf.path; all)
@@ -16831,7 +16886,7 @@ end
 
 "Send the email that shows on to someone else: a draft opens, with the caret where the address goes"
 mail_forward!(e) = begin
-  m = mail_ready(e)
+  m = mail_for_page(e)
   (m === nothing || !mail_shows(e)) && return
   dirty(e.buf) && save!(e.buf)
   mail_window!(e, Mail.forward!(m, e.buf.path), 2)
@@ -16839,7 +16894,7 @@ end
 
 "Send the draft that shows. Its file gets what the page shows first."
 mail_send!(e) = begin
-  m = mail_ready(e)
+  m = mail_for_page(e)
   b = e.buf
   (m === nothing || !Mail.isdraft(b.lines) || Mail.sending(m, b.path)) && return
   save!(b)
@@ -16871,7 +16926,7 @@ end
 
 "Move the email that shows to the archive, and show the next one"
 mail_archive!(e) = begin
-  m = mail_ready(e)
+  m = mail_for_page(e)
   path = e.buf.path
   (m === nothing || Mail.locate(path) === nothing) && return
   dirty(e.buf) && save!(e.buf)
@@ -16885,7 +16940,7 @@ email that's in the Trash already is deleted for good. A draft, which the
 server doesn't have, goes to the Mac's Trash.
 """
 mail_delete!(e) = begin
-  m = mail_ready(e)
+  m = mail_for_page(e)
   path = e.buf.path
   (m === nothing || isempty(path) || !mail_place(e, path)) && return
   next = mail_beside(path)
@@ -16896,7 +16951,7 @@ end
 
 "Mark the email that shows as not read"
 mail_unread!(e) = begin
-  m = mailer(e)
+  m = mail_owner(e, e.buf.path)
   m === nothing || Mail.seen!(m, e.buf.path, false)
   nothing
 end
@@ -17067,6 +17122,14 @@ end
 @def mutable struct MailChoose <: SemanticUI end
 "The button of the form that connects the account"
 @def mutable struct MailConnect <: SemanticUI end
+"One account in the row of accounts over the form. A click shows that account in the form."
+@def mutable struct MailTab <: SemanticUI
+  of::Any = nothing   # the account's mailer. Each frame gives each tab its mailer.
+end
+"The words after the accounts that add one more"
+@def mutable struct MailAdd <: SemanticUI end
+"The words under the form that take the account away"
+@def mutable struct MailRemove <: SemanticUI end
 
 const MAIL_FIELDS = (:address => "Email address", :name => "Your name", :password => "Password")
 const MAIL_MORE = (:incoming => "Incoming mail server", :outgoing => "Outgoing mail server")
@@ -17184,7 +17247,17 @@ describe(f::MailForm) = begin
     (Row(height(26px), padding(0px, 0px, 0px, MAIL_LABEL_W + 12px), link),)
   end
   more = f.more || unknown
+  # Over the fields, the accounts that Kaydown has, with the one that the form shows lit, and the words that add one
+  all = mailers(e)
+  tabs = map(enumerate(all)) do (k, o)
+    tab = node!(MailTab, e, (:mail_tab, k))
+    tab.of = o
+    tab
+  end
+  # An account that's connected can go. So can one that's still to fill, when there's another.
+  goes = m !== nothing && (Mail.ready(m.account) || length(all) > 1)
   Column(width(grow=grow), Alignment.Start, child_gap=2px, name="Email account",
+    Row(width(grow=grow), height(44px), child_gap=4px, name="Email accounts", tabs..., node!(MailAdd, e, :mail_add)),
     map(row, MAIL_FIELDS)...,
     help..., page...,
     folder,
@@ -17194,7 +17267,75 @@ describe(f::MailForm) = begin
        (isempty(mail_status(e, f, typed)) ? () : (mail_words(mail_status(e, f, typed), color=colours.ink),))...,
        mail_progress(e, f, typed)...))...,
     node!(MailMore, e, :mail_more),
-    (more ? map(row, MAIL_MORE) : ())...)
+    (more ? map(row, MAIL_MORE) : ())...,
+    (goes ? (Row(height(34px), node!(MailRemove, e, :mail_remove)),) : ())...)
+end
+
+describe(t::MailTab) = begin
+  e = editor(t)
+  m = t.of
+  here = m === mail_chosen(e)
+  name = m === nothing || isempty(m.account.address) ? "New account" : short(m.account.address)
+  Box(height(28px), padding(12px, 0px), radius(6px), background(here ? colours.active : ishovered(t) ? colours.hover : clear),
+    label(name, 13px, color=here ? colours.ink : colours.dim, weight=here ? "Medium" : ""))
+end
+cursor(::MailTab) = :hand
+onkey(t::MailTab, ::KeyPress{Keys.mouse_left}) = (t.of === nothing || mail_choose!(editor(t), t.of); handled)
+
+describe(b::MailAdd) =
+  Box(height(28px), padding(12px, 0px), radius(6px), background(ishovered(b) ? colours.hover : clear),
+    label("Add an account", 13px, color=colours.accent))
+cursor(::MailAdd) = :hand
+onkey(b::MailAdd, ::KeyPress{Keys.mouse_left}) = (mail_add!(editor(b)); handled)
+
+describe(b::MailRemove) =
+  Box(border(1px, :solid, ishovered(b) ? colours.accent : clear)[:bottom], label("Remove this account", 13px, color=colours.accent))
+cursor(::MailRemove) = :hand
+onkey(b::MailRemove, ::KeyPress{Keys.mouse_left}) = (mail_remove!(editor(b)); handled)
+
+"Put the account `a` in the form's fields, as the form has an account when it opens"
+mail_fill!(e, a) = begin
+  f = get(e.nodes, :mail_form, nothing)
+  f isa MailForm && ((f.note, f.kept, f.more, f.typed, f.waits, f.filled) = ("", nothing, false, ("", 0.0), false, nothing))
+  for (key, _) in (MAIL_FIELDS..., MAIL_MORE...)
+    field = get(e.nodes, (:mail_field, key), nothing)
+    field === nothing && continue
+    field.text = key == :password ? "" : getfield(a, key)
+    field.cursor = field.anchor = 0
+  end
+  crumb = get(e.nodes, :mail_place, nothing)
+  crumb === nothing || (crumb.at = Mail.base(a))
+  nothing
+end
+
+"Show the account of the mailer `m` on the Email page of the settings: in the form, and in what the page says under it"
+mail_choose!(e, m) = begin
+  e.nodes[:mail_chosen] = m
+  mail_fill!(e, m.account)
+  rerun!(e, :mail)
+  nothing
+end
+
+"Show a form with nothing in it, for one more account. The account is kept when the form connects it."
+mail_add!(e) = begin
+  all = mailers(e)
+  isempty(all) && return
+  # One account that's still to fill is enough
+  i = findfirst(m -> isempty(m.account.address), all)
+  mail_choose!(e, i === nothing ? Mail.add!(all) : all[i])
+end
+
+"""
+Take the account that the form shows away from Kaydown: its work stops, and
+its address and its password go from the settings and the Keychain. The
+emails stay in their folder on the Mac.
+"""
+mail_remove!(e) = begin
+  all = mailers(e)
+  m = mail_chosen(e)
+  m === nothing && return
+  Mail.remove!(all, m)
+  mail_choose!(e, first(all))
 end
 
 """
@@ -17314,6 +17455,7 @@ mail_keep!(e, f::MailForm) = begin
   a = Mail.Account(address=text(:address), name=text(:name), incoming=text(:incoming), outgoing=text(:outgoing), folder=folder,
                    user=m.account.user, every=m.account.every, safe=m.account.safe, back=m.account.back, rest=m.account.rest)
   occursin(MAIL_ADDRESS, a.address) || return say("Type your email address first.")
+  any(o -> o !== m && Mail.is(o.account, a.address), mailers(e)) && return say("Kaydown has an account for $(a.address) already.")
   f.waits = false
   company = Mail.provider(a.address)
   company !== nothing && company.secret === :none && return say(company.how)
@@ -17340,7 +17482,8 @@ mail_keep!(e, f::MailForm) = begin
     password.text, password.cursor, password.anchor = "", 0, 0
   end
   f.kept = !isempty(Mail.secret(a.address))
-  Mail.keep(a)
+  # The account keeps its place among the accounts, also when its address changed. A new one goes after the others.
+  Mail.keep(a, was=m.account.address)
   Mail.account!(m, a)
   f.note = f.kept ? "" : "Type the password, then click Connect."
   rerun!(e, :mail)
@@ -17395,8 +17538,11 @@ end
 mail_show!(e) = begin
   i = findlast(o -> !issettings(o) && window_of(o) !== nothing, editors)
   i === nothing && return mail_inbox!(e)
-  mail_inbox!(editors[i])
-  mail_ready(editors[i]) === nothing || front!(window_of(editors[i]))
+  # The inbox is the one of the account that the settings page shows
+  m = mail_ready(e)
+  m === nothing && return
+  mail_inbox!(editors[i], m)
+  front!(window_of(editors[i]))
   nothing
 end
 
@@ -17757,7 +17903,7 @@ open_editor(args) = begin
   # This returns when the last window has closed
   display(window!(e, title="Kaydown", size=e.size))
   # The look for email stops, and each folder's list of its emails is kept
-  Mail.mine[] === nothing || Mail.quit!(Mail.mine[])
+  Mail.quit!()
   # A newer version of the app that's ready takes the app's place once Kaydown has quit
   Update.quit!(Update.own())
 end

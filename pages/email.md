@@ -2,7 +2,7 @@
 
 Kaydown can keep a copy of your email in a folder on this Mac. The folder has the same folders in it as your email server has. Each email is one `.eml` file: the email as the server sent it, with what was attached to it inside. Kaydown shows it as a page. You read it there, and you can't change it: Kaydown marks each email file as read-only on your Mac, so no other app changes one by mistake. Click a link in an email to open it. An email that you write is a Markdown page until you send it.
 
-## Your account
+## Your accounts
 
 ```ui
 email_form()
@@ -12,7 +12,11 @@ Type your address, and Kaydown says which password your email company takes. For
 
 Kaydown keeps the password in the Keychain of this Mac, and nowhere else.
 
-Your email goes in a folder that's named for your address. Kaydown makes that folder in a folder called Mail in your home folder, unless you choose another one. To choose, click a name in the path to go to that folder, and the last name to list the folders in it. Choose, beside the path, asks for a folder with the Mac's own panel, which can make a new one. The folder that you choose can have other things in it, because Kaydown only uses the folder that's named for your address. If you change the folder later, Kaydown gets your email again into the new folder, and leaves the old folder as it is.
+Kaydown can have more than one account. Click **Add an account** for a form with nothing in it. Type the address and the password there, then click Connect. The row over the form has each account's address. Click an address to see that account in the form. The settings on the rest of this page are for the account that's lit in that row.
+
+**Remove this account** takes the account that shows away from Kaydown. Its password goes from the Keychain. Its emails stay in their folder on this Mac.
+
+The email of each account goes in a folder that's named for its address. Kaydown makes that folder in a folder called Mail in your home folder, unless you choose another one. To choose, click a name in the path to go to that folder, and the last name to list the folders in it. Choose, beside the path, asks for a folder with the Mac's own panel, which can make a new one. The folder that you choose can have other things in it, because Kaydown only uses the folder that's named for your address. If you change the folder later, Kaydown gets your email again into the new folder, and leaves the old folder as it is.
 
 ## What Kaydown gets
 
@@ -59,6 +63,7 @@ These change what the server has:
 
 - Reading an email marks it as read.
 - The buttons at the top of an email answer it, send it on, archive it and delete it.
+- A new email goes from the account whose folder the sidebar shows. An answer goes from the account that got the email.
 - A new email, and an answer, is a page with `to` and `subject` at its top. ⌘⇧Return sends it. A line that holds only a link to a file sends the file with it.
 
 The Key bindings page lists the keys of each of these.

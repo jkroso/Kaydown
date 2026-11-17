@@ -19,7 +19,7 @@
 # You write it as you write any page. When Kaydown sends it, the email that
 # went is kept as an .eml file in the folder of sent email, and the draft goes.
 #
-#     m = own()                # the mailer of the app that's running
+#     m = own()[1]             # the mailers of the app that's running, one for each account
 #     tick!(m)                 # call it in each frame. It gives the seconds until it wants the next call.
 #     check!(m)                # look for new email now
 #     says(m)                  # a sentence on how far it has got
@@ -91,38 +91,44 @@ account_file() = joinpath(home(), "email")
 #
 # Gmail lets one app get 2,500 MB of email in a day. When an app gets more,
 # Google stops every email app of the account for up to a day. So Kaydown
-# counts the bytes that come, hour by hour, and a look stops getting emails
-# when the last 24 hours hold most of what the company allows. It goes on when
-# the oldest of those hours is a day old.
+# counts the bytes that come for each account, hour by hour, and a look stops
+# getting emails when the last 24 hours hold most of what the company allows.
+# It goes on when the oldest of those hours is a day old.
 
 "The MB of email that a company lets one app get in a day, by the company's name"
 const DAILY = Dict("Gmail" => 2500)
 const DAY_SHARE = 0.8   # the part of that which Kaydown uses
 "A test puts a number of bytes here, to be what any account can get in a day"
 const allowance = Ref{Union{Nothing,Int}}(nothing)
-"The bytes that came in each hour, by the hour's number since 1970. Nothing until the file is read."
-const hours = Ref{Union{Nothing,Dict{Int,Int}}}(nothing)
+"The bytes that came in each hour for each account: by the account's address, then by the hour's number since 1970. Nothing until the file is read."
+const hours = Ref{Union{Nothing,Dict{String,Dict{Int,Int}}}}(nothing)
 hours_file() = joinpath(home(), "email-bytes")
 
-"The bytes of each hour of the last 24. The file is read once, and older hours go."
-tally() = begin
+"The bytes of each hour of the last 24 for the account with `address`. The file is read once, and older hours go."
+tally(address) = begin
   if hours[] === nothing
-    hours[] = Dict{Int,Int}()
+    hours[] = Dict{String,Dict{Int,Int}}()
+    # A line that an older Kaydown wrote names no account. Kaydown had one account then, which is the first one now.
+    first = (all = accounts(); isempty(all) ? "" : lowercase(all[1].address))
     for text in (isfile(hours_file()) ? eachline(hours_file()) : ())
-      parts = tryparse.(Int, split(text, '\t'))
-      length(parts) == 2 && !any(isnothing, parts) && (hours[][parts[1]] = parts[2])
+      parts = split(text, '\t')
+      length(parts) >= 2 || continue
+      h, n = tryparse(Int, parts[1]), tryparse(Int, parts[2])
+      (h === nothing || n === nothing) && continue
+      t = get!(() -> Dict{Int,Int}(), hours[], length(parts) >= 3 ? lowercase(parts[3]) : first)
+      t[h] = get(t, h, 0) + n
     end
   end
   now = floor(Int, time() / 3600)
-  filter!(p -> p[1] > now - 24, hours[])
+  filter!(p -> p[1] > now - 24, get!(() -> Dict{Int,Int}(), hours[], lowercase(address)))
 end
 
 "The bytes that came since the count was last kept"
 const unkept = Ref(0)
 
-"Count `n` bytes that came from the server now. The count is kept after every few MB, so that little is lost if Kaydown stops at once."
-tally!(n) = begin
-  t = tally()
+"Count `n` bytes that came from the server now for the account with `address`. The count is kept after every few MB, so that little is lost if Kaydown stops at once."
+tally!(address, n) = begin
+  t = tally(address)
   h = floor(Int, time() / 3600)
   t[h] = get(t, h, 0) + n
   (unkept[] += n) >= 4 << 20 && keep_tally()
@@ -132,8 +138,9 @@ end
 "Keep the count of the bytes, so that it holds when Kaydown opens again"
 keep_tally() = try
   unkept[] = 0
+  hours[] === nothing && return nothing
   mkpath(home())
-  write(hours_file(), join(("$h\t$n\n" for (h, n) in sort!(collect(tally()))), ""))
+  write(hours_file(), join(("$h\t$n\t$who\n" for who in sort!(collect(keys(hours[]))) for (h, n) in sort!(collect(tally(who)))), ""))
   nothing
 catch
 end
@@ -146,10 +153,10 @@ allowed(a) = begin
 end
 
 "True when the account `a` has got as much email in the last 24 hours as Kaydown lets it"
-capped(a) = (most = allowed(a); most !== nothing && sum(values(tally()), init=0) >= most)
+capped(a) = (most = allowed(a); most !== nothing && sum(values(tally(a.address)), init=0) >= most)
 
-"The time when the oldest hour that's counted is a day old, so that the account can get more"
-resumes() = (t = tally(); isempty(t) ? time() : (minimum(keys(t)) + 25) * 3600.0)
+"The time when the oldest hour that's counted for the account `a` is a day old, so that the account can get more"
+resumes(a) = (t = tally(a.address); isempty(t) ? time() : (minimum(keys(t)) + 25) * 3600.0)
 
 # --- the account ---------------------------------------------------------------------
 
@@ -297,26 +304,64 @@ endpoint(text, usual) = begin
   (String(parts[1]), length(parts) > 1 ? something(tryparse(Int, parts[2]), usual) : usual)
 end
 
-"The account that the settings file holds, or one with nothing in it"
-account() = begin
-  a = Account()
-  isfile(account_file()) || return a
+"""
+The accounts that the settings file holds, in the order that they were added.
+The lines of each account start with its address. A file that an older
+Kaydown wrote holds one account, and reads the same.
+"""
+accounts() = begin
+  out = Account[]
+  isfile(account_file()) || return out
   for text in eachline(account_file())
     name, value = (split(text, '=', limit=2)..., "")[1:2]
+    name == "address" && push!(out, Account())
+    isempty(out) && continue
+    a = last(out)
     name == "address" ? (a.address = value) : name == "name" ? (a.name = value) : name == "user" ? (a.user = value) :
     name == "incoming" ? (a.incoming = value) : name == "outgoing" ? (a.outgoing = value) : name == "folder" ? (a.folder = value) :
     name == "every" ? (a.every = clamp(something(tryparse(Int, value), 5), 1, 1440)) :
     name == "back" ? (a.back = max(0, something(tryparse(Int, value), 12))) : name == "rest" ? (a.rest = value != "false") : nothing
   end
+  out
+end
+
+"True when `a` is the account with `address`. The case of an address's letters doesn't count."
+is(a::Account, address) = lowercase(strip(a.address)) == lowercase(strip(address))
+
+"The account that the settings file holds for `address`, or the first one that it holds with no address given. One with nothing in it when there's none."
+account(address="") = begin
+  all = accounts()
+  i = isempty(address) ? (isempty(all) ? nothing : 1) : findfirst(a -> is(a, address), all)
+  i === nothing ? Account() : all[i]
+end
+
+"Keep the accounts `all` in the settings file, in their order. No password is in it."
+keep(all::Vector{Account}) = begin
+  mkpath(home())
+  write(account_file(), join(("address=$(a.address)\nname=$(a.name)\nuser=$(a.user)\nincoming=$(a.incoming)\noutgoing=$(a.outgoing)\n" *
+                              "folder=$(a.folder)\nevery=$(a.every)\nback=$(a.back)\nrest=$(a.rest)\n" for a in all), ""))
+  all
+end
+
+"""
+Keep the account `a` in the settings file, beside the other accounts. It takes
+the place of the account whose address was `was`, which is how an account gets
+another address. With no such account, it's one more account, after the others.
+"""
+keep(a::Account; was=a.address) = begin
+  all = accounts()
+  i = something(findfirst(x -> is(x, was), all), findfirst(x -> is(x, a.address), all), 0)
+  i == 0 ? push!(all, a) : (all[i] = a)
+  # No two accounts have one address
+  keep(filter!(x -> x === a || !is(x, a.address), all))
   a
 end
 
-"Keep the account in the settings file. The password isn't in it."
-keep(a::Account) = begin
-  mkpath(home())
-  write(account_file(), "address=$(a.address)\nname=$(a.name)\nuser=$(a.user)\nincoming=$(a.incoming)\noutgoing=$(a.outgoing)\n" *
-                        "folder=$(a.folder)\nevery=$(a.every)\nback=$(a.back)\nrest=$(a.rest)\n")
-  a
+"Take the account with `address` out of the settings file, and its password out of the Keychain. Its emails stay in their folder."
+forget(address) = begin
+  keep(filter!(a -> !is(a, address), accounts()))
+  secret!(address, "")
+  nothing
 end
 
 # --- the password, in the Mac's Keychain ---------------------------------------------------
@@ -649,16 +694,45 @@ end
 
 Mailer(a::Account=account()) = Mailer(a, nothing, false, Any[], "", :none, 0.0, 0.0, "", 0, 0, 0.0, 0, 0.0, 0, Box[], String[], false, false, Dict{String,String}(), false)
 
-"The mailer of the app that's running"
-const mine = Ref{Union{Nothing,Mailer}}(nothing)
+"The mailers of the app that's running, one for each account. Nothing until a window asks for them."
+const ours = Ref{Union{Nothing,Vector{Mailer}}}(nothing)
+
+"""
+The mailers of the app that's running: one for each account that the settings
+file holds, in the file's order. Each account has its own folder, its own
+connection and its own work. With no account yet, the list has one mailer
+whose account holds nothing, for the settings to fill.
+"""
 own() = begin
-  mine[] === nothing || return mine[]
-  m = Mailer()
-  ready(m.account) && (m.all = nested(root(m.account)))
-  # While the app is built, this code runs in Julia's own program. The app must read the account again when it opens.
-  ccall(:jl_generating_output, Cint, ()) == 1 || (mine[] = m)
-  m
+  ours[] === nothing || return ours[]
+  all = Mailer[Mailer(a) for a in accounts()]
+  isempty(all) && push!(all, Mailer(Account()))
+  foreach(m -> ready(m.account) && (m.all = nested(root(m.account))), all)
+  # While the app is built, this code runs in Julia's own program. The app must read the accounts again when it opens.
+  ccall(:jl_generating_output, Cint, ()) == 1 || (ours[] = all)
+  all
 end
+
+"One more mailer at the end of the list `all`, for an account that the settings are still to fill"
+add!(all::Vector{Mailer}) = (push!(all, Mailer(Account())); last(all))
+
+"""
+Take the mailer `m` out of the list `all`. Its work stops, and its account
+goes from the settings file, with its password from the Keychain. The emails
+stay in their folder on the Mac. The list keeps one mailer at the least.
+"""
+remove!(all::Vector{Mailer}, m::Mailer) = begin
+  m.stop = m.task !== nothing
+  empty!(m.jobs)
+  foreach(b -> b.dirty && isdir(b.path) && save(b), m.all)
+  isempty(m.account.address) || forget(m.account.address)
+  filter!(x -> x !== m, all)
+  isempty(all) && push!(all, Mailer(Account()))
+  nothing
+end
+
+"How many mailers are at work now. They share the time that a frame can spare."
+const working = Ref(1)
 
 changed!(m::Mailer) = (m.changed += 1; m)
 
@@ -671,7 +745,7 @@ rest(m::Mailer) = begin
 end
 
 "Rest, if this turn has gone on for as long as a frame can spare"
-breathe(m::Mailer) = time() - m.turn > SLICE && rest(m)
+breathe(m::Mailer) = time() - m.turn > SLICE / working[] && rest(m)
 
 "A connection to the server that holds the email"
 mutable struct Wire
@@ -684,6 +758,7 @@ mutable struct Wire
   chosen::String         # the folder that's open, or ""
   writes::Bool           # that folder is open to be changed, not only read
   scratch::Vector{UInt8}
+  who::String            # the address of the account, which the bytes that come are counted for
 end
 
 set(easy, option, value) = curl_easy_setopt(easy, option, value)
@@ -748,7 +823,7 @@ connect(m::Mailer, a::Account, name, password) = begin
   set(easy, CURLOPT_NOSIGNAL, 1)
   set(easy, CURLOPT_CONNECTTIMEOUT, 20)
   certificates(easy)
-  w = Wire(curl_multi_init(), easy, UInt8[], 1, 0, Set{String}(), "", false, Vector{UInt8}(undef, 1 << 16))
+  w = Wire(curl_multi_init(), easy, UInt8[], 1, 0, Set{String}(), "", false, Vector{UInt8}(undef, 1 << 16), a.address)
   curl_multi_add_handle(w.multi, easy)
   try
     code = finish(m, w.multi, easy)
@@ -793,7 +868,7 @@ receive!(w::Wire) = begin
     append!(w.inbox, view(w.scratch, 1:Int(n[])))
     got += Int(n[])
   end
-  got > 0 && tally!(got)
+  got > 0 && tally!(w.who, got)
   got > 0
 end
 
@@ -1905,7 +1980,7 @@ start!(m::Mailer) = begin
       end
       only || (m.next = m.checked + 60 * m.account.every)
       # An account that got its day's worth looks again when it can get more
-      !only && m.held > 0 && (m.next = max(m.next, resumes()))
+      !only && m.held > 0 && (m.next = max(m.next, resumes(m.account)))
       # The connection stays open for a while, and what you do in that time goes to the server at once
       waited = time()
       while true
@@ -1960,6 +2035,7 @@ calls this in each frame. It returns the seconds until it wants the next call.
 """
 tick!(m::Mailer) = begin
   ready(m.account) || return Inf
+  working[] = ours[] === nothing ? 1 : max(1, count(busy, ours[]))
   if m.task !== nothing
     if istaskdone(m.task)
       m.task = nothing
@@ -1988,6 +2064,9 @@ quit!(m::Mailer) = begin
   foreach(b -> b.dirty && isdir(b.path) && save(b), values(boxes))
   nothing
 end
+
+"The app is closing: stop the work of each account"
+quit!() = ours[] === nothing || foreach(quit!, ours[])
 
 "The time `at` as a list shows it: the time of day for today, or the day"
 shortdate(at; now=time()) = begin
@@ -2038,12 +2117,15 @@ waiting(m::Mailer) = begin
   who = p === nothing ? "Your email company" : p.name
   most = p !== nothing && haskey(DAILY, p.name) ? " $(commas(DAILY[p.name])) MB of" : " only so much"
   "$who lets an app get$most email in a day. Kaydown stopped before that, with $(commas(m.held)) email$(m.held == 1 ? "" : "s") still to come. " *
-  "It goes on $(resuming(max(m.next, resumes())))."
+  "It goes on $(resuming(max(m.next, resumes(m.account))))."
 end
 
 "A sentence or two on the email: what the work is doing, what went wrong, or when it last looked"
 says(m::Mailer) = begin
   a = m.account
+  # An account that's still to fill, beside others that are connected
+  ready(a) || (ours[] !== nothing && any(o -> o !== m && ready(o.account), ours[])) &&
+    return "This account isn't connected yet. Type its address and its password above, then click Connect."
   ready(a) || return "Kaydown has no email account yet. Type your address and your password above."
   isempty(m.problem) || return m.problem
   p = progress(m)

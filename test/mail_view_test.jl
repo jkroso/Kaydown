@@ -220,6 +220,89 @@ end
   frames()
 end
 
+@testset "more than one account" begin
+  # A second account, with a server of its own. Its emails are in a folder beside the first account's.
+  server2 = Fake.serve(user="two@example.com")
+  inbox2 = Fake.folder!(server2, "INBOX")
+  put!(inbox2, email(7, from="Kim Wu <kim@example.com>", subject="For two"))
+  Fake.folder!(server2, "Drafts", flags="\\Drafts")
+  Mail.secret!("two@example.com", "secret")
+  m2 = Mail.Mailer(Mail.Account(address="two@example.com", name="Jake Two", incoming="127.0.0.1:$(server2.port)",
+                                outgoing="127.0.0.1:$(server2.smtp)", folder=joinpath(top, "mail"), safe=false, back=0))
+  both = Mail.Mailer[m, m2]
+  foreach(o -> Mail.keep(o.account), both)
+  e.nodes[:mailer] = both
+  wait() = begin
+    started = time()
+    while time() - started < 30
+      foreach(Mail.tick!, both)
+      foreach(o -> frame(K.window_of(o)), K.editors)
+      any(o -> Mail.busy(o) || (!isempty(o.jobs) && o.kind === :none), both) || break
+      sleep(0.001)
+    end
+  end
+  wait()
+  dir2 = joinpath(top, "mail", "two@example.com", "Inbox")
+  @test isempty(m2.problem) && [r.subject for r in Mail.rows(dir2)] == ["For two"]
+  # A window is on the account whose folder it shows
+  @test K.mailer(e) === m && K.mail_owner(e, dir2) === m2 && K.mail_owner(e, top) === nothing
+  K.go_folder!(e, dir2)
+  frames()
+  @test K.mailer(e) === m2 && K.mail_place(e, joinpath(dir2, "x.eml")) && !K.mail_place(e, joinpath(top, "x.eml"))
+  # An email that's read is marked on its own account's server
+  click(e.nodes[(:mail_row, 1)])
+  @test endswith(e.buf.path, "For two.eml") && K.mailer(e) === m2
+  wait()
+  @test "\\Seen" in inbox2.notes[1].flags
+  # A new email from this window is a draft of the second account
+  press(w, Keys.n, Keys.cmd, Keys.shft)
+  d = K.editors[end]
+  @test startswith(d.buf.path, joinpath(top, "mail", "two@example.com")) && K.mailer(d) === m2 && Mail.isdraft(d.buf.lines)
+  draft = d.buf.path
+  close(K.window_of(d))
+  rm(draft)
+  K.go_folder!(e, dir)
+  frames()
+  @test K.mailer(e) === m
+
+  # The Email page of the settings has the accounts in a row. A click on one shows it in the form.
+  s, sw = window(joinpath(K.pages_dir[], "email.md"), size=(720px, 1100px))
+  s.nodes[:mailer] = both
+  frames(sw, 3)
+  field(key) = s.nodes[(:mail_field, key)].text
+  @test s.nodes[(:mail_tab, 1)].of === m && s.nodes[(:mail_tab, 2)].of === m2 && K.mailer(s) === m && field(:address) == "you@example.com"
+  shot("11-accounts", sw)
+  click(s.nodes[(:mail_tab, 2)], sw)
+  @test K.mailer(s) === m2 && (field(:address), field(:name), field(:incoming)) == ("two@example.com", "Jake Two", "127.0.0.1:$(server2.port)")
+  @test occursin(joinpath(top, "mail", "two@example.com"), K.mail_news(s)) && s.nodes[:mail_place].at == joinpath(top, "mail")
+  # What Kaydown gets is a setting of the account that shows
+  K.mail_rest!(s, false)
+  @test !Mail.account("two@example.com").rest && Mail.account("you@example.com").rest && !K.mail_rest(s)
+  K.mail_rest!(s, true)
+  wait()
+  # The words after the accounts show a form with nothing in it, for one more account. A second click adds no second one.
+  click(s.nodes[:mail_add], sw)
+  @test length(both) == 3 && K.mailer(s) === both[3] && field(:address) == "" && field(:name) == "" && s.nodes[(:mail_tab, 3)].of === both[3]
+  shot("12-new-account", sw)
+  click(s.nodes[:mail_add], sw)
+  @test length(both) == 3
+  # An address that another account has isn't taken
+  s.nodes[(:mail_field, :address)].text = "TWO@example.com"
+  K.mail_keep!(s, s.nodes[:mail_form])
+  @test occursin("has an account for TWO@example.com already", s.nodes[:mail_form].note) && length(Mail.accounts()) == 2
+  # The words under the form take the account that shows away. The first account shows then.
+  frames(sw)
+  click(s.nodes[:mail_remove], sw)
+  @test length(both) == 2 && K.mailer(s) === m && field(:address) == "you@example.com"
+  click(s.nodes[(:mail_tab, 2)], sw)
+  click(s.nodes[:mail_remove], sw)
+  @test both == [m] && [a.address for a in Mail.accounts()] == ["you@example.com"] && Mail.secret("two@example.com") == ""
+  @test isfile(joinpath(dir2, Mail.rows(dir2)[1].path)) && K.mailer(s) === m   # its emails stay on the Mac
+  close(sw)
+  e.nodes[:mailer] = m
+  Fake.stop(server2)
+end
+
 @testset "the Email page of the settings" begin
   s, sw = window(joinpath(K.pages_dir[], "email.md"), size=(720px, 1100px))
   empty!(K.problems)

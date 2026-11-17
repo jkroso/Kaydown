@@ -475,7 +475,7 @@ end
   @test (have("Inbox"), have("Sent")) == (4, 2)
   # The settings are kept with the account
   Mail.keep(m.account)
-  @test (Mail.account().back, Mail.account().rest) == (1, true) && Mail.Account().back == 12 && Mail.Account().rest
+  @test (Mail.account(m.account.address).back, Mail.account(m.account.address).rest) == (1, true) && Mail.Account().back == 12 && Mail.Account().rest
   Fake.stop(s)
 
   # In a new folder, the order: every email of the inbox comes before the first email of another folder
@@ -598,7 +598,7 @@ end
   foreach(i -> put!(inbox, email(subject="Email $i", id="<day$i@example.com>")), 1:40)
   # Gmail's limit is known by the address. The test's account has none, until the test gives it one.
   @test Mail.allowed(Mail.Account(address="jo@gmail.com")) == 2000 << 20 && Mail.allowed(Mail.Account(address="jo@example.com")) === nothing
-  Mail.allowance[] = sum(values(Mail.tally()), init=0) + 6000   # room for some of the 40 emails, and not for all
+  Mail.allowance[] = sum(values(Mail.tally("you@example.com")), init=0) + 6000   # room for some of the 40 emails, and not for all
   m = mailer(s)
   settle(m)
   dir = joinpath(Mail.root(m.account), "Inbox")
@@ -606,9 +606,10 @@ end
   # The look stopped before the limit. The emails that didn't come wait, and Kaydown says when it goes on.
   @test 0 < have < 40 && m.held == 40 - have && isempty(m.problem)
   @test occursin("Kaydown stopped before that, with $(m.held) emails still to come. It goes on ", Mail.says(m))
-  @test m.next >= Mail.resumes() > time() + 23 * 3600
+  @test m.next >= Mail.resumes(m.account) > time() + 23 * 3600
   # The count of the bytes is kept, for when Kaydown opens again
-  @test sum(n -> parse(Int, split(n, '\t')[2]), readlines(Mail.hours_file())) == sum(values(Mail.tally()))
+  kept = [split(n, '\t') for n in readlines(Mail.hours_file())]
+  @test sum(n -> parse(Int, n[2]), filter(n -> n[3] == "you@example.com", kept)) == sum(values(Mail.tally("you@example.com")))
   # A look that you ask for gets nothing more while the limit holds
   look(m)
   @test length(names(dir)) == have && m.held == 40 - have
@@ -654,4 +655,80 @@ end
   @test n.kind === :login && occursin("no password", n.problem)
   @test occursin("no email account yet", Mail.says(Mail.Mailer(Mail.Account())))
   @test Mail.tick!(Mail.Mailer(Mail.Account())) == Inf
+end
+
+@testset "more than one account" begin
+  had = Mail.accounts()
+  Mail.keep(Mail.Account[])
+  # The settings file keeps each account, in the order that they came
+  one = Mail.Account(address="one@example.com", name="One", incoming="imap.one.example:993", outgoing="smtp.one.example:465", back=3)
+  two = Mail.Account(address="two@example.com", name="Two", incoming="imap.two.example:993", outgoing="smtp.two.example:465", rest=false)
+  Mail.keep(one)
+  Mail.keep(two)
+  @test [a.address for a in Mail.accounts()] == ["one@example.com", "two@example.com"]
+  @test (Mail.account().name, Mail.account("TWO@example.com").name, Mail.account("two@example.com").rest, Mail.account("one@example.com").back) == ("One", "Two", false, 3)
+  @test isempty(Mail.account("nobody@example.com").address)
+  # An account that's kept again keeps its place. One whose address changed takes the place of the old address.
+  one.name = "Uno"
+  Mail.keep(one)
+  Mail.keep(Mail.Account(address="deux@example.com", name="Deux"), was="two@example.com")
+  @test [(a.address, a.name) for a in Mail.accounts()] == [("one@example.com", "Uno"), ("deux@example.com", "Deux")]
+  # A file that an older Kaydown wrote holds one account, and reads the same
+  write(Mail.account_file(), "address=old@example.com\nname=Old\nuser=\nincoming=imap.example.com\noutgoing=smtp.example.com\nfolder=\nevery=7\n")
+  @test [a.address for a in Mail.accounts()] == ["old@example.com"] && Mail.account().every == 7
+  # An account that's forgotten goes from the file, and its password goes too
+  Mail.keep(two)
+  Mail.secret!("two@example.com", "pw")
+  Mail.forget("two@example.com")
+  @test [a.address for a in Mail.accounts()] == ["old@example.com"] && Mail.secret("two@example.com") == ""
+
+  # The bytes of each account are counted on their own, since a company's limit is for one account
+  Mail.tally!("one@example.com", 500)
+  Mail.tally!("Two@example.com", 70)
+  @test sum(values(Mail.tally("one@example.com"))) == 500 && sum(values(Mail.tally("two@example.com"))) == 70
+  Mail.allowance[] = 400
+  @test Mail.capped(one) && !Mail.capped(two)
+  Mail.allowance[] = nothing
+  Mail.keep_tally()
+  @test any(n -> endswith(n, "\t500\tone@example.com"), readlines(Mail.hours_file())) && any(n -> endswith(n, "\t70\ttwo@example.com"), readlines(Mail.hours_file()))
+  # A count that an older Kaydown kept names no account. It's the count of the first account.
+  write(Mail.hours_file(), "$(floor(Int, time() / 3600))\t900\n")
+  Mail.hours[] = nothing
+  @test sum(values(Mail.tally("old@example.com"))) == 900 && isempty(Mail.tally("one@example.com"))
+  rm(Mail.hours_file())
+  Mail.hours[] = nothing
+
+  # Two accounts, each with a server of its own. The email of each comes to its own folder, beside the other's.
+  s1, s2 = Fake.serve(user="one@example.com"), Fake.serve(user="two@example.com")
+  put!(Fake.folder!(s1, "INBOX"), email(to="one@example.com", subject="For one", id="<one1@example.com>"))
+  box2 = Fake.folder!(s2, "INBOX")
+  put!(box2, email(to="two@example.com", subject="For two", id="<two1@example.com>"))
+  put!(box2, email(to="two@example.com", subject="More for two", id="<two2@example.com>", date="Sat, 14 Nov 2026 10:00:00 +1100"))
+  base = joinpath(top, "both")
+  account(address, s) = Mail.Account(address=address, name="Jake", incoming="127.0.0.1:$(s.port)", outgoing="127.0.0.1:$(s.smtp)", folder=base, safe=false, back=0)
+  a1, a2 = account("one@example.com", s1), account("two@example.com", s2)
+  foreach(a -> (Mail.secret!(a.address, "secret"); Mail.keep(a)), (a1, a2))
+  both = [Mail.Mailer(a1), Mail.Mailer(a2)]
+  started = time()
+  while time() - started < 30
+    foreach(Mail.tick!, both)
+    any(m -> Mail.busy(m) || (!isempty(m.jobs) && m.kind === :none), both) || break
+    sleep(0.001)
+  end
+  @test all(m -> isempty(m.problem) && m.checked > 0, both)
+  @test names(joinpath(base, "one@example.com", "Inbox")) == ["2026-11-14 0932 Sam Lee - For one.eml"]
+  @test names(joinpath(base, "two@example.com", "Inbox")) == ["2026-11-14 0932 Sam Lee - For two.eml", "2026-11-14 1000 Sam Lee - More for two.eml"]
+  @test !isempty(Mail.tally("one@example.com")) && sum(values(Mail.tally("two@example.com"))) > sum(values(Mail.tally("one@example.com")))
+  # An answer is written in the folder of the account that got the email
+  answer = Mail.reply!(both[2], joinpath(base, "two@example.com", "Inbox", "2026-11-14 0932 Sam Lee - For two.eml"))
+  @test startswith(answer, joinpath(base, "two@example.com")) && Mail.isdraft(page(answer))
+
+  # An account that's taken away: its work stops, and it goes from the settings with its password. Its emails stay.
+  Mail.remove!(both, both[1])
+  @test [m.account.address for m in both] == ["two@example.com"] && [a.address for a in Mail.accounts()] == ["old@example.com", "two@example.com"]
+  @test Mail.secret("one@example.com") == "" && isfile(joinpath(base, "one@example.com", "Inbox", "2026-11-14 0932 Sam Lee - For one.eml"))
+  # With the last account gone, the list has one that's still to fill
+  Mail.remove!(both, both[1])
+  @test length(both) == 1 && isempty(both[1].account.address) && Mail.add!(both) === both[2] && length(both) == 2
+  Mail.keep(had)
 end

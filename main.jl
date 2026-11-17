@@ -13301,25 +13301,24 @@ end
 const MODE_W = 30px   # the room that the picture takes in the top bar
 const TITLE_ROOM = 160px   # the least room that the file's name keeps in the top bar of a narrow window
 
-# UI.jl has a ladder among its icons and no snake. This is the snake's shape, in
-# a square 16 wide: its body, which gets thin towards the tail, its head, the
-# eye that's a hole in the head, and the three lines of its tongue.
-const SNAKE = "M10.4 3.5Q10.06 4.6 9.13 4.26Q8.21 3.92 7.58 3.97Q6.95 4.02 6.42 4.31Q5.89 4.59 5.98 4.99Q6.06 5.38 6.49 5.64Q6.92 5.89 7.94 6.29Q8.96 6.69 9.89 7.31Q10.82 7.94 11.46 9.09Q12.11 10.24 11.6 11.36Q11.1 12.48 10.06 13.07Q9.02 13.67 8.01 13.91Q7 14.16 5.99 14.32Q4.98 14.49 4.01 14.62Q3.05 14.74 3 14.5Q2.95 14.26 3.89 14.01Q4.84 13.77 5.79 13.5Q6.75 13.23 7.69 12.88Q8.62 12.54 9.31 12.06Q9.99 11.59 10.22 10.9Q10.45 10.21 10.09 9.84Q9.73 9.47 8.86 9.02Q8 8.58 7.11 8.33Q6.22 8.08 5.14 7.3Q4.06 6.52 3.99 4.97Q3.91 3.41 5.06 2.63Q6.2 1.85 7.49 1.77Q8.78 1.69 9.76 2.05Q10.74 2.4 10.4 3.5Z" *
-              "M8.99 2.9A2.7 2 15 1 1 14.21 4.3A2.7 2 15 1 1 8.99 2.9Z" *
-              "M11.9 3A0.6 0.6 0 1 0 13.1 3A0.6 0.6 0 1 0 11.9 3Z" *
-              "M13.99 4.01L14.79 4.26A0.3 0.3 0 0 1 14.61 4.84L13.81 4.59A0.3 0.3 0 0 1 13.99 4.01Z" *
-              "M14.58 4.28L15.48 3.88A0.3 0.3 0 0 1 15.72 4.42L14.82 4.82A0.3 0.3 0 0 1 14.58 4.28Z" *
-              "M14.94 4.37L15.54 5.17A0.3 0.3 0 0 1 15.06 5.53L14.46 4.73A0.3 0.3 0 0 1 14.94 4.37Z"
+# UI.jl has a ladder among its icons and no snake. These are the snake's
+# shapes, in a square 16 wide: its body and its tongue. The body is a line round
+# a snake that lies folded three times, with its tail at the top and its head
+# hung down, as a snake takes you down. Each edge of a line is on a whole or a
+# half, so on a screen with two pixels to a point each line is sharp.
+const SNAKE = ("M0.92 1.01L6.92 0.01Q6.96 0 7 0L12 0Q13.45 0 14.47 1.03Q15.5 2.05 15.5 3.5Q15.5 4.95 14.47 5.97Q13.45 7 12 7L4 7Q3.5 7 3.5 7.5Q3.5 8 4 8L7 8Q8.04 8 8.77 8.73Q9.5 9.46 9.5 10.5Q9.5 10.37 9.43 10.3Q9.43 10.3 9.51 10.36Q10.25 10.9 10.25 11.8Q10.25 12.68 9.45 13.65Q8.65 14.6 8 14.6Q7.35 14.6 6.55 13.65Q5.75 12.68 5.75 11.8Q5.75 10.9 6.49 10.36Q6.57 10.3 6.57 10.3Q6.5 10.37 6.5 10.5L7 10.5L7 11L4 11Q2.55 11 1.53 9.97Q0.5 8.95 0.5 7.5Q0.5 6.05 1.53 5.03Q2.55 4 4 4L12 4Q12.5 4 12.5 3.5Q12.5 3 12 3L7 3Q6.96 3 6.92 2.99L0.92 1.99Q0.87 1.99 0.82 1.97Q0.78 1.95 0.74 1.92Q0.69 1.9 0.66 1.86Q0.62 1.83 0.59 1.79Q0.56 1.75 0.54 1.71Q0.52 1.66 0.51 1.61Q0.5 1.56 0.5 1.52Q0.5 1.47 0.51 1.42Q0.52 1.34 0.56 1.27Q0.59 1.2 0.65 1.15Q0.7 1.09 0.77 1.06Q0.84 1.02 0.92 1.01ZM1.08 1.99L1 1.5L1.08 1.01L7.08 2.01L7 2.5L7 2L12 2Q12.62 2 13.06 2.44Q13.5 2.88 13.5 3.5Q13.5 4.12 13.06 4.56Q12.62 5 12 5L4 5Q2.96 5 2.23 5.73Q1.5 6.46 1.5 7.5Q1.5 8.54 2.23 9.27Q2.96 10 4 10L7 10Q7.05 10 7.1 10.01Q7.15 10.02 7.19 10.04Q7.24 10.06 7.28 10.08Q7.32 10.11 7.35 10.15Q7.39 10.18 7.42 10.22Q7.44 10.26 7.46 10.31Q7.48 10.35 7.49 10.4Q7.5 10.45 7.5 10.5Q7.5 10.86 7.08 11.17Q6.75 11.41 6.75 11.8Q6.75 12.32 7.32 13Q7.82 13.6 8 13.6Q8.18 13.6 8.68 13Q9.25 12.32 9.25 11.8Q9.25 11.41 8.92 11.17Q8.5 10.86 8.5 10.5Q8.5 9.88 8.06 9.44Q7.62 9 7 9L4 9Q3.38 9 2.94 8.56Q2.5 8.12 2.5 7.5Q2.5 6.88 2.94 6.44Q3.38 6 4 6L12 6Q13.04 6 13.77 5.27Q14.5 4.54 14.5 3.5Q14.5 2.46 13.77 1.73Q13.04 1 12 1L7 1L7 0.5L7.08 0.99L1.08 1.99Z",
+               "M8.4 14.1L8.4 14.55A0.4 0.4 0 0 1 7.6 14.55L7.6 14.1A0.4 0.4 0 0 1 8.4 14.1ZM8.26 14.86L7.36 15.61A0.4 0.4 0 0 1 6.84 14.99L7.74 14.24A0.4 0.4 0 0 1 8.26 14.86ZM8.26 14.24L9.16 14.99A0.4 0.4 0 0 1 8.64 15.61L7.74 14.86A0.4 0.4 0 0 1 8.26 14.24Z")
 
 """
-The name of the snake's icon. Its shape goes among UI.jl's icons the first time
-that it's asked for. It goes there again when the shape there isn't this one:
-an app that loads this file again keeps UI.jl's icons, and with them the shape
+The name of the snake's icon. Its shapes go among UI.jl's icons the first time
+that it's asked for. They go there again when the shapes there aren't these:
+an app that loads this file again keeps UI.jl's icons, and with them the shapes
 that the file had before.
 """
 snake() = begin
   kept = get(icon_cache, "snake", nothing)
-  (kept === nothing || first(kept.paths).d != SNAKE) && (icon_cache["snake"] = (paths=[SVGPath(d=SNAKE)], viewbox=(0f0, 0f0, 16f0, 16f0)))
+  (kept === nothing || [p.d for p in kept.paths] != collect(SNAKE)) &&
+    (icon_cache["snake"] = (paths=[SVGPath(d=d) for d in SNAKE], viewbox=(0f0, 0f0, 16f0, 16f0)))
   "snake"
 end
 
@@ -13328,7 +13327,8 @@ describe(m::Mode) = begin
   ishovered(m) || (m.quiet = false)
   Box(width(MODE_W), height(28px), radius(6px), Alignment.Center, name=e.plain ? "Plain text" : "Rich text",
       background(ishovered(m) ? colours.hover : clear),
-    Icon(e.plain ? snake() : "ladder", size=15px, color=colours.dim))
+    # Both are drawn for a square 16 wide, so at this size their lines are on whole pixels
+    Icon(e.plain ? snake() : "ladder", size=16px, color=colours.dim))
 end
 
 cursor(::Mode) = :hand

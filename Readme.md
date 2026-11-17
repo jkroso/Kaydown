@@ -126,7 +126,7 @@ A code block in the language `board` shows every to-do item of its page as a car
 
 ## Draw a sketch
 
-A code block in the language `sketch` is a drawing. The buttons at its top are the tools: one selects a shape, and the others draw by hand, a line, an arrow, a box, an oval and words. The dots choose a colour. Drag in the sketch to draw. With the first tool, click a shape to select it, drag it to move it, and press Delete to take it away. Each shape is a line of the block, so ⌘Z takes back the last thing you drew. `sketch.jl` says how the lines are written.
+A code block in the language `sketch` is a drawing. The buttons at its top are the tools: one selects a shape, and the others draw by hand, a line, an arrow, a box, an oval and words. The dots choose a colour. Drag in the sketch to draw. With the first tool, click a shape to select it, drag it to move it, and press Delete to take it away. While a takeoff, a schedule, a picture or a diagram fills the window, the sidebar isn't there, and the top bar has none of the sidebar's buttons: not the one that shows it, the eye or the two arrows. The file's name is in the middle of the window then. Each shape is a line of the block, so ⌘Z takes back the last thing you drew. `sketch.jl` says how the lines are written.
 
 ## List what's in the pages of a folder
 
@@ -267,6 +267,7 @@ julia -O0 --project=. test/window_test.jl         # the settings window, ⌘W, a
 julia -O0 --project=. test/title_test.jl          # the menu of the file's name in the top bar
 julia -O0 --project=. test/back_test.jl           # going back to the file that showed before, and forward again
 julia -O0 --project=. test/selection_test.jl      # where the colour of the selection goes
+julia -O0 --project=. test/full_bar_test.jl       # the top bar has none of the sidebar's buttons while something fills the window
 julia -O0 --project=. test/rich_test.jl           # rich text and plain text: where the caret stops, what ⌫ and Return do, and the snake and the ladder in the top bar
 julia -O0 --project=. test/spelling_test.jl       # the red dots under a word that's spelt wrong, and what the page's menu does with it
 julia -O0 --project=. test/sound_test.jl          # a line that holds only a sound file, and the Transcribe button under its player

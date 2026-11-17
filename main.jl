@@ -1124,7 +1124,8 @@ end
 # back button of a web browser does. ⌘⌥→ goes forward again, to the file that
 # going back left. While the sidebar is open, two arrows at its top do the
 # same. They are in the top bar, at the right of the part that's over the
-# sidebar, and they aren't there while the sidebar is closed. An arrow is
+# sidebar, and they aren't there while the sidebar is closed, or while
+# something fills the window (see `filled`). An arrow is
 # faint when it has no file to go to, and its tooltip names the file that it
 # goes to. Any way of showing a file adds to the list: a link, the
 # list of files, the file finder, a line of a `find` block. A file shows from
@@ -13370,6 +13371,12 @@ bar that's over the sidebar.
 """
 history_buttons(e) = e.panel ? (button(e, :back, "arrow-left"), button(e, :forward, "arrow-right")) : ()
 
+"""
+True when something fills the window in place of the page and the sidebar: a
+takeoff or a schedule, or a picture.
+"""
+filled(e) = full_block(e) !== nothing || zooming(e) !== nothing
+
 describe(t::TopBar) = begin
   e = editor(t)
   b = e.buf
@@ -13384,18 +13391,22 @@ describe(t::TopBar) = begin
   # sidebar hidden, the left end keeps the room of its own two buttons. It always keeps the room that its
   # buttons need past the sidebar: a sidebar that's dragged narrow is narrower than its buttons.
   wide, _ = window_size(e)
-  buttons = (button(e, :panel, "layout-sidebar"), hidden_button(e)...)
+  # While something fills the window, the sidebar isn't there. The bar has none of the sidebar's buttons
+  # then, not the one that shows it either, and the file's name is in the middle of the window.
+  full = filled(e)
+  showing = full ? 0.0 : opened(e)   # how far the sidebar shows, from 0 to 1
+  buttons = full ? () : (button(e, :panel, "layout-sidebar"), hidden_button(e)...)
   # The two arrows are at the sidebar's right edge, as far in as the right end of a row of its list. They
   # ride on that edge while the sidebar slides open, once it has passed the other buttons.
-  arrows = history_buttons(e)
+  arrows = full ? () : history_buttons(e)
   need = 84px + 32px * length(buttons) - 2px + (isempty(arrows) ? 0px : 74px)
-  over = max(need, panel_w(e) * opened(e))
-  left = max(150px * (1 - opened(e)), need - panel_w(e) * opened(e), min(side, wide - panel_w(e) * opened(e) - side - TITLE_ROOM))
-  e.nodes[:title_room] = wide - panel_w(e) * opened(e) - left - side   # the name is cut short to fit in it
+  over = max(need, panel_w(e) * showing)
+  left = max(150px * (1 - showing), need - panel_w(e) * showing, min(side, wide - panel_w(e) * showing - side - TITLE_ROOM))
+  e.nodes[:title_room] = wide - panel_w(e) * showing - left - side   # the name is cut short to fit in it
   # The top bar lies over the top of the sidebar. The file's name is in the
   # middle of the space beside the sidebar, so it moves as the sidebar slides.
   Row(width(grow=grow), height(TOPBAR_H), name="TopBar",
-    Row(fixed(left + panel_w(e) * opened(e)), height(grow=grow),
+    Row(fixed(left + panel_w(e) * showing), height(grow=grow),
       # The close, minimise and zoom buttons sit over the first 84px
       Row(fixed(over), height(grow=grow), padding(0px, 8px, 0px, 84px), child_gap=2px,
         buttons..., Box(width(grow=grow)), arrows...)),

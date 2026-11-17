@@ -242,37 +242,60 @@ end
   @test e.buf.lines[1] == "Some **bold** words"
 end
 
-@testset "the caret steps over a part of the page that shows as one thing" begin
+@testset "the caret goes onto a part of the page that shows as one thing, and not into it" begin
   e, w = window(PAGE)
   # The line across the page
   caret!(e, w, 9, 0)
   press(w, Keys.up)
-  @test e.buf.caret[1] == 7
-  press(w, Keys.down)
+  @test e.buf.caret == (8, 0) && K.picked(e.buf) == (8, 8)
+  @test !raw(e, 8)
+  press(w, Keys.up)
+  @test e.buf.caret[1] == 7 && K.picked(e.buf) === nothing
+  press(w, Keys.down); press(w, Keys.down)
   @test e.buf.caret[1] == 9
-  # The ``` lines of a code block. The code itself is text that the caret goes into.
+  # The caret steps over the ``` lines of a code block, which don't show. The code itself is text that it goes into.
   press(w, Keys.down)
   @test e.buf.caret[1] == 11
   @test !raw(e, 10) && !raw(e, 12)
   press(w, Keys.down)
   @test e.buf.caret[1] == 13
-  # The diagram
+  # The diagram. The caret is on all of it, and it still shows as a diagram.
   press(w, Keys.down)
-  @test e.buf.caret[1] == 18
+  @test e.buf.caret == (14, 0) && K.picked(e.buf) == (14, 17)
   @test !(K.item(e, 15).content isa K.Flow)
+  # ↓ goes on to the line after it, and ↑ comes back onto it from there
+  press(w, Keys.down)
+  @test e.buf.caret[1] == 18 && K.picked(e.buf) === nothing
+  press(w, Keys.up)
+  @test K.picked(e.buf) == (14, 17)
   press(w, Keys.up)
   @test e.buf.caret[1] == 13
-  # → at the end of a line goes over it too
+  # → at the end of a line goes onto it too, and → again goes past it. ← does the same the other way.
   caret!(e, w, 13, 0)
   press(w, Keys.right)
+  @test K.picked(e.buf) == (14, 17)
+  press(w, Keys.right)
   @test e.buf.caret == (18, 0)
+  press(w, Keys.left)
+  @test K.picked(e.buf) == (14, 17)
+  press(w, Keys.left)
+  @test e.buf.caret[1] == 13
+  # The keys that go along a line leave the caret on it
+  press(w, Keys.right)
+  press(w, Keys.right, cmd)
+  @test K.picked(e.buf) == (14, 17)
+  press(w, Keys.left, opt)
+  @test K.picked(e.buf) == (14, 17) || e.buf.caret[1] == 13
   # A key can't take the caret into the diagram's code, but something that puts it there shows the code
   caret!(e, w, 15, 3)
   @test e.buf.caret == (15, 3)
   @test K.item(e, 15).content isa K.Flow
+  # From its code, ↓ goes onto the diagram as a whole, and then past it
   press(w, Keys.down); press(w, Keys.down)
-  @test e.buf.caret[1] == 18
+  @test K.picked(e.buf) == (14, 17)
   @test !(K.item(e, 15).content isa K.Flow)
+  press(w, Keys.down)
+  @test e.buf.caret[1] == 18
   # In a table the ** of a cell don't show, with the caret in the cell or not
   caret!(e, w, 21, 4)
   press(w, Keys.right)
@@ -284,10 +307,13 @@ end
 
 @testset "⌫ after a part that shows as one thing" begin
   e, w = window("one\n\n---\ntwo\n\n```julia\nx = 1\n```\n\nthree\n")
-  # After a line across the page, it takes the line away
+  # After a line across the page, the caret goes onto the line, and ⌫ again takes the line away
   caret!(e, w, 4, 0)
   press(w, Keys.backspace)
+  @test e.buf.lines[3:4] == ["---", "two"] && K.picked(e.buf) == (3, 3)
+  press(w, Keys.backspace)
   @test e.buf.lines[1:3] == ["one", "", "two"]
+  @test e.buf.caret == (3, 0)
   # A line with nothing on it after a code block goes, and the caret is at the end of the code
   i = findfirst(==("three"), e.buf.lines) - 1
   caret!(e, w, i, 0)
@@ -301,13 +327,64 @@ end
   @test length(e.buf.lines) == n
 end
 
-@testset "↓ under a block at the end of the page starts a line" begin
+@testset "↓ on a block at the end of the page starts a line under it" begin
   e, w = window("text\n\n```mermaid\ngraph TD\n  A --> B\n```")
   caret!(e, w, 1, 2)
   press(w, Keys.down)
   @test e.buf.caret[1] == 2
   press(w, Keys.down)
+  @test K.picked(e.buf) == (3, 6) && length(e.buf.lines) == 6
+  press(w, Keys.down)
   @test e.buf.lines[end] == "" && e.buf.caret == (7, 0)
+end
+
+@testset "what the keys do while the caret is on a part as a whole" begin
+  e, w = window("one\n\n```ui\nTextInput(placeholder=\"Name\")\n```\n\ntwo\n\n```mermaid\ngraph TD\n  A --> B\n```\n\nthree\n")
+  caret!(e, w, 2, 0)
+  press(w, Keys.down)
+  @test K.picked(e.buf) == (3, 5)
+  # A character changes nothing
+  type(e, w, "x")
+  @test e.buf.lines[3] == "```ui" && K.picked(e.buf) == (3, 5)
+  # Return gives the keyboard to the field of the form, and what's typed goes into the field
+  press(w, Keys.enter)
+  @test w.focus !== e && K.tabstop(w.focus)
+  @test e.buf.lines[3:5] == ["```ui", "TextInput(placeholder=\"Name\")", "```"]
+  # esc gives the keyboard back to the page, with the caret still on the form
+  press(w, Keys.escape)
+  @test w.focus === e && K.picked(e.buf) == (3, 5)
+  # ⌘E shows the form's code, with the caret in it, and ⌘E again puts the caret back on the form
+  press(w, Keys.e, cmd)
+  frame(w)
+  @test raw(e, 3) && K.picked(e.buf) === nothing
+  press(w, Keys.e, cmd)
+  frame(w)
+  @test K.picked(e.buf) == (3, 5)
+  # What's pasted goes on a line of its own under the part
+  K.type!(e, "pasted")
+  frame(w)
+  @test e.buf.lines[3:6] == ["```ui", "TextInput(placeholder=\"Name\")", "```", "pasted"]
+  press(w, Keys.z, cmd)
+  # The command that moves a line moves all the lines of the part
+  caret!(e, w, 2, 0)
+  press(w, Keys.down)
+  K.move_lines!(e, 1)
+  frame(w)
+  @test e.buf.lines[3:6] == ["", "```ui", "TextInput(placeholder=\"Name\")", "```"]
+  @test K.picked(e.buf) == (4, 6)
+  press(w, Keys.z, cmd)
+  # ⌫ takes the part away
+  caret!(e, w, 2, 0)
+  press(w, Keys.down)
+  press(w, Keys.backspace)
+  @test e.buf.lines[1:4] == ["one", "", "", "two"]
+  # ⌦ at the end of the line before a part goes onto it, and ⌦ again takes it away
+  i = findfirst(==("```mermaid"), e.buf.lines)
+  caret!(e, w, i - 1, 0)
+  press(w, Keys.delete)
+  @test K.picked(e.buf) == (i, i + 3)
+  press(w, Keys.delete)
+  @test !any(==("```mermaid"), e.buf.lines)
 end
 
 @testset "a part that's being typed shows as text until the caret leaves it" begin
@@ -327,11 +404,13 @@ end
   @test e.buf.lines[3:6] == ["```mermaid", "graph TD", "  A --> B", "```"] || e.buf.lines[3:6] == ["```mermaid", "graph TD", "A --> B", "```"]
   # Its code shows while the caret is in it
   @test K.item(e, 4).content isa K.Flow
-  # ↑ leaves it, and it shows as a diagram
+  # ↑ leaves its code. The caret is then on the diagram as a whole, and it shows as a diagram.
   press(w, Keys.up); press(w, Keys.up)
   frame(w)
-  @test e.buf.caret[1] == 2
+  @test K.picked(e.buf) == (3, 6)
   @test !(K.item(e, 4).content isa K.Flow)
+  press(w, Keys.up)
+  @test e.buf.caret[1] == 2
   # A line across the page shows its dashes while they're typed
   caret!(e, w, 2, 0)
   type(e, w, "---")
@@ -376,13 +455,13 @@ end
   press(w, Keys.backspace)
   @test startswith(e.buf.lines[3], "Some **bold* words")
   press(w, Keys.z, cmd)
-  # Back to rich text with the caret in the diagram's code: the diagram shows, and the caret is outside it
+  # Back to rich text with the caret in the diagram's code: the diagram shows, and the caret is on it as a whole
   caret!(e, w, 15, 3)
   K.plain!(e, false)
   frame(w); frame(w)
   @test !e.buf.plain
   @test !(K.item(e, 15).content isa K.Flow)
-  @test e.buf.caret[1] in (13, 18)
+  @test K.picked(e.buf) == (14, 17)
   @test !raw(e, 3)
 end
 

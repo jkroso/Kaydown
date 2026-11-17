@@ -49,6 +49,9 @@
 #   - Type in a line and it keeps its look: that's rich text. Press ⌘E, or
 #     click Plain in the top bar, to see the markup of the part that the
 #     caret is in. ⌘E again, or Rich, hides it.
+#   - Move the caret down the page onto a form, a diagram or a picture. A
+#     line goes round it. Return gives it the keyboard, ⌫ takes it away, and
+#     ↑ and ↓ go on to the lines beside it.
 #   - ⌘B and ⌘I make the selection bold or italic. ⌘Z and ⌘⇧Z undo and redo.
 #   - Double-click selects a word, triple-click a line. ⌘-click opens a link.
 #   - ⌘F finds text in the page. Return goes to the next place that has it.
@@ -146,6 +149,8 @@
 @use "github.com/jkroso/MiniFB.jl"... onfiledrop onscroll
 @use "github.com/jkroso/UI.jl/Interface/Geometric"...
 @use "github.com/jkroso/UI.jl/Interface/Specific"...
+@use "github.com/jkroso/UI.jl/Interface/abstract" tabstop tabbed!
+@use "github.com/jkroso/UI.jl/Interface/draw" scene
 @use "github.com/jkroso/UI.jl/Interface/abstract" SemanticUI GeometricUI WrapMode Theme with_theme adopt_theme! light describe describe! reuse! detach! add_child! window_of focus handled carry! inputs version
 @use "github.com/jkroso/UI.jl/Interface/draw" ui draw ishovered cursor open_url viewport show_tooltip! hide_tooltip! hittest show_menu! hide_menu! redraw_in! rect popup! close_popup! MouseScroll Pinch onpinch placed! with_clip with_round_clip clipboard!
 @use "github.com/jkroso/UI.jl/Interface/objc" libobjc cls sel msg nsstring jstring with_pool send
@@ -584,7 +589,10 @@ Base.@kwdef mutable struct Buffer
   reading::Bool = false
   # True while the page is written as plain text: the part with the caret shows its markup. The window sets it from its setting.
   plain::Bool = false
-  # Where the caret was when the page last looked at where it is, or nothing before the first look. See `rest!`.
+  # The part of the page that the caret is on as a whole, and the text, caret and so on that it was worked out for. See `picked`.
+  picked::Union{Nothing,Tuple{Int,Int}} = nothing
+  picked_for::Tuple{Int,Pos,Pos,Bool,Bool} = (-1, (0, 0), (0, 0), false, false)
+  # Where the caret was when the page last looked at where it is, or nothing before the first look. See `stand!`.
   stood::Union{Nothing,Pos} = nothing
   # How the file shows. A Markdown file is a document that you change, and :code is a file of
   # code that you change, which is one block of code. Any other file is only shown: :text shows
@@ -1429,7 +1437,8 @@ as it reads.
 incode(b::Buffer, i::Int) = begin
   b.reading && return false
   s, t = codeblock(b, i)
-  s <= b.caret[1] <= t && s <= b.anchor[1] <= t
+  # A block that the caret is on as a whole shows as what it makes
+  s <= b.caret[1] <= t && s <= b.anchor[1] <= t && picked(b) === nothing
 end
 
 # --- rich text and plain text ----------------------------------------------------------------
@@ -1446,8 +1455,12 @@ end
 #   - It stays on the side of them that it came from. After **bold**, a caret
 #     that came from the left is in the bold text, and what's typed there is
 #     bold. A caret that came from the right is after the bold text.
-#   - It steps over a part of the page that shows as one thing: a picture, a
-#     diagram, a line across the page, the ``` lines of a code block.
+#   - It doesn't go into a part of the page that shows as one thing: a
+#     diagram, a form, a picture, a line across the page. It goes onto the
+#     part as a whole, and a line goes round the part. Return then gives the
+#     part the keyboard, so you can type in a field of a form. ⌫ takes the
+#     part away. ↑ and ↓ go on to the line before it and the line after it.
+#   - It steps over the ``` lines of a code block, which don't show.
 #
 # Only a part that's being typed shows its markup: the caret is on it because
 # its text was typed there, and it stays as text until the caret leaves.
@@ -1475,7 +1488,8 @@ that's enough. As rich text, the line also has to be one that shows as
 something other than its text, which is only so while it's typed: a ``` line,
 a line across the page, a picture, a table's line of dashes.
 """
-israw(b::Buffer, i::Int) = alone(b, i) && (!rich(b) || kinds(b)[i].kind in (Kind.fence, Kind.rule, Kind.table) || pictured(b, i))
+israw(b::Buffer, i::Int) =
+  alone(b, i) && (!rich(b) || (picked(b) === nothing && (kinds(b)[i].kind in (Kind.fence, Kind.rule, Kind.table) || pictured(b, i))))
 
 """
 The spans of line `i` as rich text reads them: the text after what starts the
@@ -1564,16 +1578,49 @@ free(b::Buffer, i::Int, from::Int) = begin
   kinds(b)[i].kind == Kind.fence ? from == i : run[1] <= from <= run[2]
 end
 
-"The first line after `i`, or with `by` of -1 before it, that the caret can go to from line `from`. It's 0, or a line past the last, when there's none."
+"""
+The first and last line of the part of the page that line `i` is in, when the
+caret can be on that part as a whole: a block that shows as a diagram, a form,
+a plan and so on, the front matter, a picture, a line across the page. Nothing
+for any other line. A ``` line of a code block isn't such a part, and nor is
+a table's line of dashes: neither shows, so the caret steps over them.
+"""
+part(b::Buffer, i::Int) = begin
+  run = solid(b, i)
+  run === nothing && return nothing
+  k = kinds(b)[i].kind
+  k == Kind.table || (k == Kind.fence && run[1] == run[2]) ? nothing : run
+end
+
+"""
+The first and last line of the part of the page that the caret is on as a
+whole, or nothing when it's in text. The caret is on a part when it's at the
+very start of the part's first line, in rich text, with nothing selected. The
+part then shows as what it makes, with a line round it, and not as its code.
+"""
+picked(b::Buffer) = begin
+  key = (b.version, b.caret, b.anchor, b.plain, b.reading)
+  key == b.picked_for && return b.picked
+  i, col = b.caret
+  run = rich(b) && col == 0 && alone(b, i) && i <= length(b.lines) ? part(b, i) : nothing
+  b.picked_for = key
+  b.picked = run !== nothing && run[1] == i ? run : nothing
+end
+
+"""
+The first line after `i`, or with `by` of -1 before it, that the caret can go
+to from line `from`: a line of text, or a line of a part that the caret can be
+on as a whole. It's 0, or a line past the last, when there's none.
+"""
 step_over(b::Buffer, i::Int, by::Int, from::Int) = begin
-  while 1 <= i <= length(b.lines) && !free(b, i, from)
+  while 1 <= i <= length(b.lines) && !free(b, i, from) && part(b, i) === nothing
     s, t = solid(b, i)
     i = by > 0 ? t + 1 : s - 1
   end
   i
 end
 
-"Where the caret goes in rich text when it's sent to `p` from `from`, going in the direction `by`: the nearest place where it can stop"
+"Where the caret goes in rich text when it's sent to `p` from `from`, going in the direction `by`: the nearest place where it can stop, or the start of a part that it goes onto as a whole"
 settle_rich(b::Buffer, p::Pos, by::Int, from::Pos) = begin
   i, col = p
   if !free(b, i, from[1])
@@ -1581,10 +1628,12 @@ settle_rich(b::Buffer, p::Pos, by::Int, from::Pos) = begin
     for d in (by < 0 ? (-1, 1) : (1, -1))
       j = step_over(b, i, d, from[1])
       1 <= j <= length(b.lines) || continue
+      # The caret goes onto a part like a diagram as a whole: to the start of its first line
+      free(b, j, from[1]) || return (part(b, j)[1], 0)
       i, col, by, found = j, d > 0 ? 0 : length(b.lines[j]), d, true
       break
     end
-    found || return p   # the page has nothing but parts like that
+    found || return p   # the page has nothing but lines that don't show
   end
   for (a, z) in Iterators.flatten((unseen(b, i), wholes(b, i)))
     a < col < z || continue
@@ -1597,10 +1646,11 @@ end
 Look at where the caret is, before the page is laid out. As rich text, a caret
 that something put among characters that don't show goes to the nearest place
 where it can stop. In a file that was just opened, and after a change from
-plain text to rich text, it also leaves a part of the page that shows as one
-thing. At any other time it stays in such a part, which then shows as text:
-a key or a click can't take it there, so something meant to. A click on the
-front matter does, and so does the menu that inserts a block.
+plain text to rich text, a caret that's in a part of the page that shows as
+one thing goes onto the part as a whole. At any other time it stays in such a
+part, which then shows as text: a key or a click can't take it there, so
+something meant to. A click on the front matter does, and so does the menu
+that inserts a block.
 """
 stand!(b::Buffer) = begin
   b.caret == b.stood && return b
@@ -1809,6 +1859,8 @@ nearest cell when `by` is 0.
 """
 settle(b::Buffer, p::Pos, by::Int=0; from::Pos=b.caret) = begin
   rich(b) || return settle_cells(b, p, by)
+  # A caret that's on a part as a whole isn't in the part's text, so it can't move about in that text
+  from == b.caret && picked(b) !== nothing && (from = (0, 0))
   # As rich text the caret also keeps off what doesn't show. A place that one rule gives can break the other, so both look again.
   for _ in 1:4
     q = settle_rich(b, settle_cells(b, p, by), by, from)
@@ -10273,6 +10325,7 @@ draw(ctx, size, ui::ConcreteRect, d::Document) = begin
   e.origin = (ui.left, ui.top)
   fill_selection(ctx, selection_boxes(ctx, e, ui))
   with_others(() -> fill_selection(ctx, selection_boxes(ctx, e, ui)), b)
+  ring_part(ctx, e, ui)
   annotate(ctx, e, ui)
   # A file that's only shown has a selection and no caret
   if !(b.reading || readonly(b))
@@ -10363,6 +10416,7 @@ end
 "Draw the caret on the page, whose text is at `ui`"
 carets(ctx, e, ui) = begin
   b = e.buf
+  picked(b) === nothing || return   # a line round the part shows where the caret is
   for it in e.layout[e.shown]
     top = ui.top + it.top
     if it.content isa Grid
@@ -10657,6 +10711,13 @@ onmouse(p::Page, ev::MouseMove) = drag!(editor(p), ev.position)
 "Put `new` where the selection is, or at the caret"
 type!(e, new; typing=false) = begin
   b = e.buf
+  run = picked(b)
+  if run !== nothing
+    isempty(new) && return e
+    # What's pasted or inserted while the caret is on a part as a whole goes on a line of its own under the part
+    b.caret = b.anchor = line_end(b, run[2])
+    new = "\n" * new
+  end
   cell = cellat(b, b.caret)
   if cell !== nothing && b.caret[1] == b.anchor[1]
     # In a row of a table, typing only ever changes the cell the caret is in
@@ -10701,6 +10762,9 @@ the whole of something that shows as one thing, like the number of a footnote.
 """
 beside(b::Buffer, p::Pos, by::Int) = begin
   rich(b) || return neighbour(b, p, by)
+  run = p == b.caret ? picked(b) : nothing
+  # From a part that the caret is on as a whole, it's the end of the line before the part or the start of the line after it
+  run === nothing || return by < 0 ? (run[1] > 1 ? line_end(b, run[1] - 1) : p) : (run[2] < length(b.lines) ? (run[2] + 1, 0) : p)
   i, col = p
   hidden, whole = unseen(b, i), wholes(b, i)
   if by < 0
@@ -10740,6 +10804,23 @@ end
 vertical(e, by::Int) = begin
   b = e.buf
   i, col = b.caret
+  run = picked(b)
+  if run !== nothing
+    # From a part that the caret is on as a whole, ↑ goes to the line before the part and ↓ to the line after it
+    j = by > 0 ? run[2] + 1 : run[1] - 1
+    j < 1 && return b.caret
+    if j > length(b.lines)
+      # ↓ on a part at the end of the document starts a line below it, as it does under a table
+      edit!(b, line_end(b, length(b.lines)), line_end(b, length(b.lines)), "\n")
+      return (length(b.lines), 0)
+    end
+    x = e.goal = something(e.goal, 0px)
+    free(b, j, 0) || return by > 0 ? (j, 0) : line_end(b, j)
+    into = item(e, j)
+    into.content isa Sheet && return enter(e, into, into.content, by, x)
+    f = flow(e, j, false)
+    return (j, colat(f, by < 0 ? length(f.lines) : 1, x))
+  end
   it = item(e, i)
   at = it.content isa Grid ? gridcell(it.content, b.caret) : nothing
   at === nothing || return vertical(e, it, at, by)
@@ -10750,13 +10831,15 @@ vertical(e, by::Int) = begin
   1 <= k + by <= length(f.lines) && return (i, colat(f, k + by, x))
   j = i + by
   if rich(b)
-    # As rich text, the caret steps over a part of the page that shows as one thing, like a diagram
+    # As rich text, the caret steps over a line that doesn't show, like the ``` of a code block
     j = step_over(b, j, by, i)
     if j > length(b.lines) && i < length(b.lines)
-      # ↓ over a block at the end of the document starts a line below it, as it does under a table
+      # ↓ over such a line at the end of the document starts a line below it, as it does under a table
       edit!(b, line_end(b, length(b.lines)), line_end(b, length(b.lines)), "\n")
       return (length(b.lines), 0)
     end
+    # It goes onto a part that shows as one thing, like a diagram, as a whole
+    1 <= j <= length(b.lines) && !free(b, j, i) && return (j, 0)
   end
   j < 1 && return (1, 0)
   j > length(b.lines) && return line_end(b, i)
@@ -10835,6 +10918,7 @@ end
 
 erase!(e, to::Pos) = begin
   b = e.buf
+  picked(b) === nothing || return delete_lines!(e)   # the part that the caret is on as a whole goes
   insheet(b, b.caret[1]) && !selecting(b) && erase_row!(e, to) && return
   cell = cellat(b, b.caret)
   # In a table, a cell's edges can't be deleted
@@ -10846,6 +10930,7 @@ end
 "Return starts a new line. What else it does depends on the block the caret is in."
 newline!(e) = begin
   b = e.buf
+  picked(b) === nothing || return enter_part!(e)   # Return gives the keyboard to the part that the caret is on
   insheet(b, b.caret[1]) && b.caret[1] == b.anchor[1] && return next_row!(e)
   isempty(rowcells(b, b.caret)) || return next_cell!(e, false, down=true)
   selecting(b) ? type!(e, "\n") : newline!(e, block(b, b.caret[1]))
@@ -11013,6 +11098,7 @@ end
 "Put `mark` around the selection, or take it away if it's there already"
 surround!(e, mark::String) = begin
   b = e.buf
+  picked(b) === nothing || return
   lo, hi = selection(b)
   lo[1] == hi[1] || return
   if rich(b)
@@ -11304,6 +11390,7 @@ caret_page!(e, by::Int, select::Bool) = foreach(_ -> move!(e, vertical(e, by), s
 "What ⌫ does: it takes away a row of a table that has nothing in it, or what's before the caret"
 erase_back!(e) = begin
   b = e.buf
+  picked(b) === nothing || return delete_lines!(e)   # the part that the caret is on as a whole goes
   emptyrow(b) && return backrow!(e)
   erase_start!(e) && return
   blk = block(b, b.caret[1])
@@ -11316,9 +11403,9 @@ returns true when it did it, and false when the caret is somewhere else.
 
 - In a heading, a list item or a quote, it makes the line a paragraph. An item
   of a list inside a list goes out a step first.
-- After a line across the page or a picture, it takes that away.
-- After any other part that shows as one thing, it takes away a line with
-  nothing on it. A line with text stays, and the caret goes over the part.
+- After a part that shows as one thing, like a diagram or a picture, it takes
+  away a line with nothing on it. A line with text stays. Either way the caret
+  goes onto the part, and ⌫ again takes the part away.
 """
 erase_start!(e) = begin
   b = e.buf
@@ -11335,13 +11422,9 @@ erase_start!(e) = begin
   end
   at = something(findfirst(r -> r[1] < col <= r[2], hidden), 0)
   (at == 0 ? col : hidden[at][1]) == 0 && i > 1 && !free(b, i - 1, i) || return false
-  s, t = solid(b, i - 1)
   if isempty(b.lines[i]) && line.kind != Kind.code
     edit!(b, line_end(b, i - 1), (i, 0), "")
     b.caret = b.anchor = settle(b, line_end(b, i - 1), -1, from=(0, 0))
-  elseif kinds(b)[s].kind == Kind.rule || pictured(b, s)
-    edit!(b, (s, 0), (i, 0), "")
-    b.caret = b.anchor = (s, col)
   else
     return (move!(e, line_end(b, i - 1), false, by=-1); true)
   end
@@ -11351,22 +11434,16 @@ end
 
 """
 What ⌦ does: it takes away what's after the caret. As rich text, at the end of
-a line it joins the next line's text to it, without what starts that line, or
-takes away a line across the page or a picture that comes next.
+a line it joins the next line's text to it, without what starts that line.
 """
 erase_next!(e) = begin
   b = e.buf
+  picked(b) === nothing || return delete_lines!(e)   # the part that the caret is on as a whole goes
   to = beside(b, b.caret, 1)
   if rich(b) && !selecting(b) && to[1] > b.caret[1]
     j = to[1]
-    if !free(b, j, b.caret[1])
-      s, t = solid(b, j)
-      (kinds(b)[j].kind == Kind.rule || pictured(b, j)) || return nothing
-      at = b.caret
-      edit!(b, line_end(b, j - 1), line_end(b, j), "")
-      b.caret = b.anchor = at
-      return touch!(e)
-    end
+    # The caret goes onto a part that comes next, and ⌦ again takes that part away. It stays before a ``` line.
+    free(b, j, b.caret[1]) || return part(b, j) === nothing ? nothing : move!(e, to, false, by=1)
     to = (j, first_stop(b, j))
   end
   erase!(e, to)
@@ -11379,6 +11456,8 @@ erase_line_end!(e) = (b = e.buf; at = line_end(b, b.caret[1]); at == b.caret ? e
 
 "The first and last line that the selection touches. A selection that ends at the start of a line doesn't touch that line."
 touched(b::Buffer) = begin
+  run = picked(b)
+  run === nothing || return run   # all the lines of the part that the caret is on as a whole
   lo, hi = minmax(b.caret, b.anchor)
   (lo[1], hi[2] == 0 && hi[1] > lo[1] ? hi[1] - 1 : hi[1])
 end
@@ -11404,7 +11483,8 @@ delete_lines!(e) = begin
     edit!(b, (1, 0), line_end(b, t), "")
   end
   i = min(s, length(b.lines))
-  b.caret = b.anchor = settle(b, (i, min(col, length(b.lines[i]))))
+  # The caret comes to the line afresh, so in rich text it isn't left on a line that doesn't show
+  b.caret = b.anchor = settle(b, (i, min(col, length(b.lines[i]))), 1, from=(0, 0))
   touch!(e)
 end
 
@@ -11568,6 +11648,7 @@ as it is. Outside code, where a comment has no mark, nothing changes.
 """
 toggle_comment!(e) = begin
   b = e.buf
+  picked(b) === nothing || return
   s, t = touched(b)
   ks = kinds(b)
   lines = [i for i in s:t if ks[i].kind == Kind.code && !isempty(strip(b.lines[i]))]
@@ -12051,6 +12132,8 @@ ontype(e::Editor, ev::Typed) = begin
   (iscntrl(c) || '\uf700' <= c <= '\uf8ff') && return nothing
   # While the page is read, a key that would change the text does nothing. A file that's only shown is never changed.
   (e.buf.reading || readonly(e.buf)) && return nothing
+  # Nor does a character change a part that the caret is on as a whole, like a diagram
+  picked(e.buf) === nothing || return nothing
   each_selection!(() -> type!(e, string(c), typing=true), e)
   # A code block offers names only just after a character is typed
   e.nodes[:typed_at] = (e.buf.path, e.buf.version, e.buf.caret)
@@ -12668,6 +12751,94 @@ plain!(e, on::Bool) = begin
   end
   save_settings!(e)
   rerun!(e, :plain)
+  e
+end
+
+# --- the caret on a part of the page as a whole ------------------------------------------------
+#
+# In rich text the caret doesn't go into a part of the page that shows as one
+# thing, like a form, a diagram or a picture. It goes onto the part, and a
+# line goes round the part to show that. See `picked`. From there:
+#
+#   - Return gives the part the keyboard. A form's first field takes it, and
+#     Tab goes to the next field. A plan, a schedule and a sketch take their
+#     own keys. A picture, a diagram and a page of a PDF fill the window. The
+#     front matter shows as it's written. esc gives the keyboard back to the
+#     page, with the caret still on the part.
+#   - ↑ and ← go to the line before the part, and ↓ and → to the line after.
+#   - ⌫ and ⌦ take the part away, and the commands that move, copy and delete
+#     a line do that to all of its lines.
+#   - ⌘E shows its code, with the caret in it.
+
+"`c` with `alpha` of its colour, from 0 for none to 1 for all"
+tint(c, alpha) = (k = convert(RGBA{Float64}, c); RGBA(k.r, k.g, k.b, alpha))
+
+const RING_OUT = 10.0   # px from the page's text to the line round a part that the caret is on
+
+"Draw a line round the part of the page that the caret is on as a whole. The page's text is at `ui`."
+ring_part(ctx, e, ui) = begin
+  b = e.buf
+  run = picked(b)
+  (run === nothing || isempty(e.layout)) && return
+  # While the part has the keyboard, the field in it that takes the keys shows that itself
+  w = window_of(e)
+  (w === nothing || w.focus === e) || return
+  it = item(e, run[1])
+  it.first <= run[1] <= it.last || return
+  round_box(ctx, num(ui.left) - RING_OUT, num(ui.top + it.top) + 1, num(e.width) + 2RING_OUT, max(4.0, num(it.tall) - 2), 8.0,
+            fill=tint(colours.accent, 0.06), line=tint(colours.accent, 0.75), wide=1.5)
+end
+
+"The part of a component that takes the keys when the component has the keyboard, or nothing for a node that has none"
+keyboard_part(node) = nothing
+keyboard_part(v::TakeoffView) = part!(() -> PlanArea(of=v), v, :area)
+keyboard_part(v::ScheduleView) = chart(v)
+keyboard_part(v::SketchView) = sketch_area(v)
+
+"The nodes that `pick` is true for among those that the window last drew in the part of the page that `it` shows, in the order of the layout"
+nodes_in(pick, e, it::Item) = begin
+  out = SemanticUI[]
+  w = window_of(e)
+  drawn = w === nothing ? nothing : scene(w)
+  drawn === nothing && return out
+  page = node!(Document, e, :document)
+  top, bottom = e.origin[2] + it.top, e.origin[2] + it.top + it.tall
+  walk(ui, inpage) = begin
+    ui isa ConcreteRect || return
+    node = ui.from isa GeometricUI ? ui.from.from : nothing
+    inpage |= node === page
+    inpage && node isa SemanticUI && node !== page && top <= ui.top + ui.height / 2 < bottom && pick(node) &&
+      !any(n -> n === node, out) && push!(out, node)
+    foreach(child -> walk(child, inpage), ui.children)
+  end
+  walk(drawn, false)
+  out
+end
+
+"""
+What Return does while the caret is on a part of the page as a whole: it gives
+the part the keyboard, in the way that suits the part. A part with nothing to
+give it to, like a line across the page, stays as it is.
+"""
+enter_part!(e) = begin
+  b = e.buf
+  run = picked(b)
+  (run === nothing || isempty(e.layout)) && return e
+  it = item(e, run[1])
+  # A plan, a schedule and a sketch have keys of their own
+  views = nodes_in(n -> keyboard_part(n) !== nothing, e, it)
+  isempty(views) || return (focus(keyboard_part(first(views))); e)
+  # A field to type in takes the keyboard, with its text selected, as Tab gives it
+  fields = nodes_in(tabstop, e, it)
+  isempty(fields) || return (focus(first(fields)); tabbed!(first(fields)); e)
+  # A picture, a diagram or a page of a PDF fills the window
+  fills = nodes_in(n -> n isa Fillable, e, it)
+  isempty(fills) || return (zoom_in!(e, first(fills).what, first(fills).parent); e)
+  # Front matter shows as it's written, with the caret after its first key
+  if run[1] == 1 && kinds(b)[1].lang in (MATTER, TOML_MATTER)
+    b.caret = b.anchor = line_end(b, min(2, run[2]))
+    touch!(e)
+  end
   e
 end
 

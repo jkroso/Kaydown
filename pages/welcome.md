@@ -102,7 +102,14 @@ A file path shows as a breadcrumb. Click its last name to list what's in the fol
 fs"."
 ```
 
-To change the code, hold ⌥ and click the block. Or press ⌘E, and move the caret into the block with ↑ or ↓.
+The caret doesn't go into a block like this one. Move it down the page with ↓, and it goes onto the block as a whole: a line shows round the block. From there:
+
+- Return gives the block the keyboard. In a form, the first field takes it, and Tab goes to the next field. Esc gives the keyboard back to the page.
+- ↑ and ↓ go on to the line before the block and the line after it.
+- ⌫ takes the block away.
+- ⌘E shows the block's code, so you can change it. ⌘E again shows what the code makes.
+
+A click on the block with ⌥ held shows its code too.
 
 Code can run in a line of text too. Write a `!` and then the code between backticks, like \!`fs"."`. This page is in the folder !`fs"."` and its colours are !`page_theme()`. A number works too: 12 × 2.4 is !`12 * 2.4`. Press ⌘E and click a line to see its code.
 

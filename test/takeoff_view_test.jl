@@ -156,6 +156,29 @@ end
   at(under); w.keys |= Keys.cmd; foreach(_ -> onscroll(w, Vec2{px}(0px, 3px)), 1:3); w.keys ⊻= Keys.cmd; frames()
   @test v.zoom > 2small
   @test all(isapprox.(K.window_point(v, house(8, 5)), under, atol=0.01))
+  # The plan has the keyboard since the drag, so a mouse wheel with no key held makes it bigger and smaller too
+  wheel(dx, dy) = (onscroll(w, Vec2{px}(px(dx), px(dy)), true); frames())
+  fingers(dx, dy) = (onscroll(w, Vec2{px}(px(dx), px(dy)), false); frames())
+  was = v.zoom
+  at(under); wheel(0, 3)
+  @test v.zoom ≈ was * exp(0.3)
+  @test all(isapprox.(K.window_point(v, house(8, 5)), under, atol=0.01))
+  wheel(0, -3)
+  @test v.zoom ≈ was
+  # Two fingers on the trackpad move it, and leave its size as it is
+  spot = v.at
+  fingers(-2, -2)
+  @test v.at[1] > spot[1] && v.at[2] > spot[2] && v.zoom ≈ was
+  fingers(2, 2)
+  @test all(v.at .≈ spot)
+  # A scroll that doesn't say what sent it, as from a window with no macOS behind it, is two fingers
+  onscroll(w, Vec2{px}(-2px, -2px)); frames()
+  @test v.at[1] > spot[1] && v.zoom ≈ was
+  fingers(2, 2)
+  # Once the text has the keyboard, the wheel and two fingers are the page's, and leave the plan as it is
+  K.focus(e)
+  wheel(0, -3); fingers(-2, -2)
+  @test v.zoom ≈ was && all(v.at .≈ spot)
   # Now a drag moves it, as far as the edge of the page and no further
   was = v.at
   press(K.window_point(v, house(8, 5))); at(K.window_point(v, house(8, 5)) .+ (-40, -25)); release()
@@ -614,14 +637,29 @@ end
   n = amounts()[1]
   plan_click(3, 3)
   @test amounts()[1] == n + 1
-  # Two fingers move a plan that's bigger than its view, with no click first
+  # A mouse wheel makes a plan that fills the window bigger and smaller round the mouse, with no click first and no key held
+  wheel(dy) = (onscroll(w, Vec2{px}(0px, px(dy)), true); frames())
   under = K.window_point(v, house(8, 5))
-  at(under); w.keys |= Keys.cmd; foreach(_ -> onscroll(w, Vec2{px}(0px, 3px)), 1:3); w.keys ⊻= Keys.cmd; frames()
   K.focus(e)
+  whole = v.zoom
+  at(under); foreach(_ -> wheel(3), 1:3)
+  @test v.zoom > 2whole
+  # The page is wide and the window is tall. While the page is still shorter than the window, it stays in the
+  # middle from top to bottom, so only the place across stays under the mouse from the first step.
+  @test K.window_point(v, house(8, 5))[1] ≈ under[1] atol=0.01
+  # Once the page is taller than the window, the point under the mouse stays there both ways
+  under = K.window_point(v, house(8, 5)); at(under)
+  wheel(3)
+  @test all(isapprox.(K.window_point(v, house(8, 5)), under, atol=0.01))
+  # Two fingers on the trackpad move it, with no click first
   was = v.at
-  onscroll(w, Vec2{px}(-2px, -2px)); frames()
+  onscroll(w, Vec2{px}(-2px, -2px), false); frames()
   @test v.at[1] > was[1] && v.at[2] > was[2]
-  button(:fit); frames()
+  foreach(_ -> wheel(-3), 1:4)
+  @test v.zoom ≈ whole
+  # It gets no smaller than the whole page
+  wheel(-30)
+  @test v.zoom ≈ whole
   # Esc puts the arrow back, then puts the takeoff back in the page, where the page was
   click(K.window_point(v, house(14, 3)))
   key(Keys.escape)

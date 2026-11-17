@@ -3816,8 +3816,10 @@ end
 #     moved and taken away like any outline, and it goes when its area does.
 #   - With the arrow, click a mark or a line to select it, drag a corner to move
 #     it, and press Delete to take it away. Drag the plan to move it.
-#   - ⌘ and the scroll wheel make the plan bigger and smaller. Once you've
-#     clicked the plan, two fingers move it. A plan that shows whole stays put.
+#   - A mouse wheel makes the plan bigger and smaller round the mouse, and so
+#     does a pinch. Two fingers on the trackpad move the plan. With ⌘ held, they
+#     make it bigger and smaller. In the page, the wheel and two fingers move
+#     the page until you click the plan. A plan that shows whole stays put.
 #   - The button with four arrows makes the block fill the window, with the list
 #     of measures beside the plan or under it. Esc puts it back in the page.
 #   - V, C, L, A, X and S choose the tools. Esc drops what's half drawn. ⌘Z takes
@@ -5148,14 +5150,16 @@ onmouse(a::PlanArea, ev::MouseMove) = begin
   handled   # the drag is the plan's, so the page's text doesn't select
 end
 
-# Scrolling with ⌘ held makes the plan bigger or smaller, round the mouse. Once a click has given the
-# plan the keyboard, scrolling without ⌘ moves the plan. Before that, it scrolls the page that the plan is on.
-# A plan that fills the window has no page to scroll, so scrolling always moves it.
+# A mouse wheel makes the plan bigger or smaller, round the mouse, like a map. Two fingers on the trackpad move
+# the plan, and a pinch makes it bigger or smaller. With ⌘ held, both make it bigger or smaller.
+# A plan in the page takes them once a click has given it the keyboard, or while ⌘ is held. Before that, they
+# move the page that the plan is on, so that the page can scroll past it. A plan that fills the window has no page.
 onscroll(a::PlanArea, ev::MouseScroll) = begin
   v, w = a.of, ev.window
   v.zoom > 0 || return nothing
-  Keys.cmd in w.keys && return zoom_plan!(v, exp(num(ev.delta[2]) / 10), num(w.mouse[1]), num(w.mouse[2]))
-  (w.focus === a || v.full) || return nothing
+  cmd = Keys.cmd in w.keys
+  (cmd || w.focus === a || v.full) || return nothing
+  (cmd || ev.wheel) && return zoom_plan!(v, exp(num(ev.delta[2]) / 10), num(w.mouse[1]), num(w.mouse[2]))
   v.at = (v.at[1] - 30num(ev.delta[1]) / v.zoom, v.at[2] - 30num(ev.delta[2]) / v.zoom)
   moved!(v)
   handled
@@ -5991,7 +5995,7 @@ toolbar(v::TakeoffView) = begin
               button!(v, :next, (:page, 1), icon="chevron-right", tip="The next page", off=t.page >= n)) : ())...,
     Box(width(grow=grow)),
     button!(v, :smaller, (:zoom, 1 / 1.4), icon="zoom-out", tip="Smaller"),
-    button!(v, :bigger, (:zoom, 1.4), icon="zoom-in", tip="Bigger  pinch, or ⌘ and scroll"),
+    button!(v, :bigger, (:zoom, 1.4), icon="zoom-in", tip=v.full ? "Bigger  pinch, or the mouse wheel" : "Bigger  pinch, or ⌘ and scroll"),
     button!(v, :fit, :fit, icon="aspect-ratio", tip="Show the whole page"),
     button!(v, :full, :full, icon=v.full ? "fullscreen-exit" : "arrows-fullscreen", tip=v.full ? "Back to the page  esc" : "Fill the window"),
     rule(),

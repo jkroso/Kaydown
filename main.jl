@@ -10441,9 +10441,34 @@ took(e) = begin
   holds(f, under) || holds(under, f)
 end
 
+"A heading as a link names it: its letters and digits in lower case, with a - where anything else is. `Live blocks` is `live-blocks`."
+heading_slug(words) = String(strip(replace(lowercase(plain_cell(words)), r"[^\p{L}\p{N}]+" => "-"), '-'))
+
+"""
+Follow a link that names a heading of a page: `welcome.md#tables`, or `#tables`
+for a heading of the page that shows. The page opens, and the heading goes to
+the top of the window. It's true when the link names a page. It's false for any
+other link with a # in it, like the address of a web page.
+"""
+follow_heading!(e, url) = begin
+  file, name = String.(split(url, '#', limit=2))
+  path = isempty(file) ? e.buf.path : abspath(docdir(e), unescaped(file))
+  (ismarkdown(path) && isfile(path)) || return false
+  path == e.buf.path || open!(e, path)
+  b = e.buf
+  ks = kinds(b)
+  i = findfirst(i -> ks[i].kind == Kind.heading && heading_slug(rest(b.lines[i], ks[i].prefix)) == heading_slug(unescaped(name)), eachindex(ks))
+  i === nothing && return true   # the page has no such heading, so it shows from where it was
+  show_line!(e, i)
+  # Its line goes near the top of the window. The next frame does it, once it has laid out the page.
+  e.nodes[:hold] = (i, 24px - PAGE_TOP)
+  true
+end
+
 "Open a link: a file on the Mac in this editor, like a page, or a file that came with an email, and anything else in the app the system picks for it"
 follow!(e, url) = begin
   startswith(url, '^') && return follow_note!(e, url[2:end])
+  occursin('#', url) && follow_heading!(e, url) && return e   # a heading of a page, like welcome.md#tables
   path = abspath(docdir(e), unescaped(url))
   isfile(path) ? open!(e, path) : open_url(url)
 end

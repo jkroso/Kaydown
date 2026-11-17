@@ -47,6 +47,7 @@ julia --project=. main.jl ~/notes        # opens a file or a folder
 
 The `pages` folder has the pages that come with Kaydown:
 
+- `examples.md` lists everything that Kaydown does, with a link to an example of each. Start there to see it all.
 - `welcome.md` shows what the editor does.
 - `components.md` has a live block for each of UI.jl's components.
 - `julia.md` has code to run with ⌘Return.
@@ -194,6 +195,7 @@ julia -O0 --project=. test/video_test.jl          # a line that holds only a vid
 julia -O0 --project=. test/html_test.jl           # the page of HTML that ⌘⇧E saves
 julia -O0 --project=. test/merge_test.jl          # your changes and an agent's changes to one page put together, and how the two talk
 julia -O0 --project=. test/pasteboard_test.jl     # what the Mac's clipboard holds: text, files and pictures
+julia -O0 --project=. test/examples_test.jl       # the page that lists every example: each link goes somewhere, and nothing is left out
 julia -O0 --project=. test/chart_test.jl          # how a chart is read and written, and where its bars, lines and slices go
 julia -O0 --project=. test/chart_view_test.jl     # the chart of a table, a spreadsheet and a sheet, in a window that isn't on the screen
 julia -O0 --project=. test/ask_test.jl            # how a question and its answers are read and written

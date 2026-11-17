@@ -17237,9 +17237,9 @@ end
 # knows, like Gmail, needs only a name and a password, and the form says which
 # password that company takes, with a button that opens the page where you make
 # one. For an address at a domain of its own, Kaydown asks which company takes
-# the domain's email (see `lookup!` in mail.jl). The servers and the folder are
-# under a line that shows them, and show by themselves when Kaydown can't tell
-# the servers.
+# the domain's email (see `lookup!` in mail.jl). The servers are under a line
+# that shows them. When Kaydown can't tell the servers, their two fields show
+# with the other fields, and that line isn't there.
 
 "The fields of the account on the Email page of the settings, and the button that connects it"
 @def mutable struct MailForm <: SemanticUI
@@ -17397,7 +17397,9 @@ describe(f::MailForm) = begin
     map(row, MAIL_FIELDS)...,
     help..., page...,
     folder,
-    node!(MailMore, e, :mail_more),
+    # The line that shows and hides the servers is for an address whose servers Kaydown knows. When it can't
+    # tell them, the two fields are fields of the form like the others, with no line over them.
+    (unknown ? () : (node!(MailMore, e, :mail_more),))...,
     (more ? map(row, MAIL_MORE) : ())...,
     # The button is the last thing in the form, after every field, with what it came to under it. The words
     # that take the account away are beside it. A company that Kaydown can't sign in to has no button: the

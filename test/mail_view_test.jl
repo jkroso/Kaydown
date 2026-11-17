@@ -315,7 +315,9 @@ end
   @test occursin("Kaydown has", K.mail_news(s))
   # The Connect button is the last thing in the form, under the servers, with the words that take the account away beside it
   low(node) = K.num(rect(node).top)
-  @test low(s.nodes[:mail_keep]) > low(s.nodes[(:mail_field, :outgoing)]) > low(s.nodes[:mail_more]) > low(s.nodes[:mail_place])
+  @test low(s.nodes[:mail_keep]) > low(s.nodes[(:mail_field, :outgoing)]) > low(s.nodes[(:mail_field, :incoming)]) > low(s.nodes[:mail_place])
+  # Kaydown can't tell the servers of example.com, so the two fields show with the others, with no line over them
+  @test !haskey(s.nodes, :mail_more)
   @test abs(low(s.nodes[:mail_remove]) - low(s.nodes[:mail_keep])) < 30 && K.num(rect(s.nodes[:mail_remove]).left) > K.num(rect(s.nodes[:mail_keep]).left)
   @test s.nodes[:mail_servers]   # the servers show, so the line over them points down
   shot("7-settings", sw)
@@ -428,7 +430,8 @@ end
   s.nodes[(:mail_field, :address)].text = "jo@yahoo.com"
   frames(sw)
   @test s.nodes[(:mail_field, :incoming)].text == "imap.mail.yahoo.com:993" && s.nodes[:mail_page].url == "https://login.yahoo.com/account/security"
-  # The line under the button shows and hides the servers
+  # An address whose servers Kaydown knows has a line that shows and hides the servers
+  @test rect(s.nodes[:mail_more]) !== nothing && !s.nodes[:mail_servers]
   click(s.nodes[:mail_more], sw)
   @test s.nodes[:mail_form].more
   shot("10-outlook", sw)

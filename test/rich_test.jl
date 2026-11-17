@@ -232,6 +232,24 @@ end
   @test e.buf.lines[j:j+1] == ["- an *it*", "- *em* here"]
 end
 
+@testset "Return on an empty list item ends the list" begin
+  for lead in ("- ", "1. ", "- [ ] ", "- [x] ", "> ", "  - ")
+    e, w = window("$(lead)one\n$(lead)\n\nA line after\n")
+    caret!(e, w, 2, length(lead))
+    press(w, Keys.enter)
+    @test e.buf.lines[1:3] == ["$(lead)one", "", ""]
+    @test e.buf.caret == e.buf.anchor == (2, 0)
+    # One ⌘Z puts the item back
+    press(w, Keys.z, cmd)
+    @test e.buf.lines[2] == lead
+    # It does the same as plain text
+    K.plain!(e, true)
+    caret!(e, w, 2, length(lead))
+    press(w, Keys.enter)
+    @test e.buf.lines[1:3] == ["$(lead)one", "", ""]
+  end
+end
+
 @testset "⌘B takes the bold from text that's all selected" begin
   e, w = window("Some **bold** words\n")
   # Each end of the selection is outside the ** that don't show

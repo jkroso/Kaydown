@@ -11532,9 +11532,11 @@ newline!(e, ::Type{<:Union{List,Quote,Paragraph}}) = begin
   col < line.prefix && return type!(e, "\n")
   lead = head(text, line.prefix)
   # Return on an empty list item ends the list
+  # What starts the item goes as it's written. As rich text, a selection that's
+  # deleted keeps what starts its line, so `type!` would leave the item there.
   if length(text) == line.prefix && k != Kind.paragraph
-    b.anchor = (i, 0)
-    return type!(e, "")
+    edit!(b, (i, 0), (i, line.prefix), "")
+    return touch!(e)
   end
   # As rich text, bold text that the new line cuts in two is bold on both lines
   shut, opened = halves!(b)

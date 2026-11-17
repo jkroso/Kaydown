@@ -45,6 +45,10 @@ total = sum(grid);
 
 Type the first two letters of a name that the page's code has, like `ar` or `pa`, on the empty line of this block. A list under the caret shows the names that start that way. ↑ and ↓ choose one, Return or Tab types the rest of it, and Escape hides the list.
 
+The list has only the names that code at the caret can use. A name that's made inside a function, like a value that the function takes, is in the list only while the caret is in that function. The fields of a struct are never in it.
+
+Each name has paler words at its right that say what it is. A name with a value says the type of the value, like `Float64` or `Vector{Wall}`. Other names say `function`, `struct`, `module` or `macro`. The page reads these from its code, so most names have them before any code has run.
+
 ```julia
 
 ```

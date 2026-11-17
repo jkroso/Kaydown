@@ -5,7 +5,7 @@ A Markdown editor for the Mac, made with [UI.jl](https://github.com/jkroso/UI.jl
 A code block does more than show code. What it does depends on its language:
 
 - `ui` runs its Julia code and shows what the code makes.
-- `julia` runs the line that the caret is in when you press ⌘Return, and shows what it comes to in a box after the line. It offers the names in scope as you type.
+- `julia` runs the line that the caret is in when you press ⌘Return, and shows what it comes to in a box after the line. It offers the names that code at the caret can use as you type, and says what each one is: the type of a value, or `function`, `struct`, `module` or `macro`.
 - In any code, a bracket or a quote that you type comes with the one that closes it, and the caret stays between the two. With text selected, the pair goes round the text. The two brackets that the caret is between glow.
 - `sheet` works things out, a row at a time.
 - `spreadsheet` is a grid of cells with formulas.
@@ -278,7 +278,7 @@ julia -O0 --project=. test/schedule_view_test.jl  # the schedule's bars and link
 julia -O0 --project=. test/project_page_test.jl   # a video or a sound on the web, and the button that makes a job in Centient
 julia -O0 --project=. test/outcome_test.jl        # the code that ⌘Return runs in a `julia` block, and the box of what it comes to
 julia -O0 --project=. test/outcome_parts_test.jl  # the fields of a struct and the children of a node, which that box lists
-julia -O0 --project=. test/names_test.jl          # the list of names that a code block offers while you type
+julia -O0 --project=. test/names_test.jl          # the list of names that a code block offers while you type, and what it says each name is
 julia -O0 --project=. test/code_file_test.jl      # a Julia file that the page changes, as one block of code
 julia -O0 --project=. test/code_settings_test.jl  # the settings of code: long lines, line numbers, the guide, the indent, the font and size
 julia -O0 --project=. test/weight_test.jl         # the weights of the page's text and of code: the weights a font has, bold text, the settings file

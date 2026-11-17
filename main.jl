@@ -2945,14 +2945,22 @@ suggestbox(e) = begin
   else
     return ()
   end
-  wide = max(150px, maximum(n -> measure(face, n), names) + 26px)
+  # In Julia code, each name has what it is at the right of its row, in a paler colour
+  notes = s isa Flow ? name_notes(e, i, names) : fill("", length(names))
+  pale = Face(face, color=colours.dim)
+  span(note) = sum(((part, f),) -> measure(f, part), runs(note, pale), init=0px)
+  needs(n, note) = measure(face, n) + (isempty(note) ? 0px : NOTE_GAP + span(note))
+  wide = max(150px, maximum(map(needs, names, notes)) + 26px)
   list = Column(fixed(wide), Alignment.Start, padding(4px), radius(7px), background(colours.float), border(1px, :solid, colours.line), lifted,
     name="Names",
     [Row(width(grow=grow), height(face.size * 1.8), Alignment.Center, padding(8px, 0px), radius(4px),
          background(j == chosen ? colours.active : clear),
-       Text(n, size=face.size, family=face.family, subfamily=face.style, color=colours.ink, wrap=WrapMode.none))
-     for (j, n) in enumerate(names)]...)
-  left = text_left(e) + across - 9px
+       (isempty(note) ? (Text(n, size=face.size, family=face.family, subfamily=face.style, color=colours.ink, wrap=WrapMode.none),) :
+        (Box(Text(n, size=face.size, family=face.family, subfamily=face.style, color=colours.ink, wrap=WrapMode.none)),
+         Box(width(grow=grow), height(1px)), spared(note, pale)...))...)
+     for (j, (n, note)) in enumerate(zip(names, notes))]...)
+  # A list that's too wide for the room at its right stays in the window
+  left = clamp(text_left(e) + across - 9px, 8px, max(8px, window_size(e)[1] - 8px - wide))
   top = TOPBAR_H + PAGE_TOP + it.top - e.scroll.offset + down + 3px
   top >= TOPBAR_H || return ()
   (Row(width(grow=grow), height(grow=grow), Alignment.Start, padding(top, 0px, 0px, left), list),)
@@ -18280,12 +18288,16 @@ end
 # --- the names a code block offers -------------------------------------------------------
 #
 # While you type a name in a code block, a list under the caret shows the names
-# that start the same way, as a sheet does. They are the names in the page's
-# other code of that language, the nearest first. Julia code also gets every
-# name that's in scope: the names that the page's code made when it ran, the
-# names of Julia's own functions and types, like `length`, its macros, like
-# `@show`, and the names that a live block has, like Slider. ↑ and ↓ choose a
-# name, Return or Tab types the rest of it, and esc hides the list.
+# that start the same way, as a sheet does. In Julia code they are the names
+# that code at the caret can use. First come the names that the page's code
+# makes, the nearest first: see "the names in reach of the caret". Then comes
+# every other name that's in scope: the names that the page's code made when
+# it ran, the names of Julia's own functions and types, like `length`, its
+# macros, like `@show`, and the names that a live block has, like Slider. Code
+# in any other language gets each name in the page's other code of that
+# language, the nearest first. ↑ and ↓ choose a
+# name, Return or Tab types the rest of it, and esc hides the list. In Julia
+# code the list also says what each name is: see "what a name is" below.
 #
 # The list shows just after you type a character of a name, from the name's
 # second character. It doesn't show in a string or a comment, after a dot, for
@@ -18381,19 +18393,415 @@ code_offered(e) = begin
     fit < 2 && (push!(seen, name); push!(found, (fit, from, far, name)))
     true
   end
-  for (name, places) in page_names(e, lang)
-    # The name that's being typed is in the page's code too, where the caret is
-    others = [abs(p[1] - i) for p in places if p != (i, start)]
-    isempty(others) || note!(name, 0, minimum(others)) || return nothing
-  end
   if lang == "julia"
+    # Only the names that code at the caret can use: see "the names in reach of the caret"
+    near = Dict{String,Int}()
+    for made in page_bounds(e)
+      # The name that's being typed can be one that the code makes, where the caret is
+      (inreach(made, i) && made.at != (i, start)) || continue
+      near[made.name] = min(get(near, made.name, typemax(Int)), abs(made.at[1] - i))
+    end
+    for (name, far) in near
+      note!(name, 0, far) || return nothing
+    end
     # The shortest name first, so `len` offers `length` before `lengthof`
     for (from, list) in enumerate(scope_names(e)), name in list
       note!(name, from, length(name)) || return nothing
     end
+  else
+    for (name, places) in page_names(e, lang)
+      # The name that's being typed is in the page's code too, where the caret is
+      others = [abs(p[1] - i) for p in places if p != (i, start)]
+      isempty(others) || note!(name, 0, minimum(others)) || return nothing
+    end
   end
   isempty(found) && return nothing
   (i, start, [name for (_, _, _, name) in first(sort!(found), NAMES_SHOWN)])
+end
+
+# --- the names in reach of the caret -----------------------------------------------------
+#
+# Julia code can use a name only where the name is in reach. A name that the
+# code makes at its top is in reach in all of the page's Julia code. A name
+# that's made inside a function, a loop or a `let` is in reach only there, and
+# so is each value that a function takes. A field of a struct isn't a name
+# that code can use. Neither is a name after a dot, or the name that a call
+# gives a value, like `value` in Slider(value=0.4). The list offers only the
+# names in reach of the caret.
+#
+# Julia's own parser reads the code. It reads code that's half typed too, and
+# gives what it could make of it.
+
+const Syntax = Base.JuliaSyntax
+const NOWHERE = 1:0   # the lines where a field of a struct is in reach: none
+
+"""
+A name that Julia code makes: where it's written, what the code says it is,
+and the lines of the page where code can use it. `span` is nothing for a name
+that all of the page's code can use. `call` is true when `words` is what the
+code calls to make the name's value, like Wall in `door = Wall(0.9)`. That's
+the value's type only when it's the name of a type.
+"""
+struct Bound
+  name::String
+  at::Pos
+  words::String
+  call::Bool
+  span::Union{Nothing,UnitRange{Int}}
+end
+
+"One block of Julia code as it's read: its lines, the line of the page that it starts on, and the names found so far"
+struct Scan
+  lines::Vector{String}
+  first::Int
+  starts::Vector{Int}   # the byte that each line starts at, in the text of the block
+  found::Vector{Bound}
+end
+
+"True when code on line `i` of the page can use the name"
+inreach(made::Bound, i::Int) = made.span === nothing || i in made.span
+
+kids(n) = something(Syntax.children(n), ())
+iskind(n, kinds...) = Syntax.kind(n) in kinds
+
+"The lines of the page that the code `n` is on"
+span_of(r::Scan, n) =
+  (r.first + searchsortedlast(r.starts, Syntax.first_byte(n)) - 1):(r.first + searchsortedlast(r.starts, Syntax.last_byte(n)) - 1)
+
+"Note that the code makes the name written at `n`, for code in the lines `span` to use"
+bind!(r::Scan, n, span, words="", call=false; name=String(Syntax.sourcetext(n))) = begin
+  (span === nothing || !isempty(span)) || return nothing
+  occursin(r"^@?[\p{L}_][\p{L}\p{N}_!]*$", name) || return nothing
+  byte = Syntax.first_byte(n)
+  l = searchsortedlast(r.starts, byte)
+  # A column counts characters, and the parser counts bytes
+  push!(r.found, Bound(name, (r.first + l - 1, length(r.lines[l], 1, byte - r.starts[l])), words, call, span))
+  nothing
+end
+
+"The code of a type, as the list shows it"
+type_text(n) = (text = Syntax.sourcetext(n); occursin('\n', text) ? "" : clip_note(bare_names(text)))
+
+"The name in the first line of a type: Room in `Room{T} <: Shape`"
+type_name(n) = iskind(n, Syntax.K"<:", Syntax.K"curly") && !isempty(kids(n)) ? type_name(kids(n)[1]) : n
+
+"""
+What the code `n` of a value says that the value is: the type of a plain
+value, like Float64 for 4.2, or what the code calls, like Wall for Wall(0.9).
+The second part is true for a call.
+"""
+value_words(n) = begin
+  Syntax.is_leaf(n) && return (n.val isa Union{Number,Char} ? string(typeof(n.val)) : "", false)
+  iskind(n, Syntax.K"string") && return ("String", false)
+  iskind(n, Syntax.K"char") && return ("Char", false)
+  c = kids(n)
+  (iskind(n, Syntax.K"call") && !isempty(c) && iskind(c[1], Syntax.K"Identifier", Syntax.K".", Syntax.K"curly")) || return ("", false)
+  called = Syntax.sourcetext(c[1])
+  # a * (b) is a call to Julia, with `a` first. Only a name with its bracket straight after it is what's called.
+  (startswith(Syntax.sourcetext(n), called * "(") && !occursin('\n', called)) || return ("", false)
+  (String(called), true)
+end
+
+"""
+Note each name that the code `n` gives a value: a name, a name with a type, or
+several in brackets. A function's values and a loop's names are read here too,
+where a name can come with code: `coats=2` and `w in walls`.
+"""
+target!(r::Scan, n, span, top, words="") = begin
+  c = kids(n)
+  if iskind(n, Syntax.K"Identifier")
+    bind!(r, n, span, words)
+  elseif iskind(n, Syntax.K"::")
+    length(c) == 2 && target!(r, c[1], span, top, type_text(c[2]))
+  elseif iskind(n, Syntax.K"=", Syntax.K"in") && length(c) == 2
+    target!(r, c[1], span, top)
+    scan!(r, c[2], span, top)
+  elseif iskind(n, Syntax.K"filter") && !isempty(c)
+    target!(r, c[1], span, top)
+    foreach(x -> scan!(r, x, span, top), c[2:end])
+  elseif iskind(n, Syntax.K"<:") && !isempty(c)
+    target!(r, c[1], span, top)   # T in `where T<:Real`
+  elseif iskind(n, Syntax.K"tuple", Syntax.K"parens", Syntax.K"...", Syntax.K"parameters", Syntax.K"iteration", Syntax.K"braces")
+    foreach(x -> target!(r, x, span, top), c)
+  end
+  nothing
+end
+
+"""
+Read a function or a macro. Its name is in reach of the lines `span`, where
+it's made. The values that it takes are in reach inside it.
+"""
+method!(r::Scan, n, span, top) = begin
+  c = kids(n)
+  inner = span_of(r, n)
+  sig = c[1]
+  # f(x::T)::Int where T: the types after `where` are names inside the function
+  while iskind(sig, Syntax.K"where", Syntax.K"::") && !isempty(kids(sig)) && iskind(kids(sig)[1], Syntax.K"call", Syntax.K"where", Syntax.K"::")
+    iskind(sig, Syntax.K"where") && foreach(x -> target!(r, x, inner, top), kids(sig)[2:end])
+    sig = kids(sig)[1]
+  end
+  s = kids(sig)
+  if iskind(sig, Syntax.K"call") && !isempty(s)
+    name = s[1]
+    if iskind(name, Syntax.K"Identifier") && startswith(Syntax.sourcetext(sig), Syntax.sourcetext(name) * "(")
+      iskind(n, Syntax.K"macro") ? bind!(r, name, span, "macro", name="@" * Syntax.sourcetext(name)) : bind!(r, name, span, "function")
+    elseif !iskind(name, Syntax.K".", Syntax.K"curly")
+      target!(r, name, inner, top)   # a in `a + b = ...`, and p in `(p::Paint)(area) = ...`
+    end
+    foreach(x -> target!(r, x, inner, top), s[2:end])
+  elseif iskind(sig, Syntax.K"tuple")
+    foreach(x -> target!(r, x, inner, top), s)   # function (x, y) ... end has no name
+  elseif iskind(sig, Syntax.K"Identifier")
+    bind!(r, sig, span, "function")   # function paint end
+  end
+  foreach(x -> scan!(r, x, inner, top), c[2:end])
+end
+
+"Note each name that a line of `@use` loads: a name, a macro like @def, and K in \"./main\" => K"
+used!(r::Scan, n, span) =
+  iskind(n, Syntax.K"Identifier", Syntax.K"macro_name") ? bind!(r, n, span) :
+  iskind(n, Syntax.K"string") ? nothing : foreach(x -> used!(r, x, span), kids(n))
+
+"""
+Read the code `n` and note the names that it makes. A name that it makes here
+is in reach of the lines `span`: nothing for the whole page. `top` is the same
+for a name that's made with `global`: the lines of the module that the code is
+in.
+"""
+scan!(r::Scan, n, span, top) = begin
+  c = kids(n)
+  isempty(c) && return nothing
+  inner = span_of(r, n)
+  if iskind(n, Syntax.K"=") && length(c) == 2
+    if iskind(c[1], Syntax.K"Identifier")
+      bind!(r, c[1], span, value_words(c[2])...)
+    elseif iskind(c[1], Syntax.K"::", Syntax.K"tuple", Syntax.K"parens")
+      target!(r, c[1], span, top)
+    else
+      scan!(r, c[1], span, top)   # room.door = ... and walls[1] = ... make no name
+    end
+    scan!(r, c[2], span, top)
+  elseif iskind(n, Syntax.K"function", Syntax.K"macro")
+    method!(r, n, span, top)
+  elseif iskind(n, Syntax.K"->", Syntax.K"do")
+    target!(r, c[1], inner, top)
+    foreach(x -> scan!(r, x, inner, top), c[2:end])
+  elseif iskind(n, Syntax.K"for", Syntax.K"let")
+    foreach(x -> target!(r, x, inner, top), iskind(c[1], Syntax.K"block") ? kids(c[1]) : (c[1],))
+    foreach(x -> scan!(r, x, inner, top), c[2:end])
+  elseif iskind(n, Syntax.K"generator")
+    foreach(x -> target!(r, x, inner, top), c[2:end])
+    scan!(r, c[1], inner, top)
+  elseif iskind(n, Syntax.K"while", Syntax.K"try")
+    foreach(x -> scan!(r, x, inner, top), c)
+  elseif iskind(n, Syntax.K"catch")
+    iskind(c[1], Syntax.K"Identifier") && bind!(r, c[1], span)
+    foreach(x -> scan!(r, x, span, top), c[2:end])
+  elseif iskind(n, Syntax.K"struct")
+    bind!(r, type_name(c[1]), span, Syntax.has_flags(n, Syntax.MUTABLE_FLAG) ? "mutable struct" : "struct")
+    # A field isn't a name that code can use. A function in the struct still has names of its own.
+    foreach(x -> scan!(r, x, NOWHERE, top), c[2:end])
+  elseif iskind(n, Syntax.K"abstract", Syntax.K"primitive")
+    bind!(r, type_name(c[1]), span, iskind(n, Syntax.K"abstract") ? "abstract type" : "primitive type")
+  elseif iskind(n, Syntax.K"module")
+    bind!(r, c[1], span, "module")
+    foreach(x -> scan!(r, x, inner, inner), c[2:end])
+  elseif iskind(n, Syntax.K"global")
+    foreach(x -> iskind(x, Syntax.K"Identifier") ? bind!(r, x, top) : scan!(r, x, top, top), c)
+  elseif iskind(n, Syntax.K"local", Syntax.K"const")
+    foreach(x -> iskind(x, Syntax.K"Identifier", Syntax.K"::") ? target!(r, x, span, top) : scan!(r, x, span, top), c)
+  elseif iskind(n, Syntax.K"using", Syntax.K"import")
+    # using Dates: now, Day makes now and Day. import Foo.bar as baz makes baz.
+    for x in c, y in (iskind(x, Syntax.K":") ? kids(x)[2:end] : (x,))
+      iskind(y, Syntax.K"as", Syntax.K"importpath") && !isempty(kids(y)) && bind!(r, last(kids(y)), span)
+    end
+  elseif iskind(n, Syntax.K"macrocall")
+    endswith(Syntax.sourcetext(c[1]), "@use") ? foreach(x -> used!(r, x, span), c[2:end]) : foreach(x -> scan!(r, x, span, top), c[2:end])
+  elseif iskind(n, Syntax.K"call", Syntax.K"dotcall", Syntax.K"tuple", Syntax.K"parameters")
+    # `value=0.4` in a call gives a value its name. It makes no name that code can use.
+    foreach(x -> scan!(r, iskind(x, Syntax.K"=") && length(kids(x)) == 2 ? kids(x)[2] : x, span, top), c)
+  elseif iskind(n, Syntax.K".")
+    scan!(r, c[1], span, top)   # the name after a dot is a part of a value
+  elseif iskind(n, Syntax.K"quote")
+    # Code that's a value, like :(x = 1), makes no name
+  else
+    foreach(x -> scan!(r, x, span, top), c)
+  end
+  nothing
+end
+
+"The names that the Julia code of `lines` makes. The first of the lines is line `first` of the page."
+read_names(lines::Vector{String}, first::Int) = begin
+  r = Scan(lines, first, cumsum([1; [ncodeunits(l) + 1 for l in lines[1:end-1]]]), Bound[])
+  try
+    scan!(r, Syntax.parseall(Syntax.SyntaxNode, join(lines, '\n'), ignore_errors=true), nothing, nothing)
+  catch err
+    # The parser can give half typed code a shape that this doesn't expect. The names found so far still stand.
+    @debug "The names of some Julia code couldn't all be read" err
+  end
+  r.found
+end
+
+# Julia takes some seconds to compile the reader the first time it runs, and the window would stop for
+# them at the first list of names. So the reader runs once while this file is compiled, on code that
+# has each kind of thing that it reads, and what Julia compiles for it is kept with this file.
+# Kip looks for the files that this file loads in its text, so the line that loads one is written as @load here.
+ccall(:jl_generating_output, Cint, ()) == 1 && read_names(String.(split(replace("""
+  @load "./walls" Wall @def => K
+  using Dates: now
+  import Base: show
+  const width::Float64 = 0.09
+  struct Room{T} <: Shape
+    walls::Vector{Wall}
+    Room(walls) = new{Any}(walls)
+  end
+  abstract type Shape end
+  module Paint
+    global tins = 2
+  end
+  macro twice(code) :(\$code; \$code) end
+  paint(area::T, coats=2; thin=false, more...) where T<:Real = area * coats
+  function trim(room::Room, edges...)::Float64
+    total, count = 0.0, 0
+    for (i, wall) in enumerate(room.walls), side in 1:2
+      total += wall.long
+    end
+    longs = [wall.long for wall in room.walls if wall.long > 1]
+    map(longs) do long
+      local half = long / 2
+      let third = long / 3, name = "a \$long"
+        while third > 1
+          third -= 1
+        end
+      end
+    end
+    try
+      Wall(long=total, name='w')
+    catch err
+      sort(longs, by=x -> -x)
+    end
+  end
+  function unfinished(a, b
+    c = a.
+  """, "@load" => "@use"), '\n')), 1)
+
+"The names that the page's Julia code makes, from every block of it. They're kept until the text changes."
+page_bounds(e) = begin
+  b = e.buf
+  kept = get(e.nodes, :bounds, nothing)
+  kept !== nothing && kept[1] == (b.path, b.version) && return kept[2]
+  ks = kinds(b)
+  julia(i) = ks[i].kind == Kind.code && !(ks[i].lang in NO_NAMES) && shared_lang(ks[i].lang) == "julia"
+  found = Bound[]
+  i = 1
+  while i <= length(ks)
+    j = i
+    while j <= length(ks) && julia(j); j += 1 end
+    j > i && append!(found, read_names(b.lines[i:j-1], i))
+    i = max(j, i + 1)
+  end
+  e.nodes[:bounds] = ((b.path, b.version), found)
+  found
+end
+
+# --- what a name is ----------------------------------------------------------------------
+#
+# In Julia code, each name of the list has a few paler words at its right that
+# say what the name is. A name that has a value says the type of that value,
+# like Float64 or Vector{Wall}. A function says `function`, a macro `macro` and
+# a module `module`. A type says how it's made: `struct`, `mutable struct`,
+# `abstract type` or `primitive type`.
+#
+# A name of the function, the loop or the `let` that the caret is in says what
+# the code there says: the type after `name::`, or the type of a plain value,
+# like `total = 0.0`. A name that the page's code made when it ran says what
+# it is now. For any other name that the page's code makes, the words come
+# from the code: `struct`, `function`, the type after `name::`, and the type
+# of a plain value, like `width = 0.09` or `door = Wall(0.9)`. Then come
+# Julia's own names. A name that nothing is known about has no words.
+
+const NOTE_COLS = 32     # the most characters of what a name is
+const NOTE_GAP = 18px    # the least room between a name and what it is
+
+"`text` with each type written by its own name, with no module in front: `Main.Page.Wall` is `Wall`"
+bare_names(text) = replace(text, r"(?<![\p{L}\p{N}_.])([\p{L}_][\p{L}\p{N}_]*\.)+(?=[\p{L}_])" => "")
+
+"No more of what a name is than the list has room for"
+clip_note(text) = length(text) > NOTE_COLS ? first(text, NOTE_COLS - 1) * "…" : String(text)
+
+"How the type `T` is made: struct, mutable struct, abstract type or primitive type"
+how_made(T::Type) = begin
+  T = Base.unwrap_unionall(T)
+  T isa DataType || return "type"
+  isabstracttype(T) ? "abstract type" : isprimitivetype(T) ? "primitive type" : ismutabletype(T) ? "mutable struct" : "struct"
+end
+
+"What the value `v` is, in a few words. The type of a plain value is as code in the module `home` writes it."
+value_note(v, home) = begin
+  v isa Module && return "module"
+  v isa Type && return how_made(v)
+  v isa Function && return "function"
+  io = IOBuffer()
+  Base.invokelatest(show, IOContext(io, :module => home), typeof(v))
+  clip_note(bare_names(String(take!(io))))
+end
+
+"""
+What each of `names` is, for the list of names that shows at line `i`: a few
+words, or "" when nothing is known. Only Julia code has them.
+"""
+name_notes(e, i::Int, names) = begin
+  line = kinds(e.buf)[i]
+  (line.kind == Kind.code && !(line.lang in NO_NAMES) && shared_lang(line.lang) == "julia") || return fill("", length(names))
+  m = scope(e)
+  mine = scope_names(e)[1]
+  reach = filter(made -> inreach(made, i), page_bounds(e))
+  isbound(name) = Base.invokelatest(isdefined, m, Symbol(name))
+  # The words for a name that has a value. Asking for a name's value runs none of the page's code.
+  value(name) = try value_note(Base.invokelatest(getglobal, m, Symbol(name)), m) catch; "" end
+  struct_of_page(name) = any(made -> made.name == name && made.words in ("struct", "mutable struct"), reach)
+  # What one line of the code says. A call says the type of its value only when it calls a type.
+  words(made) = begin
+    made.call || return made.words
+    head = first(split(made.words, '{'))
+    struct_of_page(last(split(head, '.'))) || named_value(m, head) isa Type ? clip_note(bare_names(made.words)) : ""
+  end
+  # What the code says, from the nearest line to the list that says something
+  written(lines) = begin
+    for made in sort(lines, by=made -> abs(made.at[1] - i))
+      said = words(made)
+      isempty(said) || return said
+    end
+    ""
+  end
+  map(names) do name
+    startswith(name, '@') && return "macro"
+    lines = filter(made -> made.name == name, reach)
+    # A name of the function, the loop or the `let` that the caret is in comes before one of the whole page
+    inside = filter(made -> made.span !== nothing, lines)
+    if !isempty(inside)
+      small = minimum(made -> length(made.span), inside)
+      return written(filter(made -> length(made.span) == small, inside))
+    end
+    name in mine && isbound(name) && return value(name)
+    said = written(lines)
+    isempty(said) || return said
+    isbound(name) ? value(name) : ""
+  end
+end
+
+"The module whose names the page's Julia code can use: the one that the code runs in, or Julia's own before any code ran"
+scope(e) = something(get(e.nodes, (:workspace, e.buf.path), nothing), get(e.nodes, :sandbox, nothing), Base)
+
+"The value that code in the module `m` calls `name`, like `length` or `Base.length`. Nothing when it has no such name."
+named_value(m::Module, name::AbstractString) = begin
+  v = m
+  for part in split(name, '.')
+    # Only a module is asked for a part. Any other value could run code of its own to answer.
+    (v isa Module && Base.invokelatest(isdefined, v, Symbol(part))) || return nothing
+    v = Base.invokelatest(getglobal, v, Symbol(part))
+  end
+  v
 end
 
 # --- email --------------------------------------------------------------------------------

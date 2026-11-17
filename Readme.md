@@ -317,6 +317,7 @@ julia -O0 --project=. test/sketch_test.jl         # how a sketch is read and wri
 julia -O0 --project=. test/sketch_view_test.jl    # a sketch in the page, and its tools while it fills the window: drawing, moving, changing and deleting shapes
 julia -O0 --project=. test/file_block_test.jl     # a kind of block that a file defines: what it shows, and what goes back into its lines
 julia -O0 --project=. test/autosave_test.jl       # the setting that saves a page when you leave its window
+julia -O0 --project=. test/children_test.jl       # the parts of the page as the document's children, and a walk from one part to another
 julia -O0 --project=. test/emails_test.jl         # how a list of emails is read and written, and which emails it asks for
 julia -O0 --project=. test/emails_view_test.jl    # the list of the emails with a person, in a page
 julia -O0 --project=. test/mime_test.jl           # how an email becomes the page that a window shows, and a page an email

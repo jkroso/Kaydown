@@ -245,6 +245,7 @@ A line in the block can say more. `show: Sales` draws only that column. `by: Mon
 A code block in the language `board` shows this page's to-do items as cards in columns. Drag a card to another column. A card that you drop on the last column ticks its item, and a card that you drag out of that column takes the tick away. Click a card twice to go to its item.
 
 ```board
+Click the box of an item like this one to tick it. | Doing
 ```
 
 The block's lines hold the column of each card. A line like `columns: Later, This week, Done` at their top names other columns.

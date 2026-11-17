@@ -6,8 +6,8 @@ This page plans a job. Each to-do item is a task. The schedule under the tasks s
 
 - [x] Mark out the driveway
 - [x] Dig out the soil and cart it away
-- [ ] Set the forms along the edges
-  - [ ] Set the drain across the garage door
+- [x] Set the forms along the edges
+  - [x] Set the drain across the garage door
 - [ ] Fix the steel mesh
 - [ ] Book the concrete and the pump
 - [ ] Pour and finish the concrete

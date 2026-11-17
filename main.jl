@@ -931,7 +931,7 @@ end
   action::Symbol = :none
   label::String = ""
 end
-"The picture in the top bar of the level that the page shows at: a ladder for rich text and a snake for plain text. A click goes to the other level."
+"The picture in the top bar of the level that the window shows at: a ladder for graphics and a snake for symbols. A click goes to the other level."
 @def mutable struct Mode <: SemanticUI
   rect::NTuple{4,px} = (0px, 0px, 0px, 0px)
   quiet::Bool = false
@@ -10845,9 +10845,12 @@ text_width(e) = begin
   # While the sidebar slides, the text keeps the width it has beside the
   # sidebar, so it doesn't wrap again on each frame
   # The numbers of a file's lines have room on the left of the text
-  room = w - (e.panel || sliding(e) ? panel_w(e) : 0px) - 2PAGE_X - gutter(e)
-  # A file of code or of text takes all the room that the window has. A page is no wider than the settings say.
-  numbered(e.buf) ? max(room, 240px) : clamp(room, 240px, e.widest * e.zoom)
+  # The lines of a block that fill the window have no sidebar beside them
+  alone = lowered(e) !== nothing
+  room = w - ((e.panel || sliding(e)) && !alone ? panel_w(e) : 0px) - 2PAGE_X - gutter(e)
+  # A file of code or of text takes all the room that the window has, and so do the lines of a block
+  # that fill the window. A page is no wider than the settings say.
+  numbered(e.buf) || alone ? max(room, 240px) : clamp(room, 240px, e.widest * e.zoom)
 end
 
 """
@@ -10858,7 +10861,7 @@ scrolled to the right.
 """
 text_left(e) = begin
   w, _ = window_size(e)
-  side = panel_w(e) * opened(e)
+  side = lowered(e) === nothing ? panel_w(e) * opened(e) : 0px
   numbered(e.buf) ? side + PAGE_X + gutter(e) - sideways(e) : side + max(PAGE_X, (w - side - e.width) / 2)
 end
 
@@ -10880,6 +10883,9 @@ layout!(e, width=text_width(e)) = begin
   top = 0px
   i = 1
   n = length(b.lines)
+  # The lines of a block that went down a level from the window it filled show by themselves
+  span = lowered(e)
+  span === nothing || ((i, n) = span)
   plans = 0   # how many takeoff blocks there have been so far
   schedules = 0   # and how many schedules
   seen = Dict{String,Int}()   # and how many blocks in each of the languages of `BLOCKS`
@@ -11522,7 +11528,7 @@ touch!(e; keep_goal=false) = begin
   e.blink = time()
   e.reveal = true
   keep_goal || (e.goal = nothing)
-  e
+  confine!(e)
 end
 
 "The line of the to-do item whose box is under a point in the window, or nothing"
@@ -12725,7 +12731,7 @@ const COMMAND_GROUPS = [
     Command(:settings, "Show or hide the settings", :window, "cmd+comma", (e, w, _) -> toggle_settings!(e)),
     Command(:sidebar, "Show or hide the sidebar", :window, "cmd+backslash", (e, w, _) -> toggle_panel!(e)),
     Command(:sidebar_keys, "Give the sidebar the keyboard", :window, "cmd+shift+backslash", (e, w, _) -> focus_panel!(e)),
-    Command(:plain, "Go down a level, to the symbols at the caret, or up again", :window, "cmd+e", (e, w, _) -> plain!(e, !e.plain)),
+    Command(:plain, "Go down a level, to the symbols at the caret, or up again", :window, "cmd+e", (e, w, _) -> level!(e)),
     Command(:hidden_files, "Show or hide the hidden files in the sidebar", :window, "cmd+shift+period", (e, w, _) -> hidden!(e, !e.hidden)),
     Command(:bigger, "Make the text bigger", :window, "cmd+equal", (e, w, _) -> zoom!(e, zoom_for(text_size(e) + 1))),
     Command(:smaller, "Make the text smaller", :window, "cmd+minus", (e, w, _) -> zoom!(e, zoom_for(text_size(e) - 1))),
@@ -13156,6 +13162,9 @@ onkey(e::Editor, ev::KeyPress{K}) where K = begin
       b.anchor, b.caret = first(b.others)
       empty!(b.others)
       touch!(e)
+    elseif lowered(e) !== nothing
+      # The lines of a block that fill the window go back among the lines of the page
+      widen!(e)
     elseif !forget_outcomes!(e)
       b.anchor = b.caret
       b.reading = true
@@ -13809,7 +13818,9 @@ end
 # game of snakes and ladders. A ladder takes you up, so at the high level it's
 # a ladder. A snake takes you down, so at the low level it's a snake. A click
 # on it goes to the other level, and ⌘E does too. See "rich text and plain
-# text" above for what each level does.
+# text" above for what each level does. While a takeoff, a schedule or a
+# sketch fills the window, the click goes down to the lines that make it,
+# and those lines fill the window as text. See `level!`.
 
 const MODE_W = 30px   # the room that the picture takes in the top bar
 const TITLE_ROOM = 160px   # the least room that the file's name keeps in the top bar of a narrow window
@@ -13838,16 +13849,23 @@ end
 describe(m::Mode) = begin
   e = editor(m)
   ishovered(m) || (m.quiet = false)
-  Box(width(MODE_W), height(28px), radius(6px), Alignment.Center, name=e.plain ? "Plain text" : "Rich text",
+  Box(width(MODE_W), height(28px), radius(6px), Alignment.Center, name=low(e) ? "Plain text" : "Rich text",
       background(ishovered(m) ? colours.hover : clear),
     # Both are drawn for a square 16 wide, so at this size their lines are on whole pixels
-    Icon(e.plain ? snake() : "ladder", size=16px, color=colours.dim))
+    Icon(low(e) ? snake() : "ladder", size=16px, color=colours.dim))
 end
 
 cursor(::Mode) = :hand
-onkey(m::Mode, ::KeyPress{Keys.mouse_left}) = (e = editor(m); plain!(e, !e.plain); hush!(m); focus(e); handled)
+# A block that the click makes fill the window again keeps the keyboard that it took
+onkey(m::Mode, ::KeyPress{Keys.mouse_left}) = (e = editor(m); level!(e); hush!(m); full_block(e) === nothing && focus(e); handled)
 # The tip says what a click does, as the count's tip does
-tip(m::Mode) = (e = editor(m); (e.plain ? "Go up a level, to the graphics that the symbols make" : "Go down a level, to the symbols of the part with the caret") * hint(e, :plain))
+tip(m::Mode) = begin
+  e = editor(m)
+  words = low(e) ? "Go up a level, to the graphics that the symbols make" :
+          full_block(e) === nothing ? "Go down a level, to the symbols of the part with the caret" :
+                                      "Go down a level, to the symbols that make this"
+  words * hint(e, :plain)
+end
 
 "The snake or the ladder for the top bar. Only a document has one: a file of code is always plain, and the settings are always rich."
 mode_part(e) = (e.buf.view == :markdown && !issettings(e)) ? (node!(Mode, e, :mode),) : ()
@@ -13873,6 +13891,108 @@ plain!(e, on::Bool) = begin
   end
   save_settings!(e)
   rerun!(e, :plain)
+  e
+end
+
+# A takeoff, a schedule or a sketch that fills the window is graphics, so the
+# window is at the high level then, whatever level the page under it is at,
+# and the top bar shows the ladder. Going down from there shows the symbols
+# that make the block: the lines of the block fill the window as text, with
+# nothing else of the page and no sidebar, and the caret stays in them. Going
+# up again makes the block fill the window again. Esc puts the lines back
+# among the lines of the page, as it puts a block that fills the window back
+# in the page.
+
+"True when the window shows symbols: the page is at the low level, and no block fills the window"
+low(e) = e.plain && full_block(e) === nothing
+
+"The language of the block that `v` is the view of, or nothing"
+block_lang(v) = v isa TakeoffView ? TAKEOFF : v isa ScheduleView ? SCHEDULE : findfirst(kind -> v isa kind.view, BLOCKS)
+
+"The first and the last line of the block that `v` is the view of, or nothing"
+block_span(b::Buffer, v) = (lang = block_lang(v); lang === nothing ? nothing : block_lines(b, lang, v.n))
+
+"Go to the other level: down from graphics to the symbols that make them, or up again"
+level!(e) = begin
+  v = full_block(e)
+  v === nothing || return lower!(e, v)
+  e.plain || return plain!(e, true)
+  kept = lowered(e) === nothing ? nothing : e.nodes[:lowered]
+  plain!(e, false)
+  kept === nothing || refill!(e, kept)
+  e
+end
+
+"""
+Go down a level from `v`, a block that fills the window. The lines of the
+block fill the window in its place, as text, with the caret in them. A page
+that's never changed has no caret, so its block goes back into the page.
+"""
+lower!(e, v) = begin
+  b = e.buf
+  span = block_span(b, v)
+  v.full = false
+  focus(e)
+  (span === nothing || b.fixed) && return plain!(e, true)
+  s, t = span
+  empty!(b.others)
+  b.caret = b.anchor = (min(s + 1, t), 0)
+  plain!(e, true)
+  delete!(e.nodes, :hold)   # the lines start at the top of the window
+  e.nodes[:lowered] = (view=v, path=b.path, offset=e.scroll.offset)
+  e.scroll.offset = 0px
+  touch!(e)
+end
+
+"""
+The first and the last line of the block whose lines fill the window as text,
+or nothing. They stop filling it when the block goes, when the page goes up a
+level and when another file shows.
+"""
+lowered(e) = begin
+  kept = get(e.nodes, :lowered, nothing)
+  kept === nothing && return nothing
+  b = e.buf
+  span = e.plain && kept.path == b.path && !b.fixed ? block_span(b, kept.view) : nothing
+  span === nothing && widen!(e)
+  span
+end
+
+"""
+Put the lines that fill the window back among the lines of the page. The page
+is where it was, or as near to that as shows the caret.
+"""
+widen!(e) = begin
+  kept = pop!(e.nodes, :lowered, nothing)
+  kept === nothing && return e
+  kept.path == e.buf.path && (e.scroll.offset = kept.offset; e.reveal = true)
+  e
+end
+
+"Keep the caret, and each selection, in the lines that fill the window"
+confine!(e) = begin
+  span = lowered(e)
+  span === nothing && return e
+  b = e.buf
+  s, t = span
+  near(p) = p[1] < s ? (s, 0) : p[1] > t ? line_end(b, t) : p
+  b.caret, b.anchor = near(b.caret), near(b.anchor)
+  filter!(o -> all(p -> s <= p[1] <= t, o), b.others)
+  b.reading = false   # without a caret, the block would show as what it makes
+  e
+end
+
+"Make the block whose lines fill the window fill it again. The caret goes onto the block as a whole, and the page under it is where it was."
+refill!(e, kept) = begin
+  b = e.buf
+  delete!(e.nodes, :lowered)
+  delete!(e.nodes, :hold)
+  e.scroll.offset = kept.offset
+  span = block_span(b, kept.view)
+  span === nothing && return e
+  empty!(b.others)
+  b.caret = b.anchor = (span[1], 0)
+  full!(kept.view, true)
   e
 end
 
@@ -14540,7 +14660,7 @@ onmouse(p::PanelEdge, ev::MouseMove) = begin
 end
 
 "The strip over the sidebar's edge, while the sidebar is open and not sliding. It starts under the top bar."
-panel_edge(e) = e.panel && !sliding(e) ?
+panel_edge(e) = e.panel && !sliding(e) && lowered(e) === nothing ?
   (Row(width(grow=grow), height(grow=grow), Alignment.Start, padding(TOPBAR_H, 0px, 0px, panel_w(e) - EDGE_W / 2),
        node!(PanelEdge, e, :edge)),) : ()
 
@@ -18249,6 +18369,7 @@ describe(e::Editor) = begin
   takeoff_tick!(e)
   schedule_tick!(e)
   blocks_tick!(e)
+  confine!(e)   # while the lines of a block fill the window, the caret stays in them
   job_tick!(e)
   update_tick!(e)
   mail_tick!(e)
@@ -18276,7 +18397,8 @@ describe(e::Editor) = begin
   # The sidebar runs from the top of the window to the bottom, and the top bar
   # lies over the top of the sidebar and the page
   body = Row(width(grow=grow), height(grow=grow), Alignment.Start, background(colours.bg),
-    (opened(e) > 0 ? (node!(Sidebar, e, :sidebar),) : ())...,
+    # The lines of a block that fill the window take the sidebar's room too
+    (opened(e) > 0 && lowered(e) === nothing ? (node!(Sidebar, e, :sidebar),) : ())...,
     Column(width(grow=grow), height(grow=grow), Alignment.Start,
       Box(width(grow=grow), height(TOPBAR_H)),   # under the top bar
       node!(Page, e, :page)))

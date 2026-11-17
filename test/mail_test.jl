@@ -65,8 +65,9 @@ mailer(s; folder=joinpath(top, "mail-$(made[] += 1)"), back=0, rest=true) = begi
   Mail.Mailer(a)
 end
 
-names(dir) = sort!(filter(n -> endswith(n, ".md"), readdir(dir)))
-page(path) = split(read(path, String), '\n')
+# The names of the email files of a folder, and the lines that a window shows for an email or for a draft
+names(dir) = sort!(filter(n -> endswith(n, ".eml"), readdir(dir)))
+page(path) = Mail.content(path)
 
 @testset "names and servers" begin
   @test Mail.servers("jo@gmail.com") == ("imap.gmail.com:993", "smtp.gmail.com:465")
@@ -157,16 +158,23 @@ end
   @test isempty(m.problem)
   dir = Mail.root(m.account)
   @test sort(readdir(dir)) == ["Entwürfe", "Inbox", "Jobs", "Sent"] && isdir(joinpath(dir, "Jobs", "Roof"))
-  @test names(joinpath(dir, "Inbox")) == ["2026-11-14 0932 Sam Lee - Roof quote.md", "2026-11-14 1000 to Sam Lee - Re Roof quote.md",
-                                          "2026-11-16 1405 Kim Wu - Plans.md"]
-  first = page(joinpath(dir, "Inbox", "2026-11-14 0932 Sam Lee - Roof quote.md"))
+  @test names(joinpath(dir, "Inbox")) == ["2026-11-14 0932 Sam Lee - Roof quote.eml", "2026-11-14 1000 to Sam Lee - Re Roof quote.eml",
+                                          "2026-11-16 1405 Kim Wu - Plans.eml"]
+  # An email is what somebody sent, so the Mac marks its file as read-only. The folder's hidden list isn't marked.
+  @test !any(n -> iswritable(joinpath(dir, "Inbox", n)), names(joinpath(dir, "Inbox"))) && iswritable(joinpath(dir, "Inbox", ".email-index"))
+  first = page(joinpath(dir, "Inbox", "2026-11-14 0932 Sam Lee - Roof quote.eml"))
   @test first[1:6] == ["---", "from: Sam Lee <sam@example.com>", "to: you@example.com", "date: 14 Nov 2026, 9:32 am", "subject: Roof quote", "---"]
   @test "Hi Jake," in first && "The quote is attached." in first
-  # What was attached is a file beside the page, and the page links to it
-  kept = joinpath(dir, "Inbox", "files", "2026-11-16 1405 Kim Wu - Plans", "Floor plan.pdf")
-  @test read(kept, String) == "%PDF-1.4\n"
-  plans = joinpath(dir, "Inbox", "2026-11-16 1405 Kim Wu - Plans.md")
-  @test Mail.linked(last(filter(!isempty, page(plans))), dirname(plans)) == kept
+  # The file is the email as the server sent it, with what was attached inside it
+  plans = joinpath(dir, "Inbox", "2026-11-16 1405 Kim Wu - Plans.eml")
+  @test read(plans) == inbox.notes[2].raw && !isdir(joinpath(dir, "Inbox", "files"))
+  # What a window shows of it links to a copy of the attached file, in Kaydown's cache
+  kept = Mail.linked(last(filter(!isempty, page(plans))), dirname(plans))
+  @test kept !== nothing && startswith(kept, Mail.cache()) && basename(kept) == "Floor plan.pdf" && read(kept, String) == "%PDF-1.4\n"
+  @test read(plans) == inbox.notes[2].raw   # showing it changed nothing
+  # The head of the file says what the index says, for a list that reads the files
+  @test Mail.fields(Mail.first_lines(plans))[1]["from"] == "Kim Wu <kim@example.com>" && Mail.heading(plans).id == "<plans@example.com>"
+  @test Mail.isemail("A.EML") && !Mail.isemail("a.md") && Mail.heading(joinpath(dir, "nothing.eml")) === nothing
   # The index knows each email, and the server's marks. Reading an email left it unread on the server.
   b = Mail.box(joinpath(dir, "Inbox"))
   @test b.role == :inbox && length(b.letters) == 3 && Mail.unread(joinpath(dir, "Inbox")) == 1
@@ -189,16 +197,17 @@ end
     deleteat!(inbox.notes, 1)                 # another app deleted the first email
     push!(inbox.notes[1].flags, "\\Seen")     # and read the second
     look(m)
-    @test names(joinpath(dir, "Inbox")) == ["2026-11-14 1000 to Sam Lee - Re Roof quote.md", "2026-11-16 1405 Kim Wu - Plans.md",
-                                            "2026-11-17 0800 Sam Lee - Invoice.md"]
+    @test names(joinpath(dir, "Inbox")) == ["2026-11-14 1000 to Sam Lee - Re Roof quote.eml", "2026-11-16 1405 Kim Wu - Plans.eml",
+                                            "2026-11-17 0800 Sam Lee - Invoice.eml"]
     @test Mail.unread(joinpath(dir, "Inbox")) == 1 && Mail.rows(joinpath(dir, "Inbox"))[1].subject == "Invoice"
-    # A page that the Finder deleted comes back
+    # A file that the Finder deleted comes back
     rm(plans)
     look(m)
     @test isfile(plans) && length(Mail.box(joinpath(dir, "Inbox")).letters) == 3
-    # A page that you changed stays when its email goes from the server
-    tiles = joinpath(dir, "Jobs", "Roof", "2026-11-14 0932 Sam Lee - Tiles.md")
+    # A file that something changed stays when its email goes from the server
+    tiles = joinpath(dir, "Jobs", "Roof", "2026-11-14 0932 Sam Lee - Tiles.eml")
     sleep(0.02)
+    chmod(tiles, 0o644)   # you took off the mark that makes the file read-only
     write(tiles, read(tiles, String) * "\nMy note.\n")
     empty!(roof.notes)
     look(m)
@@ -228,7 +237,7 @@ end
     bin = Fake.folder!(s, "Trash", flags="\\Trash")
     m = settle(mailer(s))
     dir = Mail.root(m.account)
-    path(i, folder="Inbox") = joinpath(dir, folder, "2026-11-14 090$i Sam Lee - Email $i.md")
+    path(i, folder="Inbox") = joinpath(dir, folder, "2026-11-14 090$i Sam Lee - Email $i.eml")
     # Reading
     @test Mail.seen!(m, path(1)) && !Mail.seen!(m, path(1))
     @test Mail.unread(joinpath(dir, "Inbox")) == 3   # at once, before the server knows
@@ -241,11 +250,12 @@ end
     # Archiving moves the page at once, and the email on the server soon
     @test Mail.archive!(m, path(2)) == path(2, "Archive")
     @test isfile(path(2, "Archive")) && !isfile(path(2)) && [r.subject for r in Mail.rows(joinpath(dir, "Archive"))] == ["Email 2"]
+    @test !iswritable(path(2, "Archive"))   # a file that's read-only can still be moved, and it's read-only where it goes
     settle(m)
     @test [n.uid for n in inbox.notes] == [1, 3, 4] && length(archive.notes) == 1 && "\\Flagged" in archive.notes[1].flags
     # The next look sees that the page is the page of the server's copy, and gets no second one
     look(m)
-    @test names(joinpath(dir, "Archive")) == ["2026-11-14 0902 Sam Lee - Email 2.md"]
+    @test names(joinpath(dir, "Archive")) == ["2026-11-14 0902 Sam Lee - Email 2.eml"]
     @test Mail.box(joinpath(dir, "Archive")).letters[1].uid == archive.notes[1].uid && !Mail.box(joinpath(dir, "Archive")).letters[1].waits
     # Deleting moves an email to the Trash, and deletes one that's in the Trash for good
     @test Mail.trash!(m, path(3))
@@ -280,7 +290,7 @@ end
     Mail.archive!(m, path(4))
     settle(m)
     @test occursin("said no", m.problem) && Mail.says(m) == m.problem
-    @test isfile(path(4)) && names(joinpath(dir, "Archive")) == ["2026-11-14 0902 Sam Lee - Email 2.md"]
+    @test isfile(path(4)) && names(joinpath(dir, "Archive")) == ["2026-11-14 0902 Sam Lee - Email 2.eml"]
     look(m)
     @test isempty(m.problem) && isfile(path(4))
     Fake.stop(s)
@@ -295,12 +305,13 @@ end
   Fake.folder!(s, "Drafts", flags="\\Drafts")
   m = settle(mailer(s))
   dir = Mail.root(m.account)
-  original = joinpath(dir, "Inbox", "2026-11-14 0932 Sam Lee - Roof quote.md")
+  original = joinpath(dir, "Inbox", "2026-11-14 0932 Sam Lee - Roof quote.eml")
   @test "reply-to: Sam's office <office@example.com>" in page(original)
 
   # A new draft is a page with front matter that names who it's to
   new = Mail.draft!(m)
   @test dirname(new) == joinpath(dir, "Drafts") && page(new)[1:5] == ["---", "to: ", "cc: ", "subject: ", "---"]
+  @test iswritable(new) && !iswritable(original)   # a draft is a page that you write, and an email isn't
   @test Mail.isdraft(page(new)) && !Mail.isdraft(page(original)) && !Mail.isdraft(["# A page"])
   @test Mail.rows(joinpath(dir, "Drafts"))[1].draft && Mail.rows(joinpath(dir, "Drafts"))[1].who == "No one yet"
   @test occursin("Write who the email is to", Mail.send!(m, new))
@@ -332,15 +343,19 @@ end
   @test occursin("In-Reply-To: <1@example.com>", post.raw) && occursin("Subject: Re: Roof quote", post.raw) && !occursin("quiet@example.com", post.raw)
   @test occursin("From: Jake Example <you@example.com>", post.raw) && occursin("<strong>go ahead</strong>", post.raw)
   @test occursin("Site plan.txt", post.raw) && !occursin(plan, post.raw)
-  # The draft became the page of the sent email, with a copy of the file, and the server's Sent folder got the email
+  # The email that went is a file in the folder of sent email, with the file that went with it inside. The
+  # draft is gone, and the server's Sent folder got the email.
   out = names(joinpath(dir, "Sent"))
-  @test length(out) == 1 && endswith(out[1], "to Sam's office - Re Roof quote.md")
+  @test length(out) == 1 && endswith(out[1], "to Sam's office - Re Roof quote.eml")
+  @test !iswritable(joinpath(dir, "Sent", out[1]))   # what went can't be changed any more
   copy = page(joinpath(dir, "Sent", out[1]))
   @test copy[2] == "from: Jake Example <you@example.com>" && startswith(copy[5], "date: ") && "Yes, **go ahead**. Ça va." in copy
-  @test read(joinpath(dir, "Sent", "files", splitext(out[1])[1], "Site plan.txt"), String) == "the plan"
+  went = filter(!isnothing, [Mail.linked(l, joinpath(dir, "Sent")) for l in copy])
+  @test length(went) == 1 && basename(went[1]) == "Site plan.txt" && read(went[1], String) == "the plan"
+  @test occursin("In-Reply-To: <1@example.com>", read(joinpath(dir, "Sent", out[1]), String)) && !isdir(joinpath(dir, "Sent", "files"))
   @test length(sent.notes) == 1 && "\\Seen" in sent.notes[1].flags
   @test "\\Answered" in inbox.notes[1].flags
-  # The next look takes the server's copy as the page that's there
+  # The next look takes the server's copy as the file that's there, and gets no second one
   look(m)
   @test names(joinpath(dir, "Sent")) == out && Mail.box(joinpath(dir, "Sent")).letters[1].uid == sent.notes[1].uid
   @test Mail.rows(joinpath(dir, "Sent"))[1].who == "To Sam's office" && !Mail.rows(joinpath(dir, "Sent"))[1].unread
@@ -383,8 +398,8 @@ end
   @test sort(readdir(joinpath(dir, "[Gmail]"))) == ["All Mail", "Sent Mail"] && Mail.folder(m, :all).path == joinpath(dir, "[Gmail]", "All Mail")
   @test length(names(joinpath(dir, "[Gmail]", "All Mail"))) == 2
   # Archiving takes the email out of the inbox. The folder of every email has its page already.
-  page_in = joinpath(dir, "Inbox", "2026-11-14 0932 Sam Lee - Roof quote.md")
-  @test Mail.archive!(m, page_in) == joinpath(dir, "[Gmail]", "All Mail", "2026-11-14 0932 Sam Lee - Roof quote.md")
+  page_in = joinpath(dir, "Inbox", "2026-11-14 0932 Sam Lee - Roof quote.eml")
+  @test Mail.archive!(m, page_in) == joinpath(dir, "[Gmail]", "All Mail", "2026-11-14 0932 Sam Lee - Roof quote.eml")
   @test !isfile(page_in) && length(names(joinpath(dir, "[Gmail]", "All Mail"))) == 2
   settle(m)
   @test isempty(inbox.notes) && any(c -> occursin("UID MOVE 1 \"[Gmail]/All Mail\"", c), s.said)
@@ -498,6 +513,82 @@ end
   m.account.every = 5
   settle(m)
   @test length(names(joinpath(Mail.root(m.account), "Plans"))) == 450 && isempty(m.problem)
+  Fake.stop(s)
+end
+
+@testset "the index is made again from the files" begin
+  s = Fake.serve()
+  inbox = Fake.folder!(s, "INBOX")
+  foreach(i -> put!(inbox, email(subject="Email $i", id="<again$i@example.com>", date="Sat, 14 Nov 2026 09:0$i:00 +1100"),
+                    flags=i == 2 ? ["\\Seen"] : String[]), 1:3)
+  m = settle(mailer(s))
+  dir = joinpath(Mail.root(m.account), "Inbox")
+  had = names(dir)
+  # The index is lost. A file that isn't one of the folder's emails is in the folder too.
+  rm(joinpath(dir, ".email-index"))
+  delete!(Mail.boxes, dir)
+  write(joinpath(dir, "A stray.eml"), email(subject="Stray", id="<stray@example.com>"))
+  chmod(joinpath(dir, had[2]), 0o644)   # one of the files has lost the mark that makes it read-only
+  empty!(s.said)
+  Mail.account!(m, m.account)
+  settle(m)
+  b = Mail.box(dir)
+  # Each file has its place in the index again, with the server's number and marks, and nothing was got again
+  @test [(l.uid, l.seen, l.subject) for l in sort(b.letters, by=l -> l.uid)] == [(1, false, "Email 1"), (2, true, "Email 2"), (3, false, "Email 3")]
+  @test sort([l.file for l in b.letters]) == had && names(dir) == sort([had; "A stray.eml"])
+  @test !any(n -> iswritable(joinpath(dir, n)), had)   # each file that's an email of the folder is read-only again
+  @test !any(c -> occursin("BODY.PEEK[]", c), s.said) && any(c -> occursin("HEADER.FIELDS (MESSAGE-ID)", c), s.said)
+  @test [r.subject for r in Mail.rows(dir)] == ["Email 3", "Email 2", "Email 1"] && Mail.unread(dir) == 2
+  # A file that's moved out with the Finder comes back, and one that's put back takes its place with no download
+  aside = joinpath(top, "aside.eml")
+  mv(joinpath(dir, had[1]), aside)
+  look(m)
+  @test names(dir) == sort([had; "A stray.eml"])
+  rm(joinpath(dir, had[1]))
+  delete!(Mail.boxes, dir)
+  rm(joinpath(dir, ".email-index"))
+  mv(aside, joinpath(dir, "Put back.eml"))
+  empty!(s.said)
+  Mail.account!(m, m.account)
+  settle(m)
+  @test length(Mail.box(dir).letters) == 3 && "Put back.eml" in [l.file for l in Mail.box(dir).letters] && !any(c -> occursin("BODY.PEEK[]", c), s.said)
+  Fake.stop(s)
+end
+
+@testset "the Markdown pages of the Kaydown before" begin
+  s = Fake.serve()
+  inbox = Fake.folder!(s, "INBOX")
+  foreach(i -> put!(inbox, email(subject="Email $i", id="<older$i@example.com>", date="Sat, 14 Nov 2026 09:0$i:00 +1100")), 1:3)
+  m = settle(mailer(s))
+  dir = joinpath(Mail.root(m.account), "Inbox")
+  b = Mail.box(dir)
+  # Make the folder what that Kaydown left: a Markdown page for each email, with a folder of its attached files
+  for l in b.letters
+    rm(joinpath(dir, l.file))
+    delete!(b.byfile, l.file)
+    l.file = splitext(l.file)[1] * ".md"
+    write(joinpath(dir, l.file), "---\nfrom: Sam Lee <sam@example.com>\ndate: 14 Nov 2026, 9:0$(l.uid) am\nsubject: $(l.subject)\n---\n\nAs a page.\n")
+    mkpath(joinpath(dir, "files", splitext(l.file)[1]))
+    write(joinpath(dir, "files", splitext(l.file)[1], "a.txt"), "attached")
+    l.written = mtime(joinpath(dir, l.file))
+    b.byfile[l.file] = l
+  end
+  Mail.save(b)
+  # You changed one of the pages
+  mine = joinpath(dir, b.byuid[2].file)
+  sleep(1.1)   # so that the disk gives the page a later time
+  write(mine, read(mine, String) * "\nMy own note.\n")
+  empty!(s.said)
+  look(m)
+  # Each email came again, and is kept as the email itself. The pages are gone, with their folders of files.
+  @test length(names(dir)) == 3 && all(l -> Mail.isemail(l.file) && l.uid > 0, b.letters) && length(b.letters) == 3
+  @test read(joinpath(dir, b.byuid[1].file)) == inbox.notes[1].raw
+  @test filter(n -> endswith(n, ".md"), readdir(dir)) == [basename(mine)] && occursin("My own note.", read(mine, String))   # yours stays, as a page of yours
+  @test readdir(joinpath(dir, "files")) == [splitext(basename(mine))[1]]
+  # The next look gets nothing again
+  empty!(s.said)
+  look(m)
+  @test !any(c -> occursin("BODY.PEEK", c), s.said)
   Fake.stop(s)
 end
 

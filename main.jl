@@ -53,7 +53,8 @@
 #     line goes round it. Return gives it the keyboard, ⌫ takes it away, and
 #     ↑ and ↓ go on to the lines beside it.
 #   - ⌘B and ⌘I make the selection bold or italic. ⌘Z and ⌘⇧Z undo and redo.
-#   - Double-click selects a word, triple-click a line. ⌘-click opens a link.
+#   - Double-click selects a word, triple-click a line. ⌘-click opens a link. In a page
+#     that's read-only, like an email, a click opens it with no key held.
 #   - ⌘F finds text in the page. Return goes to the next place that has it.
 #   - Write ![name](picture.png) on a line of its own to show a picture, or drop
 #     a file on the page from the Finder. ⌘V pastes a file that you copied in
@@ -118,7 +119,7 @@
 #     window show two more pages: Code editor, for how code shows, and Key
 #     bindings, for the keys of each command. ⌘, again closes that window.
 #   - ⌘, then Email takes your email account. Kaydown then keeps a folder
-#     with every email in it, as a Markdown page, in the folders that the
+#     with every email in it, as an .eml file, in the folders that the
 #     email server has. ⌘⇧I shows the inbox: the sidebar lists the emails,
 #     and the top bar of an email has buttons that answer it, archive it and
 #     delete it. ⌘⇧N starts a new email, which is a page like any other, and
@@ -598,6 +599,10 @@ Base.@kwdef mutable struct Buffer
   # code that you change, which is one block of code. Any other file is only shown: :text shows
   # its text, :hex shows its bytes, and :file shows a viewer of its kind.
   view::Symbol = :markdown
+  # True for a page that's read, and never changed or written: an email, or a file that the Mac marks as
+  # read-only. The lines of an email are the email as a page, which mail.jl makes from the file: the file
+  # holds the email as the server sent it.
+  fixed::Bool = false
   about::String = ""                    # what the top bar says of a file that's only shown, like how much of it shows
   disk::Vector{String} = [""]           # the file's text as it was last read or written
   # The text as an agent last knew it: what you last sent it, with every change that was made to the file from outside since
@@ -608,14 +613,25 @@ end
 "True when the file is only shown. Kaydown changes Markdown files and the files of code in `CODE_FILES`, and no others."
 readonly(b::Buffer) = !(b.view in (:markdown, :code))
 
+"""
+True when Kaydown shows the file at `path` as a page and never changes it: the
+file is an email, or the Mac marks it as read-only. Kaydown marks each email
+that it keeps, and a mark that you put on a page of your own counts the same.
+"""
+protected(path) = Mail.isemail(path) || (isfile(path) && !iswritable(path))
+
+"True when the page shows no caret and no key changes it: after Escape, and all the time in a page that's never changed"
+caretless(b::Buffer) = b.reading || b.fixed
+
 const stamp = Ref(0)
 
 load(path) = begin
   READ[path] = mtime(path)
+  Mail.isemail(path) && return load_email(path)
   code = !ismarkdown(path) && iscode(path)
   ismarkdown(path) || code || return look(path)
   lines = text(path)
-  b = Buffer(path=path, lines=lines, disk=copy(lines), told=copy(lines), view=code ? :code : :markdown)
+  b = Buffer(path=path, lines=lines, disk=copy(lines), told=copy(lines), view=code ? :code : :markdown, fixed=protected(path))
   b.sent = b.told   # nothing has changed from outside yet
   code && return b
   # The caret starts at the text, after any front matter, so the front matter shows as a card
@@ -628,6 +644,21 @@ load(path) = begin
 end
 text(path) = String.(split(replace(read(path, String), "\r\n" => "\n"), '\n'))
 
+"""
+The email file at `path`, as a page that's read and not changed: who it's from
+and its subject at the top, then its text. A file that isn't an email after
+all shows as any other file does.
+"""
+load_email(path) = begin
+  lines = try Mail.render(path) catch; return look(path) end
+  b = Buffer(path=path, lines=lines, disk=copy(lines), told=copy(lines), fixed=true)
+  b.sent = b.told
+  t = front_matter(b.lines)
+  i = something(findnext(l -> !isempty(strip(l)), b.lines, t + 1), min(t + 1, length(b.lines)))
+  b.caret = b.anchor = (i, 0)
+  b
+end
+
 const READ = Dict{String,Float64}()   # when each open file was last read or written, as the disk tells it
 
 """
@@ -639,6 +670,11 @@ the document keeps its own. Returns the lines of the document that changed, as
 """
 refresh!(b::Buffer) = begin
   (isempty(b.path) || !isfile(b.path)) && return
+  # The Mac's mark can go on a file, or come off it, while the file is open
+  if b.fixed != protected(b.path)
+    b.fixed = !b.fixed
+    b.picked_for = (-1, (0, 0), (0, 0), false, false)
+  end
   at = mtime(b.path)
   at == get(READ, b.path, 0.0) && return
   READ[b.path] = at
@@ -649,7 +685,7 @@ refresh!(b::Buffer) = begin
     b.view, b.about = new.view, new.about
     lines = new.lines
   else
-    theirs = text(b.path)
+    theirs = Mail.isemail(b.path) ? (try Mail.render(b.path) catch; b.disk end) : text(b.path)
     theirs == b.disk && return
     # An agent knows the changes it made to the file, and none of yours until you send them
     b.told = combine(b.disk, b.told, theirs, keep=:theirs)
@@ -749,7 +785,7 @@ end
 
 "Replace the text from `lo` to `hi` with `new`, and put the caret after it"
 edit!(b::Buffer, lo::Pos, hi::Pos, new::AbstractString; typing=false) = begin
-  readonly(b) && return b   # nothing changes a file that's only shown
+  (readonly(b) || b.fixed) && return b   # nothing changes a file that's only shown, an email, or a file that's read-only
   # Letters typed one after another undo together
   if !(typing && time() - b.typed < 1 && !isempty(b.undo))
     push!(b.undo, snapshot(b))
@@ -773,7 +809,8 @@ redo!(b::Buffer) = isempty(b.redo) || (push!(b.undo, snapshot(b)); restore!(b, p
 
 save!(b::Buffer) = begin
   # The lines of a file that's only shown can be a part of the file, or its bytes, so they're never written
-  (isempty(b.path) || readonly(b)) && return
+  # ... and the lines of an email are the email as a page, which isn't what its file holds
+  (isempty(b.path) || readonly(b) || b.fixed || Mail.isemail(b.path)) && return
   refresh!(b)   # a change that something else made to the file a moment ago is kept
   write(b.path, join(b.lines, "\n"))
   READ[b.path] = mtime(b.path)
@@ -1435,7 +1472,7 @@ doesn't reach out of the block. A selection that goes through a block leaves it
 as it reads.
 """
 incode(b::Buffer, i::Int) = begin
-  b.reading && return false
+  caretless(b) && return false
   s, t = codeblock(b, i)
   # A block that the caret is on as a whole shows as what it makes
   s <= b.caret[1] <= t && s <= b.anchor[1] <= t && picked(b) === nothing
@@ -1477,7 +1514,7 @@ const TEXT_KINDS = (Kind.paragraph, Kind.heading, Kind.bullet, Kind.ordered, Kin
 rich(b::Buffer) = !b.plain && b.view == :markdown
 
 "True when the caret is on line `i`, and the selection doesn't reach another line"
-alone(b::Buffer, i::Int) = !b.reading && i == b.caret[1] == b.anchor[1]
+alone(b::Buffer, i::Int) = !caretless(b) && i == b.caret[1] == b.anchor[1]
 
 "True when line `i` holds only a picture, a sound or a video"
 pictured(b::Buffer, i::Int) = kinds(b)[i].kind == Kind.paragraph && occursin("![", b.lines[i]) && occursin(PICTURE_LINE, b.lines[i])
@@ -2743,7 +2780,7 @@ suggesting(e) = get!(() -> Ref{Any}((at=(0, 0), chosen=1, hidden=(0, 0))), e.nod
 
 "The list of names to show now: the line, the column where the name starts, the names and which one is chosen. Or nothing."
 suggestion(e) = begin
-  e.buf.reading && return nothing
+  caretless(e.buf) && return nothing
   found = offered(e)
   state = suggesting(e)[]
   # A list that esc hid stays hidden while its name is being typed, and no longer
@@ -3889,7 +3926,7 @@ draw_numbers(ctx, e, left, top) = begin
     flow = it.content
     flow isa Flow || continue
     words = string(it.first)
-    here = !b.reading && !readonly(b) && it.first == b.caret[1]
+    here = !caretless(b) && !readonly(b) && it.first == b.caret[1]
     x = left - NUMBER_GAP - measure(f, words)
     y = top + it.top + line_top(flow, 1) + (flow.lines[1].high + rise) / 2
     write_ink(ctx, words, num(x), num(y), here ? Face(f, color=colours.dim) : f)
@@ -10140,12 +10177,18 @@ end
 
 describe(c::MatterCard) = begin
   s = c.size
+  e = editor(c)
+  said = Dict(lowercase(k) => v for (_, k, v) in c.rows)
+  # An email that came or went shows who it's from and its subject, as an email does, in place of its keys
+  mail_shows(e) && haskey(said, "date") && return mail_head(c, said)
+  # ... and a draft says that it's one
+  title = Mail.isdraft(e.buf.lines) ? "DRAFT" : "FRONTMATTER"
   keyface = Face(SANS, "Semibold", s, colours.dim, false)
   keys = maximum(r -> measure(keyface, r[2]), c.rows, init=0px)
   Column(width(grow=grow), Alignment.Start, padding(s, s * 0.7), child_gap=s * 0.4, radius(6px),
          border(1px, :solid, colours.line), background(colours.block), name="Front matter",
     # The heading has a little more room under it than the rows have between them
-    Box(padding(0px, 0px, s * 0.2, 0px), label("FRONTMATTER", s * 0.72, color=colours.dim, weight="Bold")),
+    Box(padding(0px, 0px, s * 0.2, 0px), label(title, s * 0.72, color=colours.dim, weight="Bold")),
     [MatterRow(line=at, key=k, value=v, keys=keys, size=s) for (at, k, v) in c.rows]...)
 end
 
@@ -10154,6 +10197,34 @@ describe(r::MatterRow) = begin
   Row(width(grow=grow), Alignment.Start, padding(0px, s * 0.15), child_gap=(keys > 0px ? s * 0.9 : 0px),
     (keys > 0px ? (Box(fixed(keys), label(r.key, s, color=colours.dim, weight="Semibold")),) : ())...,
     Box(width(grow=grow), Alignment.Start, Text(r.value, size=s, family=SANS, color=colours.ink, wrap=WrapMode.words)))
+end
+
+"""
+The top of an email, in place of the card of its front matter: the subject as
+a title, then who sent it with the date at the right, then who it's to. `said`
+is what the front matter sets each key to. A click shows the front matter as
+it's written, as a click on any front matter does.
+"""
+mail_head(c::MatterCard, said) = begin
+  s = c.size
+  # Each person's name, or the address of one with no name
+  people(key) = join((isempty(name) ? address : name for (name, address) in Mail.addresses(get(said, key, ""))), ", ")
+  from = Mail.addresses(get(said, "from", ""))
+  name, address = isempty(from) ? (get(said, "from", ""), "") : (first(from)[1], first(from)[2])
+  isempty(name) && ((name, address) = (address, ""))
+  subject = get(said, "subject", "")
+  line(words) = Box(width(grow=grow), Alignment.Start, Text(words, size=s, family=SANS, color=colours.dim, wrap=WrapMode.words))
+  high = s * 1.5   # a line of one size of text, with room for the tails of its letters
+  Column(width(grow=grow), Alignment.Start, padding(0px, s * 0.2, s * 1.1, 0px), child_gap=s * 0.55, name="Email head",
+         border(1px, :solid, colours.line)[:bottom],
+    Box(width(grow=grow), Alignment.Start, padding(0px, 0px, s * 0.5, 0px),
+      Text(isempty(subject) ? "No subject" : subject, size=s * 1.6, family=SANS, subfamily="Semibold", color=colours.ink, wrap=WrapMode.words)),
+    Row(width(grow=grow), height(high), child_gap=s * 0.6,
+      Box(height(high), justify=Alignment.Center, label(name, s * 1.05, weight="Semibold")),
+      Box(width(grow=grow), height(high), Alignment.Start, justify=Alignment.Center, clip=true, label(address, s, color=colours.dim)),
+      Box(height(high), justify=Alignment.Center, label(get(said, "date", ""), s, color=colours.dim))),
+    (haskey(said, "to") ? (line("To " * people("to")),) : ())...,
+    (haskey(said, "cc") ? (line("Cc " * people("cc")),) : ())...)
 end
 
 cursor(::Union{MatterCard,MatterRow}) = :ibeam
@@ -10504,7 +10575,8 @@ describe(d::Document) = begin
     spacer(total - items[hi].top - items[hi].tall))
 end
 
-# With ⌘ held, a click on a link opens it, so the mouse shows a hand there
+# With ⌘ held, a click on a link opens it, so the mouse shows a hand there. In a page that's never
+# changed, a click on a link opens it with no key held.
 cursor(d::Document) = begin
   e = editor(d)
   e.buf.view == :file && return :arrow   # a viewer has no text to select
@@ -10512,7 +10584,7 @@ cursor(d::Document) = begin
   w === nothing && return :ibeam
   # A click on a to-do item's box ticks it
   todo_at(e, w.mouse) === nothing || return :hand
-  Keys.cmd in w.keys && link_at(e, w.mouse) !== nothing ? :hand : :ibeam
+  (Keys.cmd in w.keys && link_at(e, w.mouse) !== nothing) || (e.buf.fixed && link_on(e, w.mouse) !== nothing) ? :hand : :ibeam
 end
 
 """
@@ -10665,8 +10737,8 @@ draw(ctx, size, ui::ConcreteRect, d::Document) = begin
   with_others(() -> fill_selection(ctx, selection_boxes(ctx, e, ui)), b)
   ring_part(ctx, e, ui)
   annotate(ctx, e, ui)
-  # A file that's only shown has a selection and no caret
-  if !(b.reading || readonly(b))
+  # A file that's only shown has a selection and no caret. So has a page that's never changed.
+  if !(caretless(b) || readonly(b))
     carets(ctx, e, ui)
     with_others(() -> carets(ctx, e, ui), b)
   end
@@ -10745,7 +10817,7 @@ shows through it. There's none while text is selected.
 """
 shade_line(ctx, e, x, top) = begin
   b = e.buf
-  (e.shade && numbered(b) && !b.reading && !readonly(b) && !selecting(b) && !isempty(e.layout)) || return
+  (e.shade && numbered(b) && !caretless(b) && !readonly(b) && !selecting(b) && !isempty(e.layout)) || return
   it = item(e, b.caret[1])
   w, _ = window_size(e)
   rectangle(ctx, x, top + it.top, w - x, it.tall, background=RGBA(colours.ink, SHADE), border=0px)
@@ -10811,6 +10883,29 @@ link_at(e, pos) = begin
   it.content isa Flow || return nothing
   for vl in it.content.lines, seg in vl.segs
     seg.col <= col < seg.col + seg.n && !isempty(seg.link) && return seg.link
+  end
+  nothing
+end
+
+"""
+The link that's drawn under a point in the window, or nothing. `link_at` gives
+the link nearest to a point, which is right for a click with ⌘ held. A point
+beside a line, or between two lines, is on no link here, so a click with no
+key held opens a link only when the click is on its words.
+"""
+link_on(e, (x, y)) = begin
+  dx, dy = x - e.origin[1], y - e.origin[2]
+  k = findlast(it -> it.top <= dy, e.layout)
+  k === nothing && return nothing
+  it = e.layout[k]
+  f = it.content
+  f isa Flow || return nothing
+  for vl in f.lines
+    top = it.top + f.above + vl.top
+    top <= dy < top + vl.high || continue
+    for seg in vl.segs
+      !isempty(seg.link) && seg.x <= dx < seg.x + seg.w && return seg.link
+    end
   end
   nothing
 end
@@ -10917,6 +11012,10 @@ press!(e, pos) = begin
   e.popup = :none
   if held(e, Keys.cmd)
     url = link_at(e, pos)
+    url === nothing || return follow!(e, url)
+  elseif b.fixed && !held(e, Keys.shft)
+    # A page that's never changed has no caret for a click to place, so a click on a link opens it
+    url = link_on(e, pos)
     url === nothing || return follow!(e, url)
   end
   if it.content isa Live
@@ -12423,7 +12522,7 @@ onkey(e::Editor, ev::KeyPress{K}) where K = begin
   # While the page is read, there's no caret to move, so the keys that would move it scroll the
   # page. A key that would change the text at the caret does nothing. Any other command still
   # works, and one that moves the caret, like undo, puts it back.
-  if b.reading || readonly(b)
+  if caretless(b) || readonly(b)
     step = read_step(e, K, command, shift)
     step === nothing || return (scroll_page!(e, step); nothing)
     K == Keys.escape || kind in (:window, :look, :edit) || return nothing
@@ -12469,7 +12568,7 @@ ontype(e::Editor, ev::Typed) = begin
   # macOS has characters of its own for keys like the arrows, which aren't text
   (iscntrl(c) || '\uf700' <= c <= '\uf8ff') && return nothing
   # While the page is read, a key that would change the text does nothing. A file that's only shown is never changed.
-  (e.buf.reading || readonly(e.buf)) && return nothing
+  (caretless(e.buf) || readonly(e.buf)) && return nothing
   # Nor does a character change a part that the caret is on as a whole, like a diagram
   picked(e.buf) === nothing || return nothing
   each_selection!(() -> type!(e, string(c), typing=true), e)
@@ -12626,7 +12725,7 @@ onkey(t::TableButton, ::KeyPress{Keys.mouse_left}) = (e = editor(t); tableop!(e,
 "The bar over the table the caret is in, placed in the window. Nothing when the caret isn't in a table."
 tablebar(e) = begin
   b = e.buf
-  (!b.reading && b.caret[1] == b.anchor[1] && !isempty(e.layout)) || return ()
+  (!caretless(b) && b.caret[1] == b.anchor[1] && !isempty(e.layout)) || return ()
   it = item(e, b.caret[1])
   it.content isa Grid || return ()
   top = TOPBAR_H + PAGE_TOP + it.top + TABLE_GAP - e.scroll.offset - BAR_H - 3px
@@ -13022,11 +13121,18 @@ describe(t::TopBar) = begin
   mode = mode_part(e)
   side = issettings(e) ? 130px : (isempty(mail) ? 250px : 330px) + (isempty(mode) ? 0px : MODE_W)
   ended_rename!(e)
+  # The two ends of the bar are as wide as each other, so the file's name is in the middle of the space beside
+  # the sidebar. A window can be too narrow for that, with a wide sidebar or the buttons of an email. Then the
+  # left end gives up its room, so the right end stays in the window and the name keeps some room. With the
+  # sidebar hidden, the left end keeps the room of its own two buttons.
+  wide, _ = window_size(e)
+  left = max(150px * (1 - opened(e)), min(side, wide - panel_w(e) * opened(e) - side - TITLE_ROOM))
+  e.nodes[:title_room] = wide - panel_w(e) * opened(e) - left - side   # the name is cut short to fit in it
   # The top bar lies over the top of the sidebar. The file's name is in the
   # middle of the space beside the sidebar, so it moves as the sidebar slides.
   Row(width(grow=grow), height(TOPBAR_H), name="TopBar",
     # The close, minimise and zoom buttons sit over the first 84px
-    Row(fixed(side + panel_w(e) * opened(e)), height(grow=grow), padding(0px, 0px, 0px, 84px), child_gap=2px,
+    Row(fixed(left + panel_w(e) * opened(e)), height(grow=grow), padding(0px, 0px, 0px, 84px), child_gap=2px,
       button(e, :panel, "layout-sidebar"), hidden_button(e)...),
     Box(width(grow=grow), height(grow=grow), clip=true, node!(Title, e, :title)),
     Row(fixed(side), height(grow=grow), justify=Alignment.End, padding(0px, 10px, 0px, 0px),
@@ -13035,7 +13141,10 @@ describe(t::TopBar) = begin
                       # The app that the Mac uses for the file can change it, so a button opens the file there
                       button(e, :outside, "box-arrow-up-right")) :
                      # The pages of the settings are for choosing, not for writing, so they show no count
-                     issettings(e) ? () : (mail..., job_part(e)..., agent_part(e)..., mode..., node!(Count, e, :count)))...))
+                     issettings(e) ? () : (mail..., job_part(e)..., agent_part(e)..., mode...,
+                                            # A page that's never changed says so where the count of its words would be
+                                            b.fixed ? Box(height(28px), padding(8px, 0px), label("Read only", 12px, color=colours.dim)) :
+                                                      node!(Count, e, :count)))...))
 end
 
 # --- the switch between rich text and plain text ---------------------------------------------
@@ -13046,6 +13155,7 @@ end
 # what each one does.
 
 const MODE_W = 104px   # the room that the switch takes in the top bar
+const TITLE_ROOM = 160px   # the least room that the file's name keeps in the top bar of a narrow window
 
 describe(t::ModeTab) = begin
   e = editor(t)
@@ -13199,8 +13309,10 @@ describe(t::Title) = begin
     return Box(width(wide), height(22px), padding(5px, 0px), radius(4px), Alignment.Start, background(colours.bg),
                border(1px, :solid, colours.accent), renamer(e))
   end
+  # A name that's too long for its room in the bar ends in …, so that its start still shows
+  room = get(e.nodes, :title_room, 10_000px) - (dirty(b) ? 70px : 16px)
   Row(child_gap=6px,
-    label(something(mail_title(e), name(b)), 13px, color=colours.dim),
+    label(elide(something(mail_title(e), name(b)), 13px, max(room, 40px)), 13px, color=colours.dim),
     (dirty(b) ? (label("— edited", 13px, color=colours.faint),) : ())...)
 end
 
@@ -14022,6 +14134,7 @@ page_menu!(e, w) = begin
   front_matter(b.lines) == 0 || push!(off, (n + length(PAGE_MENU), length(INSERTS)))
   # Each item that would change the text is grey for a file that's only shown
   readonly(b) && append!(off, n .+ findall(x -> (x isa Pair ? first(x) : x) in ("Cut", "Paste", "Export as HTML…", "Insert"), PAGE_MENU))
+  b.fixed && append!(off, n .+ findall(x -> (x isa Pair ? first(x) : x) in ("Cut", "Paste", "Insert"), PAGE_MENU))
   # A file of code is no page, and has no place for a table or a recording
   b.view == :code && append!(off, n .+ findall(x -> (x isa Pair ? first(x) : x) in ("Export as HTML…", "Insert"), PAGE_MENU))
   items = Any[spell..., PAGE_MENU...]
@@ -15047,7 +15160,8 @@ spellable(text::AbstractString) = text != "Kaydown" && !any(c -> isdigit(c) || c
 misspellings(e, i) = begin
   b = e.buf
   text, line = b.lines[i], kinds(b)[i]
-  (e.spelling && line.kind in CHECKED) || return Tuple{Int,Int}[]
+  # A page that's never changed is somebody's words as they wrote them, so its spelling isn't marked
+  (e.spelling && !b.fixed && line.kind in CHECKED) || return Tuple{Int,Int}[]
   get!(e.flows, (:spelling, text, line.prefix)) do
     out = Tuple{Int,Int}[]
     occursin(PICTURE_LINE, text) && return out
@@ -15562,7 +15676,7 @@ places. With `step`, the caret goes on to the next expression.
 """
 run_here!(e; step=false) = begin
   b = e.buf
-  (b.reading || readonly(b)) && return false
+  (caretless(b) || readonly(b)) && return false
   found = julia_code(b, b.caret[1])
   (found !== nothing && julia_code(b, b.anchor[1]) == found) || return false
   from, to = found
@@ -16487,13 +16601,15 @@ end
 
 # --- email --------------------------------------------------------------------------------
 #
-# Kaydown keeps a folder that holds every email of an account, as Markdown
-# pages, in step with the email server. mail.jl does that work, and says how.
-# This part is what the window shows of it:
+# Kaydown keeps a folder that holds every email of an account, as .eml files,
+# in step with the email server. mail.jl does that work, and says how. This
+# part is what the window shows of it:
 #
+#   - An .eml file opens as a page that's read and never changed: its lines
+#     are what mail.jl makes of the email, and `fixed` is set on its buffer.
 #   - In a folder of emails, the sidebar lists the emails, newest first: who
 #     each is from, its subject and when it came. An email that isn't read has
-#     a dot. A click shows the email's page, and marks it as read.
+#     a dot. A click shows the email, and marks it as read.
 #   - The top bar of an email has buttons that answer it, send it on, archive
 #     it and delete it. Each changes the folder at once, and the server soon.
 #   - A draft is a page whose front matter names who it's to, with no date.
@@ -16503,7 +16619,7 @@ end
 #     look for new email has got.
 
 "How tall the row of an email is in the sidebar"
-const MAIL_ROW_H = 46px
+const MAIL_ROW_H = 50px
 const MAIL_BAR_H = 30px     # the line over the list, with what the email is doing and two buttons
 const MAIL_SHOWS = 7.0      # seconds that words about an email show under the top bar
 const MAIL_ICONS = ["reply", "reply-all", "forward", "archive", "trash", "send", "pencil-square", "arrow-repeat", "folder"]
@@ -16605,9 +16721,10 @@ mail_part(e) = begin
   if mail_place(e, b.path) && Mail.isdraft(b.lines)
     return (button(e, :mail_send, "send"), Box(width(4px)))
   end
-  Mail.locate(b.path) === nothing && return ()
-  (button(e, :mail_reply, "reply"), button(e, :mail_reply_all, "reply-all"), button(e, :mail_forward, "forward"),
-   button(e, :mail_archive, "archive"), button(e, :mail_delete, "trash"), Box(width(4px)))
+  answers = (button(e, :mail_reply, "reply"), button(e, :mail_reply_all, "reply-all"), button(e, :mail_forward, "forward"))
+  # An email file that's in no folder of the account can be answered, and not archived or deleted on a server
+  Mail.locate(b.path) === nothing && return Mail.isemail(b.path) ? (answers..., Box(width(4px))) : ()
+  (answers..., button(e, :mail_archive, "archive"), button(e, :mail_delete, "trash"), Box(width(4px)))
 end
 
 "What the tooltip of an email button says"
@@ -16632,7 +16749,7 @@ mail_act!(e, action) =
 "What the top bar calls a page that's an email or a draft: its subject. It's nothing for any other page, which has its file's name."
 mail_title(e) = begin
   b = e.buf
-  (isempty(b.path) || b.view != :markdown || !mail_place(e, b.path) || front_matter(b.lines) == 0) && return nothing
+  (isempty(b.path) || b.view != :markdown || !(Mail.isemail(b.path) || mail_place(e, b.path)) || front_matter(b.lines) == 0) && return nothing
   said, _ = Mail.fields(b.lines)
   (haskey(said, "to") && haskey(said, "subject")) || return nothing
   isempty(said["subject"]) ? (haskey(said, "date") ? "No subject" : "New email") : said["subject"]
@@ -16692,13 +16809,15 @@ end
 "Write a new email: a draft opens, with the caret where the address goes"
 mail_new!(e) = (m = mail_ready(e); m === nothing ? nothing : mail_window!(e, Mail.draft!(m), 2))
 
-"True when the page that shows is an email: one that the folder's index knows, or a page with the front matter of one"
+"""
+True when what shows is an email: an .eml file, which holds an email as a
+server sends one. A Markdown page that the Kaydown before this one made from
+an email counts too, while its folder's index still lists it.
+"""
 mail_shows(e) = begin
   b = e.buf
   (isempty(b.path) || b.view != :markdown) && return false
-  Mail.locate(b.path) !== nothing && return true
-  said, _ = Mail.fields(b.lines)
-  haskey(said, "from") && haskey(said, "date")
+  Mail.isemail(b.path) || Mail.locate(b.path) !== nothing
 end
 
 "Answer the email that shows: a draft opens, with the caret over the email's text. With `all`, it goes to everyone."
@@ -16842,11 +16961,13 @@ describe(r::MailRow) = begin
     # An email that isn't read has a dot
     Box(width(10px), height(grow=grow), Alignment.Center,
       (x.unread ? (Box(width(7px), height(7px), radius(3.5px), background(colours.accent)),) : ())...),
-    Column(width(grow=grow), Alignment.Start, child_gap=4px,
-      Row(width(grow=grow), child_gap=6px,
-        Box(width(grow=grow), Alignment.Start, clip=true, label(x.who, 13px, weight=x.unread ? "Semibold" : "")),
-        Box(label(Mail.shortdate(x.at), 11px, color=colours.faint))),
-      Box(width(grow=grow), Alignment.Start, clip=true,
+    # Each line has room for the tails of its letters, like the one of a g. A name or a subject that's too long is cut at the
+    # right: its box starts it at the left, and puts it in the middle of the line's height.
+    Column(width(grow=grow), Alignment.Start, child_gap=1px,
+      Row(width(grow=grow), height(19px), child_gap=6px,
+        Box(width(grow=grow), height(19px), Alignment.Start, justify=Alignment.Center, clip=true, label(x.who, 13px, weight=x.unread ? "Semibold" : "")),
+        Box(height(19px), justify=Alignment.Center, label(Mail.shortdate(x.at), 11px, color=colours.faint))),
+      Box(width(grow=grow), height(18px), Alignment.Start, justify=Alignment.Center, clip=true,
         label(x.draft ? "Draft  ·  " * subject : subject, 12px, color=x.draft ? colours.accent : x.unread ? colours.ink : colours.dim))))
 end
 

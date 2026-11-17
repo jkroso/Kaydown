@@ -77,10 +77,17 @@ typed(win, s) = (foreach(c -> ontype(win, Typed(c, win)), s); frames(win))
 rows(o=e) = [o.nodes[(:mail_row, k)].row for k in 1:60 if haskey(o.nodes, (:mail_row, k)) && rect(o.nodes[(:mail_row, k)]) !== nothing]
 
 const shots = get(ENV, "MAIL_SHOTS", "")
+"Each Text in the layout `node`, in the order they read"
+texts(node, out=String[]) = begin
+  node isa K.Text ? push!(out, node.content) : node isa K.GeometricUI && foreach(n -> texts(n, out), node.children)
+  out
+end
+"The words that the top bar of the window itself writes"
+bar(o=e) = texts(K.describe(o.nodes[:topbar]))
 shot(name, win=w) = isempty(shots) || (mkpath(shots); save_png(joinpath(shots, name * ".png"), win))
 
 @testset "the list of emails in the sidebar" begin
-  @test e.panel && e.folder == dir && endswith(e.buf.path, "Email 1.md")   # a folder opens on its first file
+  @test e.panel && e.folder == dir && isempty(e.buf.path)   # a folder of emails opens on no email, so that none is marked as read
   list = Mail.rows(dir)
   @test length(list) == 60 && list[1].subject == "Email 60" && list[1].unread && !list[4].unread
   # Only the rows that are in the window are built
@@ -92,8 +99,26 @@ shot(name, win=w) = isempty(shots) || (mkpath(shots); save_png(joinpath(shots, n
   shot("1-list")
   # A click shows the email, and marks it as read here and on the server
   click(e.nodes[(:mail_row, 2)])
-  @test endswith(e.buf.path, "Email 59.md") && "The text of email 59." in e.buf.lines
+  @test endswith(e.buf.path, "Email 59.eml") && "The text of email 59." in e.buf.lines
   @test !Mail.rows(dir)[2].unread && K.mail_brief(e)[1] == "2 not read"
+  # An email is read, and not changed. Nothing that the window does writes to its file, which is the email as the server sent it.
+  raw, lines = read(e.buf.path), copy(e.buf.lines)
+  @test e.buf.fixed && raw == inbox.notes[59].raw
+  K.edit!(e.buf, e.buf.caret, e.buf.caret, "typed")
+  K.save!(e.buf)
+  @test e.buf.lines == lines && read(e.buf.path) == raw
+  # The Mac marks the file as read-only, and the top bar says so. A key that's typed changes nothing.
+  @test !iswritable(e.buf.path) && "Read only" in bar()
+  # With a wide sidebar, the right end of the top bar stays where it was, in the window
+  from_edge() = K.num(K.window_size(e)[1]) - K.num(rect(e.nodes[:mail_delete]).left)
+  was, there = e.side, from_edge()
+  e.side = 420px
+  frames()
+  @test K.panel_w(e) > was && from_edge() == there
+  e.side = was
+  frames()
+  typed(w, "abc")
+  @test e.buf.lines == lines && K.caretless(e.buf)
   settle()
   @test "\\Seen" in inbox.notes[59].flags && !("\\Seen" in inbox.notes[60].flags)
   # An email has the buttons that answer it and move it. A page that isn't an email has none.
@@ -102,9 +127,9 @@ shot(name, win=w) = isempty(shots) || (mkpath(shots); save_png(joinpath(shots, n
   shot("2-email")
   # ⌘] and ⌘[ go down and up the list
   press(w, Keys.right_bracket, Keys.cmd)
-  @test endswith(e.buf.path, "Email 58.md")
+  @test endswith(e.buf.path, "Email 58.eml")
   press(w, Keys.left_bracket, Keys.cmd)
-  @test endswith(e.buf.path, "Email 59.md")
+  @test endswith(e.buf.path, "Email 59.eml")
   # The list scrolls, and the rows show the emails that are in the window then
   e.files_scroll.offset = 30 * K.MAIL_ROW_H
   frames()
@@ -117,13 +142,13 @@ end
   click(e.nodes[(:mail_row, 2)])
   click(e.nodes[:mail_archive])
   # The next email shows, and the page is in the archive at once
-  @test endswith(e.buf.path, "Email 58.md") && length(Mail.rows(dir)) == 59
-  @test isfile(joinpath(top, "mail", "you@example.com", "Archive", "2026-11-14 0859 Sam Lee - Email 59.md"))
+  @test endswith(e.buf.path, "Email 58.eml") && length(Mail.rows(dir)) == 59
+  @test isfile(joinpath(top, "mail", "you@example.com", "Archive", "2026-11-14 0859 Sam Lee - Email 59.eml"))
   press(w, Keys.backspace, Keys.ctrl, Keys.cmd)
-  @test endswith(e.buf.path, "Email 57.md") && length(Mail.rows(dir)) == 58
+  @test endswith(e.buf.path, "Email 57.eml") && length(Mail.rows(dir)) == 58
   settle()
   @test length(inbox.notes) == 58 && length(archive.notes) == 1 && length(bin.notes) == 1
-  @test isfile(joinpath(top, "mail", "you@example.com", "Trash", "2026-11-14 0858 Sam Lee - Email 58.md"))
+  @test isfile(joinpath(top, "mail", "you@example.com", "Trash", "2026-11-14 0858 Sam Lee - Email 58.eml"))
   # ⌘⇧U marks the email that shows as not read
   press(w, Keys.u, Keys.cmd, Keys.shft)
   @test Mail.rows(dir)[2].unread
@@ -133,9 +158,9 @@ end
 
 @testset "an answer, in a window of its own" begin
   click(e.nodes[(:mail_row, 1)])
-  @test endswith(e.buf.path, "Email 60.md")
+  @test endswith(e.buf.path, "Email 60.eml")
   press(w, Keys.r, Keys.cmd)
-  @test length(K.editors) == 2 && endswith(e.buf.path, "Email 60.md")   # the email stays in its window
+  @test length(K.editors) == 2 && endswith(e.buf.path, "Email 60.eml")   # the email stays in its window
   d = K.editors[2]
   dw = K.window_of(d)
   frames(dw)
@@ -169,6 +194,7 @@ end
   dw = K.window_of(d)
   frames(dw)
   @test d !== e && Mail.isdraft(d.buf.lines) && d.buf.caret == (2, 4)
+  @test !d.buf.fixed && iswritable(d.buf.path) && !("Read only" in bar(d))   # a draft is a page that you write
   # A draft with no address says so, and isn't sent
   click(d.nodes[:mail_send], dw)
   @test occursin("Write who the email is to", get(d.nodes, :mail_words, ("",))[1]) && !haskey(d.nodes, :mail_going)

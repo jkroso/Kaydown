@@ -160,3 +160,47 @@ end
   K.scroll_page!(e, px(Inf)); frames()
   @test e.scroll.offset == 0px   # a short page fits in the window
 end
+
+@testset "a file that the Mac marks as read-only is shown as it is, and isn't changed" begin
+  locked = joinpath(dir, "locked.md")
+  write(locked, "# Locked\n\nSome words.\n\nSee [the notes](notes.md) for more.\n")
+  chmod(locked, 0o444)
+  K.open!(e, locked); frames()
+  b = e.buf
+  @test b.view == :markdown && b.fixed && !K.readonly(b)   # it's a page like any other, with its heading as a heading
+  b.caret = b.anchor = (3, 0); frames()
+  typed("x")
+  key(Keys.s, Keys.cmd)
+  @test b.lines[3] == "Some words." && !K.dirty(b) && read(locked, String) == "# Locked\n\nSome words.\n\nSee [the notes](notes.md) for more.\n"
+  # A click on a link opens it with no key held, since the page has no caret for a click to place. A click
+  # beside the link's line, or on the line's other words, opens nothing.
+  it = K.item(e, 5)
+  line = it.content.lines[1]
+  seg = line.segs[findfirst(s -> !isempty(s.link), line.segs)]
+  y = e.origin[2] + it.top + it.content.above + line.top + line.high / 2
+  @test K.link_on(e, (e.origin[1] + seg.x + seg.w / 2, y)) == "notes.md"
+  @test K.link_on(e, (e.origin[1] - 20px, y)) === nothing && K.link_on(e, (e.origin[1] + seg.x - 6px, y)) === nothing
+  K.press!(e, (e.origin[1] + seg.x - 6px, y)); frames()
+  @test e.buf.path == locked
+  K.press!(e, (e.origin[1] + seg.x + seg.w / 2, y)); frames()
+  @test e.buf.path == notes
+  K.open!(e, locked); frames()
+  b = e.buf
+  # With the mark taken off, the page is written like any other
+  chmod(locked, 0o644)
+  frames()
+  @test !e.buf.fixed
+  caret!(3, 0)
+  typed("x")
+  key(Keys.s, Keys.cmd)
+  @test read(locked, String) == "# Locked\n\nxSome words.\n\nSee [the notes](notes.md) for more.\n"
+  # In a page that's written, a click on a link places the caret, and the link opens with ⌘ held
+  K.press!(e, (e.origin[1] + seg.x + seg.w / 2, y)); frames()
+  @test e.buf.path == locked && e.buf.caret[1] == 5
+  # A mark that's put on the file while it's open stops the typing too
+  chmod(locked, 0o444)
+  frames()
+  typed("y")
+  @test e.buf.fixed && e.buf.lines[3] == "xSome words."
+  chmod(locked, 0o644)
+end

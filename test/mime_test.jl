@@ -352,8 +352,14 @@ end
   @test md("<a href=\"\">none</a> <a href=\"#top\">Top</a> <a>bare</a> <a href=\"javascript:go()\">go</a>") == ["none Top bare go"]
   @test md("<a href=\"https://x.com/(a)\"><b>Read</b> [more] </a>now") == ["[**Read** (more)](https://x.com/%28a%29) now"]
   @test md("<a href='https://x.com\n/long'>cut</a>") == ["[cut](https://x.com/long)"]
-  # Pictures: none on the web loads by itself
-  @test md("<img src=\"https://x.com/chart.png\" alt=\"A chart\"> <img src=\"https://x.com/logo.png\">") == ["[A chart](https://x.com/chart.png)"]
+  # Pictures: none on the web shows, so that a sender can't tell when you read the email. In a line of text, the
+  # picture's words stand for it. A line of nothing but pictures is left out, like a logo or a drawing.
+  @test md("<p>Paid with <img src=\"https://x.com/visa.png\" alt=\"Visa\"> - 6941</p><p><img src=\"https://x.com/logo.png\" alt=\"A logo\"></p><p>Thanks</p>") ==
+        ["Paid with Visa - 6941", "", "Thanks"]
+  # ... and so are a picture's words beside the same words as text
+  @test md("<p><img src=\"https://x.com/link.png\" alt=\"Link\"> Link</p>") == ["Link"]
+  # An email that's all pictures has their words, at least
+  @test md("<img src=\"https://x.com/chart.png\" alt=\"A chart\"> <img src=\"https://x.com/logo.png\">") == ["A chart"]
   @test md("<a href=\"https://x.com\"><img src=\"https://x.com/i.png\"></a>after") == ["after"]
   @test md("<a href=\"https://x.com\"><img src=\"https://x.com/i.png\" alt=\"Shop now\"></a>") == ["[Shop now](https://x.com)"]
   @test md("x<img src=\"https://t.x.com/o.gif\" alt=\"pixel\" width=\"1\" height=\"1\"><img alt=\"p\" src=\"https://t.x.com/o\" style=\"width:1px\">") == ["x"]
@@ -381,9 +387,25 @@ end
   @test md("<html><head><title>T</title><style>p{color:red}</style></head><body><script>if (a < b) alert('<p>')</script>" *
            "<!-- a <b>comment</b> -->shown<div style=\"DISPLAY: none\">hidden <div>deep</div></div><span hidden>no</span>" *
            "<p style=\"max-height:0px;overflow:hidden\">no</p><span class=\"preheader\">no</span><![if !mso]> yes<![endif]></body></html>") == ["shown yes"]
-  # Tables: one that puts things beside each other becomes its cells, a row to a line
+  # Tables: one that puts things beside each other becomes its cells. The short cells of a row go on one line,
+  # with a — between two of them, whether or not the row was closed and whatever boxes the cells' words are in.
   @test md("<table><tr><td>Total</td><td>\$45.00</td></tr><tr><td>Tax<td>\$4.50<tr><td><p>A</p></td><td><p>B</p></td></tr></table>") ==
-        ["Total \$45.00", "Tax \$4.50", "", "A", "", "B"]
+        ["Total — \$45.00", "Tax — \$4.50", "", "A — B"]
+  # A line of an invoice, as Stripe writes one: tables in the cells, and cells that only make room
+  @test md("<table><tr><td></td><td><table><tr><td>Claude</td></tr></table><table><tr><td height=3></td></tr></table><table><tr><td>Qty 1</td></tr></table></td>" *
+           "<td></td><td align=right><table><tr><td>A\$309.09</td></tr></table></td></tr></table>") == ["Claude, Qty 1 — A\$309.09"]
+  # More than two cells have a · between them, however long their links are
+  @test md("<table><tr><td><a href=\"https://example.com/$("a"^80)\">Privacy</a></td><td><a href=\"https://example.com/b\">Terms</a></td><td>Help</td></tr></table>") ==
+        ["[Privacy](https://example.com/$("a"^80)) · [Terms](https://example.com/b) · Help"]
+  # Cells that each hold a name over what it's set to: a line for each
+  @test md("<table><tr><td><p>Amount paid</p><p>\$6.31</p></td><td><p>Date paid</p><p>9 Nov</p></td></tr></table>") ==
+        ["Amount paid — \$6.31", "", "Date paid — 9 Nov"]
+  # A dot in a cell of its own, then words: an item of a list
+  @test md("<table><tr><td>•</td><td>Add a vehicle</td></tr><tr><td>•</td><td>Send an enquiry</td></tr></table>") == ["- Add a vehicle", "- Send an enquiry"]
+  # A row with a long cell stays as it is: a line for each cell
+  @test md("<table><tr><td>$("word "^30)</td><td>Side</td></tr></table>") == [strip("word "^30), "Side"]
+  # A short line that ends with a colon takes the short line after it
+  @test md("<div>Order ID:</div><p>MTZ57</p><p>Notes:</p><p>$("long "^20)</p>") == ["Order ID: MTZ57", "", "Notes:", "", strip("long "^20)]
   # ... and one with headings becomes a table
   @test md("<p>Prices</p><table><thead><tr><th>Item</th><th>Price</th></tr></thead><tr><td><b>Tiles</b> | grey</td><td>\$400</td></tr><tr><td>Grout</td></tr></table>") ==
         ["Prices", "", "| Item | Price |", "| --- | --- |", "| **Tiles** \\| grey | \$400 |", "| Grout |  |"]
@@ -434,13 +456,9 @@ const GMAIL_REPLY = """
     "",
     "Everything is **20% off** until Sunday.",
     "",
-    "Cordless drill",
+    "Cordless drill — \$129",
     "",
-    "\$129",
-    "",
-    "Circular saw",
-    "",
-    "\$99",
+    "Circular saw — \$99",
     "",
     "[Shop the sale](https://shop.example.com/sale)",
     "You get this email because you signed up.",

@@ -140,18 +140,18 @@ Click a line of the list to open its page at that line. Click the box of a to-do
 
 ## Read and write email
 
-Kaydown can keep a folder on your Mac that holds every email of an account. Each email is a Markdown page, and the folder has the same folders in it as your email server has:
+Kaydown can keep a folder on your Mac that holds every email of an account. The folder has the same folders in it as your email server has, and each email is one `.eml` file:
 
 ```
 ~/Mail/you@example.com/
   Inbox/
-    2026-11-14 0932 Sam Lee - Roof quote.md
-    files/2026-11-14 0932 Sam Lee - Roof quote/Roof quote.pdf
+    2026-11-14 0932 Sam Lee - Roof quote.eml
   Sent/
   Drafts/
+    Re Roof quote.md
 ```
 
-A page starts with front matter that says who sent the email, to whom, when, and its subject. The email's text follows, as Markdown. What was attached to the email is in `files`.
+An `.eml` file holds the email exactly as the server sent it, with what was attached to it inside. Mail, Quick Look and Spotlight read it too. Kaydown shows it as a page: the subject and who sent it at the top, then the email's text as Markdown, then a link to each attached file. You read that page, and you can't change it. Kaydown marks each email file as read-only on your Mac, so no other app changes one by mistake. A click on a link in an email opens it, with no key held. Because the file is the whole email, a later Kaydown can show it better with no new download.
 
 1. Press ⌘, and click the Email tab.
 2. Type your email address, your name and your password, and click Connect.
@@ -163,9 +163,9 @@ Kaydown gets your inbox first, then the other folders. The Email page has two se
 
 In a folder of emails, the sidebar lists the emails, newest first. A click shows an email, and marks it as read. The top bar of an email has buttons that answer it, send it on, archive it and delete it. A right-click on an email in the list has the same, and marks it as not read.
 
-An email that you write is a page too. ⌘⇧N starts one in a window of its own, with `to` and `subject` at its top. Write it as you write any page. A line that holds only a link to a file sends the file with the email. ⌘⇧Return sends it, and the page moves to the folder of sent email.
+An email that you write is a Markdown page. ⌘⇧N starts one in a window of its own, with `to` and `subject` at its top. Write it as you write any page. A line that holds only a link to a file sends the file with the email. ⌘⇧Return sends it. The email that went is then kept as an `.eml` file in the folder of sent email, and the draft goes.
 
-The server is the one that's right. An email that another app deletes goes from the folder, and a page that the Finder moves or deletes comes back. A page that you changed stays when its email goes from the server. `mail.jl` says how it works, and `mime.jl` how an email becomes a page.
+The server is the one that's right. An email that another app deletes goes from the folder, and an email file that the Finder moves or deletes comes back. Each folder has a hidden list of its emails, which is only a copy: if it's lost, Kaydown makes it again from the files and the server, with no new download. `mail.jl` says how it works, and `mime.jl` how an email becomes a page.
 
 It works with one account, and with a server that takes a password. Outlook.com and Microsoft 365 only let an app sign in through Microsoft's own sign-in page, and Proton Mail needs its Bridge app. Kaydown works with neither yet, and the form says so.
 
@@ -265,7 +265,7 @@ julia -O0 --project=. test/sketch_view_test.jl    # the tools of a sketch: drawi
 julia -O0 --project=. test/file_block_test.jl     # a kind of block that a file defines: what it shows, and what goes back into its lines
 julia -O0 --project=. test/emails_test.jl         # how a list of emails is read and written, and which emails it asks for
 julia -O0 --project=. test/emails_view_test.jl    # the list of the emails with a person, in a page
-julia -O0 --project=. test/mime_test.jl           # how an email becomes a Markdown page, and a page an email
+julia -O0 --project=. test/mime_test.jl           # how an email becomes the page that a window shows, and a page an email
 julia -O0 --project=. test/mail_test.jl           # the folder of emails that's kept in step with an email server, and sending
 julia -O0 --project=. test/mail_view_test.jl      # the list of emails, the buttons of an email and of a draft, and the Email page of the settings
 ```

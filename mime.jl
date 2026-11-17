@@ -676,6 +676,7 @@ struct Seg
   strike::Bool
   code::Bool
   href::String   # where it goes when it's the text of a link
+  alt::Bool      # the words that stand for a picture on the web, which the page doesn't show
 end
 
 "A tag that's open"
@@ -688,7 +689,10 @@ mutable struct Open
   used::Bool       # a line of the list item has been written
   count::Int       # the number of the next item of a numbered list
   tight::Bool      # a paragraph that Outlook wrote for one line: no empty line goes round it
+  cells::Vector{Int}   # of a row of a table: how many lines were written when the row started, and when each of its cells did
 end
+
+Open(name, href, bold, italic, marker, used, count, tight) = Open(name, href, bold, italic, marker, used, count, tight, Int[])
 
 "What writes the lines of Markdown"
 mutable struct Writer
@@ -700,9 +704,10 @@ mutable struct Writer
   depth::Int                       # how many quotes the last line was in
   pre::Union{Nothing,IOBuffer}     # the text of a block of code that's open
   picture::Function                # the path of the picture that the email holds under a name, or nothing
+  alts::Bool                       # a line that holds only the words of pictures on the web is written, and not left out
 end
 
-Writer(picture) = Writer(String[], Seg[], Open[], false, false, 0, nothing, picture)
+Writer(picture, alts=false) = Writer(String[], Seg[], Open[], false, false, 0, nothing, picture, alts)
 
 const VOID = Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"])
 # What's in these isn't the text of an email
@@ -817,6 +822,13 @@ flush!(w::Writer) = begin
   segs, nbsp = w.segs, w.nbsp
   isempty(segs) && !nbsp && return
   w.segs, w.nbsp = Seg[], false
+  if any(s -> s.alt, segs)
+    # A line that holds only the words of pictures on the web, like a logo or a drawing, is left out
+    !w.alts && all(s -> s.alt || isempty(strip(s.text)), segs) && return
+    # ... and so are a picture's words beside the same words as text, like the sign of a card beside its name
+    said = Set(lowercase(strip(s.text)) for s in segs if !s.alt)
+    segs = filter(s -> !(s.alt && lowercase(strip(s.text)) in said), segs)
+  end
   k = findlast(o -> level(o.name) > 0, w.open)
   body = strip(render(segs, k !== nothing))
   # A line with only a space that doesn't break is how many senders write an empty line
@@ -833,7 +845,7 @@ end
 block!(w::Writer) = (flush!(w); gap!(w))
 
 "Add text to the line. Each run of white space is one space."
-say!(w::Writer, text) = begin
+say!(w::Writer, text; alt=false) = begin
   w.pre === nothing || return (print(w.pre, text); nothing)
   t = replace(replace(text, GONE => ""), r"[\s\u00a0\u2007\u202f]+" => " ")
   (isempty(w.segs) || endswith(w.segs[end].text, ' ')) && (t = lstrip(t))
@@ -850,7 +862,7 @@ say!(w::Writer, text) = begin
     code |= o.name in ("code", "tt", "kbd", "samp")
     o.name == "a" && (href = o.href)
   end
-  push!(w.segs, Seg(t, bold, italic, strike, code, href))
+  push!(w.segs, Seg(t, bold, italic, strike, code, href, alt))
   nothing
 end
 
@@ -873,8 +885,10 @@ end
 
 """
 A picture. One that the email holds goes on a line of its own. One on the web
-becomes a link with the words that it has for those who can't see it, and one
-without such words is left out.
+isn't shown: Kaydown gets nothing from the web for an email, so that a sender
+can't tell when you read it. In a line of text, such a picture becomes the
+words that it has for those who can't see it. In a link, those words are the
+link's text. A line with nothing but such pictures is left out.
 """
 picture!(w::Writer, t::Token) = begin
   src = strip(get(t.attrs, "src", ""))
@@ -889,10 +903,8 @@ picture!(w::Writer, t::Token) = begin
   isempty(alt) && return
   # A picture a pixel or two wide is there to tell the sender that the email was opened
   any(n -> something(pixels(t, n), 100) <= 2, ("width", "height")) && return
-  href = any(o -> o.name == "a" && !isempty(o.href), w.open) ? "" : occursin(r"^https?://"i, src) ? target(src) : nothing
-  href === nothing && return
   # In a link, the words go to where the link goes
-  isempty(href) ? say!(w, alt) : (push!(w.open, Open("a", href, false, false, "", false, 0, false)); say!(w, alt); pop!(w.open))
+  any(o -> o.name == "a" && !isempty(o.href), w.open) ? say!(w, alt) : occursin(r"^https?://"i, src) ? say!(w, alt, alt=true) : nothing
   nothing
 end
 
@@ -1019,10 +1031,15 @@ open!(w::Writer, toks, i) = begin
       o.marker = k === nothing || w.open[k].name == "ul" ? "- " : "$((w.open[k].count += 1) - 1). "
     elseif name == "td" || name == "th"
       implied!(w, ("td", "th"), ("table",))
-      isempty(w.segs) || say!(w, " ")   # the cells of a row are on one line
+      # Each cell starts a line. The end of the row puts short cells on one line: see `joinrow!`.
+      flush!(w)
+      k = findlast(x -> x.name == "tr" || x.name == "table", w.open)
+      k !== nothing && w.open[k].name == "tr" && push!(w.open[k].cells, length(w.lines))
     elseif name == "tr"
       flush!(w)
+      endrow!(w)   # a row that was never closed ends where the next starts
       implied!(w, ("tr",), ("table",))
+      push!(o.cells, length(w.lines))
     elseif name in BLOCKS
       block!(w)
       name == "ol" && (o.count = something(tryparse(Int, get(t.attrs, "start", "")), 1))
@@ -1041,6 +1058,71 @@ open!(w::Writer, toks, i) = begin
   i
 end
 
+"A line that's plain text and short: no heading, list, quote, table, picture, rule or code"
+short(text) = length(replace(text, r"\]\([^)]*\)" => "]")) <= 70 && !occursin(r"^(#|[-*+] |>|\||```|~~~|!\[|\d+[.)] |([-*_])(\s*\2){2,}\s*$)", text)
+
+"""
+Put the cells of the table row that just ended on one line, when each cell is
+a few short lines of text. Most tables in email only put things beside each
+other, and a row like this is a line of an invoice or a row of links: what's
+bought and its price, or Privacy and Terms. A — goes between two cells, and a
+· between more. The lines of one cell have a comma between them.
+"""
+joinrow!(w::Writer, row::Open) = begin
+  marks = row.cells
+  (length(marks) >= 3 && marks[1] <= length(w.lines)) || return
+  any(o -> o.name in ("blockquote", "li", "ul", "ol"), w.open) && return
+  ends = [marks[2:end]; length(w.lines)]
+  issorted(ends) || return
+  cells = [filter!(!isempty, String.(strip.(w.lines[ends[i]+1:ends[i+1]]))) for i in 1:length(ends)-1]
+  filter!(!isempty, cells)
+  (length(cells) >= 2 && all(c -> length(c) <= 3 && all(short, c), cells)) || return
+  spaced = marks[1] < length(w.lines) && isempty(w.lines[marks[1]+1])
+  add(text) = (spaced && !isempty(w.lines) && push!(w.lines, ""); push!(w.lines, text))
+  if cells[1] == ["•"] || cells[1] == ["·"] || cells[1] == ["-"] || cells[1] == ["*"]
+    # A dot in a cell of its own, then the words: an item of a list
+    resize!(w.lines, marks[1])
+    add("- " * join((join(c, ", ") for c in cells[2:end]), " "))
+  elseif all(c -> length(c) == 2, cells)
+    # Each cell is a name over what it's set to, like Amount paid over the amount: a line for each
+    resize!(w.lines, marks[1])
+    for (i, c) in enumerate(cells)
+      (i > 1 || spaced) && !isempty(w.lines) && push!(w.lines, "")
+      push!(w.lines, c[1] * " — " * c[2])
+    end
+  elseif sum(c -> sum(l -> length(replace(l, r"\]\([^)]*\)" => "]")), c), cells) <= 140
+    resize!(w.lines, marks[1])
+    add(join((join(c, ", ") for c in cells), length(cells) == 2 ? " — " : " · "))
+  end
+  nothing
+end
+
+"Join the cells of the row that's open in the table that's open, or in the tag at place `from` of the open tags"
+endrow!(w::Writer, from=something(findlast(o -> o.name == "table", w.open), 1)) = begin
+  k = findlast(o -> o.name == "tr", w.open)
+  k !== nothing && k >= from && joinrow!(w, w.open[k])
+  nothing
+end
+
+"""
+Put a short line that ends with a colon and the short line after it on one
+line, like `Order ID:` and its number. Senders often write the two in boxes of
+their own.
+"""
+joinlabels!(lines) = begin
+  i = 1
+  while i + 2 <= length(lines)
+    a, b = lines[i], lines[i+2]
+    if endswith(a, ':') && length(a) <= 40 && short(a) && isempty(lines[i+1]) && !isempty(b) && short(b) && !endswith(b, ':') &&
+       (i == 1 || isempty(lines[i-1])) && (i + 3 > length(lines) || isempty(lines[i+3]))
+      lines[i] = a * " " * b
+      deleteat!(lines, i+1:i+2)
+    end
+    i += 1
+  end
+  lines
+end
+
 "Take a tag that closes"
 close!(w::Writer, name) = begin
   name == "br" && return w.pre === nothing ? (isempty(w.segs) ? gap!(w) : flush!(w)) : print(w.pre, '\n')
@@ -1054,14 +1136,16 @@ close!(w::Writer, name) = begin
   w.pre === nothing && any(o -> o.name in LINES || o.name in BLOCKS, @view w.open[k:end]) && flush!(w)
   # A paragraph that's open in the tag ends with it
   gap = any(o -> o.name in BLOCKS && !o.tight, @view w.open[k:end])
+  name == "tr" && w.pre === nothing && joinrow!(w, w.open[k])
+  name in ("table", "tbody", "thead", "tfoot") && w.pre === nothing && endrow!(w, k)
   shut!(w, k)
   gap && gap!(w)
   nothing
 end
 
 "The lines of Markdown of tags and text"
-written(toks, picture) = begin
-  w = Writer(picture)
+written(toks, picture; alts=false) = begin
+  w = Writer(picture, alts)
   i = 1
   while i <= length(toks)
     t = toks[i]
@@ -1074,7 +1158,7 @@ written(toks, picture) = begin
   # A rule at the very top of a file would read as the start of front matter
   while !isempty(out) && (isempty(strip(out[1])) || occursin(r"^\s*([-*_])(\s*\1){2,}\s*$", out[1])); popfirst!(out) end
   while !isempty(out) && isempty(strip(out[end])); pop!(out) end
-  out
+  joinlabels!(out)
 end
 
 """
@@ -1089,7 +1173,10 @@ markdown(html::AbstractString; picture=name -> nothing) = begin
   failed = Ref{Any}(nothing)
   safe(name) = try picture(name) catch err; failed[] = err; nothing end
   lines = try
-    written(tokens(source), safe)
+    toks = tokens(source)
+    made = written(toks, safe)
+    # An email that's all pictures on the web has their words, at least
+    isempty(made) ? written(toks, safe, alts=true) : made
   catch
     String[oneline(l) for l in split(entities(replace(source, r"<[^>]*>" => " ")), '\n') if !isempty(strip(l))]
   end

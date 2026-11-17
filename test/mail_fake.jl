@@ -106,7 +106,12 @@ words(text) = begin
       push!(out, String(take!(buf)))
       i += 1
     elseif c == '('
-      stop = something(findnext(')', text, i), n)
+      # A list can hold a list, like (UID BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])
+      depth, stop = 0, n
+      for k in i:n
+        depth += text[k] == '(' ? 1 : text[k] == ')' ? -1 : 0
+        depth == 0 && (stop = k; break)
+      end
       push!(out, text[i:stop])
       i = stop + 1
     else
@@ -217,7 +222,12 @@ imap(s::Server, sock) = begin
         occursin("BODY[]", items) && writes && push!(n.flags, "\\Seen")
         parts = ["UID $(n.uid)", "FLAGS ($(flagtext(n)))"]
         occursin("INTERNALDATE", items) && push!(parts, "INTERNALDATE \"$(n.came)\"")
-        if occursin("BODY", items)
+        if occursin("HEADER.FIELDS", items)
+          # Only the Message-ID of the email's head, which is all that mail.jl asks for by name
+          head = match(r"(?im)^message-id:[^\r\n]*", String(copy(n.raw)))
+          lines = (head === nothing ? "" : head.match * "\r\n") * "\r\n"
+          write(sock, "* $seq FETCH ($(join(parts, ' ')) BODY[HEADER.FIELDS (MESSAGE-ID)] {$(sizeof(lines))}\r\n", lines, ")\r\n")
+        elseif occursin("BODY", items)
           write(sock, "* $seq FETCH ($(join(parts, ' ')) BODY[] {$(length(n.raw))}\r\n", n.raw, ")\r\n")
         else
           say("* $seq FETCH ($(join(parts, ' ')))")

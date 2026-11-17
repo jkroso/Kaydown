@@ -1,26 +1,30 @@
 # Email. Kaydown keeps a folder on the Mac that holds every email of an
 # account, and has the same folders in it as the email server has. Each email
-# is a Markdown page:
+# is one file:
 #
 #     ~/Mail/you@example.com/
 #       Inbox/
-#         2026-11-14 0932 Sam Lee - Roof quote.md
-#         files/2026-11-14 0932 Sam Lee - Roof quote/Roof quote.pdf
+#         2026-11-14 0932 Sam Lee - Roof quote.eml
 #       Sent/
 #       Drafts/
+#         Re Roof quote.md
 #
-# The page starts with front matter that says who sent the email, to whom,
-# when, and its subject. The email's text follows, as Markdown. What was
-# attached to the email is in `files`, in a folder with the page's name.
+# An .eml file holds the email exactly as the server sent it, with what was
+# attached to it inside. So nothing of the email is lost, the file's kind says
+# that it's an email, and Mail, Quick Look and Spotlight can read it too.
+# `render` makes the lines of a page from the file, for a window to show: the
+# file itself is never changed.
 #
-# A draft is a page too: one whose front matter has `to` and no `date`. You
-# write it as you write any page, and Kaydown sends it.
+# A draft is a Markdown page: one whose front matter has `to` and no `date`.
+# You write it as you write any page. When Kaydown sends it, the email that
+# went is kept as an .eml file in the folder of sent email, and the draft goes.
 #
 #     m = own()                # the mailer of the app that's running
 #     tick!(m)                 # call it in each frame. It gives the seconds until it wants the next call.
 #     check!(m)                # look for new email now
 #     says(m)                  # a sentence on how far it has got
 #     rows(dir)                # what a folder of emails holds, newest first, for a list
+#     render(path)             # the email in the file at `path`, as the lines of a page
 #     draft!(m)                # a new page to write an email in. `reply!` and `forward!` start one from an email.
 #     send!(m, path)           # send the draft at `path`
 #     seen!(m, path)           # mark an email as read
@@ -44,8 +48,11 @@
 #
 # Each folder has a hidden file, `.email-index`, that lists its emails: the
 # server's number for each (its UID), whether it's read, who it's from, its
-# subject and the name of its page. The list of a folder is drawn from that
-# file, so no page is read to draw it.
+# subject and the name of its file. The list of a folder is drawn from that
+# file, so no email is read to draw it. The index is only a copy of what the
+# files and the server say. When it's lost, or a file is put in the folder by
+# hand, the next look makes it again: the server says the Message-ID of each
+# email, and the file with that Message-ID is that email. See `adopt!`.
 #
 # The password is in the Mac's Keychain, under "Kaydown email". The rest of
 # the account is in the file `email` in Kaydown's folder in
@@ -390,7 +397,7 @@ mutable struct Letter
   subject::String
   id::String        # its Message-ID
   file::String      # the name of its page in the folder
-  written::Float64  # when Kaydown wrote the page, as the disk tells it. A later time means you changed the page.
+  written::Float64  # when Kaydown wrote the file, as the disk tells it. A later time means something changed the file.
 end
 
 "A folder of emails"
@@ -406,10 +413,11 @@ mutable struct Box
   byfile::Dict{String,Letter}
   dirty::Bool                     # the index file doesn't say what `letters` says
   version::Int                    # goes up with each change, so that a list knows to draw again
+  renew::Set{Int}                 # the UIDs of the emails that the look that's running gets again, to keep as .eml files
 end
 
 Box(path; server="", delimiter="/", role=:none) =
-  Box(path, server, delimiter, role, 0, "", Letter[], Dict{Int,Letter}(), Dict{String,Letter}(), false, 0)
+  Box(path, server, delimiter, role, 0, "", Letter[], Dict{Int,Letter}(), Dict{String,Letter}(), false, 0, Set{Int}())
 
 "Every folder of emails that's been read from the disk, by its path"
 const boxes = Dict{String,Box}()
@@ -474,6 +482,8 @@ box(dir) = begin
     end
   end
   b.dirty = false
+  # An email file that an older Kaydown wrote, or that came here some other way, is marked now
+  foreach(l -> isemail(l.file) && protect!(joinpath(dir, l.file)), b.letters)
   boxes[dir] = b
 end
 
@@ -965,7 +975,9 @@ unpage!(b::Box, l::Letter) = begin
   path = joinpath(b.path, l.file)
   if isfile(path) && mtime(path) == l.written
     rm(path, force=true)
+    # A Markdown page of the Kaydown before this one had its attached files in a folder beside it
     rm(joinpath(b.path, FILES, splitext(l.file)[1]), recursive=true, force=true)
+    try rm(joinpath(b.path, FILES)) catch end   # the folder of those folders goes with the last of them
   end
   drop!(b, l)
 end
@@ -980,16 +992,31 @@ attach!(b::Box, stem, name, bytes) = begin
   "$FILES/$stem/$name"
 end
 
+"True for the name of a file that holds an email as a server sends one"
+isemail(name) = endswith(lowercase(name), ".eml")
+"True for the name of a Markdown page: a draft, or an email as the Kaydown before this one kept it"
+ispage(name) = endswith(lowercase(name), ".md")
+
 """
-Write the page of the email `raw`, which is number `uid` of the folder `b`,
-and put it in the folder's index. `flags` are the server's marks on it, and
-`came` is when the server got it.
+Mark the email file at `path` as a file to read and not to write. An email is
+what somebody sent, so no app should change it: Kaydown doesn't, and with the
+mark the Mac lets no other app do it by mistake. The file can still be moved
+and deleted. A draft is a page that you write, and never gets the mark.
+"""
+protect!(path) = try iswritable(path) && chmod(path, 0o444) catch end
+
+"""
+Keep the email `raw`, which is number `uid` of the folder `b`, as a file, and
+put it in the folder's index. The file holds the email as the server sent it,
+with what was attached to it, so nothing of the email is lost and any app that
+reads email can open it. `flags` are the server's marks on it, and `came` is
+when the server got it.
 """
 store!(m::Mailer, b::Box, uid, flags, came, raw) = begin
   part = message(raw)
   id = String(strip(header(part, "message-id")))
   seen, flagged, answered = "\\seen" in flags, "\\flagged" in flags, "\\answered" in flags
-  # A page that Kaydown moved here, or wrote when it sent the email, is the page of this email already
+  # A file that Kaydown moved here, or wrote when it sent the email, is the file of this email already
   if !isempty(id)
     i = findfirst(l -> l.uid == 0 && l.id == id && isfile(joinpath(b.path, l.file)), b.letters)
     if i !== nothing
@@ -1007,21 +1034,134 @@ store!(m::Mailer, b::Box, uid, flags, came, raw) = begin
   who = outgoing ? "to " * shown(to) : shown(from)
   subject = String(strip(header(part, "subject")))
   stem = "$(stamp(at)) $(clean(isempty(who) ? "Nobody" : who, 30, 60)) - $(clean(isempty(subject) ? "No subject" : subject, 70, 120))"
-  file = spare(b.path, stem, ".md", taken=name -> haskey(b.byfile, name))
-  stem = splitext(file)[1]
-  lines = page(part, keep=(name, bytes, picture) -> attach!(b, stem, name, bytes), at=at)
-  # The address that an answer goes to, when it isn't the sender's
-  answer = addresses(part, "reply-to")
-  at_from = findfirst(startswith("from:"), lines)
-  if !isempty(answer) && at_from !== nothing && answer != from
-    insert!(lines, at_from + 1, "reply-to: " * flat(written(answer)))
-  end
+  file = spare(b.path, stem, ".eml", taken=name -> haskey(b.byfile, name))
   path = joinpath(b.path, file)
-  write(path, join(lines, "\n"))
+  write(path, raw)
+  protect!(path)
   l = Letter(uid, seen, flagged, answered, outgoing, false, false, at, shown(from), shown(to), subject, id, file, mtime(path))
   add!(b, l)
   note(b, l)
   l
+end
+
+# --- an email file, read ---------------------------------------------------------------------
+#
+# An .eml file is the email. The index of its folder only repeats what the
+# file's head says, with the server's number for the email and its marks. So
+# Kaydown can make the index again from the files and the server: see `adopt!`.
+
+"""
+What the head of the email file at `path` says: who it's from, to and copied
+to, its subject, its Message-ID and when it was sent. It's nothing for a file
+that can't be read. Only the start of the file is read, so a long email costs
+no more than a short one.
+"""
+heading(path) = try
+  bytes = open(io -> read(io, 1 << 17), path)
+  # The head ends at the first empty line
+  stop = something(findfirst(i -> bytes[i] == 0x0a && (bytes[i+1] == 0x0a || (bytes[i+1] == 0x0d && get(bytes, i + 2, 0x00) == 0x0a)),
+                             1:length(bytes)-1), length(bytes))
+  part = message(bytes[1:stop])
+  (from=addresses(part, "from"), to=addresses(part, "to"), cc=addresses(part, "cc"), answer=addresses(part, "reply-to"),
+   subject=String(strip(header(part, "subject"))), id=String(strip(header(part, "message-id"))), at=sent(part))
+catch
+  nothing
+end
+
+"The head of the email file at `path` as the front matter of a page writes it, or no lines for a file that can't be read"
+headlines(path) = begin
+  h = heading(path)
+  h === nothing && return String[]
+  lines = ["---", "from: $(flat(written(h.from)))"]
+  isempty(h.answer) || h.answer == h.from || push!(lines, "reply-to: $(flat(written(h.answer)))")
+  isempty(h.to) || push!(lines, "to: $(flat(written(h.to)))")
+  isempty(h.cc) || push!(lines, "cc: $(flat(written(h.cc)))")
+  push!(lines, "date: $(longdate(something(h.at, mtime(path))))", "subject: $(flat(h.subject))", "---")
+  lines
+end
+
+"The folder that holds the files of the emails that were opened, like a PDF that came with one"
+cache() = isempty(place[]) ? joinpath(homedir(), "Library", "Caches", "Kaydown", "email") : joinpath(place[], "cache")
+
+"""
+The email in the file at `path` as the lines of a page, for a window to show:
+front matter that says who it's from and so on, then its text as Markdown,
+then a link to each file that came with it. Those files are inside the email,
+so a copy of each goes in Kaydown's cache for the links to open. The email's
+file isn't changed.
+"""
+render(path) = begin
+  part = message(read(path))
+  dir = joinpath(cache(), string(hash(abspath(path)), base=16))
+  keep(name, bytes, picture) = begin
+    mkpath(dir)
+    base, ext = splitext(clean(name, 80, 150))
+    file = joinpath(dir, (isempty(base) ? "file" : base) * ext)
+    # The same file of the same email is written once
+    (isfile(file) && filesize(file) == length(bytes)) || write(file, bytes)
+    file
+  end
+  lines = page(part, keep=keep, at=mtime(path))
+  # The address that an answer goes to, when it isn't the sender's
+  from, answer = addresses(part, "from"), addresses(part, "reply-to")
+  at = findfirst(startswith("from:"), lines)
+  !isempty(answer) && at !== nothing && answer != from && insert!(lines, at + 1, "reply-to: " * flat(written(answer)))
+  lines
+end
+
+"The lines of the file at `path`: of a page as it's written, and of an email as `render` gives them"
+content(path) = isemail(path) ? render(path) : String.(split(replace(read(path, String), "\r\n" => "\n"), '\n'))
+
+"""
+Give each email file that the index of `b` doesn't know its place in the
+index, when it's one of the emails `new` that the server has in the folder.
+The server says the Message-ID of each of those, and a file with that
+Message-ID is that email. So an index that's lost, or a file that's put back
+in its folder, costs no new download. `there` is the server's marks by UID. A
+file that Kaydown moved here, or wrote when it sent an email, is matched in
+the same way. Each UID that finds its file is taken out of `new`.
+"""
+adopt!(m::Mailer, w::Wire, b::Box, new, there) = begin
+  byid = Dict{String,Any}()   # a letter with no UID yet, or the name of a file and what its head says
+  foreach(l -> l.uid == 0 && !isempty(l.id) && isfile(joinpath(b.path, l.file)) && (byid[l.id] = l), b.letters)
+  for name in readdir(b.path)
+    (isemail(name) && !haskey(b.byfile, name) && !startswith(name, '.')) || continue
+    h = heading(joinpath(b.path, name))
+    (h === nothing || isempty(h.id) || haskey(byid, h.id)) || (byid[h.id] = (name, h))
+    breathe(m)
+  end
+  isempty(byid) && return
+  me = lowercase(m.account.address)
+  for some in Iterators.partition(copy(new), 400)
+    isempty(byid) && break
+    ask(m, w, "UID FETCH $(join(some, ',')) (UID BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])") do r
+      uid = match(r"\bUID (\d+)", r.text)
+      (uid === nothing || isempty(r.data)) && return
+      uid = parse(Int, uid[1])
+      id = match(r"(?i)^message-id:\s*(\S.*?)\s*$"m, replace(String(copy(last(r.data))), r"\r?\n[ \t]+" => " "))
+      found = id === nothing ? nothing : get(byid, String(id[1]), nothing)
+      (found === nothing || !haskey(there, uid) || haskey(b.byuid, uid)) && return
+      flags = there[uid]
+      seen, flagged, answered = "\\seen" in flags, "\\flagged" in flags, "\\answered" in flags
+      if found isa Letter
+        found.uid, found.seen, found.flagged, found.answered, found.waits = uid, seen, flagged, answered, false
+        b.byuid[uid] = found
+        b.version += 1
+      else
+        name, h = found
+        path = joinpath(b.path, name)
+        protect!(path)
+        out = !isempty(h.from) && lowercase(h.from[1].second) == me
+        add!(b, Letter(uid, seen, flagged, answered, out, false, false, something(h.at, mtime(path)), shown(h.from), shown(h.to),
+                       h.subject, h.id, name, mtime(path)))
+      end
+      delete!(byid, String(id[1]))
+      filter!(!=(uid), new)
+      b.dirty = true
+      breathe(m)
+    end
+  end
+  nothing
 end
 
 # --- the look for new email ------------------------------------------------------------------
@@ -1103,6 +1243,8 @@ survey!(m::Mailer, w::Wire, b::Box) = begin
     end
   end
   new = sort!([uid for uid in keys(there) if !haskey(b.byuid, uid)], rev=true)
+  # A file of an email that the index doesn't know takes its place in the index, with no new download
+  isempty(new) || adopt!(m, w, b, new, there)
   # Only the emails that came in the months that the account goes back. An older email that's here already stays.
   if m.account.back > 0 && !isempty(new)
     recent = Set{Int}()
@@ -1112,6 +1254,10 @@ survey!(m::Mailer, w::Wire, b::Box) = begin
     end
     filter!(in(recent), new)
   end
+  # The Kaydown before this one kept each email as a Markdown page. Each of those emails comes again, to be
+  # kept as the email itself, however old it is. The new emails come first.
+  b.renew = Set(l.uid for l in b.letters if l.uid > 0 && ispage(l.file) && haskey(there, l.uid))
+  append!(new, sort!(collect(b.renew), rev=true))
   # A page that Kaydown moved here waits for the server's copy. When the server knows of the move
   # and has nothing new here, no copy is coming: the move failed. The page goes, and the email is
   # still in the folder that it was in.
@@ -1126,14 +1272,22 @@ const MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 "The day of the time `at` as IMAP writes it, like 17-Nov-2025"
 imapday(at) = (t = Libc.TmStruct(at); "$(t.mday)-$(MONTHS[t.month + 1])-$(t.year + 1900)")
 
-"Get the emails `uids` of the folder `b`, and write a page for each"
+"Get the emails `uids` of the folder `b`, and keep each as a file"
 fetch!(m::Mailer, w::Wire, b::Box, uids) = begin
   w.chosen == b.server || choose!(m, w, b.server)
   ask(m, w, "UID FETCH $(join(uids, ',')) (UID FLAGS INTERNALDATE BODY.PEEK[])") do r
     uid = match(r"\bUID (\d+)", r.text)
     (uid === nothing || isempty(r.data)) && return
     uid = parse(Int, uid[1])
-    (uid in uids && !haskey(b.byuid, uid)) || return
+    uid in uids || return
+    had = get(b.byuid, uid, nothing)
+    if had !== nothing
+      # An email that's here already only comes again to take the place of its Markdown page. The page
+      # goes, with the files that were beside it, unless you changed it: then it stays, as a page of yours.
+      uid in b.renew || return
+      unpage!(b, had)
+    end
+    delete!(b.renew, uid)
     flags = match(r"FLAGS \(([^)]*)\)", r.text)
     came = match(r"INTERNALDATE \"([^\"]+)\"", r.text)
     try
@@ -1170,7 +1324,7 @@ gather!(m::Mailer, w::Wire, some) = begin
     foreach(l -> drop!(b, l), lost)
     breathe(m)
     # A folder that says what it said last time has nothing new, unless it still has emails that didn't come
-    fresh = isempty(lost) && !isempty(said) && said == b.state && b.validity != 0
+    fresh = isempty(lost) && !isempty(said) && said == b.state && b.validity != 0 && !any(l -> l.uid > 0 && ispage(l.file), b.letters)
     fresh && continue
     new = survey!(m, w, b)
     b.dirty && save(b)
@@ -1301,10 +1455,11 @@ move!(m::Mailer, path, to::Box) = begin
     changed!(m)
     return joinpath(to.path, to.letters[there].file)
   end
-  file = spare(to.path, stem, ".md", taken=name -> haskey(to.byfile, name))
+  file = spare(to.path, stem, splitext(l.file)[2], taken=name -> haskey(to.byfile, name))
   mkpath(to.path)
-  changed = mtime(path) != l.written   # you changed the page
+  changed = mtime(path) != l.written   # something changed the file
   mv(path, joinpath(to.path, file))
+  # A Markdown page of the Kaydown before this one has its attached files in a folder beside it
   kept = joinpath(b.path, FILES, stem)
   if isdir(kept)
     mkpath(joinpath(to.path, FILES))
@@ -1506,9 +1661,11 @@ With `all`, it goes to everyone that the email went to as well. The email's
 text is under your own, as a quote.
 """
 reply!(m::Mailer, path; all=false) = begin
-  lines = String.(split(read(path, String), '\n'))
+  lines = content(path)
   said, start = fields(lines)
   at = locate(path)
+  # The Message-ID of the email, from the index, or from the email itself when the index doesn't know it
+  id = at !== nothing ? at[2].id : isemail(path) ? (h = heading(path); h === nothing ? "" : h.id) : ""
   me = lowercase(m.account.address)
   from = addresses(get(said, "from", ""))
   # An answer to an email of your own goes to the people that the email went to
@@ -1524,12 +1681,12 @@ reply!(m::Mailer, path; all=false) = begin
   end
   append!(text, [isempty(l) ? ">" : "> " * l for l in theirs])
   draft!(m, to=written(to), cc=written(others), subject=marked(get(said, "subject", ""), "Re:"), text=text,
-         reply=at === nothing ? "" : at[2].id)
+         reply=id)
 end
 
 "Write a draft that sends the email at `path` on to someone else, with what was attached to it, and give the draft's path"
 forward!(m::Mailer, path) = begin
-  lines = String.(split(read(path, String), '\n'))
+  lines = content(path)
   said, start = fields(lines)
   text = ["", "", "Forwarded email:", "", "> From: $(get(said, "from", ""))", "> Date: $(get(said, "date", ""))",
           "> Subject: $(get(said, "subject", ""))", "> To: $(get(said, "to", ""))", ">"]
@@ -1621,8 +1778,8 @@ deliver(m::Mailer, raw, from, to) = begin
 end
 
 """
-Send the draft at `path`. Then its page becomes the page of the email that was
-sent, in the folder of sent email, and the server's folder gets a copy.
+Send the draft at `path`. Then the email that went is kept as a file in the
+folder of sent email, the draft goes, and the server's folder gets a copy.
 
 An email goes once. Whatever goes wrong after the server took it, the draft
 isn't sent again: this returns, and the job is done.
@@ -1655,7 +1812,7 @@ post!(m::Mailer, w::Wire, path) = begin
   try
     filed!(m, path, said, text, from, to, cc, subject, id, at, raw)
   catch e
-    m.problem, m.kind = "Kaydown sent your email, but couldn't put its page in the folder of sent email: $(sprint(showerror, e))", :server
+    m.problem, m.kind = "Kaydown sent your email, but couldn't keep it in the folder of sent email: $(sprint(showerror, e))", :server
     # The draft is still where it was. A date in its front matter says that it went, so it can't be sent a second time.
     try
       isfile(path) && write(path, join([lines[1]; "from: $(flat(from))"; "date: $(longdate(at))"; lines[2:end]], "\n"))
@@ -1667,9 +1824,9 @@ post!(m::Mailer, w::Wire, path) = begin
 end
 
 """
-The email that the draft at `path` held has gone. Make the draft's file the
-page of that email, in the folder of sent email, and note what the server must
-still be told.
+The email that the draft at `path` held has gone. Keep the email `raw`, as it
+went, as a file in the folder of sent email, take the draft away, and note
+what the server must still be told.
 """
 filed!(m::Mailer, path, said, text, from, to, cc, subject, id, at, raw) = begin
   a = m.account
@@ -1677,21 +1834,13 @@ filed!(m::Mailer, path, said, text, from, to, cc, subject, id, at, raw) = begin
   boxes[out.path] = out
   mkpath(out.path)
   stem = "$(stamp(at)) $(clean("to " * shown(to), 30, 60)) - $(clean(isempty(subject) ? "No subject" : subject, 70, 120))"
-  name = spare(out.path, stem, ".md", taken=n -> haskey(out.byfile, n))
-  stem = splitext(name)[1]
-  top = ["---", "from: $(flat(from))", "to: $(flat(written(to)))"]
-  isempty(cc) || push!(top, "cc: $(flat(written(cc)))")
-  append!(top, ["date: $(longdate(at))", "subject: $(flat(subject))", "---", ""])
+  name = spare(out.path, stem, ".eml", taken=n -> haskey(out.byfile, n))
   draft = locate(path)
-  # The draft's file becomes the page first, in one step, so that it can't be sent again
   copy = joinpath(out.path, name)
-  mv(path, copy)
-  # The page keeps a copy of each file that went with the email
-  body = map(text[something(findfirst(l -> !isempty(strip(l)), text), 1):end]) do l
-    went = linked(l, dirname(path))
-    went === nothing ? l : replace(l, r"\([^)]*\)\s*$" => "($(escaped(attach!(out, stem, basename(went), read(went)))))")
-  end
-  write(copy, join([top; body], "\n"))
+  write(copy, raw)
+  protect!(copy)
+  # The draft goes at once, so that it can't be sent again
+  rm(path)
   m.moved[path] = copy
   add!(out, Letter(0, true, false, false, true, true, false, at, shown([a.name => a.address]), shown(to), subject, id, name, mtime(copy)))
   save(out)
@@ -1925,8 +2074,8 @@ const listed = Dict{String,Tuple{Any,Vector{Row}}}()
 
 """
 The rows of the folder `dir`, newest first: its emails, from its index, and
-each other Markdown page that's in it, like a draft. It's nothing when `dir`
-isn't a folder of emails.
+each Markdown page that's in it, like a draft. It's nothing when `dir` isn't
+a folder of emails.
 """
 rows(dir) = begin
   b = box(dir)
@@ -1952,8 +2101,9 @@ rows(dir) = begin
   out
 end
 
-"The first lines of the file at `path`: enough to hold its front matter"
+"The first lines of the file at `path`: enough to hold its front matter. For an email, they say what its head says."
 first_lines(path) = begin
+  isemail(path) && return headlines(path)   # an email's head, as the front matter of a page writes it
   out = String[]
   try
     for l in eachline(path)

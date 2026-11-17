@@ -1,6 +1,6 @@
 # Email
 
-Kaydown can keep a copy of your email in a folder on this Mac. Each email is a Markdown page, and the folder has the same folders in it as your email server has. You read an email as you read any page, and you write one the same way.
+Kaydown can keep a copy of your email in a folder on this Mac. The folder has the same folders in it as your email server has. Each email is one `.eml` file: the email as the server sent it, with what was attached to it inside. Kaydown shows it as a page. You read it there, and you can't change it: Kaydown marks each email file as read-only on your Mac, so no other app changes one by mistake. Click a link in an email to open it. An email that you write is a Markdown page until you send it.
 
 ## Your account
 
@@ -53,7 +53,7 @@ Gmail lets an app get 2,500 MB of email in a day. Kaydown stops before that, and
 
 ## How it works
 
-The server is the one that's right. An email that you delete in another app goes from the folder here. A page that you move or delete in the Finder comes back the next time Kaydown looks. A page that you changed stays when its email goes from the server.
+The server is the one that's right. An email that you delete in another app goes from the folder here. An email file that you move or delete in the Finder comes back the next time Kaydown looks. Each folder also has a hidden list of its emails. If that list is lost, Kaydown makes it again from the files and the server, with no new download.
 
 These change what the server has:
 

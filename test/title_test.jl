@@ -157,9 +157,21 @@ end
   @test menu().items == ["Rename", "Copy Path", "Show in Finder", "Move to Trash"]
   choose("Rename")
   @test K.renaming(e, :sidebar) == other && renaming() == ""
-  @test K.renamer(e).text == "other"
+  @test K.renamer(e).text == "other.md"
   typed("second")
   key(Keys.enter)
   @test isfile(joinpath(dir, "second.md")) && !isfile(other)
   @test w.focus === K.file_tree(e)
+end
+
+@testset "⌘P lists each page with its ending, and finds a page by its whole name" begin
+  write(joinpath(dir, "plan.md"), "# Plan\n")
+  write(joinpath(dir, "plan.markdown"), "# Plan\n")
+  K.open_finder!(e)
+  typed("plan.md")   # the ending is part of the name that's matched
+  @test basename.(K.matches(e)) == ["plan.markdown", "plan.md"]
+  typed("x")   # "plan.mdx" is in no name
+  @test isempty(K.matches(e))
+  key(Keys.escape)
+  @test e.popup == :none
 end

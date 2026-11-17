@@ -14461,7 +14461,7 @@ describe(r::FileRow) = begin
   Row(width(grow=grow), height(28px), padding(0px, 10px), radius(6px), child_gap=8px, clip=true, name="File",
       background(picked ? colours.active : ishovered(r) ? colours.hover : clear),
     Icon("file-earmark-text", size=13px, color=colours.dim),
-    Box(width(grow=grow), Alignment.Start, label(title(r.path), weight=picked ? "Semibold" : "")),
+    Box(width(grow=grow), Alignment.Start, label(basename(r.path), weight=picked ? "Semibold" : "")),
     (changed ? (Box(width(6px), height(6px), radius(3px), background(colours.dim)),) : ())...)
 end
 
@@ -14500,7 +14500,7 @@ describe(l::FileLabel) = begin
     # A hidden folder or page is fainter than the others, as it is in the Finder
     isdir(l.path) ? Box(width(grow=grow), Alignment.Start, label(basename(l.path), color=ishidden(l.path) ? colours.dim : colours.ink)) :
     ismarkdown(l.path) ?
-    Box(width(grow=grow), Alignment.Start, label(title(l.path), color=ishidden(l.path) && l.path != e.buf.path ? colours.dim : colours.ink,
+    Box(width(grow=grow), Alignment.Start, label(basename(l.path), color=ishidden(l.path) && l.path != e.buf.path ? colours.dim : colours.ink,
                                                  weight=l.path == e.buf.path ? "Semibold" : "")) :
     # A file that Kaydown only shows has its whole name, and it's fainter until it's the file that shows
     Box(width(grow=grow), Alignment.Start, label(basename(l.path), color=l.path == e.buf.path ? colours.ink : colours.dim,
@@ -14795,14 +14795,13 @@ end
 
 """
 Start to rename the file at `path`. Its name becomes a text field, in the
-sidebar or in the top bar, as `at` says. The sidebar's field has the name
-without its ending, all selected. The top bar shows the whole name, so its
+sidebar or in the top bar, as `at` says. Both show the whole name, so the
 field has the whole name, with the part before the ending selected.
 """
 rename!(e, path; at=:sidebar) = begin
   i = renamer(e)
   i.color = colours.ink
-  i.text = at == :title ? basename(path) : title(path)
+  i.text = basename(path)
   i.anchor, i.cursor = 0, length(title(path))
   e.nodes[:renaming] = path
   e.nodes[:renaming_at] = at
@@ -15283,7 +15282,7 @@ end
 matches(e) = begin
   q = lowercase(input(e).text)
   filter(e.files) do path
-    name = lowercase(title(path))
+    name = lowercase(basename(path))
     at = firstindex(name)
     all(q) do c
       found = findnext(c, name, at)

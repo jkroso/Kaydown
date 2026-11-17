@@ -8196,6 +8196,12 @@ zoom_tick!(e) = begin
   # The mouse button that started a drag has come up
   w = window_of(e)
   v.grab === nothing || w === nothing || Keys.mouse_left in w.keys || let_go!(v, w)
+  m = changing(v)
+  if m !== nothing && w !== nothing
+    m.joining === nothing || Keys.mouse_left in w.keys || Diagrams.let_go_at!(m, picture_spot(v, w.mouse)...)
+    # A box shows its point only while the mouse is over the diagram, and not over the buttons under it
+    m.hovered === nothing || ishovered(part!(() -> ZoomArea(of=v), v, :area)) || Diagrams.unhover!(m)
+  end
   v.what === nothing && return
   if v.what[1] == :diagram && v.block > 0
     # The diagram is what the lines of its block say now. They change under it when ⌘Z takes a change back.
@@ -8313,7 +8319,11 @@ end
 
 describe(::ZoomArea) = Box(width(grow=grow), height(grow=grow))
 # While a tool of the diagram waits for a click on a part, the mouse is a cross
-cursor(a::ZoomArea) = a.of.tool === nothing ? :arrow : :crosshair
+# While a tool of the diagram waits for a click on a part, or a line is dragged from a box's point, the mouse is a cross
+cursor(a::ZoomArea) = begin
+  m = changing(a.of)
+  a.of.tool !== nothing || (m !== nothing && (m.joining !== nothing || m.on_point)) ? :crosshair : :arrow
+end
 
 """
 The buttons of the tools of the diagram that fills the window, with a line
@@ -8510,12 +8520,25 @@ pdf_ink(ctx, v::ZoomView, paper) = begin
   image == C_NULL || paint_picture(ctx, image, (0, 0, w, h), (left, top, wide, tall))
 end
 
-# A click starts a drag that moves the picture
+"The place in the picture of the diagram that's at the place `at` in the window"
+picture_spot(v::ZoomView, at) = (v.at[1] + (num(at[1]) - v.box[1]) / v.zoom, v.at[2] + (num(at[2]) - v.box[2]) / v.zoom)
+
+# A click starts a drag that moves the picture. On the point of a box of a diagram, the drag draws a line from the box.
 onkey(a::ZoomArea, ev::KeyPress{Keys.mouse_left}) = begin
-  w = ev.window
+  w, v = ev.window, a.of
   focus(a)
-  a.of.grab = ((num(w.mouse[1]), num(w.mouse[2])), a.of.at)
+  m = changing(v)
+  # The point is under the mouse when it's within 8px of it on the screen, however small the diagram is drawn
+  m !== nothing && v.zoom > 0 && Diagrams.press_at!(m, picture_spot(v, w.mouse)..., near=8 / v.zoom) && return handled
+  v.grab = ((num(w.mouse[1]), num(w.mouse[2])), v.at)
   handled
+end
+
+# A line that's dragged from a box's point is drawn when the button comes up over another box
+onkey(a::ZoomArea, ev::KeyRelease{Keys.mouse_left}) = begin
+  m = changing(a.of)
+  m === nothing || a.of.zoom <= 0 || Diagrams.let_go_at!(m, picture_spot(a.of, ev.window.mouse)...)
+  nothing
 end
 
 """
@@ -8536,6 +8559,16 @@ end
 
 onmouse(a::ZoomArea, ev::MouseMove) = begin
   v = a.of
+  m = changing(v)
+  if m !== nothing && v.zoom > 0
+    at = picture_spot(v, ev.position)
+    if m.joining !== nothing
+      Keys.mouse_left in ev.window.keys ? Diagrams.drag_to!(m, at...) : Diagrams.let_go_at!(m, at...)
+      return handled
+    end
+    # The box under the mouse shows its point
+    v.grab === nothing && Diagrams.hover_at!(m, at..., near=8 / v.zoom)
+  end
   g = v.grab
   g === nothing && return handled
   Keys.mouse_left in ev.window.keys || (let_go!(v, ev.window); return handled)

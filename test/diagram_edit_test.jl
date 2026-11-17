@@ -164,6 +164,38 @@ end
   frames()
 end
 
+@testset "a drag from a box's point onto another box draws a line" begin
+  v = view()
+  m = K.changing(v)
+  window_spot(p) = (v.box[1] + (p[1] - v.at[1]) * v.zoom, v.box[2] + (p[2] - v.at[2]) * v.zoom)
+  area = v.parts[:area]
+  # The box under the mouse shows its point, in the middle of its right side since the diagram goes right
+  at(spot((:box, "A")))
+  @test m.hovered !== nothing && (m.hovered.kind, m.hovered.key) == (:box, "A") && !m.on_point
+  point = window_spot(D.point_of(m, D.part(m, (:box, "A"))))
+  at(point)
+  @test m.on_point && K.cursor(area) == :crosshair
+  shot("4c-point")
+  # A drag from the point follows the mouse, and doesn't move the diagram
+  was = v.at
+  press(point)
+  @test m.joining !== nothing && v.grab === nothing
+  at(spot((:box, "D")))
+  @test D.landing(m) !== nothing && D.landing(m).key == "D" && v.at == was
+  shot("4d-joining")
+  # Over box D the button comes up, and the line from A to D is in the block's lines
+  release()
+  @test m.joining === nothing
+  @test endswith(block(), "\n  A --> D")
+  @test m.picked[1] == :line
+  # ⌫ takes it away again
+  key(Keys.backspace)
+  @test !occursin("A --> D", block())
+  # The point goes when the mouse leaves the boxes
+  at((v.box[1] + 2, v.box[2] + 2))
+  @test m.hovered === nothing && K.cursor(area) == :arrow
+end
+
 @testset "Esc selects nothing, and then puts the page back" begin
   m = K.changing(view())
   click(spot((:box, "B")))

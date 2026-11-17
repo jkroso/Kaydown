@@ -27,7 +27,7 @@ A page shows more than text:
 - A formula that's written in TeX between dollar signs shows as maths: `$x^2$` in a line of text, and on lines of its own between a line of `$$` and another.
 - A line that holds only a picture, a video or a sound file shows it, or a player for it. The page's Insert menu records a sound from the microphone, and a button under the player writes down what's said in it, on the Mac.
 - A button beside a diagram, a picture or a page of a PDF file makes it fill the window, where you zoom it with a pinch.
-- A diagram that fills the window can be changed there. Click a box or a line to select it, click it twice to type its words, and use the buttons under it to add a box, draw a line, change a shape or take a part away. Each change is written in the code of the block.
+- A diagram that fills the window can be changed there. Click a box or a line to select it, click it twice to type its words, drag the point on a box's edge onto another box to draw a line, and use the buttons under it to add a box, draw a line, change a shape or take a part away. Each change is written in the code of the block.
 - A Julia file opens as one block of code, which you change and run as you do a `julia` block. There, the box of a value that's a part of a window lists the value's fields and its children.
 
 "Kaydown" is a working name, after Alan Kay.

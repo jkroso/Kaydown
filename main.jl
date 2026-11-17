@@ -40,8 +40,9 @@
 #   - Write a code block in the language `sketch` to draw: by hand, lines,
 #     arrows, boxes, ovals and words. Its last button makes it fill the window.
 #   - Write a code block in the language `find` to list the to-do items
-#     that aren't ticked in every page of the folder. With words in it, it
-#     lists the lines that have those words.
+#     that aren't ticked in every page of the folder. At its top, type words
+#     to keep only the lines that have them, and choose the kind of line and
+#     the folder from two menus.
 #   - Write a code block in the language `email` to list the emails with a
 #     person, once Kaydown has your email account.
 #   - An agent writes a code block in the language `ask` to ask you a
@@ -1102,6 +1103,7 @@ open!(e, path; record=true) = begin
   write_blocks!(e)   # the page that leaves keeps what its blocks hold
   e.buf.offset = e.scroll.offset
   from = e.buf.path
+  from == path || forget_ticked!(e)   # an item that was ticked in a list of what's found leaves that list
   # A new file ends the list of files to go forward to, as a new address does in a web browser
   record && !isempty(from) && from != path && (push!(e.back, from); empty!(e.ahead))
   e.buf = get!(e.buffers, path) do
@@ -9154,14 +9156,25 @@ BLOCKS[BOARD] = BlockKind("Board", "kanban", BoardView, board_html)
 # line. A click on the box of a to-do item ticks it in its own page. If that
 # page isn't open, or is open with nothing to save, Kaydown writes the tick to
 # the page's file at once. An item that you tick stays in the list, ticked,
-# until the page that shows the list is opened again.
+# until another page shows.
+#
+# The top of the list changes what it asks for, so the block's lines needn't
+# be seen: a field for the words that a line must have, a button that opens a
+# menu of the kinds of line, and one that opens a menu of the folders when the
+# page has folders beside it. Each change goes into the block's lines. Under them, a line says
+# what the list is of and where it looked. It counts only the lines that
+# match, not the items that were ticked here.
 
 const FIND = Searches.FIND
 const FIND_MOST = 200     # the most lines that a list shows
 const FIND_PAGES = 3000   # the most pages that a list reads
 const FIND_EVERY = 3      # seconds between two looks at the folder, while the window is drawn
 const FIND_BUDGET = 0.3   # seconds that one look at the folder can take
-push!(BLOCK_ICONS, "search", "file-earmark-text")
+const FIND_BAR = 440px     # the room that the top of a list needs to show its field and its buttons in one row
+push!(BLOCK_ICONS, "search", "file-earmark-text", "folder")
+
+# The kinds of line that a list can be of, and the name of each one in the list's menu
+const FIND_KINDS = ((:todo, "To-do items"), (:done, "Done items"), (:heading, "Headings"), (:line, "Lines"))
 
 "What a `find` block shows: the lines of a folder's pages that match"
 @def mutable struct SearchView <: SemanticUI
@@ -9174,6 +9187,16 @@ push!(BLOCK_ICONS, "search", "file-earmark-text")
   kept::Vector{Searches.Match} = Searches.Match[]   # the items whose box was clicked here. They stay in the list.
   pages::Dict{String,Any} = Dict{String,Any}()      # what was found in each page, and the mark of the page's text then
   parts::Dict{Any,Any} = Dict{Any,Any}()   # its rows, kept between frames
+end
+
+"""
+A button at the top of a list that shows what the list asks for now. A click
+opens a menu of the others. One chooses the kind of line that the list is of,
+and one chooses the folder that it looks in.
+"""
+@def mutable struct SearchChoice <: SemanticUI
+  of::Any = nothing     # the list
+  what::Symbol = :kind  # :kind or :folder
 end
 
 "The name of a page, over the lines of that page in the list"
@@ -9192,14 +9215,96 @@ end
   of::Any = nothing    # the row
 end
 
+"The text field at the top of a list. It holds the words that a line must have."
+search_input(v::SearchView) = block_part!(v, :input) do
+  TextInput(placeholder="Words to find", font_family=SANS, font_size=13px,
+            look=(_, text) -> Row(width(grow=grow), height(grow=grow), clip=true, text))
+end
+
 reread!(v::SearchView, lines) = begin
   lines == v.lines && return v
   v.lines = lines
   v.data = Searches.query(lines)
   v.shown = nothing
   empty!(v.pages)
+  # The field shows the words that the block has, as it does after ⌘Z takes some of them back.
+  # A space that was just typed after a word stays in the field.
+  i = search_input(v)
+  split(i.text) == v.data.with || (i.text = join(v.data.with, " "); i.anchor = i.cursor = length(i.text))
   v
 end
+
+"Write what the list asks for into the lines of its block, and work the list out again"
+ask!(v::SearchView; typing=false) = begin
+  v.shown = nothing
+  empty!(v.pages)
+  write_block!(v, FIND, Searches.written(v.data); typing)
+end
+
+"""
+What happens to a list in each frame, before the page is laid out: the words
+that were typed in its field are written into its block. The words make the
+list shorter. They don't change the kind of line that it lists.
+"""
+block_tick!(v::SearchView) = begin
+  words = String.(split(search_input(v).text))
+  q = v.data
+  words == q.with && return v
+  q.what === nothing && (q.what = Searches.kind(q))
+  q.with = words
+  ask!(v, typing=true)
+end
+
+"The folders that the list can look in: the folders beside the page, and the one that the block names now"
+search_folders(v::SearchView) = begin
+  dir = docdir(editor(v))
+  found = isdir(dir) ? sort!([f for f in readdir(dir) if !startswith(f, '.') && f != "node_modules" && isdir(joinpath(dir, f))], by=lowercase) : String[]
+  folder = v.data.folder
+  isempty(folder) || folder in found || pushfirst!(found, folder)
+  found
+end
+
+"Look in the folder `name` beside the page, or in the page's own folder when `name` is empty"
+look_in!(v::SearchView, name) = (v.data.folder = String(name); ask!(v))
+
+"List lines of the kind `kind`: :todo, :done, :heading or :line"
+list_kind!(v::SearchView, kind) = (v.data.what = kind; ask!(v))
+
+"What the button `c` says: the kind of line that its list is of now, or the folder that the list looks in"
+choice_words(c::SearchChoice) = begin
+  q = c.of.data
+  c.what == :folder && return isempty(q.folder) ? "This folder" : q.folder
+  FIND_KINDS[findfirst(k -> k[1] == Searches.kind(q), FIND_KINDS)][2]
+end
+
+"The items of the menu of the button `c`, and what a click on the `i`th one does"
+choices(c::SearchChoice) = begin
+  v = c.of
+  c.what == :kind && return [name for (_, name) in FIND_KINDS], i -> (i in eachindex(FIND_KINDS) && list_kind!(v, FIND_KINDS[i][1]); nothing)
+  folders = search_folders(v)
+  ["This folder"; "-"; folders], i -> (i == 1 ? look_in!(v, "") : i - 2 in eachindex(folders) && look_in!(v, folders[i-2]); nothing)
+end
+
+describe(c::SearchChoice) =
+  Row(height(26px), padding(9px, 0px), child_gap=6px, radius(6px), Alignment.Center, name="Menu",
+      border(1px, :solid, colours.line), background(ishovered(c) ? colours.hover : colours.bg),
+    (c.what == :folder ? (Icon("folder", size=13px, color=colours.dim),) : ())...,
+    Box(label(choice_words(c), 12px)), Icon("chevron-down", size=9px, color=colours.dim))
+
+cursor(::SearchChoice) = :hand
+
+# A click opens the button's menu under it
+onkey(c::SearchChoice, ev::KeyPress{Keys.mouse_left}) = begin
+  w = ev.window
+  items, act = choices(c)
+  r = rect(c)
+  at = r === nothing ? (w.mouse[1], w.mouse[2]) : (r.left, r.top + r.height + 4px)
+  system_menu(w, items, act; at) || drawn_menu!(w, items, act; at)
+  handled
+end
+
+# Return in the field gives the keyboard back to the page
+onkey(v::SearchView, ::KeyPress{Keys.enter}) = (focus(editor(v)); handled)
 
 """
 The Markdown files in `folder`, then those of each folder in it, in the order
@@ -9377,10 +9482,26 @@ tick_found!(v::SearchView, m::Searches.Match) = begin
   handled
 end
 
+"The lists of the page that shows let go of the items that were ticked in them. `open!` does this when another page takes its place."
+forget_ticked!(e) = for (key, v) in e.nodes
+  v isa SearchView && key[3] == e.buf.path && !isempty(v.kept) && (empty!(v.kept); v.shown = nothing)
+end
+
 onkey(t::SearchTick, ::KeyPress{Keys.mouse_left}) = begin
   row = t.of
   ms = found!(row.of).matches
   row.i <= length(ms) ? tick_found!(row.of, ms[row.i]) : handled
+end
+
+"""
+What the top of the list says: what it lists, how many lines match and where
+it looks. An item that was ticked here stays in the list, but it no longer
+matches, so it isn't counted.
+"""
+search_words(v::SearchView) = begin
+  q = v.data
+  own = [m for m in found!(v).matches if Searches.kind(q) in (m.kind, :line)]
+  Searches.summary(q, length(own), length(unique(m.path for m in own)))
 end
 
 describe(v::SearchView) = begin
@@ -9389,11 +9510,23 @@ describe(v::SearchView) = begin
   ms = found.matches
   q = v.data
   with_theme(component_theme(e.zoom)) do
-    words = Searches.summary(q, length(ms), length(unique(m.path for m in ms)))
-    bar = block_bar(Box(padding(6px, 0px), Icon("search", size=13px, color=colours.dim)), Box(label(words, 12px, color=colours.dim)),
-                    Box(width(grow=grow)), (isempty(q.folder) ? () : (Box(padding(8px, 0px), label(q.folder, 12px, color=colours.faint)),))...)
-    isempty(found.problem) || return Column(block_look()..., clip=true, name="Found", bar, block_note(found.problem))
-    rows = Any[]
+    input = search_input(v)
+    input.color = colours.ink
+    w = window_of(v)
+    typing = w !== nothing && w.focus === input
+    field = Row(width(grow=grow), height(26px), padding(8px, 0px), child_gap=7px, radius(6px), Alignment.Center, background(colours.bg),
+                border(1px, :solid, typing ? colours.accent : colours.line),
+                Icon("search", size=12px, color=colours.dim), Box(width(grow=grow), height(grow=grow), input))
+    # The button for the folder shows only when there's another folder to choose
+    menus = (block_part!(() -> SearchChoice(of=v, what=:kind), v, :kind),
+             (isempty(search_folders(v)) ? () : (block_part!(() -> SearchChoice(of=v, what=:folder), v, :folder),))...)
+    gap() = Box(width(4px))   # a new one each time: a box can be in the page only once
+    bars = editor(v).width < FIND_BAR ?
+           (block_bar(field), block_bar(menus[1], gap(), menus[2:end]..., Box(width(grow=grow)))) :
+           (block_bar(field, gap(), menus[1], gap(), menus[2:end]...),)
+    total = Row(width(grow=grow), padding(9px, 12px, 3px, 12px), Alignment.Start, Box(label(search_words(v), 12px, color=colours.dim)), Box(width(grow=grow)))
+    isempty(found.problem) || return Column(block_look()..., clip=true, name="Found", bars..., block_note(found.problem))
+    rows = Any[total]
     pages = 0
     for i in 1:min(length(ms), FIND_MOST)
       if i == 1 || ms[i-1].path != ms[i].path
@@ -9405,7 +9538,7 @@ describe(v::SearchView) = begin
     end
     length(ms) > FIND_MOST && push!(rows, block_note("And $(length(ms) - FIND_MOST) more. Add words to the block's with: line to list fewer."))
     found.whole || push!(rows, block_note("This folder has more pages than Kaydown reads for a list. Name a folder in it with the block's in: line."))
-    Column(block_look()..., clip=true, name="Found", bar, rows..., Box(height(isempty(rows) ? 0px : 6px)))
+    Column(block_look()..., clip=true, name="Found", bars..., rows..., Box(height(6px)))
   end
 end
 

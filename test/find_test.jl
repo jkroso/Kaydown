@@ -52,7 +52,8 @@ end
 end
 
 @testset "what the list is of, in words" begin
-  @test F.summary(F.Query(), 3, 2) == "3 to-do items in 2 pages" && F.summary(F.Query(), 1, 1) == "1 to-do item in 1 page"
-  @test F.summary(F.query(["plumber sam"]), 2, 1) == "2 lines with “plumber sam” in 1 page"
-  @test F.summary(F.query(["headings"]), 0, 0) == "No headings"
+  @test F.summary(F.Query(), 3, 2) == "3 to-do items in 2 pages of this folder" && F.summary(F.Query(), 1, 1) == "1 to-do item in 1 page of this folder"
+  @test F.summary(F.query(["plumber sam"]), 2, 1) == "2 lines with “plumber sam” in 1 page of this folder"
+  @test F.summary(F.query(["headings"]), 0, 0) == "No headings in this folder"
+  @test F.summary(F.query(["in: jobs"]), 2, 1) == "2 to-do items in 1 page of the folder jobs" && F.summary(F.query(["done", "in: jobs"]), 0, 0) == "No items that are done in the folder jobs"
 end

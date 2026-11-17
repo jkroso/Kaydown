@@ -266,12 +266,27 @@ Each shape is a line of the block, so ⌘Z takes back the last thing you drew.
 
 ## Find
 
-A code block in the language `find` lists the lines that match in every page of this page's folder, and of the folders in it. With nothing in the block, it lists each to-do item that isn't ticked. Click a box to tick the item in its own page. Click an item's words to go to it.
+A code block in the language `find` looks through every page in this page's folder, and in the folders inside it. It lists the lines that you ask for, under the name of each page.
+
+A new block lists each to-do item that isn't ticked. The one below lists the items of two pages: this one and [schedule.md](schedule.md).
 
 ```find
 ```
 
-Words in the block list the lines that have those words. `what: headings` lists headings, and `what: done items` lists the items that are ticked. `in: jobs` looks only in the folder `jobs`.
+Click an item's words to go to it in its own page. Click its box to tick it there. The ticked item stays in the list, in grey, until you leave this page. Click its box again to take the tick away.
+
+The top of the list changes what it lists:
+
+- Type words in the field, and the list keeps only the lines that have every one of them.
+- Click the button beside the field to choose the kind of line: to-do items, done items, headings or all lines.
+- If the page has folders beside it, a second button chooses the folder to look in.
+
+Each change goes into the block's lines, so the page's file keeps it. The next block lists each heading that has the word email. Its lines are `what: headings` and `with: email`. To see them, hold ⌥ and click the list.
+
+```find
+what: headings
+with: email
+```
 
 ## Emails
 

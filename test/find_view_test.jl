@@ -5,8 +5,8 @@
 
 @use Test: @test, @testset
 @use "../main" => K
-@use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse
-@use "github.com/jkroso/UI.jl/Interface/draw" frame rect
+@use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse Typed ontype
+@use "github.com/jkroso/UI.jl/Interface/draw" frame rect popups
 @use "github.com/jkroso/UI.jl/Interface/save" save_png
 @use GeometryBasics: Vec2
 const px = K.px
@@ -55,6 +55,16 @@ click(place) = (press(place); release())
 middle(r) = (K.num(r.left + r.width / 2), K.num(r.top + r.height / 2))
 found(n) = [(relpath(m.path, dir), m.text, m.kind) for m in K.found!(list(n)).matches]
 row(n, i) = list(n).parts[(:row, i)]
+typed(s) = (foreach(c -> ontype(w, Typed(c, w)), s); frames())
+block(n) = (s = K.block_lines(e.buf, K.FIND, n); e.buf.lines[s[1]+1:s[2]-1])
+choice(n, key) = list(n).parts[key]   # the button that opens the menu of kinds, or the one of folders
+menu() = (i = findfirst(p -> p.key == :menu, popups(w)); i === nothing ? nothing : popups(w)[i].content)
+"Click the button `c`, and choose the item `name` of the menu that it opens"
+choose(c, name) = begin
+  click(middle(rect(c)))
+  m = menu()
+  m.onselect(findfirst(==(name), m.items)); K.hide_menu!(w); frames()
+end
 
 @testset "the list has the lines of every page of the folder" begin
   # The folder's own pages come first, then those of each folder in it
@@ -105,4 +115,73 @@ end
   @test readlines(kitchen)[5] == "- [x] Choose the tiles" && !K.dirty(e.buffers[kitchen])
   click(middle(rect(list(1).parts[(:page, 2)])))
   @test e.buf.path == bath
+end
+
+@testset "the top of the list says what it lists, and counts only what matches" begin
+  K.open!(e, page); frames()
+  # The page was left, so the item that was ticked in the list before has gone from it
+  @test all(m -> m[3] == :todo, found(1)) && isempty(list(1).kept)
+  n = length(found(1))
+  @test K.search_words(list(1)) == "$n to-do items in 3 pages of this folder"
+  @test K.search_words(list(2)) == "1 line with “plumber” in 1 page of this folder"
+  @test K.search_words(list(3)) == "No to-do items in the folder nowhere"
+  # An item that's ticked here stays in the list, and the top no longer counts it
+  click(middle(rect(row(1, 2).box)))
+  @test found(1)[2][3] == :done && length(found(1)) == n
+  @test K.search_words(list(1)) == "$(n - 1) to-do items in 3 pages of this folder"
+  # It goes when another page shows
+  K.open!(e, kitchen); K.open!(e, page); frames()
+  @test length(found(1)) == n - 1 && all(m -> m[3] == :todo, found(1))
+end
+
+@testset "the top of the list changes what the block asks for" begin
+  v = list(1)
+  input = K.search_input(v)
+  @test isempty(block(1)) && [m[2] for m in found(1)] == ["Ring Sam", "Hang the door", "Call the plumber"]
+  @test K.choice_words(choice(1, :kind)) == "To-do items" && K.choice_words(choice(2, :kind)) == "Lines"
+  # A click in the field gives it the keyboard. What's typed goes into the block, and the list is still of to-do items.
+  click(middle(rect(input)))
+  @test w.focus === input
+  typed("plum")
+  @test block(1) == ["what: to-do items", "with: plum"] && found(1) == [("jobs/kitchen.md", "Call the plumber", :todo)]
+  @test K.search_words(v) == "1 to-do item with “plum” in 1 page of this folder" && K.choice_words(choice(1, :kind)) == "To-do items"
+  # A space after a word stays in the field while the next word is typed
+  typed(" ")
+  @test input.text == "plum " && block(1) == ["what: to-do items", "with: plum"]
+  typed("call")
+  @test block(1) == ["what: to-do items", "with: plum call"] && length(found(1)) == 1
+  shot("find-typed.png")
+  # Return gives the keyboard back to the page
+  onkey(w, KeyPress{Keys.enter}(0, w)); frames()
+  @test w.focus === e && block(1) == ["what: to-do items", "with: plum call"]
+  # A click on the kind of line opens a menu of the kinds, under the button
+  click(middle(rect(choice(1, :kind))))
+  @test menu() !== nothing && menu().items == ["To-do items", "Done items", "Headings", "Lines"]
+  @test any(p -> p.key == :menu && p.anchor[2] > rect(choice(1, :kind)).top, popups(w))
+  K.hide_menu!(w); frames()
+  @test block(1) == ["what: to-do items", "with: plum call"]
+  choose(choice(1, :kind), "Headings")
+  @test block(1) == ["what: headings", "with: plum call"] && isempty(found(1)) && K.choice_words(choice(1, :kind)) == "Headings"
+  @test K.search_words(v) == "No headings with “plum call” in this folder"
+  choose(choice(1, :kind), "Lines")
+  @test block(1) == ["what: lines", "with: plum call"] && found(1) == [("jobs/kitchen.md", "Call the plumber", :todo)]
+  # ⌘Z takes back the button, then the words, and the field follows
+  K.undo!(e.buf); K.undo!(e.buf); frames()
+  @test block(1) == ["what: to-do items", "with: plum call"] && input.text == "plum call"
+  K.undo!(e.buf); frames()
+  @test isempty(block(1)) && input.text == "" && length(found(1)) == 3
+  # The folders beside the page are the ones to choose from, with the one that a block names
+  @test K.search_folders(v) == ["jobs"] && K.search_folders(list(3)) == ["nowhere", "jobs"]
+  @test K.choice_words(choice(1, :folder)) == "This folder" && K.choice_words(choice(3, :folder)) == "nowhere"
+  click(middle(rect(choice(1, :folder))))
+  @test menu().items == ["This folder", "jobs"]
+  K.hide_menu!(w); frames()
+  choose(choice(1, :folder), "jobs")
+  @test block(1) == ["in: jobs"] && [m[1] for m in found(1)] == ["jobs/bath.md", "jobs/kitchen.md"] && K.choice_words(choice(1, :folder)) == "jobs"
+  @test K.search_words(v) == "2 to-do items in 2 pages of the folder jobs"
+  shot("find-bar.png")
+  choose(choice(1, :folder), "This folder")
+  @test isempty(block(1)) && length(found(1)) == 3
+  # The other lists of the page stay as they were
+  @test block(2) == ["plumber"] && block(3) == ["what: to-do items", "in: nowhere"]
 end

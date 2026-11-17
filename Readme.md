@@ -14,7 +14,7 @@ A code block does more than show code. What it does depends on its language:
 - `chart` draws the numbers of a table as bars, as lines or as a pie.
 - `board` shows the page's to-do items as cards in columns, and you drag a card to move it.
 - `sketch` is a drawing: lines by hand, arrows, boxes, ovals and words.
-- `find` lists the lines that match in every page of a folder, like each to-do item that isn't ticked.
+- `find` lists the to-do items that aren't ticked in every page of a folder. With words in it, it lists the lines that have those words.
 - `email` lists the emails with a person.
 - `ask` is a question from an agent, with answers to click.
 - `changes` shows a diff from an agent, with a button on each change that accepts or rejects it.
@@ -130,14 +130,23 @@ A code block in the language `sketch` is a drawing. The buttons at its top are t
 
 ## List what's in the pages of a folder
 
-A code block in the language `find` lists the lines that match in every page of its page's folder, and of the folders in that one. The name of each page is over that page's lines.
+A code block in the language `find` looks through every page of its page's folder, and of the folders in that one. It lists the lines that the block asks for, with the name of each page over that page's lines. The top of the list says what it lists, how many lines it found and where it looked, like "6 to-do items in 2 pages of this folder".
+
+The top of the list changes what the block asks for, so you needn't see its lines:
+
+- A field holds the words that a line must have. Type in it, and the list keeps only the lines that have every word. Return gives the keyboard back to the page.
+- A button shows the kind of line that the list is of. Click it for a menu of the kinds: to-do items, done items, headings and lines.
+- If the page has folders beside it, a second button shows the folder that the list looks in. Click it for a menu of those folders.
+
+Each change goes into the block's lines, and ⌘Z takes it back. The lines can be written by hand too:
 
 - An empty block lists each to-do item that isn't ticked.
-- Words in the block list the lines that have every one of those words.
-- `what: headings` lists headings, and `what: done items` lists the to-do items that are ticked.
+- `what: headings` lists headings, `what: done items` lists the to-do items that are ticked, and `what: lines` lists every line of text.
+- `with: plumber sam` keeps only the lines that have every one of those words.
 - `in: jobs` looks only in the folder `jobs` beside the page.
+- Words by themselves, with no `what:` line, list the lines of any kind that have those words.
 
-Click a line of the list to open its page at that line. Click the box of a to-do item to tick it in its own page. If that page isn't open in Kaydown, or is open with nothing to save, Kaydown writes the tick to the page's file at once. That's the one time that Kaydown writes to a file without ⌘S. `find.jl` says how the block is written.
+Click a line of the list to open its page at that line. Click the box of a to-do item to tick it in its own page. The item stays in the list, ticked, until another page shows, and the top of the list no longer counts it. A second click on its box takes the tick away. If that page isn't open in Kaydown, or is open with nothing to save, Kaydown writes the tick to the page's file at once. That's the one time that Kaydown writes to a file without ⌘S. `find.jl` says how the block is written.
 
 ## Read and write email
 

@@ -155,11 +155,15 @@ ticked(line::AbstractString, done::Bool) = begin
   String(chars)
 end
 
-"What the list is of, in words, for `n` lines in `pages` pages: `3 to-do items in 2 pages`"
+"""
+What the list is of and where it looks, in words, for `n` lines in `pages`
+pages: `3 to-do items in 2 pages of this folder`
+"""
 summary(q::Query, n::Int, pages::Int) = begin
   one, many = kind(q) == :todo ? ("to-do item", "to-do items") : kind(q) == :done ? ("item that's done", "items that are done") :
               kind(q) == :heading ? ("heading", "headings") : ("line", "lines")
   with = isempty(q.with) ? "" : " with “" * join(q.with, " ") * "”"
-  n == 0 && return "No $many$with"
-  "$n $(n == 1 ? one : many)$with in $(pages == 1 ? "1 page" : "$pages pages")"
+  place = isempty(q.folder) ? "this folder" : "the folder " * q.folder
+  n == 0 && return "No $many$with in $place"
+  "$n $(n == 1 ? one : many)$with in $(pages == 1 ? "1 page" : "$pages pages") of $place"
 end

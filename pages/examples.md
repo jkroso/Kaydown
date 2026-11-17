@@ -59,6 +59,7 @@ The block at the top of this page is front matter: lines at the very top of a fi
 
 ## Email
 
+- [The emails with a person, in a page](welcome.md#emails)
 - [Your email account, and how Kaydown keeps your email](email.md)
 
 ## The window and its settings

@@ -41,6 +41,8 @@
 #     arrows, boxes, ovals and words.
 #   - Write a code block in the language `find` to list the lines that match
 #     in every page of the folder, like each to-do item that isn't ticked.
+#   - Write a code block in the language `email` to list the emails with a
+#     person, once Kaydown has your email account.
 #   - An agent writes a code block in the language `ask` to ask you a
 #     question with answers to click, and one in the language `changes` to
 #     show you a diff, with a button on each change that accepts or rejects it.
@@ -74,7 +76,7 @@
 #   - Right-click the page to cut, copy and paste, and to insert a new block
 #     where you clicked: a heading, a list, a to-do item, a table, a sheet, a
 #     spreadsheet, a code block, a live block, a takeoff, a schedule, a chart, a
-#     board, a list of what's found, a sketch, a recording or a divider.
+#     board, a list of what's found, a sketch, a list of emails, a recording or a divider.
 #   - A line that holds only a sound file, like ![Recording](memo.m4a), shows
 #     a player. Insert › Recording records one from the microphone. A button
 #     under the player writes down what's said, in a paragraph under it.
@@ -181,6 +183,7 @@
 @use "./board" => Boards
 @use "./find" => Searches
 @use "./sketch" => Sketches
+@use "./emails" => Posts
 @use "./centient" => Centient
 @use "./update" => Update
 @use "./mail" => Mail
@@ -8080,7 +8083,7 @@ end
 #
 # A code block in one of the languages of `BLOCKS` shows as a component of its
 # own, as a takeoff and a schedule do: a chart, a question, a set of changes,
-# a board, a list of what was found or a sketch. Each one
+# a board, a list of what was found, a sketch or a list of emails. Each one
 # keeps all that it knows in the lines of its block, so the file holds the
 # whole of it, and ⌘Z takes back what you do to it. Move the caret into the
 # block, or click the block with ⌥ held, to see those lines.
@@ -9534,6 +9537,170 @@ sketch_html(e, v::SketchView) = begin
 end
 
 BLOCKS[SKETCH] = BlockKind("Sketch", "pencil", SketchView, sketch_html)
+
+# --- a list of the emails with someone ---------------------------------------------------------
+#
+# A code block in the language `email` lists the emails with one person, or
+# with a few people, newest first. emails.jl says how the block is written.
+# The emails are the ones that Kaydown keeps on the Mac, in every folder but
+# the drafts, the junk and the trash. See "email" in this file, and mail.jl.
+# A click on an email opens it. The Reply button starts an answer to the
+# newest one, and New email starts one to the block's address.
+
+const EMAIL = Posts.EMAIL
+const EMAILS_MOST = 30     # the most emails that a list shows
+const EMAILS_READ = 150    # the most emails that a list reads the addresses of in one frame
+push!(BLOCK_ICONS, "envelope", "reply", "pencil-square")
+
+"What an `email` block shows: the emails with the people that it names"
+@def mutable struct EmailsView <: SemanticUI
+  n::Int = 0                               # its place among the page's lists of emails
+  first::Int = 0                           # the lines of its block, when the page was last laid out
+  last::Int = 0
+  data::Posts.Wanted = Posts.Wanted()
+  lines::Vector{String} = String[]         # the lines that `data` was read from
+  shown::Any = nothing                     # what the list was last worked out for, and what it found
+  parts::Dict{Any,Any} = Dict{Any,Any}()   # its rows and buttons, kept between frames
+end
+
+"An email in a list of emails. A click opens it."
+@def mutable struct EmailLine <: SemanticUI
+  of::Any = nothing
+  i::Int = 0
+end
+
+reread!(v::EmailsView, lines) = begin
+  lines == v.lines && return v
+  v.lines = lines
+  v.data = Posts.wanted(lines)
+  v.shown = nothing
+  v
+end
+
+# Who each email is from and to, with their addresses, by the email's page. A folder's index has only their names.
+const EMAIL_PEOPLE = Dict{String,String}()
+
+"Who the email at `path` is from and to, as its front matter says: names and addresses"
+email_people(path) = get!(EMAIL_PEOPLE, path) do
+  said, _ = Mail.fields(Mail.first_lines(path))
+  lowercase(join((get(said, key, "") for key in ("from", "to", "cc", "reply-to")), " "))
+end
+
+"""
+What the list shows: the emails that the block asks for, newest first, how
+many emails are still to be read, and why there are none when Kaydown has no
+email. An email that's in two folders, as Gmail has them, is listed once.
+"""
+emails!(v::EmailsView) = begin
+  e = editor(v)
+  m = mailer(e)
+  (m === nothing || isempty(m.account.address)) &&
+    return (rows=[], left=0, problem="Kaydown has no email account yet. Press ⌘, and choose Email to give it one.")
+  # The list is worked out again no more than once a second, however fast email comes in
+  key = (v.lines, floor(Int, time()), length(EMAIL_PEOPLE))
+  v.shown !== nothing && v.shown[1] == key && return v.shown[2]
+  w = v.data
+  found, left, read = Dict{String,Any}(), 0, 0
+  for b in Mail.nested(Mail.root(m.account))
+    b.role in (:drafts, :junk, :trash) && continue
+    for l in b.letters
+      Posts.about(w, l.subject) || continue
+      path = joinpath(b.path, l.file)
+      fits = Posts.with(w, l.from * " " * l.to)
+      if !fits && Posts.addressed(w)
+        # The index has no addresses, so the top of the email's page is read: a few emails in each frame
+        if !haskey(EMAIL_PEOPLE, path)
+          read >= EMAILS_READ && (left += 1; continue)
+          read += 1
+        end
+        fits = Posts.with(w, email_people(path))
+      end
+      fits || continue
+      id = isempty(l.id) ? path : l.id
+      # The copy in a folder of its own is the one that's listed, not the one in the folder of all email
+      (haskey(found, id) && b.role == :all) || (found[id] = (path=path, who=l.out ? "To " * l.to : l.from, subject=l.subject, at=l.at, unread=Mail.unread(l)))
+    end
+  end
+  rows = sort!(collect(values(found)), by=r -> r.at, rev=true)
+  key = (key[1:2]..., length(EMAIL_PEOPLE))
+  (v.shown = (key, (rows=rows, left=left, problem="")))[2]
+end
+
+describe(r::EmailLine) = begin
+  rows = emails!(r.of).rows
+  r.i <= length(rows) || return Box(height(0px))
+  x = rows[r.i]
+  Row(width(grow=grow), height(30px), padding(0px, 12px, 0px, 8px), child_gap=8px, Alignment.Center, clip=true, name="Email",
+      background(ishovered(r) ? colours.hover : clear),
+    # An email that isn't read has a dot
+    Box(width(10px), height(grow=grow), Alignment.Center,
+      (x.unread ? (Box(width(7px), height(7px), radius(3.5px), background(colours.accent)),) : ())...),
+    Box(fixed(170px), Alignment.Start, clip=true, label(elide(x.who, 13px, 164px), 13px, weight=x.unread ? "Semibold" : "")),
+    Box(width(grow=grow), Alignment.Start, clip=true, label(isempty(x.subject) ? "No subject" : x.subject, 13px, color=x.unread ? colours.ink : colours.dim)),
+    Box(label(Mail.shortdate(x.at), 11px, color=colours.faint)))
+end
+
+cursor(::EmailLine) = :hand
+cursor(::EmailsView) = :arrow
+
+onkey(r::EmailLine, ::KeyPress{Keys.mouse_left}) = begin
+  rows = emails!(r.of).rows
+  r.i <= length(rows) ? visit!(editor(r.of), rows[r.i].path) : handled
+end
+
+describe(v::EmailsView) = begin
+  e = editor(v)
+  w = v.data
+  found = emails!(v)
+  # While emails are still to be read, the list is worked out again in the next frame
+  found.left > 0 && redraw_in!(v, 0.02)
+  with_theme(component_theme(e.zoom)) do
+    isempty(found.problem) || return Column(block_look()..., clip=true, name="Emails",
+      block_bar(Box(padding(6px, 0px), Icon("envelope", size=13px, color=colours.dim)), Box(label("Email", 12px, color=colours.dim)), Box(width(grow=grow)),
+                block_button!(v, :settings, :settings, words="Email settings")),
+      block_note(found.problem))
+    isempty(w.with) && return Column(block_look()..., clip=true, name="Emails",
+      block_note("Say who the emails are with. Move the caret into this block and write a name or an address, like with: sam@example.com."))
+    words = Posts.summary(w, length(found.rows)) * (found.left > 0 ? "  ·  reading $(found.left) more" : "")
+    bar = block_bar(Box(padding(6px, 0px), Icon("envelope", size=13px, color=colours.dim)), Box(label(words, 12px, color=colours.dim)), Box(width(grow=grow)),
+      (isempty(found.rows) ? () : (block_button!(v, :reply, :reply, icon="reply", words="Reply", tip="Answer the newest of these emails"),))...,
+      block_button!(v, :new, :new, icon="pencil-square", words="New email", tip="Write a new email" * (isempty(Posts.address(w)) ? "" : " to " * Posts.address(w))))
+    shown = min(length(found.rows), EMAILS_MOST)
+    Column(block_look()..., clip=true, name="Emails", bar,
+      [block_part!(() -> EmailLine(of=v, i=i), v, (:row, i)) for i in 1:shown]...,
+      (length(found.rows) > shown ? (block_note("And $(length(found.rows) - shown) older emails. Add words to the block's about: line to list fewer."),) : ())...,
+      Box(height(shown > 0 ? 6px : 0px)))
+  end
+end
+
+act!(v::EmailsView, action, w) = begin
+  e = editor(v)
+  action == :settings && return (mail_settings!(e); handled)
+  m = mail_ready(e)
+  m === nothing && return handled
+  if action == :reply
+    rows = emails!(v).rows
+    isempty(rows) && return handled
+    draft = Mail.reply!(m, rows[1].path)
+    mail_window!(e, draft, front_matter(String.(split(read(draft, String), '\n'))) + 2)
+  elseif action == :new
+    to = Posts.address(v.data)
+    mail_window!(e, Mail.draft!(m, to=to), isempty(to) ? 2 : 4)
+  end
+  handled
+end
+
+"The list as HTML: a table with a row for each email"
+emails_html(e, v::EmailsView) = begin
+  found = emails!(v)
+  (isempty(found.problem) && !isempty(v.data.with)) || return nothing
+  rows = ["<tr><td>$(escape(x.who))</td><td>$(escape(isempty(x.subject) ? "No subject" : x.subject))</td><td>$(escape(Mail.shortdate(x.at)))</td></tr>"
+          for x in first(found.rows, EMAILS_MOST)]
+  "<p><strong>$(escape(Posts.summary(v.data, length(found.rows))))</strong></p>" *
+  (isempty(rows) ? "" : "\n<table>\n" * join(rows, "\n") * "\n</table>")
+end
+
+BLOCKS[EMAIL] = BlockKind("Emails", "envelope", EmailsView, emails_html)
 
 # --- front matter as a card ---------------------------------------------------------
 #
@@ -13196,6 +13363,7 @@ const INSERTS = [
   ("Board",         ["```$BOARD", "```", "", ""],   (4, 0)),
   ("Find",          ["```$FIND", "```", "", ""],    (4, 0)),
   ("Sketch",        ["```$SKETCH", "```", "", ""],  (4, 0)),
+  ("Emails",        ["```$EMAIL", "with: ", "```"], (2, 6)),
   # This one records from the microphone into a new file, and the line shows the recorder. The caret goes
   # to an empty line under it, so that you can type while it records.
   ("Recording",     ["![Recording]()", "", ""],     (3, 0)),

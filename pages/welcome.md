@@ -250,6 +250,14 @@ A code block in the language `find` lists the lines that match in every page of 
 
 Words in the block list the lines that have those words. `what: headings` lists headings, and `what: done items` lists the items that are ticked. `in: jobs` looks only in the folder `jobs`.
 
+## Emails
+
+Once Kaydown has your email account, a code block in the language `email` lists the emails with a person, newest first. Write a name or an address in it. A click opens an email, and the block's buttons start an answer or a new email. To give Kaydown your account, press ⌘, and choose Email.
+
+```email
+with: sam@example.com
+```
+
 ## Recordings
 
 To record from your Mac's microphone, right-click the page and choose Insert › Recording. Kaydown starts to record at once, into a new file in the hidden folder `.media` beside this page. Bars show how loud the sound is, and you can type while it records. Click the red button to stop. The first time, macOS asks whether Kaydown may use the microphone.

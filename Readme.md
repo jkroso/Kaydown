@@ -15,6 +15,7 @@ A code block does more than show code. What it does depends on its language:
 - `board` shows the page's to-do items as cards in columns, and you drag a card to move it.
 - `sketch` is a drawing: lines by hand, arrows, boxes, ovals and words.
 - `find` lists the lines that match in every page of a folder, like each to-do item that isn't ticked.
+- `email` lists the emails with a person.
 - `ask` is a question from an agent, with answers to click.
 - `changes` shows a diff from an agent, with a button on each change that accepts or rejects it.
 
@@ -166,6 +167,19 @@ The server is the one that's right. An email that another app deletes goes from 
 
 It works with one account, and with a server that takes a password. Outlook.com and Microsoft 365 only let an app sign in through Microsoft's own sign-in page, and Proton Mail needs its Bridge app. Kaydown works with neither yet, and the form says so.
 
+### The emails with someone, in a page
+
+A code block in the language `email` lists the emails with a person, newest first, from every folder but the drafts, the junk and the trash. Write a name or an address in it:
+
+````
+```email
+with: sam@example.com
+about: roof
+```
+````
+
+`with` can name several people, with a comma between two of them. `about` lists only the emails whose subject has those words. A click opens an email. The Reply button starts an answer to the newest one, and New email starts one to the block's address. `emails.jl` says how the block is written.
+
 ## Test it
 
 ```sh
@@ -196,6 +210,7 @@ julia -O0 --project=. test/html_test.jl           # the page of HTML that ⌘⇧
 julia -O0 --project=. test/merge_test.jl          # your changes and an agent's changes to one page put together, and how the two talk
 julia -O0 --project=. test/pasteboard_test.jl     # what the Mac's clipboard holds: text, files and pictures
 julia -O0 --project=. test/examples_test.jl       # the page that lists every example: each link goes somewhere, and nothing is left out
+julia -O0 --project=. test/media_folder_test.jl   # the hidden folder for the files that a page makes, and the hidden files in the sidebar
 julia -O0 --project=. test/chart_test.jl          # how a chart is read and written, and where its bars, lines and slices go
 julia -O0 --project=. test/chart_view_test.jl     # the chart of a table, a spreadsheet and a sheet, in a window that isn't on the screen
 julia -O0 --project=. test/ask_test.jl            # how a question and its answers are read and written
@@ -208,7 +223,8 @@ julia -O0 --project=. test/find_test.jl           # how a list of what's found i
 julia -O0 --project=. test/find_view_test.jl      # the list in the page, and a tick that goes to another page's file
 julia -O0 --project=. test/sketch_test.jl         # how a sketch is read and written, and what a click is on
 julia -O0 --project=. test/sketch_view_test.jl    # the tools of a sketch: drawing, moving and deleting shapes
-julia -O0 --project=. test/media_folder_test.jl   # the hidden folder for the files that a page makes, and the hidden files in the sidebar
+julia -O0 --project=. test/emails_test.jl         # how a list of emails is read and written, and which emails it asks for
+julia -O0 --project=. test/emails_view_test.jl    # the list of the emails with a person, in a page
 julia -O0 --project=. test/mime_test.jl           # how an email becomes a Markdown page, and a page an email
 julia -O0 --project=. test/mail_test.jl           # the folder of emails that's kept in step with an email server, and sending
 julia -O0 --project=. test/mail_view_test.jl      # the list of emails, the buttons of an email and of a draft, and the Email page of the settings

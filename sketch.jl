@@ -19,6 +19,16 @@
 # first place to the second. `box` and `oval` have the two places as opposite
 # corners. `text` starts at its place, and its words are the rest of the line.
 #
+# Before its places, a shape can say how it's drawn, each as a word and a
+# number:
+#
+#     box red width 4 radius 12 100,50 200,120
+#     text size 24 120,80 The sink goes here
+#
+# `width` is how thick the shape's line is. Without it the line is 2 thick.
+# `radius` is how round the corners of a box are. Without it they're 3 round.
+# `size` is how big the words of a text are. Without it they're 16.
+#
 # This file reads and writes those lines, and works out what a click is on.
 # It draws nothing in a window. `svg` writes a sketch as a picture for a page
 # of HTML.
@@ -28,7 +38,11 @@ const SKETCH = "sketch"
 const WIDE = 720.0       # how wide every sketch is, in its own measure
 const LEAST = 220.0      # how tall a sketch with nothing low in it is
 const ROOM = 48.0        # the room under a sketch's lowest shape
-const TEXT_SIZE = 16.0   # how big the words of a sketch are
+const TEXT_SIZE = 16.0   # how big the words of a sketch are, when the text doesn't say
+const WIDTH = 2.0        # how thick the line of a shape is, when the shape doesn't say
+const RADIUS = 3.0       # how round the corners of a box are, when the box doesn't say
+"What a shape can say about how it's drawn, with the least and the most that each can be"
+const LIMITS = (width=(0.5, 24.0), radius=(0.0, 200.0), size=(6.0, 96.0))
 const KINDS = (:pen, :line, :arrow, :box, :oval, :text)
 const COLOURS = (:ink, :red, :blue, :green, :orange)
 
@@ -39,9 +53,19 @@ mutable struct Shape
   colour::Symbol
   points::Vector{Place}
   text::String
+  width::Float64    # how thick its line is
+  radius::Float64   # how round the corners of a box are
+  size::Float64     # how big the words of a text are
 end
 
-Shape(kind, colour, points) = Shape(kind, colour, points, "")
+Shape(kind, colour, points, text="") = Shape(kind, colour, points, text, WIDTH, RADIUS, TEXT_SIZE)
+
+"The parts of how a shape is drawn that its kind has: the names of fields of the shape"
+settings(kind::Symbol) = kind == :text ? (:size,) : kind == :box ? (:width, :radius) : (:width,)
+settings(shape::Shape) = settings(shape.kind)
+
+"Set a part of how a shape is drawn, like its `:width`. A number that's too small or too big becomes the nearest that the part can be."
+set!(shape::Shape, name::Symbol, value::Real) = (setfield!(shape, name, clamp(Float64(value), LIMITS[name]...)); shape)
 
 mutable struct Sketch
   shapes::Vector{Shape}
@@ -69,6 +93,12 @@ sketch(lines) = begin
       colour = Symbol(lowercase(words[2]))
       at = 3
     end
+    # Then how it's drawn: a word like `width`, and a number
+    said = Pair{Symbol,Float64}[]
+    while at < length(words) && Symbol(lowercase(words[at])) in keys(LIMITS) && (n = tryparse(Float64, words[at+1])) !== nothing && isfinite(n)
+      push!(said, Symbol(lowercase(words[at])) => n)
+      at += 2
+    end
     points = Place[]
     while at <= length(words) && (p = place(words[at])) !== nothing && !(kind == :text && !isempty(points))
       push!(points, p)
@@ -78,7 +108,10 @@ sketch(lines) = begin
     good = kind == :text ? length(points) == 1 && !isempty(text) :
            kind == :pen ? length(points) >= 2 && at > length(words) :
            kind in KINDS && length(points) == 2 && at > length(words)
-    good ? push!(s.shapes, Shape(kind, colour, points, text)) : push!(s.other, String(strip(line)))
+    good || (push!(s.other, String(strip(line))); continue)
+    shape = Shape(kind, colour, points, text)
+    foreach(((name, n),) -> set!(shape, name, n), said)
+    push!(s.shapes, shape)
   end
   s
 end
@@ -91,6 +124,10 @@ written(s::Sketch) = begin
   out = map(s.shapes) do shape
     parts = String[string(shape.kind)]
     shape.colour == :ink || push!(parts, string(shape.colour))
+    # How it's drawn is written only where it isn't what a shape has without it
+    for (name, usual) in ((:width, WIDTH), (:radius, RADIUS), (:size, TEXT_SIZE))
+      getfield(shape, name) == usual || push!(parts, string(name), figure(getfield(shape, name)))
+    end
     append!(parts, ("$(figure(x)),$(figure(y))" for (x, y) in shape.points))
     shape.kind == :text && push!(parts, shape.text)
     join(parts, " ")
@@ -105,7 +142,7 @@ guess(text::AbstractString, size::Real) = 0.55 * size * length(text)
 bounds(shape::Shape, measure=guess) = begin
   if shape.kind == :text
     x, y = shape.points[1]
-    return (x, y - TEXT_SIZE, x + measure(shape.text, TEXT_SIZE), y + 0.3TEXT_SIZE)
+    return (x, y - shape.size, x + measure(shape.text, shape.size), y + 0.3shape.size)
   end
   xs, ys = first.(shape.points), last.(shape.points)
   (minimum(xs), minimum(ys), maximum(xs), maximum(ys))
@@ -158,12 +195,61 @@ distance(shape::Shape, p::Place, measure=guess) = begin
   minimum(apart(p, shape.points[i], shape.points[i+1]) for i in 1:length(shape.points)-1)
 end
 
-"The place of the shape that's within `reach` of `p`, or nothing. The shape that was drawn last is over the others, so it's the first that's looked at."
+"""
+The place of the shape that's within `reach` of `p`, or nothing. The shape that
+was drawn last is over the others, so it's the first that's looked at. A thick
+line is reached from further away than a thin one: `reach` is from its edge.
+"""
 hit(s::Sketch, p::Place, reach::Real=6.0, measure=guess) = begin
   for i in length(s.shapes):-1:1
-    distance(s.shapes[i], p, measure) <= reach && return i
+    shape = s.shapes[i]
+    distance(shape, p, measure) <= reach + (shape.kind == :text ? 0.0 : shape.width / 2) && return i
   end
   nothing
+end
+
+"""
+The places of a shape that a drag moves to change the shape: the two ends of a
+line or an arrow, each place of a line drawn by hand, the four corners of a
+box, and the middle of each side of an oval. A text has none.
+"""
+handles(shape::Shape) = begin
+  k = shape.kind
+  k == :text && return Place[]
+  k in (:box, :oval) || return copy(shape.points)
+  (x1, y1), (x2, y2) = shape.points
+  k == :box ? Place[(x1, y1), (x2, y1), (x2, y2), (x1, y2)] :
+              Place[(x1, (y1 + y2) / 2), ((x1 + x2) / 2, y1), (x2, (y1 + y2) / 2), ((x1 + x2) / 2, y2)]
+end
+
+"The number of the handle of a shape that's within `reach` of `p`, or nothing. The nearest one wins."
+handle(shape::Shape, p::Place, reach::Real=6.0) = begin
+  hs = handles(shape)
+  isempty(hs) && return nothing
+  far, k = findmin(h -> hypot((h .- p)...), hs)
+  far <= reach ? k : nothing
+end
+
+"""
+Move the `k`th handle of a shape to `p`. A corner of a box takes its two sides
+with it, and the corner across from it stays. The middle of a side of an oval
+takes that side with it.
+"""
+pull!(shape::Shape, k::Integer, p::Place) = begin
+  kind = shape.kind
+  if kind == :box
+    (x1, y1), (x2, y2) = shape.points
+    k in (1, 4) ? (x1 = p[1]) : (x2 = p[1])
+    k in (1, 2) ? (y1 = p[2]) : (y2 = p[2])
+    shape.points = [(x1, y1), (x2, y2)]
+  elseif kind == :oval
+    (x1, y1), (x2, y2) = shape.points
+    k == 1 ? (x1 = p[1]) : k == 2 ? (y1 = p[2]) : k == 3 ? (x2 = p[1]) : (y2 = p[2])
+    shape.points = [(x1, y1), (x2, y2)]
+  elseif kind != :text
+    shape.points[k] = p
+  end
+  shape
 end
 
 "Move a shape by `(dx, dy)`"
@@ -172,7 +258,7 @@ move!(shape::Shape, dx::Real, dy::Real) = (shape.points = [(x + dx, y + dy) for 
 "True for a shape that's too small to see: a line, a box or an oval whose two places are almost one"
 slight(shape::Shape) = shape.kind in (:line, :arrow, :box, :oval) && hypot((shape.points[2] .- shape.points[1])...) < 3
 
-"The two ends of the head of an arrow that points from `from` to `tip`"
+"The two ends of the head of an arrow that points from `from` to `tip`. The head is `long` from its tip to its ends."
 barbs(from::Place, tip::Place, long::Real=11.0) = begin
   d = tip .- from
   len = max(hypot(d...), 1e-6)
@@ -180,6 +266,9 @@ barbs(from::Place, tip::Place, long::Real=11.0) = begin
   back = tip .- along .* long
   (back .+ across .* 0.45long, back .- across .* 0.45long)
 end
+
+"The two ends of the head of an arrow. A thick arrow has a long head."
+barbs(shape::Shape) = barbs(shape.points[1], shape.points[2], 7 + 2shape.width)
 
 # --- a sketch as a picture for a page of HTML -------------------------------------------
 
@@ -196,20 +285,20 @@ svg(s::Sketch; colours, family="sans-serif") = begin
   println(out, "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 $(f(WIDE)) $(f(tall(s)))\" width=\"$(f(WIDE))\" font-family=\"$(xml(family))\" role=\"img\">")
   for shape in s.shapes
     c = colours[shape.colour]
-    stroke = "fill=\"none\" stroke=\"$c\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\""
+    stroke = "fill=\"none\" stroke=\"$c\" stroke-width=\"$(f(shape.width))\" stroke-linecap=\"round\" stroke-linejoin=\"round\""
     if shape.kind == :text
       x, y = shape.points[1]
-      println(out, "<text x=\"$(f(x))\" y=\"$(f(y))\" font-size=\"$(f(TEXT_SIZE))\" fill=\"$c\">$(xml(shape.text))</text>")
+      println(out, "<text x=\"$(f(x))\" y=\"$(f(y))\" font-size=\"$(f(shape.size))\" fill=\"$c\">$(xml(shape.text))</text>")
     elseif shape.kind == :box
       l, t, r, b = bounds(shape)
-      println(out, "<rect x=\"$(f(l))\" y=\"$(f(t))\" width=\"$(f(r - l))\" height=\"$(f(b - t))\" rx=\"3\" $stroke/>")
+      println(out, "<rect x=\"$(f(l))\" y=\"$(f(t))\" width=\"$(f(r - l))\" height=\"$(f(b - t))\" rx=\"$(f(min(shape.radius, (r - l) / 2, (b - t) / 2)))\" $stroke/>")
     elseif shape.kind == :oval
       l, t, r, b = bounds(shape)
       println(out, "<ellipse cx=\"$(f((l + r) / 2))\" cy=\"$(f((t + b) / 2))\" rx=\"$(f((r - l) / 2))\" ry=\"$(f((b - t) / 2))\" $stroke/>")
     else
       println(out, "<polyline points=\"$(through(shape.points))\" $stroke/>")
       if shape.kind == :arrow
-        a, b = barbs(shape.points[1], shape.points[2])
+        a, b = barbs(shape)
         println(out, "<polyline points=\"$(through([a, shape.points[2], b]))\" $stroke/>")
       end
     end

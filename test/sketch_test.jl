@@ -43,6 +43,51 @@ end
   @test S.slight(S.Shape(:box, :ink, [(5.0, 5.0), (6.0, 6.0)])) && !S.slight(s.shapes[4]) && !S.slight(s.shapes[1])
 end
 
+@testset "how a shape is drawn" begin
+  s = S.sketch(["box red width 4 radius 12 100,50 200,120", "text size 24 120,80 The sink", "line radius 5 width 0.2 0,0 10,10",
+                "oval width 2 radius 3 0,0 10,10", "text 5,20 width 4 is thick", "box width 100,50 200,120"])
+  box, text, line, oval, words = s.shapes
+  @test (box.width, box.radius, box.colour) == (4.0, 12.0, :red) && (text.size, text.text) == (24.0, "The sink")
+  # A number that's too small becomes the least that it can be
+  @test line.width == 0.5 && line.radius == 5 && (oval.width, oval.radius, oval.size) == (S.WIDTH, S.RADIUS, S.TEXT_SIZE)
+  # After the place of a text, the words are its words. A word with no number after it isn't read.
+  @test words.text == "width 4 is thick" && words.width == S.WIDTH && s.other == ["box width 100,50 200,120"]
+  @test S.written(s) == ["box red width 4 radius 12 100,50 200,120", "text size 24 120,80 The sink", "line width 0.5 radius 5 0,0 10,10",
+                         "oval 0,0 10,10", "text 5,20 width 4 is thick", "box width 100,50 200,120"]
+  @test S.settings(box) == (:width, :radius) && S.settings(line) == (:width,) && S.settings(text) == (:size,)
+  S.set!(box, :width, 99)
+  @test box.width == 24
+  # Bigger words take more room, and a thick line is reached from further away
+  @test S.bounds(text)[2] == 80 - 24 && S.bounds(text)[3] > S.bounds(S.Shape(:text, :ink, [(120.0, 80.0)], "The sink"))[3]
+  thin, thick = S.sketch(["line 0,0 100,0"]), S.sketch(["line width 20 0,0 100,0"])
+  @test S.hit(thin, (50.0, 14.0)) === nothing && S.hit(thick, (50.0, 14.0)) == 1
+  picture = S.svg(s, colours=(ink="#222", red="#c00", blue="#00c", green="#0a0", orange="#f80"))
+  @test occursin("rx=\"12\" fill=\"none\" stroke=\"#c00\" stroke-width=\"24\"", picture) && occursin("font-size=\"24\"", picture)
+end
+
+@testset "the places that change a shape" begin
+  s = S.sketch(["box 100,50 200,120", "oval 300,50 400,150", "line 10,10 80,60", "pen 0,0 5,5 10,0", "text 5,20 Words"])
+  box, oval, line, pen, text = s.shapes
+  @test S.handles(box) == [(100.0, 50.0), (200.0, 50.0), (200.0, 120.0), (100.0, 120.0)]
+  @test S.handles(oval) == [(300.0, 100.0), (350.0, 50.0), (400.0, 100.0), (350.0, 150.0)]
+  @test S.handles(line) == line.points && length(S.handles(pen)) == 3 && isempty(S.handles(text))
+  @test S.handle(box, (198.0, 52.0)) == 2 && S.handle(box, (150.0, 85.0)) === nothing && S.handle(text, (5.0, 20.0)) === nothing
+  # A corner of a box takes its two sides with it, and the corner across from it stays
+  S.pull!(box, 2, (240.0, 30.0))
+  @test S.bounds(box) == (100.0, 30.0, 240.0, 120.0)
+  # It keeps its number when it's pulled past the corner across from it
+  S.pull!(box, 2, (60.0, 140.0))
+  @test S.bounds(box) == (60.0, 120.0, 100.0, 140.0) && S.handles(box)[2] == (60.0, 140.0)
+  S.pull!(oval, 1, (280.0, 0.0)); S.pull!(oval, 4, (0.0, 170.0))
+  @test S.bounds(oval) == (280.0, 50.0, 400.0, 170.0)
+  S.pull!(line, 2, (90.0, 5.0)); S.pull!(pen, 2, (5.0, 9.0))
+  @test line.points == [(10.0, 10.0), (90.0, 5.0)] && pen.points == [(0.0, 0.0), (5.0, 9.0), (10.0, 0.0)]
+  # A thick arrow has a long head
+  a, _ = S.barbs(S.sketch(["arrow 0,0 100,0"]).shapes[1])
+  b, _ = S.barbs(S.sketch(["arrow width 6 0,0 100,0"]).shapes[1])
+  @test a[1] ≈ 89 && b[1] ≈ 81
+end
+
 @testset "a line drawn by hand" begin
   straight = [(Float64(x), 10.0 + 0.2 * (x % 2)) for x in 0:50]
   @test S.simplify(straight) == [(0.0, 10.0), (50.0, 10.0)]

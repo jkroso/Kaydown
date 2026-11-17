@@ -249,7 +249,7 @@ The block's lines hold the column of each card. A line like `columns: Later, Thi
 
 ## Sketches
 
-A code block in the language `sketch` is a drawing. Choose a tool at its top, and drag in the sketch to draw with it: by hand, a line, an arrow, a box or an oval. For words, click where they start, type them in the field at the top and press Return. The dots choose a colour. With the first tool, click a shape to select it, drag it to move it, and press Delete to take it away.
+A code block in the language `sketch` is a drawing. Choose a tool at its top, and drag in the sketch to draw with it: by hand, a line, an arrow, a box or an oval. For words, click where they go, type them there and press Return. Click words twice with the first tool to change them. The dots choose a colour. With the first tool, click a shape to select it, drag it to move it, and press Delete to take it away. The shape that's selected glows. Drag one of its circles to move a corner, and use the numbers at the top to make its line thicker, its corners rounder or its words bigger: click a number to type another, or use the buttons beside it. The last button at the top makes the sketch fill the window. Esc chooses the first tool, and Esc with that tool puts the sketch back in the page.
 
 ```sketch
 box 60,50 330,190

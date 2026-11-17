@@ -5,7 +5,7 @@
 
 @use Test: @test, @testset
 @use "../main" => K
-@use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse Typed ontype
+@use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse onscroll Typed ontype
 @use "github.com/jkroso/UI.jl/Interface/draw" frame rect
 @use "github.com/jkroso/UI.jl/Interface/save" save_png
 @use GeometryBasics: Vec2
@@ -68,12 +68,27 @@ end
   # A click without a drag draws nothing
   click(spot(600, 60))
   @test length(shapes()) == 4
+  # Words are typed in the drawing, where the click was. The middle of their height is at the mouse.
   button(:text)
-  click(spot(520, 150))
-  @test v.asking !== nothing && w.focus === v.parts[:input]
+  click(spot(520, 144.4))
+  @test v.asking == (520.0, 150.0) && w.focus === v.parts[:input]
   typed("The  drain")
+  @test v.parts[:input].text == "The  drain" && length(shapes()) == 4 && rect(v.parts[(:button, :text)]).width > 0px
+  shot("typing.png")
   key(Keys.enter)
   @test block()[5] == "text red 520,150 The drain" && v.asking === nothing
+  # Esc leaves the words out. A colour and a size that are chosen while words are typed are theirs, and a click somewhere else adds them.
+  click(spot(300, 190)); typed("No"); key(Keys.escape)
+  @test length(shapes()) == 5 && v.asking === nothing
+  click(spot(300, 190)); typed("Tap")
+  click(middle(rect(v.parts[(:ink, :green)]))); button((:more, :size))
+  @test v.asking !== nothing && w.focus === v.parts[:input]
+  typed("s"); click(spot(650, 30))
+  @test block()[6] == "text green size 17 300,195.6 Taps" && v.asking !== nothing
+  key(Keys.escape)
+  K.undo!(e.buf); frames()
+  click(middle(rect(v.parts[(:ink, :red)]))); button((:less, :size))
+  @test length(shapes()) == 5 && v.next[:size] == 16
   # ⌘Z takes the last shape back
   K.undo!(e.buf); frames()
   @test length(block()) == 4 && length(shapes()) == 4
@@ -103,4 +118,135 @@ end
   @test e.buf.lines[end-1] == "The end."
   html = K.page_html(e)
   @test occursin("<svg", html) && occursin("<ellipse", html) && occursin(">The drain</text>", html)
+end
+
+@testset "how a shape is drawn" begin
+  # With a tool that draws, the numbers at the top are for the next shape
+  button(:box)
+  @test K.shown_settings(v) == (:width, :radius)
+  button((:more, :width)); button((:more, :radius))
+  drag(spot(500, 30), spot(550, 60), spot(620, 110))
+  @test block()[end] == "box blue width 2.5 radius 4 500,30 620,110"
+  # With the arrow tool, they're for the shape that's selected
+  button(:select)
+  @test isempty(K.shown_settings(v))
+  click(spot(500, 70))   # the left edge of the new box
+  @test v.picked == length(shapes()) && K.shown_settings(v) == (:width, :radius)
+  button((:less, :width)); button((:less, :width))
+  @test block()[end] == "box blue width 1.5 radius 4 500,30 620,110"
+  # A line is never thinner than a half
+  foreach(_ -> button((:less, :width)), 1:3)
+  @test shapes()[end].width == 0.5 && v.parts[(:button, (:less, :width))].off
+  # A click in a number selects it, and Return takes the number that's typed
+  number(name) = click(middle(rect(v.parts[(:number, name)])))
+  number(:radius)
+  @test v.typing == :radius && w.focus === v.parts[(:number, :radius)]
+  typed("12"); key(Keys.enter)
+  @test block()[end] == "box blue width 0.5 radius 12 500,30 620,110" && v.typing === nothing && w.focus === v.parts[:area]
+  # Esc leaves the number as it was, and so do words that aren't a number
+  number(:radius); typed("7"); key(Keys.escape)
+  number(:radius); typed("round"); key(Keys.enter)
+  @test shapes()[end].radius == 12 && v.parts[(:number, :radius)].text == "12"
+  # The corners of a box are no rounder than half its shorter side
+  number(:radius); typed("99"); key(Keys.enter)
+  @test block()[end] == "box blue width 0.5 radius 40 500,30 620,110" && v.parts[(:button, (:more, :radius))].off
+  # A click somewhere else keeps the number that was typed, for the shape that it was typed for
+  number(:width); typed("3"); click(spot(650, 190))
+  @test v.picked == 0 && block()[end] == "box blue width 3 radius 40 500,30 620,110"
+  # Words have a size
+  click(spot(530, 145))
+  @test shapes()[v.picked].kind == :text && K.shown_settings(v) == (:size,)
+  button((:more, :size))
+  @test block()[v.picked] == "text red size 17 520,150 The drain"
+  # ⌘Z takes a change back
+  K.undo!(e.buf); frames()
+  @test block()[4] == "text red 520,150 The drain"
+end
+
+@testset "the circles of the shape that's selected" begin
+  click(spot(500, 70))
+  n = length(shapes())
+  @test v.picked == n && K.cursor(v.parts[:area]) == :arrow
+  # The mouse over a circle shows a hand, and a drag of the circle moves that corner of the box
+  at(spot(620, 110))
+  @test K.handle_under(v, w) == 3 && K.cursor(v.parts[:area]) == :hand
+  shot("selected.png")
+  drag(spot(620, 110), spot(630, 120), spot(660, 140))
+  @test block()[end] == "box blue width 3 radius 40 500,30 660,140" && v.picked == n
+  # Beside the circles, a drag moves the whole shape
+  drag(spot(580, 30), spot(580, 35), spot(580, 40))
+  @test block()[end] == "box blue width 3 radius 40 500,40 660,150"
+  # The end of a line moves by itself
+  click(spot(65, 155))
+  @test shapes()[v.picked].kind == :line
+  drag(spot(80, 210), spot(90, 200), spot(120, 180))
+  @test block()[v.picked] == "line blue 50,100 120,180"
+  key(Keys.escape)
+  @test v.picked == 0
+end
+
+@testset "changing words where they are" begin
+  field = v.parts[:input]
+  twice(place) = (click(place); click(place))
+  # Two clicks on words with the arrow tool open them, with the caret where the click was
+  twice(spot(530, 136))
+  @test v.editing == 4 && v.asking == (520.0, 150.0) && field.text == "The drain" && w.focus === field && 0 < field.cursor < 4
+  @test K.shown_settings(v) == (:size,)
+  # A click further along the words moves the caret, and what's typed goes in there
+  click(spot(520 + K.sketch_measure("The drain", 16) + 2, 145))
+  @test field.cursor == 9 && v.editing == 4
+  typed(" pipe")
+  shot("editing.png")
+  key(Keys.enter)
+  @test block()[4] == "text red 520,150 The drain pipe" && v.asking === nothing && v.editing == 0 && v.picked == 4
+  # Esc leaves them as they were
+  twice(spot(530, 136)); typed("x"); key(Keys.escape)
+  @test block()[4] == "text red 520,150 The drain pipe" && v.editing == 0
+  # A colour that's chosen while they're changed is theirs
+  twice(spot(530, 136)); click(middle(rect(v.parts[(:ink, :green)])))
+  @test v.editing == 4 && w.focus === field
+  key(Keys.enter)
+  @test block()[4] == "text green 520,150 The drain pipe"
+  # With the tool for words, one click opens them. Words with nothing left in them are taken away.
+  n = length(shapes())
+  button(:text)
+  click(spot(530, 136))
+  @test v.editing == 4 && field.text == "The drain pipe"
+  field.text = ""; field.anchor = field.cursor = 0
+  key(Keys.enter)
+  @test length(shapes()) == n - 1 && !any(s -> s.kind == :text, shapes()) && v.picked == 0
+  K.undo!(e.buf); frames()
+  @test block()[4] == "text green 520,150 The drain pipe"
+  button(:select)
+end
+
+@testset "a sketch that fills the window" begin
+  small, offset = v.box, e.scroll.offset
+  button(:full)
+  @test v.full && K.full_block(e) === v && w.focus === v.parts[:area]
+  # It's as wide as the window, and its drawing goes down to the window's foot
+  @test v.box[3] ≈ 1000 && K.sketch_scale(v) ≈ 1000 / 720 && isapprox(v.box[2] + v.box[4], 900, atol=1)
+  shot("full.png")
+  # A shape is drawn there as it is in the page
+  button(:line)
+  drag(spot(100, 300), spot(150, 320), spot(200, 350))
+  @test block()[end] == "line green width 3 100,300 200,350"   # green was the last colour that was chosen
+  # The wheel scrolls a drawing that's taller than the window, and the page under it stays where it was
+  drag(spot(100, 500), spot(150, 520), spot(200, 570))
+  top = v.box[2]
+  at(spot(300, 200)); onscroll(w, Vec2{px}(px(0), px(-5))); frames()
+  @test v.box[2] < top && v.box[2] + v.box[4] ≈ 900 && e.scroll.offset == offset
+  # A click beside a button isn't the page's
+  caret = e.buf.caret
+  click((K.num(rect(v.parts[(:button, :full)]).left) - 60, K.num(rect(v.parts[(:button, :full)]).top) + 10))
+  @test e.buf.caret == caret && w.focus === v.parts[:area] && v.full
+  # Esc chooses the arrow tool first. With that tool, it puts the sketch back in the page, where the page was.
+  key(Keys.escape)
+  @test v.tool == :select && v.full
+  key(Keys.escape)
+  @test !v.full && K.full_block(e) === nothing && e.scroll.offset == offset
+  @test v.box[3] ≈ small[3] && v.box[4] > small[4]
+  # The button puts it back too
+  button(:full); button(:full)
+  @test !v.full
 end

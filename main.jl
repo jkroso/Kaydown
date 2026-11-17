@@ -16578,8 +16578,16 @@ end
 # click again to hide it. Text that the code printed shows before the value.
 # A value has the colours that a code block gives Julia code: its numbers, its
 # strings and the names of its types.
-# What went wrong shows in red. A value that's a UI node shows as the node. The
-# box of a function opens to show its documentation and a table of its methods.
+# What went wrong shows in red. On a page, a value that's a UI node shows as the
+# node. The box of a struct opens to show a line for each of the struct's
+# fields: the field's name and its value. In a file of code, a UI node shows
+# that way too, with a line for each of its children under its fields. A line
+# whose value has parts of its own has an arrow: click it to show them under
+# it. A list that has a struct or a node in it opens to a line for each item.
+# A type that the page's code made shows by its name alone, like `Wall`, with
+# no module in front of it.
+#
+# The box of a function opens to show its documentation and a table of its methods.
 # The box of a module opens to show its readme, or its documentation when it has
 # no readme, and a table of the names that it defines, with a field that
 # searches them. A
@@ -16595,6 +16603,11 @@ const OUTCOME_LINES = 30        # the most lines of a value that Julia writes
 const OUTCOME_COLS = 100        # and the most characters of each
 const OUTCOME_NODE_W = 420px    # how wide a value that's a UI node shows
 const OUTCOME_EDGE = 12px       # the least space between a box and the right edge of the window
+const MEMBERS = 100             # the most items of a list that the open box of an outcome lists
+const MEMBER_COLS = 80          # the most characters of a value on a line of that list
+const MEMBER_INDENT = 2         # how many characters further in the parts of a part start
+const MEMBERS_H = 430px         # the tallest that the list is. The wheel moves through the rest.
+const MEMBERS_LEAST = 6         # how many lines of the list show at least, in a box that's near the bottom of the window
 
 "The font of what code came to, which is the font of the code, at `size` and in the colour `ink`"
 outcome_face(size, ink=colours.ink) = Face(codefont(), codestyle(), size, ink, false)
@@ -16611,6 +16624,7 @@ outcome_face(size, ink=colours.ink) = Face(codefont(), codestyle(), size, ink, f
   failed::Bool = false
   node::Any = nothing               # a Shown, when the value is a UI node
   subject::Any = nothing            # the value itself, when it's a function or a module, which has more to show than its text
+  whole::Any = nothing              # the value itself, when the open box lists its parts: a struct, or a UI node in a file of code
   open::Bool = false                # the rest shows under the box
   body::Any = nothing               # the OutcomeBody that shows the rest
   # Each frame sets these, for the room that the window has
@@ -16622,10 +16636,26 @@ outcome_face(size, ink=colours.ink) = Face(codefont(), codestyle(), size, ink, f
   high::px = 20px
 end
 
-"What shows under the box of an outcome that's open: the rest of the value, or the node that the value is"
+"What shows under the box of an outcome that's open: the rest of the value, the node that the value is, or the parts of the value"
 @def mutable struct OutcomeBody <: SemanticUI
   of::Any = nothing
-  detail::Any = nothing   # the Detail of a function or a module, made when the box first opens
+  detail::Any = nothing    # the Detail of a function or a module, made when the box first opens
+  members::Any = nothing   # the Member of each part of a value that has parts, made when the box first opens
+  scroll::Scroll = Scroll(width(grow=grow), height(grow=grow))   # moves through a list of parts that's taller than `MEMBERS_H`
+  wide::px = 0px           # how wide that list is. Each frame sets it.
+  tall::px = MEMBERS_H     # the tallest that the list is in the room that the window has under the box. Each frame sets it.
+end
+
+"A part of a value, on a line of its own in the open box of an outcome: a field of a struct, an item of a list, or a child of a UI node"
+@def mutable struct Member <: SemanticUI
+  of::Any = nothing       # the OutcomeBody that it's in
+  name::String = ""       # the field's name, the item's place in its list, or its key
+  value::Any = nothing
+  text::String = ""       # the value as Julia writes it on one line
+  depth::Int = 0          # how many parts it's inside
+  more::Bool = false      # the value has parts of its own
+  inside::Any = nothing   # the Member of each of them, made when the line first opens
+  open::Bool = false      # they show under the line
 end
 
 """
@@ -16731,11 +16761,21 @@ run_code(e, code::String) = begin
   (value, fetch(printed), failed)
 end
 
-"`value` as the text that Julia shows for it, with the middle of a long list or a big table left out"
-value_text(value) = begin
+"""
+`value` as the text that Julia shows for it, with the middle of a long list or
+a big table left out. With the module `home`, a type that the module made has
+no module's name in front of its own.
+"""
+value_text(value, home=nothing) = begin
   io = IOBuffer()
-  Base.invokelatest(show, IOContext(io, :limit => true, :displaysize => (OUTCOME_LINES, OUTCOME_COLS)), MIME"text/plain"(), value)
+  Base.invokelatest(show, written_in(io, home), MIME"text/plain"(), value)
   String(take!(io))
+end
+
+"`io` with what tells Julia to leave out the middle of a long value, and to write the types of the module `home` by their names alone"
+written_in(io, home) = begin
+  io = IOContext(io, :limit => true, :displaysize => (OUTCOME_LINES, OUTCOME_COLS))
+  home === nothing ? io : IOContext(io, :module => home)
 end
 
 "No more of `text` than an outcome shows: a few more lines than Julia writes for a value, and a few more characters of each"
@@ -16744,6 +16784,125 @@ clipped(text) = begin
   length(lines) > OUTCOME_LINES + 10 && (lines = [lines[1:OUTCOME_LINES+10]; "…"])
   join((length(l) > OUTCOME_COLS + 20 ? first(l, OUTCOME_COLS + 20) * "…" : l for l in lines), "\n")
 end
+
+"What a line shows for a field that has no value yet"
+struct Unset end
+Base.show(io::IO, ::Unset) = print(io, "#undef")
+
+"What the last line of a list shows when the list has more items than `MEMBERS`: how many more"
+struct Unlisted
+  count::Int
+end
+Base.show(io::IO, u::Unlisted) = print(io, u.count, " more")
+
+"The fields that join a UI node to the nodes around it, and that hold what the window keeps for it. They aren't the node's own."
+const NODE_LINKS = (fieldnames(Backdrop)..., :from)
+
+"True when Julia writes a value of the type `T` its usual way: the type's name, and the value's fields in brackets"
+plainly_shown(T::Type) = try
+  which(show, Tuple{IO,T}) === which(show, Tuple{IO,Any}) &&
+    which(show, Tuple{IO,MIME"text/plain",T}) === which(show, Tuple{IO,MIME"text/plain",Any})
+catch
+  false
+end
+
+"The name and the value of each field of `value`, without the fields that `skip` names"
+field_pairs(value, skip=()) =
+  Pair{String,Any}[string(name) => (isdefined(value, name) ? getfield(value, name) : Unset())
+                   for name in fieldnames(typeof(value)) if !(name in skip)]
+
+"""
+The parts of `value` that the open box of an outcome lists, each with its
+name. It's empty for a value that has none, like a number or a string.
+
+- A struct has its fields, when Julia writes it its usual way. A struct that
+  has a way of its own to show, like a date or a colour, is one value.
+- A UI node has its own fields, and then its children by their place.
+- A vector and a tuple have their items by their place, and a dictionary has
+  its values by their keys. A long one has its first `MEMBERS`.
+"""
+members(value) = try
+  Base.invokelatest(find_members, value)
+catch
+  Pair{String,Any}[]
+end
+
+find_members(value) = begin
+  none = Pair{String,Any}[]
+  value isa Union{Number,AbstractString,Symbol,Char,Nothing,Missing,Function,Module,Type,AbstractRange,Unset,Unlisted} && return none
+  if value isa Union{SemanticUI,GeometricUI}
+    out = field_pairs(value, NODE_LINKS)
+    # The children as they are now. Asking a node for its children can make them.
+    child = hasfield(typeof(value), :firstchild) ? getfield(value, :firstchild) : nothing
+    k = 0
+    while child !== nothing && k < MEMBERS
+      push!(out, string(k += 1) => child)
+      child = getfield(child, :nextsibling)
+    end
+    return out
+  end
+  value isa NamedTuple && return Pair{String,Any}[string(k) => v for (k, v) in pairs(value)]
+  if value isa Union{AbstractVector,Tuple,AbstractDict}
+    out = value isa AbstractDict ? Pair{String,Any}[brief_text(k, 30) => v for (k, v) in Iterators.take(value, MEMBERS)] :
+          Pair{String,Any}[string(i) => (value isa Tuple || isassigned(value, i) ? value[i] : Unset()) for i in Iterators.take(eachindex(value), MEMBERS)]
+    length(value) > MEMBERS && push!(out, "…" => Unlisted(length(value) - MEMBERS))
+    return out
+  end
+  T = typeof(value)
+  (isstructtype(T) && fieldcount(T) > 0 && plainly_shown(T)) ? field_pairs(value) : none
+end
+
+"""
+True when the open box of an outcome lists the parts of `value`: a struct, a UI
+node, or a list that has one of those in it. A list of numbers or of strings
+shows as Julia writes it.
+"""
+has_members(value) = begin
+  found = members(value)
+  isempty(found) && return false
+  value isa Union{AbstractVector,Tuple,NamedTuple,AbstractDict} || return true
+  any(p -> !isempty(members(p.second)), found)
+end
+
+"`value` as Julia writes it on one line, in no more than `cols` characters. `home` is as it is for `value_text`."
+brief_text(value, cols=MEMBER_COLS; home=nothing) = begin
+  text = try
+    # A long string is cut before it's written, so that writing it stays quick
+    value isa AbstractString && length(value) > cols && (value = first(value, cols))
+    io = IOBuffer()
+    Base.invokelatest(show, written_in(io, home), value)
+    String(take!(io))
+  catch
+    string(typeof(value))
+  end
+  text = replace(text, r"\s*\n\s*" => " ")
+  length(text) > cols ? first(text, cols - 1) * "…" : text
+end
+
+"A line for each part of `value`, in the open box `d` of an outcome. They are `depth` parts inside the value that the code came to."
+member_lines(d, value, depth) = begin
+  home = workspace(editor(d))
+  Member[own!(d, Member(of=d, name=name, value=v, text=brief_text(v; home), depth=depth, more=!isempty(members(v)))) for (name, v) in members(value)]
+end
+
+"The lines that the list shows now, from the lines `rows` of the value's own parts: each of them, and under one that's open, the lines of its parts"
+unfolded(rows, out=Member[]) = begin
+  for m in rows
+    push!(out, m)
+    m.open && m.inside !== nothing && unfolded(m.inside, out)
+  end
+  out
+end
+
+"""
+The lines of text that the code printed and that the box of `o` doesn't show.
+They are over the list of the value's parts. What Julia writes for the value
+isn't there, because the list says it.
+"""
+printed_rest(o::Outcome) = (lines = split(o.rest, '\n'); lines[1:clamp(o.printed - o.from + 1, 0, length(lines))])
+
+"How many characters wide the line `m` is: how far in it starts, its arrow, its name and its value"
+member_cols(m::Member) = MEMBER_INDENT * (m.depth + 1) + length(m.name) + 2 + length(m.text)
 
 "What the code of the page came to, for each piece of it that ran and hasn't changed since"
 outcomes(e) = get!(() -> Outcome[], e.nodes, (:outcomes, e.buf.path))::Vector{Outcome}
@@ -16758,15 +16917,17 @@ outcome!(e, r::UnitRange{Int}, code::String=join(e.buf.lines[r], "\n")) = begin
   value, printed, failed = run_code(e, code)
   # Code that ends with a semicolon shows no value, as it does at Julia's prompt
   !failed && endswith(rstrip(code), ';') && (value = nothing)
-  node = nothing
+  node = whole = nothing
   text = try
     if failed
       Base.invokelatest(sprint, showerror, value)
-    elseif value isa Union{SemanticUI,GeometricUI}
+    elseif value isa Union{SemanticUI,GeometricUI} && b.view != :code
       node = own!(e, Shown(value=value, inline=true))
       string(nameof(typeof(value)))
     else
-      value === nothing ? "" : value_text(value)
+      # In a file of code a node is a value like any other, and its box lists its fields and its children
+      has_members(value) && (whole = value)
+      value === nothing ? "" : value_text(value, workspace(e))
     end
   catch err
     # A value whose own `show` fails
@@ -16779,7 +16940,7 @@ outcome!(e, r::UnitRange{Int}, code::String=join(e.buf.lines[r], "\n")) = begin
   # A node shows at once, because its name alone says little
   o = own!(e, Outcome(first=first(r), last=last(r), code=was, total=length(b.lines), brief=String(first(split(full, '\n'))),
                       full=full, printed=isempty(said) ? 0 : count('\n', said) + 1, failed=failed, node=node, subject=subject,
-                      open=node !== nothing))
+                      whole=whole, open=node !== nothing || whole isa Union{SemanticUI,GeometricUI}))
   list = outcomes(e)
   # It takes the place of what any of those lines came to before
   Base.filter!(p -> p.last < o.first || p.first > o.last, list)
@@ -16890,13 +17051,21 @@ outcome_over(e) = begin
     # The box of an outcome that's open shows the first line, so the rest starts at the second
     o.rest = o.shown == o.brief ? String(chopprefix(chopprefix(o.full, o.brief), "\n")) : o.full
     o.from = o.shown == o.brief ? 2 : 1
-    o.more = o.node !== nothing || o.subject !== nothing || !isempty(o.rest)
+    o.more = o.node !== nothing || o.subject !== nothing || o.whole !== nothing || !isempty(o.rest)
     o.size, o.high = size, high
     push!(boxes, at(top, left, o))
     (o.open && o.more) || continue
     o.body === nothing && (o.body = own!(e, OutcomeBody(of=o)))
+    if o.whole !== nothing
+      o.body.members === nothing && (o.body.members = member_lines(o.body, o.whole, 0))
+      # As wide as the widest line that shows, and no wider than the window has room for
+      cols = max(maximum(length, printed_rest(o), init=0), maximum(member_cols, unfolded(o.body.members), init=0))
+      o.body.wide = min(wide * cols, w - side - 2OUTCOME_EDGE - 38px)
+      # No taller than the room between the box and the bottom of the window
+      o.body.tall = clamp(h - (top + high + 3px) - OUTCOME_EDGE - 22px, size * 1.45 * MEMBERS_LEAST, MEMBERS_H)
+    end
     across = o.subject !== nothing ? detail_wide(e) + 2px :
-             (o.node === nothing ? wide * maximum(length, split(o.rest, '\n')) : OUTCOME_NODE_W) + 22px
+             (o.whole !== nothing ? o.body.wide : o.node === nothing ? wide * maximum(length, split(o.rest, '\n')) : OUTCOME_NODE_W) + 22px
     push!(bodies, at(top + high + 3px, max(side + 8px, min(left, w - across - OUTCOME_EDGE)), o.body))
   end
   # The rest of an open outcome goes over the boxes of the lines under it
@@ -16909,8 +17078,11 @@ the colours that a code block gives Julia code. A character that the code font
 lacks is drawn in a font that has it, in the room of one character, so the
 columns of a matrix stay in line under it.
 """
-value_row(text::AbstractString, o::Outcome; code=true) = begin
-  face = outcome_face(o.size, o.failed ? SPELL_RED : colours.ink)
+value_row(text::AbstractString, o::Outcome; code=true) =
+  Row(height(o.size * 1.45), Alignment.Center, value_parts(text, outcome_face(o.size, o.failed ? SPELL_RED : colours.ink); code)...)
+
+"The parts of the row that `value_row` makes for `text`, in the font `face`"
+value_parts(text::AbstractString, face::Face; code=true) = begin
   cell = measure(face, "0")
   parts = Any[]
   for tok in tokens(text, code ? "julia" : "")
@@ -16922,7 +17094,7 @@ value_row(text::AbstractString, o::Outcome; code=true) = begin
         Text(part, size=pf.size, family=pf.family, subfamily=pf.style, color=pf.color, wrap=WrapMode.none)))
     end
   end
-  Row(height(o.size * 1.45), Alignment.Center, parts...)
+  parts
 end
 
 "True when line `k` of all that the outcome `o` shows is a value, not text that the code printed or what went wrong"
@@ -16941,10 +17113,50 @@ end
 describe(d::OutcomeBody) = begin
   o = d.of
   o.subject === nothing || return detail_view(editor(d), d)
-  inner = o.node !== nothing ? Box(fixed(OUTCOME_NODE_W), Alignment.Start, o.node) :
+  inner = d.members !== nothing ? members_view(d) :
+          o.node !== nothing ? Box(fixed(OUTCOME_NODE_W), Alignment.Start, o.node) :
           Column(Alignment.Start, [value_row(line, o, code=isvalue(o, o.from + k - 1)) for (k, line) in enumerate(split(o.rest, '\n'))]...)
   Box(padding(10px, 8px), radius(7px), background(colours.float), border(1px, :solid, colours.line), lifted, Alignment.Start,
       name="Outcome body", inner)
+end
+
+"""
+The list of the parts of the value of the open box `d`: a line for each part,
+with the lines of an open part's own parts under it. Text that the code
+printed is over the list. A list that's taller than `MEMBERS_H`, or than the
+room that the window has under the box, shows that much of itself, and the
+wheel moves through the rest.
+"""
+members_view(d::OutcomeBody) = begin
+  o = d.of
+  said = [value_row(line, o, code=false) for line in printed_rest(o)]
+  lines = unfolded(d.members)
+  high = o.size * 1.45 * (length(said) + length(lines))
+  inside = Column(width(grow=grow), Alignment.Start, said..., lines...)
+  Box(fixed(d.wide), height(min(high, d.tall)), Alignment.Start, clip=true, reuse!(d.scroll, inside))
+end
+
+describe(m::Member) = begin
+  o = m.of.of
+  face = outcome_face(o.size)
+  cell = measure(face, "0")
+  arrow = m.more ? (Icon(m.open ? "chevron-down" : "chevron-right", size=o.size * 0.7, color=colours.dim),) : ()
+  Row(width(grow=grow), height(o.size * 1.45), Alignment.Center, radius(4px), name="Outcome part",
+      padding(0px, 0px, 0px, cell * MEMBER_INDENT * m.depth), background(m.more && ishovered(m) ? colours.hover : clear),
+      Box(fixed(cell * MEMBER_INDENT), height(o.size * 1.45), arrow...),
+      value_parts(m.name, face, code=false)..., value_parts(": ", Face(face, color=colours.dim), code=false)...,
+      value_parts(m.text, face)...)
+end
+
+cursor(m::Member) = m.more ? :hand : :arrow
+onmouse(::Member, ::MouseMove) = handled
+onscroll(m::Member, ev::MouseScroll) = onscroll(m.of, ev)
+# A click on a line whose value has parts shows them under the line, or hides them
+onkey(m::Member, ::KeyPress{Keys.mouse_left}) = begin
+  m.more || return handled
+  m.inside === nothing && (m.inside = member_lines(m.of, m.value, m.depth + 1))
+  m.open = !m.open
+  handled
 end
 
 cursor(o::Outcome) = o.more ? :hand : :arrow
@@ -16957,8 +17169,9 @@ onkey(::OutcomeBody, ::KeyPress{Keys.mouse_left}) = handled
 onmouse(::OutcomeBody, ::MouseMove) = handled
 # The wheel moves through the documentation and the table of a function or a module, not through the page under them
 onscroll(d::OutcomeBody, ev::MouseScroll) = begin
-  d.detail === nothing && return nothing
-  s = d.detail.scroll
+  # A list of parts that all shows leaves the wheel to the page
+  (d.detail === nothing && (d.members === nothing || d.scroll.content_height <= d.scroll.viewport)) && return nothing
+  s = d.detail === nothing ? d.scroll : d.detail.scroll
   s.offset = clamp(s.offset - ev.delta[2] * 30, 0px, max(0px, s.content_height - s.viewport))
   handled
 end

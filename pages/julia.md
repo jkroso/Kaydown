@@ -58,11 +58,27 @@ length
 Base.Iterators
 ```
 
+## Structs
+
+The box of a struct opens to show a line for each of the struct's fields: the field's name and its value. A line with an arrow has a value that has parts of its own. Click the line to show them under it, and click it again to hide them.
+
+```julia
+struct Wall
+  long::Float64
+  name::String
+end
+struct Room
+  walls::Vector{Wall}
+  door::Wall
+end
+Room([Wall(4.2, "north"), Wall(3.0, "east")], Wall(0.9, "door"))
+```
+
 ## The whole block, a selection and a node
 
 Put the caret in the line that opens a block, the one with the three backticks, and ⌘Return runs every line of the block. Select part of a line, like `1:6` in the grid above, and ⌘Return runs that part alone.
 
-A value that's a part of a window shows as itself. Run this line and drag the slider.
+A value that's a part of a window shows as itself. Run this line and drag the slider. In a file of code, like `widgets.jl`, such a value doesn't show as itself. Its box lists its fields, and then its children.
 
 ```julia
 Slider(value=0.4)

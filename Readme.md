@@ -25,7 +25,7 @@ A page shows more than text:
 
 - A line that holds only a picture, a video or a sound file shows it, or a player for it. The page's Insert menu records a sound from the microphone, and a button under the player writes down what's said in it, on the Mac.
 - A button beside a diagram, a picture or a page of a PDF file makes it fill the window, where you zoom it with a pinch.
-- A Julia file opens as one block of code, which you change and run as you do a `julia` block.
+- A Julia file opens as one block of code, which you change and run as you do a `julia` block. There, the box of a value that's a part of a window lists the value's fields and its children.
 
 "Kaydown" is a working name, after Alan Kay.
 
@@ -274,6 +274,7 @@ julia -O0 --project=. test/schedule_test.jl       # how a schedule is read, writ
 julia -O0 --project=. test/schedule_view_test.jl  # the schedule's bars and links, in a window that isn't on the screen
 julia -O0 --project=. test/project_page_test.jl   # a video or a sound on the web, and the button that makes a job in Centient
 julia -O0 --project=. test/outcome_test.jl        # the code that ⌘Return runs in a `julia` block, and the box of what it comes to
+julia -O0 --project=. test/outcome_parts_test.jl  # the fields of a struct and the children of a node, which that box lists
 julia -O0 --project=. test/names_test.jl          # the list of names that a code block offers while you type
 julia -O0 --project=. test/code_file_test.jl      # a Julia file that the page changes, as one block of code
 julia -O0 --project=. test/code_settings_test.jl  # the settings of code: long lines, line numbers, the guide, the indent, the font and size

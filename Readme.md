@@ -279,6 +279,7 @@ julia -O0 --project=. test/project_page_test.jl   # a video or a sound on the we
 julia -O0 --project=. test/outcome_test.jl        # the code that ⌘Return runs in a `julia` block, and the box of what it comes to
 julia -O0 --project=. test/outcome_parts_test.jl  # the fields of a struct and the children of a node, which that box lists
 julia -O0 --project=. test/names_test.jl          # the list of names that a code block offers while you type, and what it says each name is
+julia -O0 --project=. test/call_test.jl           # the box that lists what a function takes, when you type the ( of a call
 julia -O0 --project=. test/code_file_test.jl      # a Julia file that the page changes, as one block of code
 julia -O0 --project=. test/code_settings_test.jl  # the settings of code: long lines, line numbers, the guide, the indent, the font and size
 julia -O0 --project=. test/weight_test.jl         # the weights of the page's text and of code: the weights a font has, bold text, the settings file

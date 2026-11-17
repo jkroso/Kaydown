@@ -53,6 +53,21 @@ Each name has paler words at its right that say what it is. A name with a value 
 
 ```
 
+## What a function takes
+
+Run the first block of this page, then type `paint(` on the empty line of this block. A box under the line lists what the function takes, with one line for each of its methods. The value that the caret is at has a line under it, and a value in square brackets can be left out.
+
+- The box goes when you start to type a value. It comes back after the comma, for the next value.
+- The box closes when the caret leaves the brackets. Escape hides it.
+- Go back into a call and type a comma or a semicolon. The box opens for the next value.
+- Type the start of a name that the function gives a value, like `co` for `coats`. The list of names has `coats=` first. After a semicolon the list has only such names, from the first letter. Each has the type of its value at its right, and the value that it has when you leave it out, like `Int64 = 2`.
+- A function of the page has a box after its code has run. Julia's own functions, like `round(`, always have one.
+- After the first value, only the methods that can take one more value stay in the box.
+
+```julia
+
+```
+
 ## Brackets and quotes
 
 Type `(`, `[`, `{` or `"` in code, and the one that closes it comes too. The caret stays between the two. This is so in every code block and in a file of code.

@@ -1006,6 +1006,39 @@ end
 own!(e, node) = (node.parent === nothing && setfield!(node, :parent, e); node)
 node!(make, e, key) = get!(() -> own!(e, make()), e.nodes, key)
 
+"""
+A part of the page joins the children of the document, so one part can find
+another by a walk of the tree: up to the document, then through its children.
+`layout!` empties that list and gives the document each part of the page that
+shows, so the children are the parts of this page, in the order of their lines.
+The paragraphs, the headings and the other blocks that are made for the lines
+on screen follow them.
+"""
+own!(d::Document, node) = begin
+  parent = getfield(node, :parent)
+  (parent === nothing || (parent === d && !listed(d, node))) && add_child!(d, node)
+  node
+end
+
+"True if `node` is in the list of the children of `d`"
+listed(d::Document, node) = getfield(node, :prevsibling) !== nothing || getfield(d, :firstchild) === node
+
+"""
+Take every child out of the document's list. Each one keeps the document as
+its parent, so a node that an earlier frame made can still reach the editor.
+"""
+unlist!(d::Document) = begin
+  child = getfield(d, :firstchild)
+  while child !== nothing
+    next = getfield(child, :nextsibling)
+    setfield!(child, :prevsibling, nothing)
+    setfield!(child, :nextsibling, nothing)
+    child = next
+  end
+  setfield!(d, :firstchild, nothing)
+  d
+end
+
 const MARKDOWN = (".md", ".markdown", ".mdx")
 ismarkdown(path) = lowercase(splitext(path)[2]) in MARKDOWN
 
@@ -1414,7 +1447,9 @@ end
 
 "Lay out what inline code made, to learn how much room it takes in its line"
 fit(e, shown) = begin
-  own!(node!(Document, e, :document), shown)
+  # It's part of its line. It can reach the document, and it isn't one of the document's children:
+  # a line is laid out once and kept, so the document isn't given it again on each frame.
+  shown.parent === nothing && setfield!(shown, :parent, node!(Document, e, :document))
   concrete = describe(Row(Alignment.Start, geometry(shown)), (e.width, 9999px))
   # A node with no width of its own, like a slider, takes all the room it's given. In a line it gets this much.
   w = concrete.width < 16px ? INLINE_W * e.zoom : concrete.width
@@ -10410,6 +10445,7 @@ end
 "Work out what the page shows and how tall each part is, for text that's `width` wide"
 layout!(e, width=text_width(e)) = begin
   b = e.buf
+  unlist!(node!(Document, e, :document))   # the document's children are the parts that this layout gives it
   # The page is written as rich text or as plain text, as the switch in the top bar says. The pages of
   # the settings are always rich text. After a change, the caret's place is looked at afresh.
   shows = e.plain && b.view == :markdown && !issettings(e)

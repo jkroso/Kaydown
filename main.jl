@@ -1654,6 +1654,8 @@ that inserts a block.
 """
 stand!(b::Buffer) = begin
   b.caret == b.stood && return b
+  # The caret is on no line while the page is drawn for paper, so it has nowhere to stand
+  b.caret[1] < 1 && return b
   if rich(b) && !selecting(b) && isempty(b.others)
     b.caret = b.anchor = b.stood === nothing ? settle(b, b.caret, 1, from=(0, 0)) :
                                                settle(b, b.caret, cmp(b.caret, b.stood), from=b.caret)

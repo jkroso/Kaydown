@@ -14,6 +14,7 @@ The block at the top of this page is front matter: lines at the very top of a fi
 - [Bold, italic, code, links and quotes](welcome.md#text)
 - [Spelling, and finding text in the page](welcome.md#text)
 - [Footnotes](welcome.md#text)
+- [Maths: formulas written in TeX](welcome.md#maths)
 - [Lists and to-do items](welcome.md#lists)
 - [Tables, and the keys that Kaydown uses](welcome.md#tables)
 - [Code in a block, with a colour for each part](welcome.md#code)

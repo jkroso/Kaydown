@@ -24,6 +24,7 @@ A file can define a kind of block too. [Make a kind of block of your own](#make-
 
 A page shows more than text:
 
+- A formula that's written in TeX between dollar signs shows as maths: `$x^2$` in a line of text, and on lines of its own between a line of `$$` and another.
 - A line that holds only a picture, a video or a sound file shows it, or a player for it. The page's Insert menu records a sound from the microphone, and a button under the player writes down what's said in it, on the Mac.
 - A button beside a diagram, a picture or a page of a PDF file makes it fill the window, where you zoom it with a pinch.
 - A diagram that fills the window can be changed there. Click a box or a line to select it, click it twice to type its words, and use the buttons under it to add a box, draw a line, change a shape or take a part away. Each change is written in the code of the block.
@@ -305,6 +306,8 @@ julia -O0 --project=. test/examples_test.jl       # the page that lists every ex
 julia -O0 --project=. test/media_folder_test.jl   # the hidden folder for the files that a page makes, and the hidden files in the sidebar
 julia -O0 --project=. test/chart_test.jl          # how a chart is read and written, and where its bars, lines and slices go
 julia -O0 --project=. test/chart_view_test.jl     # the chart of a table, a spreadsheet and a sheet, in a window that isn't on the screen
+julia -O0 --project=. test/math_test.jl           # how the TeX of a formula is read, where its characters go, and its MathML
+julia -O0 --project=. test/math_view_test.jl      # a formula in a line of text and on lines of its own, in a window that isn't on the screen
 julia -O0 --project=. test/ask_test.jl            # how a question and its answers are read and written
 julia -O0 --project=. test/ask_view_test.jl       # a question in the page: a click on an answer, and the field to type in
 julia -O0 --project=. test/changes_test.jl        # how a diff is read, how your choices and comments are written into it, and which words of a line are different

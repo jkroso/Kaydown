@@ -21,6 +21,9 @@
 #     formula, like = B2 * C2 or = sum(D2:D4), and shows what it comes to.
 #   - Write a code block in the language `mermaid` to show a diagram: a
 #     flowchart, a sequence diagram and so on. ⌥-click shows it as code.
+#   - Write a formula in TeX between dollar signs, like $x^2$, to show it
+#     in a line of text. Between a line of $$ and another, the formula is on
+#     lines of its own, in the middle of the page. ⌥-click shows it as code.
 #   - Move the mouse over a diagram, a picture, a page of a PDF file, a model or
 #     a video, and click the button beside its top right corner to make it fill the window.
 #     Pinch, or scroll with ⌘ held, to zoom it there, and drag it to move it.
@@ -190,7 +193,7 @@
 @use "./spelling" misspelt guesses learn!
 @use "./transcribe" Transcription check! finished phrases words_between
 @use "./html" html footnotes NOTE escape
-@use "./markdown" Kind Line Span Cell classify spans tablecells isdivider words isdone front_matter MATTER TOML_MATTER
+@use "./markdown" Kind Line Span Cell classify spans tablecells isdivider words isdone front_matter MATTER TOML_MATTER MATH
 @use "./highlight" tokens
 @use "./sheet" SHEET Result sheetcells parts uses tally known units shown
 @use "./spreadsheet" SPREADSHEET Value spreadcells spreadtexts isformula letters answers moved
@@ -200,6 +203,7 @@
 @use "./takeoff" => Plans
 @use "./schedule" => Schedules
 @use "./chart" => Charts
+@use "./math" => Maths
 @use "./ask" => Asks
 @use "./changes" => Diffs
 @use "./board" => Boards
@@ -1214,6 +1218,8 @@ end
 "The face for one span of a line whose plain text is drawn in `base`"
 face(base::Face, s::Span) = begin
   s.markup && return Face(base, color=colours.faint)
+  # The TeX of a formula, while it shows as it's written, is in the font of code
+  s.math && return Face(codefont(), codestyle(), base.size * 0.86, base.color, false)
   # Inline code that runs is Julia, so its parts get the colours they have in a code block
   s.code && return Face(codefont(), codestyle(), base.size * 0.86, base.color, true, s.live ? "julia" : "")
   f = s.bold ? emboldened(base) : base
@@ -1464,6 +1470,11 @@ pieces(e, text::String, line::Line, raw::Bool, i::Int=0) = begin
       push!(out, piece(note_mark(e, s.text), s.col, Face(base, size=base.size * 0.7, color=colours.accent), atomic=true, n=length(s.text), link=s.link))
       continue
     end
+    # $x^2$ shows as the formula that its TeX describes
+    if s.math && !raw && Maths.available()
+      push!(out, equation(e, s, base))
+      continue
+    end
     # Line -1 isn't one of the document's lines: it's a line of a file under a path. Its inline code shows as code.
     s.live && !raw && i >= 0 ? push!(out, inline(e, i, s, base)) : symbols!(out, s.text, s.col, face(base, s), s.link)
   end
@@ -1638,7 +1649,7 @@ something other than its text, which is only so while it's typed: a ``` line,
 a line across the page, a picture, a table's line of dashes.
 """
 israw(b::Buffer, i::Int) =
-  alone(b, i) && (!rich(b) || (picked(b) === nothing && (kinds(b)[i].kind in (Kind.fence, Kind.rule, Kind.table) || pictured(b, i))))
+  alone(b, i) && (!rich(b) || (picked(b) === nothing && (kinds(b)[i].kind in (Kind.fence, Kind.rule, Kind.table) || pictured(b, i) || maths_line(b, i))))
 
 """
 The spans of line `i` as rich text reads them: the text after what starts the
@@ -1678,9 +1689,10 @@ unseen(b::Buffer, i::Int) = begin
   out
 end
 
-"The parts of line `i` that each show as one thing in rich text: the name of a footnote, and inline code that runs"
+"The parts of line `i` that each show as one thing in rich text: the name of a footnote, inline code that runs, and a formula"
 wholes(b::Buffer, i::Int) =
-  Tuple{Int,Int}[(s.col, s.col + length(s.text)) for s in richspans(b, i)[2] if !s.markup && (s.live || startswith(s.link, '^')) && length(s.text) > 1]
+  Tuple{Int,Int}[(s.col, s.col + length(s.text)) for s in richspans(b, i)[2]
+                 if !s.markup && (s.live || (s.math && Maths.available()) || startswith(s.link, '^')) && length(s.text) > 1]
 
 "The first column of line `i` where the caret can stop in rich text: where the text of a heading or a list item starts"
 first_stop(b::Buffer, i::Int) = begin
@@ -1693,8 +1705,9 @@ end
 The first and last line of the part of the page that line `i` is in, when the
 caret steps over that part in rich text. That's a part that shows as one
 thing: a block that shows as a diagram, a plan, a chart and so on, the front
-matter, a picture, a line across the page, a table's line of dashes. A ```
-line is such a part by itself. Nothing for a line of text or of code.
+matter, a formula on lines of its own, a picture, a line across the page, a
+table's line of dashes. A ``` line is such a part by itself. Nothing for a
+line of text or of code.
 """
 solid(b::Buffer, i::Int) = begin
   ks = kinds(b)
@@ -1704,10 +1717,11 @@ solid(b::Buffer, i::Int) = begin
     lang = ks[s].lang
     closed = t > s && ks[s].kind == Kind.fence && ks[t].kind == Kind.fence && ks[t].level == 1
     whole = closed && (lang in (MATTER, TOML_MATTER, TAKEOFF, SCHEDULE, LIVE) || haskey(BLOCKS, lang) ||
-                       (lang == DIAGRAM && isdiagram(join(b.lines[s+1:t-1], "\n"))) || block_source(b, s) !== nothing)
+                       (lang == DIAGRAM && isdiagram(join(b.lines[s+1:t-1], "\n"))) ||
+                       (lang == MATH && has_maths(join(b.lines[s+1:t-1], "\n"))) || block_source(b, s) !== nothing)
     return whole ? (s, t) : k.kind == Kind.fence ? (i, i) : nothing
   end
-  (k.kind == Kind.rule || pictured(b, i)) && return (i, i)
+  (k.kind == Kind.rule || pictured(b, i) || maths_line(b, i)) && return (i, i)
   if k.kind == Kind.table
     run = table(b, i)
     run !== nothing && i == run[1] + 1 && return (i, i)
@@ -2068,6 +2082,7 @@ cellpieces(e, i::Int, text::String, lo::Int, hi::Int, base::Face, raw::Bool) = b
   out = Piece[]
   for s in spans(rest(head(text, hi), lo), lo)
     s.markup && !raw && continue
+    s.math && !raw && Maths.available() ? push!(out, equation(e, s, base)) :
     s.live && !raw ? push!(out, inline(e, i, s, base)) : symbols!(out, s.text, s.col, face(base, s), s.link)
   end
   out
@@ -4346,6 +4361,98 @@ diagram(e, code::String) = begin
   # Lay it out once to learn how tall it is
   concrete = describe(Column(fixed(e.width), Alignment.Start, geometry(node)), (e.width, 9999px))
   Live(node, concrete.height + 2LIVE_GAP)
+end
+
+# --- formulas ---------------------------------------------------------------------------
+#
+# A formula is written in TeX between dollar signs. $x^2$ is a formula in a
+# line of text. A formula on lines of its own goes between a line of $$ and
+# another, or between $$ and $$ on one line, or in a code block in the language
+# `math`. It's in the middle of the page, and its fractions and sum signs are
+# bigger. math.jl reads the TeX and says where each character goes.
+#
+# In a line of text the formula is one thing: the caret goes over it in one
+# step, and ⌘E shows its TeX. On lines of its own it's a part of the page, as
+# a diagram is: the caret goes onto it as a whole, and Return shows its TeX.
+
+"A formula as it's set: in a line of text, or with `display` on lines of its own in the middle of the page"
+@def mutable struct Equation <: SemanticUI
+  tex::String = ""
+  size::px = TEXT_SIZE         # of the text that it's in
+  display::Bool = false
+  colour::Any = nothing        # of the text that it's in, or nothing for the page's ink
+  mid::px = 0px                # in a line of text: how far the middle of the line's capital letters is over the line they stand on
+end
+
+"The formula of `m`, with where each of its characters goes"
+typeset(m::Equation) = Maths.formula(m.tex, num(m.size), m.display)
+
+"How far a formula in a line of text goes over and under the middle of the line. A row of the page puts the middle of each thing in it at the same height."
+half_height(m::Equation) = (f = typeset(m); px(max(Maths.height(f) - num(m.mid), Maths.depth(f) + num(m.mid))))
+
+describe(m::Equation) = begin
+  f = typeset(m)
+  m.display ? Box(width(grow=grow), height(px(Maths.height(f) + Maths.depth(f)))) : Box(fixed(px(Maths.wide(f))), height(2half_height(m)))
+end
+
+draw(ctx, size, ui::ConcreteRect, m::Equation) = begin
+  f = typeset(m)
+  # On lines of its own it's in the middle of the page. In a line of text it stands on the line that the letters stand on.
+  x = m.display ? ui.left + max(0px, ui.width - px(Maths.wide(f))) / 2 : ui.left
+  y = m.display ? ui.top + px(Maths.height(f)) : ui.top + half_height(m) + m.mid
+  Maths.paint(ctx, f, num(x), num(y), something(m.colour, colours.ink), colours.accent)
+  nothing
+end
+
+# The mouse over a formula that has a command that Kaydown doesn't know says which. Two lines with the
+# same text show the same formula, so the words go under the mouse, not under where the formula was drawn.
+onmouse(m::Equation, ev::MouseMove) = begin
+  words = tip(m)
+  isempty(words) && return nothing
+  x, y = ev.position
+  show_tooltip!(ev.window, tip_label(words), x - 1px, y - 10px, 2px, 20px, placement=:bottom, gap=6px)
+  nothing
+end
+
+"What the mouse over a formula says: the commands of its TeX that Kaydown doesn't know, or nothing when it knows them all"
+tip(m::Equation) = (unknown = unique(typeset(m).problems); isempty(unknown) ? "" : "Kaydown doesn't know " * join(unknown, ", ", " or "))
+
+"The piece that stands for the formula of span `s`, in text drawn in `base`"
+equation(e, s::Span, base::Face) = begin
+  m = Equation(tex=s.text, size=base.size, colour=base.color, mid=capital(base) / 2)
+  # It's part of its line, which is laid out once and kept. It can reach the document, and it isn't one of the document's children.
+  setfield!(m, :parent, node!(Document, e, :document))
+  piece(s.text, s.col, base, atomic=true, n=length(s.text), node=Inline(m, px(Maths.wide(typeset(m))), 2half_height(m)))
+end
+
+const MATHS_LINE = r"^\s*\$\$(.*\S.*)\$\$\s*$"
+
+"The TeX of a line that holds only a formula between \$\$ and \$\$, or nothing for any other line"
+maths_text(text::AbstractString) = begin
+  m = match(MATHS_LINE, text)
+  m === nothing || occursin("\$\$", m[1]) ? nothing : String(strip(m[1]))
+end
+
+"True when line `i` holds only a formula between \$\$ and \$\$, which shows on a line of its own"
+maths_line(b::Buffer, i::Int) =
+  kinds(b)[i].kind == Kind.paragraph && occursin("\$\$", b.lines[i]) && maths_text(b.lines[i]) !== nothing && Maths.available()
+
+"True when `tex` is a formula that can be set: it has something in it, and the Mac has the font for maths"
+has_maths(tex::AbstractString) = !isempty(strip(tex)) && Maths.available()
+
+const MATHS_SMALLEST = 0.5   # how small a formula that's wider than the page gets, as a part of the size of the text
+
+"What a formula on lines of its own shows, or nothing if `tex` can't be set"
+equation_item(e, tex) = begin
+  (tex === nothing || !has_maths(tex)) && return nothing
+  m = get!(() -> Equation(tex=String(tex), display=true), e.nodes, (:equation, String(tex)))
+  own!(node!(Document, e, :document), m)
+  m.size = body(e).size
+  # A formula that's wider than the page is smaller, so that all of it shows
+  wide = px(Maths.wide(typeset(m)))
+  wide > e.width && (m.size *= max(MATHS_SMALLEST, e.width / wide))
+  f = typeset(m)
+  Live(m, px(Maths.height(f) + Maths.depth(f)) + 2LIVE_GAP)
 end
 
 # --- takeoffs ---------------------------------------------------------------------------
@@ -11190,7 +11297,7 @@ BLOCKS[EMAIL] = BlockKind("Emails", "envelope", EmailsView, emails_html)
 const SOURCE = r"^\s*(?:```|~~~)\s*[^\s`]+[ \t]+((?:\.{1,2}/|~?/|github\.com/)\S+)\s*$"
 
 "True when Kaydown itself says what a code block in the language `lang` shows"
-known_lang(lang) = lang in (LIVE, SHEET, SPREADSHEET, DIAGRAM, TAKEOFF, SCHEDULE, MATTER, TOML_MATTER, HEX, "julia") || haskey(BLOCKS, lang)
+known_lang(lang) = lang in (LIVE, SHEET, SPREADSHEET, DIAGRAM, MATH, TAKEOFF, SCHEDULE, MATTER, TOML_MATTER, HEX, "julia") || haskey(BLOCKS, lang)
 
 "What was found in each file that could define a kind of block: when the file was saved, and whether its text defines the function"
 const DEFINES = Dict{Tuple{String,String},Tuple{Float64,Bool}}()
@@ -11850,6 +11957,27 @@ layout!(e, width=text_width(e)) = begin
         continue
       end
     end
+    # A formula between two lines of $$, or in a `math` code block, shows as it's set, unless the caret is in it
+    if ks[i].kind == Kind.fence && ks[i].level == 0 && ks[i].lang == MATH && !incode(b, i)
+      t = codeblock(b, i)[2]
+      content = t > i && ks[t].kind == Kind.fence && ks[t].level == 1 ? equation_item(e, join(b.lines[i+1:t-1], "\n")) : nothing
+      if content !== nothing
+        push!(items, Item(i, t, top, content.tall, content))
+        top += content.tall
+        i = t + 1
+        continue
+      end
+    end
+    # A line that holds only a formula between $$ and $$ shows the formula, unless the caret is in the line
+    if ks[i].kind == Kind.paragraph && !israw(b, i) && maths_line(b, i)
+      content = equation_item(e, maths_text(b.lines[i]))
+      if content !== nothing
+        push!(items, Item(i, i, top, content.tall, content))
+        top += content.tall
+        i += 1
+        continue
+      end
+    end
     # A `sheet` code block is drawn as a sheet, and a `spreadsheet` one as a spreadsheet, unless the caret is on its first or last line
     if ks[i].kind == Kind.fence && ks[i].level == 0 && ks[i].lang in (SHEET, SPREADSHEET)
       run = drawn(b, i, ks[i].lang)
@@ -12477,7 +12605,9 @@ press!(e, pos) = begin
     return tick!(e, box)
   end
   it = e.layout[something(findlast(it -> it.top <= pos[2] - e.origin[2], e.layout), 1)]
-  if !held(e, Keys.opt) && inline_at(e, pos) !== nothing
+  made = held(e, Keys.opt) ? nothing : inline_at(e, pos)
+  # A click on a formula in a line of text puts the caret beside it, as a click on a word does
+  if made !== nothing && !(made.node isa Equation)
     # What inline code made takes its own clicks, as a live block does. A click with ⌥ held shows the code.
     e.popup = :none
     e.clicked = (time(), (it.first, 0), 0)
@@ -12816,7 +12946,8 @@ pass(b::Buffer, p::Pos, by::Int) = begin
   s, t = codeblock(b, i)
   s <= b.anchor[1] <= t && return p
   closed = t > s && ks[t].kind == Kind.fence && ks[t].level == 1
-  if closed && (ks[s].lang == LIVE || (ks[s].lang == DIAGRAM && isdiagram(join(b.lines[s+1:t-1], "\n"))))
+  if closed && (ks[s].lang == LIVE || (ks[s].lang == DIAGRAM && isdiagram(join(b.lines[s+1:t-1], "\n"))) ||
+                (ks[s].lang == MATH && has_maths(join(b.lines[s+1:t-1], "\n"))))
     i = by < 0 ? s - 1 : t + 1
   elseif ks[i].kind == Kind.fence
     i += by
@@ -13795,7 +13926,7 @@ const COMMENT_MARKS = Dict{String,String}(
                              "scala", "cs", "php", "dart", "zig"))...,
   (lang => "--" for lang in ("lua", "sql", "hs", "haskell", "elm"))...,
   (lang => ";" for lang in ("lisp", "el", "clj", "clojure", "scm", "scheme"))...,
-  (lang => "%" for lang in ("tex", "latex", "erl", "erlang"))..., "mermaid" => "%%")
+  (lang => "%" for lang in ("tex", "latex", MATH, "erl", "erlang"))..., "mermaid" => "%%")
 
 """
 Make a comment of each line of code that the selection touches, or make code
@@ -15126,8 +15257,8 @@ end
 #   - Return gives the part the keyboard. A form's first field takes it, and
 #     Tab goes to the next field. A plan, a schedule and a sketch take their
 #     own keys. A picture, a diagram and a page of a PDF fill the window. The
-#     front matter shows as it's written. esc gives the keyboard back to the
-#     page, with the caret still on the part.
+#     front matter and a formula show as they're written. esc gives the
+#     keyboard back to the page, with the caret still on the part.
 #   - ↑ and ← go to the line before the part, and ↓ and → to the line after.
 #   - ⌫ and ⌦ take the part away, and the commands that move, copy and delete
 #     a line do that to all of its lines.
@@ -15200,6 +15331,14 @@ enter_part!(e) = begin
   # Front matter shows as it's written, with the caret after its first key
   if run[1] == 1 && kinds(b)[1].lang in (MATTER, TOML_MATTER)
     b.caret = b.anchor = line_end(b, min(2, run[2]))
+    touch!(e)
+  elseif kinds(b)[run[1]].lang == MATH && run[2] > run[1]
+    # A formula shows its TeX, with the caret at the end of its first line
+    b.caret = b.anchor = line_end(b, run[1] + 1)
+    touch!(e)
+  elseif maths_line(b, run[1])
+    # The caret goes to the end of the TeX, before the $$ that closes it
+    b.caret = b.anchor = (run[1], length(rstrip(b.lines[run[1]])) - 2)
     touch!(e)
   end
   e
@@ -15880,6 +16019,7 @@ const INSERTS = [
   ("Code",          ["```julia", "", "```"],        (2, 0)),
   ("Live Block",    ["```$LIVE", "", "```"],        (2, 0)),
   ("Diagram",       ["```$DIAGRAM", "flowchart LR", "  A[Start] --> B[End]", "```"], (3, 2)),
+  ("Formula",       ["\$\$", "", "\$\$"],           (2, 0)),
   # The caret goes to an empty line under the block. In the block, it would show the block's lines.
   ("Takeoff",       ["```$TAKEOFF", "```", "", ""], (4, 0)),
   ("Schedule",      ["```$SCHEDULE", "```", "", ""], (4, 0)),
@@ -17068,7 +17208,7 @@ misspellings(e, i) = begin
     occursin(PICTURE_LINE, text) && return out
     for s in spans(rest(text, line.prefix), line.prefix)
       # The address of a link and the name of a footnote are markup, so only the words that show are checked
-      (s.markup || s.code || startswith(s.link, '^')) && continue
+      (s.markup || s.code || s.math || startswith(s.link, '^')) && continue
       for (lo, hi) in misspelt(s.text)
         spellable(rest(head(s.text, hi), lo)) && push!(out, (s.col + lo, s.col + hi))
       end
@@ -18719,7 +18859,7 @@ end
 const NAMES_SHOWN = 8                         # the most names in the list
 const NAME = r"[\p{L}_][\p{L}\p{N}_!]*"       # a name in code
 # The blocks that aren't code, and a block with no language
-const NO_NAMES = (MATTER, TOML_MATTER, HEX, SHEET, SPREADSHEET, DIAGRAM, TAKEOFF, SCHEDULE, keys(BLOCKS)..., "")
+const NO_NAMES = (MATTER, TOML_MATTER, HEX, SHEET, SPREADSHEET, DIAGRAM, MATH, TAKEOFF, SCHEDULE, keys(BLOCKS)..., "")
 
 "The language that code in `lang` shares its names with. `jl` and a live block are Julia."
 shared_lang(lang) = (l = lowercase(lang); l in JULIA || l == LIVE ? "julia" : l)

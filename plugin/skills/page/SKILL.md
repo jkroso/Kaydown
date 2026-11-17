@@ -73,6 +73,7 @@ Exit code 3 means that Kaydown is not installed, or that it is too old to send a
 | A flow, a sequence, states, classes, shares | A `mermaid` code block. See below. |
 | Code | A code block with its language. Kaydown colours it. |
 | Sums that the user can change | A `sheet` or a `spreadsheet` code block. See below. |
+| Maths | TeX between dollar signs: `$x^2$` in a line of text, and on lines of its own between a line of `$$` and another. A dollar sign before a number, like `$5`, stays a dollar sign. |
 | A picture | `![what it shows](picture.png)` on a line of its own. The path starts at the page's folder. A web address works too. |
 | A footnote | `[^1]` in the text, and a line that starts with `[^1]:`. |
 | Another page | A link to another `.md` file. The user holds ⌘ and clicks it. |

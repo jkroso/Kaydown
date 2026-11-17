@@ -8,9 +8,11 @@
 # a footnote's number is its place among the footnotes. `block(lang, first,
 # last)` gives the HTML of a code block that the editor shows as something
 # else, like a sheet, or nothing to show its code. `value(code)` gives the text
-# that a piece of inline code made, or nothing to show its code.
+# that a piece of inline code made, or nothing to show its code. A formula goes
+# in as MathML, which a browser sets itself.
 
-@use "./markdown" Kind Line Span classify spans tablecells isdivider front_matter isdone MATTER TOML_MATTER
+@use "./markdown" Kind Line Span classify spans tablecells isdivider front_matter isdone MATTER TOML_MATTER MATH
+@use "./math" mathml
 
 "`s` with the characters that mean something in HTML written as their names"
 escape(s::AbstractString) = replace(s, '&' => "&amp;", '<' => "&lt;", '>' => "&gt;", '"' => "&quot;")
@@ -53,14 +55,23 @@ embed(src, alt) = begin
   "<$tag controls preload=\"metadata\" src=\"$(escape(src))\" title=\"$(escape(alt))\"></$tag>"
 end
 
-styled!(out, d::Document, text::AbstractString) = for s in spans(text)
-  s.markup && continue
+styled!(out, d::Document, text::AbstractString) = begin
+  mark = ""   # the markup that came last, which says whether a formula is between $ or $$
+  for s in spans(text)
+    s.markup && (mark = s.text)
+    s.markup || styled!(out, d, s, mark)
+  end
+end
+
+styled!(out, d::Document, s::Span, mark) = begin
+  # A formula between $$ is on a line of its own
+  s.math && return print(out, mathml(s.text, display=mark == "\$\$"))
   if startswith(s.link, '^')
     # A footnote's number, which goes to the footnote
     name = s.link[2:end]
     n = get(d.notes, name, 0)
     print(out, "<sup><a href=\"#fn-", escape(name), "\" id=\"fnref-", escape(name), "\">", n == 0 ? escape(name) : n, "</a></sup>")
-    continue
+    return
   end
   body = escape(s.text)
   if s.live
@@ -147,7 +158,8 @@ html(lines::AbstractVector{<:AbstractString}; title="", block=(lang, first, last
       t = something(findnext(j -> kinds[j].kind == Kind.fence && kinds[j].level == 1, i+1:n, 1), n - i + 1) + i
       t = min(t, n)
       if !(line.lang in (MATTER, TOML_MATTER))   # front matter says things about the page. It isn't part of it.
-        made = block(line.lang, i, t)
+        tex = line.lang == MATH && kinds[t].kind == Kind.fence ? join(lines[i+1:t-1], "\n") : ""
+        made = isempty(strip(tex)) ? block(line.lang, i, t) : mathml(tex, display=true)
         if made === nothing
           lang = isempty(line.lang) ? "" : " class=\"language-$(escape(line.lang))\""
           println(out, "<pre><code", lang, ">", escape(join(lines[i+1:(kinds[t].kind == Kind.fence ? t - 1 : t)], "\n")), "</code></pre>")

@@ -3,6 +3,10 @@
 # line of a code block and so on. `spans` splits the text of a line into runs
 # of bold, italic, code and link text, and the markup characters around them.
 # Columns count characters from 0, so column 0 is before the first character.
+#
+# Maths is written as TeX between dollar signs: $x^2$ in a line of text, and
+# on lines of its own between a line of $$ and another. Those lines are read
+# as a code block in the language `math`, and so is a ```math code block.
 
 @use "github.com/jkroso/Prospects.jl" ["Enum" @Enum]
 
@@ -51,6 +55,9 @@ end
 
 "True when `text` is a to-do item that's done: its box has an x in it"
 isdone(text::AbstractString) = (m = match(TODO, text); m !== nothing && m[2] != " ")
+
+const MATH = "math"                      # the language of the lines of a formula that's on lines of its own
+const DOLLARS = r"^\s*\$\$\s*$"          # a line that opens or closes one
 
 const MATTER = "front matter"            # the language of the lines of a document's YAML front matter
 const TOML_MATTER = "toml front matter"  # and of its TOML front matter, between lines of +++
@@ -105,10 +112,24 @@ matter_lang(lines) = rstrip(lines[1]) == "+++" ? TOML_MATTER : MATTER
 "What each line of a document is"
 classify(lines) = begin
   lang = nothing
+  dollars = 0   # the line of $$ that closes the formula whose lines are being read, or 0 outside one
   matter = front_matter(lines)
   map(enumerate(lines)) do (i, text)
     # Front matter is a block of its own, like a code block: its first and last lines open and close it
     i <= matter && return Line(i == 1 || i == matter ? Kind.fence : Kind.code, i == matter ? 1 : 0, 0, matter_lang(lines))
+    if dollars != 0
+      # Only a line of $$ closes a formula, so a line of ``` in it is one of its lines
+      i < dollars && return Line(Kind.code, 0, 0, MATH)
+      dollars = 0
+      return Line(Kind.fence, 1, 0, MATH)
+    elseif lang === nothing && occursin(DOLLARS, text)
+      # A line of $$ opens a formula when another one closes it. Without that one, it's a line of text.
+      close = findnext(t -> occursin(DOLLARS, t), lines, i + 1)
+      if close !== nothing
+        dollars = close
+        return Line(Kind.fence, 0, 0, MATH)
+      end
+    end
     line = Line(text, lang)
     # The line that opens a code block names its language
     line.kind == Kind.fence || return line
@@ -129,7 +150,10 @@ struct Span
   link::String   # where it goes when it's the text of a link
   markup::Bool   # true for characters like ** that only say how to draw others
   live::Bool     # true for inline code that runs: the code of !`code`
+  math::Bool     # true for the TeX of a formula: the x^2 of $x^2$
 end
+
+Span(col, text, bold, italic, code, strike, link, markup, live) = Span(col, text, bold, italic, code, strike, link, markup, live, false)
 
 struct Style
   bold::Bool
@@ -173,11 +197,33 @@ closer(chars, delim::String, i, to) = begin
   0
 end
 
+"""
+Where the formula that opens with `n` dollar signs at `i` closes, or 0 if it
+doesn't. The TeX can't start or end with a space, and a digit can't follow it,
+so the dollar signs of "from \$5 to \$10" are dollar signs.
+"""
+math_end(chars, i, n, to) = begin
+  start = i + n
+  (start <= to && !isspace(chars[start])) || return 0
+  j = start
+  while j <= to
+    if chars[j] == '\\'
+      j += 2   # \$ in TeX is a dollar sign
+      continue
+    end
+    if chars[j] == '$' && j > start && !isspace(chars[j-1]) && (n == 1 || (j < to && chars[j+1] == '$'))
+      (j + n > to || !isdigit(chars[j+n])) && return j
+    end
+    j += 1
+  end
+  0
+end
+
 "Split `chars[from:to]` into spans, added to `out`. `offset` is the column of `chars[1]`."
 function scan!(out, chars, from, to, style::Style, offset)
   plain = from
-  emit(i, j; markup=false, code=false, live=false, s=style) = i <= j &&
-    push!(out, Span(offset + i - 1, String(chars[i:j]), s.bold, s.italic, code, s.strike, s.link, markup, live))
+  emit(i, j; markup=false, code=false, live=false, math=false, s=style) = i <= j &&
+    push!(out, Span(offset + i - 1, String(chars[i:j]), s.bold, s.italic, code, s.strike, s.link, markup, live, math))
   i = from
   while i <= to
     c = chars[i]
@@ -201,6 +247,15 @@ function scan!(out, chars, from, to, style::Style, offset)
       if j > i + 1
         emit(plain, i - 1); emit(i, i, markup=true); emit(i + 1, j - 1, code=true); emit(j, j, markup=true)
         plain = i = j + 1
+        continue
+      end
+    elseif c == '$'
+      # $x^2$ is a formula, written in TeX. So is $$x^2$$.
+      n = next == '$' ? 2 : 1
+      j = math_end(chars, i, n, to)
+      if j != 0
+        emit(plain, i - 1); emit(i, i + n - 1, markup=true); emit(i + n, j - 1, math=true); emit(j, j + n - 1, markup=true)
+        plain = i = j + n
         continue
       end
     elseif c == '[' && next == '^'
@@ -296,4 +351,4 @@ end
 "How many words are in a document"
 words(lines) = sum(text -> count(_ -> true, eachmatch(r"[\p{L}\p{N}][\p{L}\p{N}'’-]*", text)), lines, init=0)
 
-export Kind, Line, Span, Cell, classify, spans, tablecells, isdivider, words, isdone, front_matter, MATTER, TOML_MATTER
+export Kind, Line, Span, Cell, classify, spans, tablecells, isdivider, words, isdone, front_matter, MATTER, TOML_MATTER, MATH

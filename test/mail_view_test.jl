@@ -313,6 +313,11 @@ end
   @test s.nodes[(:mail_field, :incoming)].text == "127.0.0.1:$(server.port)" && !s.nodes[:mail_form].more && !haskey(s.nodes, :mail_page)
   @test s.nodes[(:mail_field, :password)].hidden && s.nodes[(:mail_field, :password)].placeholder == "Kept in your Keychain"
   @test occursin("Kaydown has", K.mail_news(s))
+  # The Connect button is the last thing in the form, under the servers, with the words that take the account away beside it
+  low(node) = K.num(rect(node).top)
+  @test low(s.nodes[:mail_keep]) > low(s.nodes[(:mail_field, :outgoing)]) > low(s.nodes[:mail_more]) > low(s.nodes[:mail_place])
+  @test abs(low(s.nodes[:mail_remove]) - low(s.nodes[:mail_keep])) < 30 && K.num(rect(s.nodes[:mail_remove]).left) > K.num(rect(s.nodes[:mail_keep]).left)
+  @test s.nodes[:mail_servers]   # the servers show, so the line over them points down
   shot("7-settings", sw)
   # While emails come, the form has a bar that fills, and says how many have come and how long the rest take.
   # The task here never starts, so the mailer looks busy and does nothing.

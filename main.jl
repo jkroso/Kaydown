@@ -17256,19 +17256,23 @@ describe(f::MailForm) = begin
   end
   # An account that's connected can go. So can one that's still to fill, when there's another.
   goes = m !== nothing && (Mail.ready(m.account) || length(all) > 1)
+  can = !(company !== nothing && company.secret === :none)
+  e.nodes[:mail_servers] = more   # the line over the servers points down while they show
   Column(width(grow=grow), Alignment.Start, child_gap=2px, name="Email account",
     Row(width(grow=grow), height(44px), child_gap=4px, name="Email accounts", tabs..., node!(MailAdd, e, :mail_add)),
     map(row, MAIL_FIELDS)...,
     help..., page...,
     folder,
-    # A company that Kaydown can't sign in to has no button: the words above say why
-    (company !== nothing && company.secret === :none ? () :
-      (Row(height(56px), padding(0px, 0px, 0px, MAIL_LABEL_W + 12px), node!(MailConnect, e, :mail_keep)),
-       (isempty(mail_status(e, f, typed)) ? () : (mail_words(mail_status(e, f, typed), color=colours.ink),))...,
-       mail_progress(e, f, typed)...))...,
     node!(MailMore, e, :mail_more),
     (more ? map(row, MAIL_MORE) : ())...,
-    (goes ? (Row(height(34px), node!(MailRemove, e, :mail_remove)),) : ())...)
+    # The button is the last thing in the form, after every field, with what it came to under it. The words
+    # that take the account away are beside it. A company that Kaydown can't sign in to has no button: the
+    # words above say why.
+    (!can && !goes ? () :
+      (Row(height(56px), child_gap=18px, padding(0px, 0px, 0px, MAIL_LABEL_W + 12px),
+         (can ? (node!(MailConnect, e, :mail_keep),) : ())..., (goes ? (node!(MailRemove, e, :mail_remove),) : ())...),))...,
+    (can ? ((isempty(mail_status(e, f, typed)) ? () : (mail_words(mail_status(e, f, typed), color=colours.ink),))...,
+            mail_progress(e, f, typed)...) : ())...)
 end
 
 describe(t::MailTab) = begin
@@ -17372,7 +17376,7 @@ end
 
 describe(l::MailMore) = begin
   e = editor(l)
-  shows = node!(MailForm, e, :mail_form).more
+  shows = get(e.nodes, :mail_servers, false)
   Row(height(34px), Alignment.Start, child_gap=6px, name="More",
     Box(width(12px), height(grow=grow), Icon(shows ? "chevron-down" : "chevron-right", size=10px, color=colours.dim)),
     Box(height(grow=grow), label("Servers", 13px, color=ishovered(l) ? colours.ink : colours.dim)))

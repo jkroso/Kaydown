@@ -38,7 +38,8 @@
 #   - Write a code block in the language `board` to see the page's to-do
 #     items as cards in columns. Drag a card to the last column to tick its item.
 #   - Write a code block in the language `sketch` to draw: by hand, lines,
-#     arrows, boxes, ovals and words. Its last button makes it fill the window.
+#     arrows, boxes, ovals and words. Click it to make it fill the window,
+#     where its tools are.
 #   - Write a code block in the language `find` to list the to-do items
 #     that aren't ticked in every page of the folder. At its top, type words
 #     to keep only the lines that have them, and choose the kind of line and
@@ -7995,10 +7996,17 @@ onkey(b::FillButton, ev::KeyPress{Keys.mouse_left}) = begin
   b.quiet = true
   hide_tooltip!(ev.window)
   f = b.parent
-  zoom_in!(editor(b), f.what, f.parent)
+  fill_window!(editor(b), f.what, f.parent)
 end
 
-"A pinch outwards on a picture, a diagram or a page in the page makes it fill the window"
+"""
+Make `what`, which a Fillable of the node `from` shows, fill the window. A
+block like a sketch, `(:block, view)`, fills it by itself. The rest fill the
+ZoomView.
+"""
+fill_window!(e, what, from) = what[1] == :block ? full!(what[2], true) : zoom_in!(e, what, from)
+
+"A pinch outwards on a picture, a diagram, a page or a sketch in the page makes it fill the window"
 pinch_open(owner, ev::Pinch) = begin
   ev.scale > 1 || return nothing
   e = editor(owner)
@@ -8008,7 +8016,7 @@ pinch_open(owner, ev::Pinch) = begin
   r = rect(f)
   x, y = num(ev.window.mouse[1]), num(ev.window.mouse[2])
   (r !== nothing && num(r.left) <= x < num(r.left + r.width) && num(r.top) <= y < num(r.top + r.height)) || return nothing
-  zoom_in!(e, f.what, owner)
+  fill_window!(e, f.what, owner)
 end
 
 onpinch(s::Shown, ev::Pinch) = pinch_open(s, ev)
@@ -9897,10 +9905,13 @@ BLOCKS[FIND] = BlockKind("Find", "search", SearchView, find_html)
 # --- a sketch ---------------------------------------------------------------------------------
 #
 # A code block in the language `sketch` is a drawing. sketch.jl says how the
-# block is written. The buttons at its top choose a tool: the arrow selects a
-# shape, and the others draw by hand, a line, an arrow, a box, an oval or
-# words. The dots after them choose the colour of the next shape, or of the
-# shape that's selected.
+# block is written. In the page it shows only the drawing. A click on it, a
+# pinch outwards, or the button that shows beside its top right corner while
+# the mouse is over it, makes it fill the window. Only there does it have its
+# tools. The buttons at its top choose a tool: the arrow selects a shape, and
+# the others draw by hand, a line, an arrow, a box, an oval or words. The dots
+# after them choose the colour of the next shape, or of the shape that's
+# selected.
 #
 #   - Drag in the sketch to draw with the tool. For words, click where they
 #     go and type them there. Return, or a click somewhere else, adds them,
@@ -9920,8 +9931,8 @@ BLOCKS[FIND] = BlockKind("Find", "search", SearchView, find_html)
 #     selected, or for the shapes that the tool draws next. Click a number
 #     to type another, and press Return.
 #   - The sketch gets taller when a shape is near its bottom edge.
-#   - The last button makes the sketch fill the window. Esc chooses the
-#     arrow tool, and Esc with that tool puts the sketch back in the page.
+#   - Esc chooses the arrow tool, and Esc with that tool puts the sketch
+#     back in the page. So does the last button.
 #
 # Each shape is a line of the block, so the file holds the whole drawing, and
 # ⌘Z takes back the last thing you drew.
@@ -10148,7 +10159,10 @@ narrow(v::SketchView) = sketch_room(v) < SKETCH_BAR
 describe(v::SketchView) = begin
   e = editor(v)
   with_theme(component_theme(e.zoom)) do
-    full = block_button!(v, :full, :full, icon=v.full ? "fullscreen-exit" : "arrows-fullscreen", tip=v.full ? "Back to the page  esc" : "Fill the window")
+    # In the page it shows only its drawing. A click on it, a pinch outwards or the button beside its top right
+    # corner makes it fill the window, where its tools are.
+    v.full || return Box(width(grow=grow), Alignment.Start, fillable(v, (:block, v), Column(block_look()..., clip=true, name="Sketch", sketch_area(v)), wide=:grow))
+    full = block_button!(v, :full, :full, icon="fullscreen-exit", tip="Back to the page  esc")
     settings = [stepper(v, name) for name in shown_settings(v)]
     beside = narrow(v) || isempty(settings) ? () : (rule(), settings...)
     tools = ([block_button!(v, tool, (:tool, tool), icon=icon, tip=tip, on=v.tool == tool) for (tool, icon, tip) in SKETCH_TOOLS]..., rule(),
@@ -10157,23 +10171,30 @@ describe(v::SketchView) = begin
              (v.picked > 0 ? (block_button!(v, :delete, :delete, icon="trash", tip="Take the selected shape away  Delete"),) : ())..., full)
     # The second row is there all the time in a narrow sketch, so that the drawing stays where it is when a shape is selected
     bars = (block_bar(tools...), (narrow(v) ? (block_bar(settings..., Box(width(grow=grow))),) : ())...)
-    v.full || return Column(block_look()..., clip=true, name="Sketch", bars..., sketch_area(v))
     # In the window it takes all the room under the top bar. The wheel scrolls through a drawing that's taller than that.
     list = get!(() -> Scroll(width(grow=grow), height(grow=grow)), v.parts, :list)
     Column(width(grow=grow), height(grow=grow), Alignment.Start, background(takeoff_back()), name="Sketch", bars..., reuse!(list, sketch_area(v)))
   end
 end
 
-"Make the sketch fill the window, or put it back in the page"
+"""
+Make the sketch fill the window, or put it back in the page. In the page it
+shows only its drawing, so words that were being typed are added, no shape is
+selected, and the keyboard goes back to the text.
+"""
 full!(v::SketchView, on::Bool) = begin
   e = editor(v)
   on && unfill!(e)   # one block at a time fills the window
+  on || (settle_number!(v); answer!(v); v.picked = 0; v.draft = v.grab = nothing)
   v.full = on
   v.pinned = e.scroll.offset
   v.box = (0.0, 0.0, 0.0, 0.0)   # it's another size now, so how big it's drawn is worked out afresh
-  focus(sketch_area(v))
+  on ? focus(sketch_area(v)) : focus(e)
   handled
 end
+
+# A pinch outwards on a sketch in the page makes it fill the window
+onpinch(v::SketchView, ev::Pinch) = v.full ? nothing : pinch_open(v, ev)
 
 "How tall the drawing is in a sketch that fills the window, when its shapes need less: the window, under the top bar and the sketch's buttons"
 full_room(v::SketchView) = num(window_size(editor(v))[2] - TOPBAR_H - (narrow(v) ? 76px : 38px))
@@ -10304,7 +10325,7 @@ draw(ctx, size, ui::ConcreteRect, a::SketchArea) = begin
   s = sketch_scale(v)
   with_clip(ctx, ui.left, ui.top, ui.width, ui.height) do
     isempty(v.data.shapes) && v.draft === nothing && v.asking === nothing &&
-      write_ink(ctx, "Drag here to draw", v.box[1] + 16, v.box[2] + 28, Face(SANS, "", 13px, colours.faint, false))
+      write_ink(ctx, v.full ? "Drag here to draw" : "Click here to draw", v.box[1] + 16, v.box[2] + 28, Face(SANS, "", 13px, colours.faint, false))
     for (k, shape) in enumerate(v.data.shapes)
       k == v.editing && continue   # words that are being changed show as they're typed
       # The shape that's selected glows
@@ -10385,6 +10406,7 @@ end
 
 cursor(a::SketchArea) = begin
   v = a.of
+  v.full || return :hand   # a click makes it fill the window
   v.tool == :select || return v.tool == :text ? :ibeam : :crosshair
   v.grab !== nothing || handle_under(v, window_of(a)) !== nothing ? :hand : :arrow
 end
@@ -10392,6 +10414,8 @@ cursor(::SketchView) = :arrow
 
 onkey(a::SketchArea, ev::KeyPress{Keys.mouse_left}) = begin
   v, w = a.of, ev.window
+  # In the page, a click makes the sketch fill the window, where its tools are. With ⌥ held, the page shows its lines.
+  v.full || return held(v, Keys.opt) ? nothing : full!(v, true)
   readonly(editor(v).buf) && return handled
   p = sketch_place(v, w)
   twice = click_twice!(v, num(w.mouse[1]), num(w.mouse[2]))

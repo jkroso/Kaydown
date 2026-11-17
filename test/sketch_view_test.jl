@@ -6,7 +6,7 @@
 @use Test: @test, @testset
 @use "../main" => K
 @use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse onscroll Typed ontype
-@use "github.com/jkroso/UI.jl/Interface/draw" frame rect
+@use "github.com/jkroso/UI.jl/Interface/draw" frame rect onpinch
 @use "github.com/jkroso/UI.jl/Interface/save" save_png
 @use GeometryBasics: Vec2
 const px = K.px
@@ -44,6 +44,10 @@ block() = (s = K.block_lines(e.buf, K.SKETCH, 1); e.buf.lines[s[1]+1:s[2]-1])
 "Where a place of the sketch is in the window"
 spot(x, y) = (s = K.sketch_scale(v); (v.box[1] + x * s, v.box[2] + y * s))
 shapes() = v.data.shapes
+"True when a button of the sketch shows"
+tools() = any(k -> k isa Tuple && k[1] == :button && rect(v.parts[k]) !== nothing, keys(v.parts))
+"The button that shows beside the top right corner of the sketch while the mouse is over it, or nothing"
+corner() = (f = get(K.fills(e), objectid(v), nothing); f === nothing || f.button === nothing || rect(f.button) === nothing ? nothing : f.button)
 
 @testset "the block shows its drawing" begin
   @test length(shapes()) == 1 && shapes()[1].kind == :box && v.box[3] > 300
@@ -51,6 +55,21 @@ shapes() = v.data.shapes
   @test K.sketch_scale(v) ≈ v.box[3] / 720 && rect(v.parts[:area]).height ≈ px(K.Sketches.LEAST * K.sketch_scale(v))
   @test any(en -> en.title == "Sketch", K.outline(e.buf)) && any(x -> x isa Tuple && x[1] == "Sketch", K.INSERTS)
   @test !K.dirty(e.buf)
+end
+
+# How big it is in the page, and how far the page is scrolled, before it fills the window
+const small, offset = v.box, e.scroll.offset
+
+@testset "the page shows only the drawing, and a click makes it fill the window" begin
+  @test !v.full && !tools() && K.cursor(v.parts[:area]) == :hand
+  # While the mouse is over it, a button shows beside its top right corner
+  at(spot(300, 100))
+  @test corner() !== nothing && K.num(rect(corner()).left) > v.box[1] + v.box[3]
+  shot("corner.png")
+  # A click on it makes it fill the window, with its tools at the top. The click draws nothing.
+  click(spot(300, 100))
+  @test v.full && K.full_block(e) === v && tools() && w.focus === v.parts[:area] && corner() === nothing
+  @test length(shapes()) == 1 && !K.dirty(e.buf) && v.tool == :pen
 end
 
 @testset "the tools draw shapes" begin
@@ -110,11 +129,10 @@ end
   @test length(shapes()) == 4 && v.picked == 0 && startswith(block()[1], "pen ")
   click(spot(650, 190))   # on nothing
   @test v.picked == 0
-  # A shape that's near the bottom makes the sketch taller
+  # The drawing goes down to the window's foot, where there's room for a shape low down
   button(:line)
-  before = rect(v.parts[:area]).height
   drag(spot(50, 100), spot(60, 150), spot(80, 210))
-  @test block()[end] == "line blue 50,100 80,210" && rect(v.parts[:area]).height > before
+  @test block()[end] == "line blue 50,100 80,210" && isapprox(v.box[2] + v.box[4], 900, atol=1)
   @test e.buf.lines[end-1] == "The end."
   html = K.page_html(e)
   @test occursin("<svg", html) && occursin("<ellipse", html) && occursin(">The drain</text>", html)
@@ -221,8 +239,6 @@ end
 end
 
 @testset "a sketch that fills the window" begin
-  small, offset = v.box, e.scroll.offset
-  button(:full)
   @test v.full && K.full_block(e) === v && w.focus === v.parts[:area]
   # It's as wide as the window, and its drawing goes down to the window's foot
   @test v.box[3] ≈ 1000 && K.sketch_scale(v) ≈ 1000 / 720 && isapprox(v.box[2] + v.box[4], 900, atol=1)
@@ -244,9 +260,24 @@ end
   key(Keys.escape)
   @test v.tool == :select && v.full
   key(Keys.escape)
-  @test !v.full && K.full_block(e) === nothing && e.scroll.offset == offset
-  @test v.box[3] ≈ small[3] && v.box[4] > small[4]
-  # The button puts it back too
-  button(:full); button(:full)
-  @test !v.full
+  @test !v.full && K.full_block(e) === nothing && e.scroll.offset == offset && w.focus === e
+  # Back in the page it shows only the drawing, which is taller now, since a shape is low in it
+  @test v.box[3] ≈ small[3] && v.box[4] > small[4] && !tools()
+  shot("page.png")
+  # The button beside its corner makes it fill the window, and the last button at its top puts it back
+  at(spot(300, 100))
+  click(middle(rect(corner())))
+  @test v.full && v.tool == :select
+  button(:full)
+  @test !v.full && w.focus === e
+  # A pinch outwards on it makes it fill the window too
+  at(spot(300, 100)); onpinch(w, 1.2); frames()
+  @test v.full
+  button(:full)
+  # A click with ⌥ held shows its lines, and it stays in the page
+  s = K.block_lines(e.buf, K.SKETCH, 1)[1]
+  w.keys |= Keys.opt
+  click(spot(300, 100))
+  w.keys ⊻= Keys.opt
+  @test !v.full && e.buf.caret == (s + 1, 0)
 end

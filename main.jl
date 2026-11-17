@@ -11733,7 +11733,8 @@ With `margin`, a box that starts at the start of its line also takes in the
 space to the left of the text, like the inset of a code block. That's for a
 line that the selection came into from the line above: it keeps the left edge
 of the selection straight from one kind of line to the next. The line that the
-selection starts in has no `margin`, so its box starts where its text does.
+selection starts in has no `margin`, so its box starts where its text does. A
+selection that's all in one code block has no `margin` on any line. See `within_code`.
 """
 marks(f::Flow, x, y, (from, to, more); margin=true) = begin
   out = Rect[]
@@ -11843,11 +11844,23 @@ draw(ctx, size, ui::ConcreteRect, d::Document) = begin
 end
 
 """
+True when the selection is all in one code block, or in a file of code. The
+space to the left of the code is the block's padding. There's no line outside
+the block for the selection to line up with, so that space gets no colour.
+"""
+within_code(b::Buffer) = begin
+  lo, hi = selection(b)
+  kinds(b)[lo[1]].kind in (Kind.code, Kind.fence) && hi[1] <= codeblock(b, lo[1])[2]
+end
+
+"""
 The boxes that cover the selection on the page, whose text is at `ui`. The
 part of it that's in the cells of a table is filled here, a cell at a time.
 """
 selection_boxes(ctx, e, ui) = begin
   b = e.buf
+  # A line takes in the space left of its text only when the selection came into it from the line above
+  margins = !within_code(b)
   # The selection goes under the caret, as one shape for each run of lines that touch
   rects = Rect[]
   for it in e.layout[e.shown]
@@ -11883,8 +11896,7 @@ selection_boxes(ctx, e, ui) = begin
         push!(rects, (num(ui.left), num(top), num(ui.left + e.width), num(top + it.tall)))
     else
       sel = selected(b, it.first)
-      # A line takes in the space left of its text only when the selection came into it from the line above
-      sel === nothing || append!(rects, marks(it.content, ui.left, top, sel, margin=selection(b)[1][1] < it.first))
+      sel === nothing || append!(rects, marks(it.content, ui.left, top, sel, margin=margins && selection(b)[1][1] < it.first))
     end
   end
   rects

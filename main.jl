@@ -16747,6 +16747,11 @@ end
 # The box shows the first line of the value. A value that has more, like a
 # matrix, has an arrow in its box: click the box to show the rest under it, and
 # click again to hide it. Text that the code printed shows before the value.
+# An open box and the rest under it are one piece, with one line around both
+# and nothing between them. The rest starts under the left of the box. When the
+# window has no room for it there, it starts further left, and the box stands
+# on top of it like a tab. A box that would end just short of the right edge of
+# the rest is as wide as it takes to end there, so there's no small step.
 # A value has the colours that a code block gives Julia code: its numbers, its
 # strings and the names of its types.
 # What went wrong shows in red. On a page, a value that's a UI node shows as the
@@ -16774,6 +16779,7 @@ const OUTCOME_LINES = 30        # the most lines of a value that Julia writes
 const OUTCOME_COLS = 100        # and the most characters of each
 const OUTCOME_NODE_W = 420px    # how wide a value that's a UI node shows
 const OUTCOME_EDGE = 12px       # the least space between a box and the right edge of the window
+const OUTCOME_ROUND = 7px       # how round the corners of an open box are, and of the rest under it
 const MEMBERS = 100             # the most items of a list that the open box of an outcome lists
 const MEMBER_COLS = 80          # the most characters of a value on a line of that list
 const MEMBER_INDENT = 2         # how many characters further in the parts of a part start
@@ -16805,6 +16811,7 @@ outcome_face(size, ink=colours.ink) = Face(codefont(), codestyle(), size, ink, f
   more::Bool = false                # there's more than the box shows
   size::px = 12px                   # of its text
   high::px = 20px
+  across::px = 0px                  # how wide the box is while it's open
 end
 
 "What shows under the box of an outcome that's open: the rest of the value, the node that the value is, or the parts of the value"
@@ -16814,6 +16821,8 @@ end
   members::Any = nothing   # the Member of each part of a value that has parts, made when the box first opens
   scroll::Scroll = Scroll(width(grow=grow), height(grow=grow))   # moves through a list of parts that's taller than `MEMBERS_H`
   wide::px = 0px           # how wide that list is. Each frame sets it.
+  across::px = 0px         # how wide all of it is, with the space around what it shows. Each frame sets it.
+  corners::Any = radius(OUTCOME_ROUND)   # how round each corner is. A corner that the box stands on is square. Each frame sets it.
   tall::px = MEMBERS_H     # the tallest that the list is in the room that the window has under the box. Each frame sets it.
 end
 
@@ -16825,6 +16834,7 @@ end
   text::String = ""       # the value as Julia writes it on one line
   depth::Int = 0          # how many parts it's inside
   more::Bool = false      # the value has parts of its own
+  room::Bool = false      # a line of its list has an arrow, so each line of the list has room for one
   inside::Any = nothing   # the Member of each of them, made when the line first opens
   open::Bool = false      # they show under the line
 end
@@ -17053,7 +17063,9 @@ end
 "A line for each part of `value`, in the open box `d` of an outcome. They are `depth` parts inside the value that the code came to."
 member_lines(d, value, depth) = begin
   home = workspace(editor(d))
-  Member[own!(d, Member(of=d, name=name, value=v, text=brief_text(v; home), depth=depth, more=!isempty(members(v)))) for (name, v) in members(value)]
+  found = [(name, v, !isempty(members(v))) for (name, v) in members(value)]
+  room = any(last, found)
+  Member[own!(d, Member(of=d, name=name, value=v, text=brief_text(v; home), depth=depth, more=more, room=room)) for (name, v, more) in found]
 end
 
 "The lines that the list shows now, from the lines `rows` of the value's own parts: each of them, and under one that's open, the lines of its parts"
@@ -17072,8 +17084,14 @@ isn't there, because the list says it.
 """
 printed_rest(o::Outcome) = (lines = split(o.rest, '\n'); lines[1:clamp(o.printed - o.from + 1, 0, length(lines))])
 
-"How many characters wide the line `m` is: how far in it starts, its arrow, its name and its value"
-member_cols(m::Member) = MEMBER_INDENT * (m.depth + 1) + length(m.name) + 2 + length(m.text)
+"How many characters wide the line `m` is: how far in it starts, the room for its arrow, its name and its value"
+member_cols(m::Member) = MEMBER_INDENT * (m.depth + m.room) + length(m.name) + 2 + length(m.text)
+
+"The colour of the line around the box of `o`, and around the rest under it"
+outcome_line(o::Outcome) = o.failed ? RGBA(SPELL_RED, 0.45) : colours.line
+
+"How wide the box of `o` is when it's as wide as what it shows: its text in characters `cell` wide, its arrow, and the space around them"
+outcome_wide(o::Outcome, cell) = cell * length(o.shown) + o.size * 0.8 + 20px
 
 "What the code of the page came to, for each piece of it that ran and hasn't changed since"
 outcomes(e) = get!(() -> Outcome[], e.nodes, (:outcomes, e.buf.path))::Vector{Outcome}
@@ -17201,7 +17219,8 @@ outcome_over(e) = begin
   y0 = TOPBAR_H + PAGE_TOP - e.scroll.offset
   size = body(e).size * 0.8
   wide = measure(outcome_face(size), "0")   # every character of the font is this wide
-  high = size * 1.7
+  # A whole number of pixels, like the top of each box, so that an open box meets the rest under it with no line between them
+  high = px(round(num(size * 1.7)))
   at(top, left, node) = Row(width(grow=grow), height(grow=grow), Alignment.Start, padding(top, 0px, 0px, left), node)
   # How many characters a box that starts at `left` has room for, beside its padding, its border and its arrow
   fits(left) = floor(Int, num(w - left - OUTCOME_EDGE - 34px) / num(wide))
@@ -17215,6 +17234,7 @@ outcome_over(e) = begin
     top = y0 + it.top + line_top(f, length(f.lines)) + (vl.high - high) / 2
     # A line that ends too near the edge of the window has the box under it
     fits(left) < min(length(o.brief), 16) && ((left, top) = (x0 + vl.x, top + vl.high))
+    top = px(round(num(top)))
     # On a page that's scrolled sideways, a box that would go over the numbers of the lines doesn't show
     (top >= TOPBAR_H && top + high <= h && left >= x0 + sideways(e)) || continue
     n = max(fits(left), 1)
@@ -17224,8 +17244,7 @@ outcome_over(e) = begin
     o.from = o.shown == o.brief ? 2 : 1
     o.more = o.node !== nothing || o.subject !== nothing || o.whole !== nothing || !isempty(o.rest)
     o.size, o.high = size, high
-    push!(boxes, at(top, left, o))
-    (o.open && o.more) || continue
+    (o.open && o.more) || (push!(boxes, at(top, left, o)); continue)
     o.body === nothing && (o.body = own!(e, OutcomeBody(of=o)))
     if o.whole !== nothing
       o.body.members === nothing && (o.body.members = member_lines(o.body, o.whole, 0))
@@ -17233,11 +17252,25 @@ outcome_over(e) = begin
       cols = max(maximum(length, printed_rest(o), init=0), maximum(member_cols, unfolded(o.body.members), init=0))
       o.body.wide = min(wide * cols, w - side - 2OUTCOME_EDGE - 38px)
       # No taller than the room between the box and the bottom of the window
-      o.body.tall = clamp(h - (top + high + 3px) - OUTCOME_EDGE - 22px, size * 1.45 * MEMBERS_LEAST, MEMBERS_H)
+      o.body.tall = clamp(h - (top + high) - OUTCOME_EDGE - 10px, size * 1.45 * MEMBERS_LEAST, MEMBERS_H)
     end
-    across = o.subject !== nothing ? detail_wide(e) + 2px :
-             (o.whole !== nothing ? o.body.wide : o.node === nothing ? wide * maximum(length, split(o.rest, '\n')) : OUTCOME_NODE_W) + 22px
-    push!(bodies, at(top + high + 3px, max(side + 8px, min(left, w - across - OUTCOME_EDGE)), o.body))
+    # How wide the rest is, with the space around what it shows
+    across = o.subject !== nothing ? detail_wide(e) :
+             o.node !== nothing ? OUTCOME_NODE_W + 22px :
+             (o.whole !== nothing ? o.body.wide : wide * maximum(length, split(o.rest, '\n'))) + 19px
+    under = max(side + 8px, min(left, w - across - OUTCOME_EDGE))
+    natural = outcome_wide(o, wide)
+    # The rest that starts under the left of the box is as wide as the box, and the box as wide as the rest
+    under == left && (across = max(across, natural))
+    # A rest that ends a little to the right of the box would make a small step there. The box is wider, and ends where the rest ends.
+    step = under + across - left - natural
+    o.across = under == left ? across : 0px < step < 3OUTCOME_ROUND ? natural + step : natural
+    # A corner of the rest that the box stands on is square, so the two have one outline
+    corner(gap) = gap >= OUTCOME_ROUND ? OUTCOME_ROUND : 0px
+    o.body.across = across
+    o.body.corners = radius(corner(left - under), corner(under + across - left - o.across), OUTCOME_ROUND, OUTCOME_ROUND)
+    # The box is over the top line of the rest, so no line shows between them
+    push!(bodies, at(top + high - 1px, under, o.body), at(top, left, o))
   end
   # The rest of an open outcome goes over the boxes of the lines under it
   (boxes..., bodies...)
@@ -17275,10 +17308,18 @@ describe(o::Outcome) = begin
   arrow = o.more ? (Icon(o.open ? "chevron-down" : "chevron-right", size=o.size * 0.8, color=colours.dim),) : ()
   what = isempty(o.full) && o.node === nothing ? Box(Icon("check", size=o.size, color=colours.dim)) :
          value_row(o.shown, o, code=isvalue(o, 1) && o.node === nothing)
-  Row(height(o.high), padding(7px, 0px), child_gap=4px, Alignment.Center, radius(5px), name="Outcome",
-      background(o.more && ishovered(o) ? colours.hover : colours.float),
-      border(1px, :solid, o.failed ? RGBA(SPELL_RED, 0.45) : colours.line),
-      arrow..., what)
+  joined = o.open && o.more
+  fill = o.more && ishovered(o) ? colours.hover : colours.float
+  box(parts...; name="") = Row(parts..., padding(7px, 0px), child_gap=4px, Alignment.Center, name=name,
+                               joined ? radius(OUTCOME_ROUND, OUTCOME_ROUND, 0px, 0px) : radius(5px),
+                               background(fill), border(1px, :solid, outcome_line(o)), arrow..., what)
+  joined || return box(height(o.high), name="Outcome")
+  # An open box is one piece with the rest under it. Its bottom corners are square, and a strip of its
+  # own colour is over the line along its bottom. A line on only three sides would have no round corners.
+  Stack(fixed(o.across), height(o.high), name="Outcome",
+        box(width(grow=grow), height(grow=grow)),
+        Column(width(grow=grow), height(grow=grow), padding(1px, 0px),
+               Box(width(grow=grow), height(grow=grow)), Box(width(grow=grow), height(1px), background(fill))))
 end
 
 describe(d::OutcomeBody) = begin
@@ -17287,7 +17328,9 @@ describe(d::OutcomeBody) = begin
   inner = d.members !== nothing ? members_view(d) :
           o.node !== nothing ? Box(fixed(OUTCOME_NODE_W), Alignment.Start, o.node) :
           Column(Alignment.Start, [value_row(line, o, code=isvalue(o, o.from + k - 1)) for (k, line) in enumerate(split(o.rest, '\n'))]...)
-  Box(padding(10px, 8px), radius(7px), background(colours.float), border(1px, :solid, colours.line), lifted, Alignment.Start,
+  # Text and the lines of a list start under the arrow of the box
+  around = o.node !== nothing ? padding(10px, 8px) : padding(3px, 10px, 6px, 7px)
+  Box(fixed(d.across), around, d.corners, background(colours.float), border(1px, :solid, outcome_line(o)), lifted, Alignment.Start,
       name="Outcome body", inner)
 end
 
@@ -17304,7 +17347,7 @@ members_view(d::OutcomeBody) = begin
   lines = unfolded(d.members)
   high = o.size * 1.45 * (length(said) + length(lines))
   inside = Column(width(grow=grow), Alignment.Start, said..., lines...)
-  Box(fixed(d.wide), height(min(high, d.tall)), Alignment.Start, clip=true, reuse!(d.scroll, inside))
+  Box(width(grow=grow), height(min(high, d.tall)), Alignment.Start, clip=true, reuse!(d.scroll, inside))
 end
 
 describe(m::Member) = begin
@@ -17314,7 +17357,7 @@ describe(m::Member) = begin
   arrow = m.more ? (Icon(m.open ? "chevron-down" : "chevron-right", size=o.size * 0.7, color=colours.dim),) : ()
   Row(width(grow=grow), height(o.size * 1.45), Alignment.Center, radius(4px), name="Outcome part",
       padding(0px, 0px, 0px, cell * MEMBER_INDENT * m.depth), background(m.more && ishovered(m) ? colours.hover : clear),
-      Box(fixed(cell * MEMBER_INDENT), height(o.size * 1.45), arrow...),
+      (m.room ? (Box(fixed(cell * MEMBER_INDENT), height(o.size * 1.45), arrow...),) : ())...,
       value_parts(m.name, face, code=false)..., value_parts(": ", Face(face, color=colours.dim), code=false)...,
       value_parts(m.text, face)...)
 end
@@ -17977,7 +18020,7 @@ detail_view(e, d::OutcomeBody) = begin
     (Row(width(grow=grow), height(SEARCH_H), Alignment.Center, padding(DETAIL_PAD, 0px), child_gap=8px,
          border(1px, :solid, colours.line)[:bottom],
          Icon("search", size=13px, color=colours.dim), Box(width(grow=grow), height(SEARCH_H - 12px), t.search)),)
-  Column(fixed(detail_wide(e)), Alignment.Start, radius(7px), background(colours.float), border(1px, :solid, colours.line), lifted,
+  Column(fixed(detail_wide(e)), Alignment.Start, d.corners, background(colours.float), border(1px, :solid, colours.line), lifted,
          clip=true, name="Outcome detail",
          field..., Box(width(grow=grow), height(high), reuse!(t.scroll, inside)))
 end

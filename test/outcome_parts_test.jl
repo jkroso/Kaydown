@@ -108,6 +108,64 @@ end
   close(v.w)
 end
 
+@testset "an open box and the rest under it are one piece" begin
+  v = opened(file)
+  o = outcome(v, 11)
+  closed = rect(o)
+  cell = K.measure(K.outcome_face(o.size), "0")
+  @test K.num(closed.width) ≈ K.num(K.outcome_wide(o, cell)) atol=0.5
+  click(v, middle(rect(o)))
+  r, b = rect(o), rect(o.body)
+  # No space between them: the rest starts on the bottom line of the box
+  @test K.num(b.top) ≈ K.num(r.top) + K.num(r.height) - 1 atol=0.5
+  # They start at the same place and are as wide as each other
+  @test K.num(b.left) ≈ K.num(r.left) atol=0.5
+  @test K.num(b.width) ≈ K.num(r.width) atol=0.5
+  @test K.num(r.width) >= K.num(closed.width) - 0.5
+  @test o.body.corners == K.radius(0px, 0px, K.OUTCOME_ROUND, K.OUTCOME_ROUND)
+  # The fields start under the arrow of the box, with no empty room on their left
+  m = line(o, "long")
+  @test !m.room
+  @test 6 <= K.num(rect(m).left) - K.num(r.left) <= 9
+  shot(v, "joined")
+  click(v, middle(rect(o)))
+  @test K.num(rect(o).width) ≈ K.num(closed.width) atol=0.5   # closed, the box is as wide as what it shows
+  # A list that has a line with an arrow gives each of its lines room for one
+  o = outcome(v, 12)
+  only!(v, o)
+  @test all(m -> m.room, o.body.members)
+  # This box is near the right edge of the window, so the rest starts further left, and the box stands on it
+  r, b = rect(o), rect(o.body)
+  @test K.num(b.left) < K.num(r.left)
+  @test K.num(b.top) ≈ K.num(r.top) + K.num(r.height) - 1 atol=0.5
+  @test K.num(b.left) + K.num(b.width) <= 1000
+  @test o.body.corners.tl == K.OUTCOME_ROUND
+  # The box ends where the rest ends, with no small step between their right edges
+  @test K.num(r.left) + K.num(r.width) ≈ K.num(b.left) + K.num(b.width) atol=0.5
+  @test o.body.corners.tr == 0px
+  shot(v, "tab")
+  # A box of text is one piece with its lines too
+  o = outcome(v, 15)
+  only!(v, o)
+  r, b = rect(o), rect(o.body)
+  @test K.num(b.top) ≈ K.num(r.top) + K.num(r.height) - 1 atol=0.5
+  @test K.num(b.left) ≈ K.num(r.left) atol=0.5
+  @test K.num(b.width) ≈ K.num(r.width) atol=0.5
+  shot(v, "text")
+  # And so is the box of a function, with its documentation and its methods
+  K.outcome!(v.e, (v.from + 16):(v.from + 16), "length")
+  o = outcome(v, 17)
+  only!(v, o)
+  r, b = rect(o), rect(o.body)
+  @test K.num(b.top) ≈ K.num(r.top) + K.num(r.height) - 1 atol=0.5
+  @test K.num(b.left) < K.num(r.left) && K.num(b.left) + K.num(b.width) <= 1000
+  # This box ends far from the right edge of the rest, so it's as wide as what it shows, and the corner of the rest there is round
+  @test K.num(r.width) ≈ K.num(K.outcome_wide(o, cell)) atol=0.5
+  @test o.body.corners.tr == K.OUTCOME_ROUND
+  shot(v, "function")
+  close(v.w)
+end
+
 @testset "a line whose value has parts opens to show them" begin
   v = opened(file)
   o = outcome(v, 12)

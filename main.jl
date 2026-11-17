@@ -147,6 +147,7 @@
 @use "github.com/jkroso/Prospects.jl" @def
 @use "github.com/jkroso/MiniFB.jl/skia" measure_text rectangle rounded_rectangle sk_color fontmgr
 @use Skia
+@use GLFW
 @use "github.com/jkroso/MiniFB.jl"... onfiledrop onscroll
 @use "github.com/jkroso/UI.jl/Interface/Geometric"...
 @use "github.com/jkroso/UI.jl/Interface/Specific"...
@@ -875,6 +876,7 @@ isspread(g::Grid) = g.head > 0px
   plain::Bool = false                   # the part of the page with the caret shows its markup: plain text, and not rich text
   spelling::Bool = true                 # put a line of dots under each word that's spelt wrong
   updates::Bool = true                  # the app looks for a newer version of itself, and gets it, without being asked
+  autosave::Bool = false                # a page is written to its file when its window stops being the front window
   wrap::Bool = true                     # a line of a file of code that's too long for the window goes on under itself
   numbers::Bool = true                  # a file of code shows the number of each line beside it
   shade::Bool = false                   # the line of a file of code that the caret is on is shaded
@@ -2910,6 +2912,9 @@ sandbox(e) = get!(e.nodes, :sandbox) do
   # ... and whether the page checks its spelling
   Core.eval(m, :(const page_spelling = $(() -> (reads!(e, :spelling); e.spelling))))
   Core.eval(m, :(const page_spelling! = $(on -> spelling!(e, Bool(on)))))
+  # ... and whether a page is written to its file when its window stops being the front window
+  Core.eval(m, :(const page_autosave = $(() -> (reads!(e, :autosave); e.autosave))))
+  Core.eval(m, :(const page_autosave! = $(on -> autosave!(e, Bool(on)))))
   # ... and whether a line of a file of code that's too long for the window goes on under itself
   Core.eval(m, :(const code_wrap = $(() -> (reads!(e, :wrap); e.wrap))))
   Core.eval(m, :(const code_wrap! = $(on -> wrap!(e, Bool(on)))))
@@ -17723,7 +17728,7 @@ end
 const pages_dir = Ref(joinpath(@__DIR__, "pages"))
 
 "The settings that every window has the same: each is a field of the editor"
-const SHARED = (:theme, :font, :weight, :zoom, :widest, :stat, :plain, :spelling, :updates, :wrap, :numbers, :shade, :indent, :code_scale, :code_font, :code_weight, :guide, :bundle, :rebound, :side, :hidden)
+const SHARED = (:theme, :font, :weight, :zoom, :widest, :stat, :plain, :spelling, :updates, :autosave, :wrap, :numbers, :shade, :indent, :code_scale, :code_font, :code_weight, :guide, :bundle, :rebound, :side, :hidden)
 
 "The pages of the settings, in the order of their tabs: the name of each page's file, and what its tab says"
 const SETTINGS_PAGES = ("settings.md" => "General", "code-editor.md" => "Code editor", "key-bindings.md" => "Key bindings", "email.md" => "Email")
@@ -17813,7 +17818,7 @@ save_settings!(e) = begin
     mkpath(dirname(settings_file()))
     # After the bundle of key bindings comes a line for each command that has other keys than the bundle's, like key.save=ctrl+s
     changed = join(["key.$name=$(e.rebound[name])\n" for name in sort!(collect(keys(e.rebound)))])
-    write(settings_file(), "theme=$(e.theme)\nfont=$(e.font)\nweight=$(e.weight)\nzoom=$(e.zoom)\nwidth=$(e.widest.value)\ncount=$(e.stat)\nplain=$(e.plain)\nspelling=$(e.spelling)\nupdates=$(e.updates)\nwrap=$(e.wrap)\nnumbers=$(e.numbers)\nshade=$(e.shade)\nindent=$(e.indent)\ncode=$(e.code_scale)\ncodefont=$(e.code_font)\ncodeweight=$(e.code_weight)\nguide=$(e.guide)\nsidebar=$(e.side.value)\nhidden=$(e.hidden)\nkeys=$(e.bundle)\n$changed")
+    write(settings_file(), "theme=$(e.theme)\nfont=$(e.font)\nweight=$(e.weight)\nzoom=$(e.zoom)\nwidth=$(e.widest.value)\ncount=$(e.stat)\nplain=$(e.plain)\nspelling=$(e.spelling)\nupdates=$(e.updates)\nautosave=$(e.autosave)\nwrap=$(e.wrap)\nnumbers=$(e.numbers)\nshade=$(e.shade)\nindent=$(e.indent)\ncode=$(e.code_scale)\ncodefont=$(e.code_font)\ncodeweight=$(e.code_weight)\nguide=$(e.guide)\nsidebar=$(e.side.value)\nhidden=$(e.hidden)\nkeys=$(e.bundle)\n$changed")
   catch
     # A file that can't be written only means the settings last as long as the window
   end
@@ -17910,6 +17915,8 @@ load_settings!(e) = begin
       e.spelling = value != "false"
     elseif name == "updates"
       e.updates = value != "false"
+    elseif name == "autosave"
+      e.autosave = value == "true"
     elseif name == "wrap"
       e.wrap = value != "false"
     elseif name == "numbers"
@@ -17971,7 +17978,47 @@ open_editor(args) = begin
 end
 
 # The close, minimise and zoom buttons line up with the sidebar's button, in the middle of the top bar
-onopen(::Editor, w::Window) = place_window_buttons!(hide_titlebar!(w), TOPBAR_H / 2, TOPBAR_H / 2)
+onopen(e::Editor, w::Window) = (watch_front!(e, w); place_window_buttons!(hide_titlebar!(w), TOPBAR_H / 2, TOPBAR_H / 2))
+
+# --- saving a page when you leave its window ------------------------------------------------
+#
+# Kaydown writes a page to its file when you press ⌘S, and at no other time.
+# A setting changes that: with it on, a window writes its pages when it stops
+# being the front window. That's when you click another window, change to
+# another app, or hide Kaydown. A page with no file has nowhere to go, so it
+# stays as it is.
+
+"Turn on or off whether a page is written to its file when its window stops being the front window"
+autosave!(e, on::Bool) = (e.autosave = on; save_settings!(e); rerun!(e, :autosave); e)
+
+"""
+The window of `e` stopped being the front window. With the setting on, each
+page of the window that has changes is written to its file. The settings
+window has no page of yours.
+"""
+left!(e) = begin
+  (e.autosave && !issettings(e)) || return e
+  write_blocks!(e)   # a block's own changes count as changes to the page
+  dirty(e.buf) && save_page!(e)
+  foreach(b -> b === e.buf || !dirty(b) || save!(b), values(e.buffers))
+  redraw_in!(e, 0)   # the top bar no longer says that the page has changes
+  e
+end
+
+"Have macOS tell `e` when its window `w` stops being the front window. A window that isn't on the screen is never the front one."
+watch_front!(e, w) = begin
+  isempty(w.glfw) && return w
+  GLFW.SetWindowFocusCallback(w.glfw[1], (_, front) -> begin
+    front && return
+    try
+      Base.invokelatest(left!, e)
+    catch
+      # A page that can't be written stays as it is, with its changes, for ⌘S to try
+    end
+    nothing
+  end)
+  w
+end
 
 const PAGE_AREA_W = 850px   # the width of the page's part of a new window: room for the page at the width it starts with, and the space beside it
 

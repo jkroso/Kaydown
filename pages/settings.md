@@ -66,6 +66,14 @@ Checkbox(label="Check spelling", checked=page_spelling(), onchange=box -> page_s
 
 With this on, a word that the Mac's dictionary doesn't have gets a line of red dots under it. Right-click the word to see the words it may have been meant to be, or to teach the dictionary the word. Code isn't checked.
 
+## Saving
+
+```ui
+Checkbox(label="Save a page when I leave its window", checked=page_autosave(), onchange=box -> page_autosave!(box.checked))
+```
+
+Kaydown writes a page to its file when you press ⌘S. With this on, it also writes the pages of a window when you click another window or change to another app. A page that has no file yet stays as it is.
+
 ## Default app
 
 ```ui

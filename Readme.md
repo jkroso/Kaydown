@@ -229,6 +229,10 @@ Kaydown asks before it runs the code of a GitHub repository for the first time. 
 
 `pages/progress.jl` is a kind of block to copy, and `pages/welcome.md` shows it. The comment over `FileBlock` in `main.jl` says how it works.
 
+## Save a page when you leave its window
+
+Kaydown writes a page to its file when you press ⌘S, and at no other time. The settings page has a box that changes that: **Save a page when I leave its window**. With it on, a window writes each of its pages that has changes when it stops being the front window: when you click another window, or change to another app. A page that has no file yet stays as it is. Closing a window doesn't save its pages.
+
 ## Test it
 
 ```sh
@@ -273,6 +277,7 @@ julia -O0 --project=. test/find_view_test.jl      # the list in the page, and a 
 julia -O0 --project=. test/sketch_test.jl         # how a sketch is read and written, and what a click is on
 julia -O0 --project=. test/sketch_view_test.jl    # the tools of a sketch: drawing, moving and deleting shapes
 julia -O0 --project=. test/file_block_test.jl     # a kind of block that a file defines: what it shows, and what goes back into its lines
+julia -O0 --project=. test/autosave_test.jl       # the setting that saves a page when you leave its window
 julia -O0 --project=. test/emails_test.jl         # how a list of emails is read and written, and which emails it asks for
 julia -O0 --project=. test/emails_view_test.jl    # the list of the emails with a person, in a page
 julia -O0 --project=. test/mime_test.jl           # how an email becomes the page that a window shows, and a page an email

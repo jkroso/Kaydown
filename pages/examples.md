@@ -66,6 +66,6 @@ The block at the top of this page is front matter: lines at the very top of a fi
 ## The window and its settings
 
 - [The list of files, the files that aren't pages, the menus, printing and the app's updates](welcome.md#files-menus-and-settings)
-- [The colours, the font, the size of the text and the width of the page](settings.md)
+- [The colours, the font, the size of the text, the width of the page, and saving a page when you leave its window](settings.md)
 - [How code shows](code-editor.md)
 - [The keys of each command](key-bindings.md)

@@ -1,8 +1,9 @@
-# Tests for the top bar while something fills the window: a schedule or a
-# diagram. The sidebar isn't there then, so the bar has none of the sidebar's
-# buttons. Run them with `julia -O0 --project=. test/full_bar_test.jl`. They
-# draw in a window that isn't on the screen. Set `KAYDOWN_SHOTS` to a folder,
-# and they save a picture of each step there.
+# Tests for the top bar while something fills the window: a schedule, the
+# lines of a schedule as text, or a diagram. The sidebar isn't there then, so
+# the bar has none of the sidebar's buttons. Run them with
+# `julia -O0 --project=. test/full_bar_test.jl`. They draw in a window that
+# isn't on the screen. Set `KAYDOWN_SHOTS` to a folder, and they save a
+# picture of each step there.
 
 @use Test: @test, @testset
 @use "../main" => K
@@ -69,6 +70,17 @@ end
   # Back in the page, the buttons come back
   K.full!(v, false); frames()
   @test !K.filled(e) && buttons() == SIDEBAR_BUTTONS && !centred()
+end
+
+@testset "the lines of a schedule that fill the window" begin
+  K.full!(v, true); frames()
+  K.level!(e); frames()
+  @test K.lowered(e) !== nothing && !v.full && K.filled(e)
+  @test isempty(buttons()) && centred()
+  shot("bar-lines.png")
+  key(Keys.escape)
+  @test K.lowered(e) === nothing && buttons() == SIDEBAR_BUTTONS
+  K.plain!(e, false); frames()
 end
 
 @testset "a diagram that fills the window" begin

@@ -14885,9 +14885,9 @@ history_buttons(e) = e.panel ? (button(e, :back, "arrow-left"), button(e, :forwa
 
 """
 True when something fills the window in place of the page and the sidebar: a
-takeoff or a schedule, or a picture.
+takeoff, a schedule or a sketch, the lines of one as text, or a picture.
 """
-filled(e) = full_block(e) !== nothing || zooming(e) !== nothing
+filled(e) = full_block(e) !== nothing || lowered(e) !== nothing || zooming(e) !== nothing
 
 describe(t::TopBar) = begin
   e = editor(t)

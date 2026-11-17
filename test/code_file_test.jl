@@ -131,6 +131,171 @@ end
   key(Keys.z, Keys.cmd)
 end
 
+@testset "a bracket or a quote that's typed in code comes with the one that closes it" begin
+  b = e.buf
+  kept = copy(b.lines)
+  # Line 10 is empty. Each check starts with `text` there, and the caret at `col` of it.
+  line!(text="", col=length(text)) = begin
+    K.edit!(b, (10, 0), (length(b.lines), length(b.lines[end])), text)
+    caret!(10, col)
+  end
+  line!()
+  typed("f(")
+  @test b.lines[10] == "f()" && b.caret == (10, 2)
+  typed("x")
+  typed(")")   # the bracket that's there isn't typed again
+  @test b.lines[10] == "f(x)" && b.caret == (10, 4)
+  line!()
+  typed("a[{")
+  @test b.lines[10] == "a[{}]" && b.caret == (10, 3)
+  line!()
+  typed("s = \"")
+  @test b.lines[10] == "s = \"\"" && b.caret == (10, 5)
+  typed("hi\"")
+  @test b.lines[10] == "s = \"hi\"" && b.caret == (10, 8)
+  # A whole line that's typed one key after another is the line
+  line!()
+  typed("Text(c.count == 1 ? \"Clicked 1 time\" : \"Clicked \$(c.count) times\", size=[15px, 'a'])")
+  @test b.lines[10] == "Text(c.count == 1 ? \"Clicked 1 time\" : \"Clicked \$(c.count) times\", size=[15px, 'a'])"
+  # A string that has a name before it
+  line!()
+  typed("colorant\"")
+  @test b.lines[10] == "colorant\"\""
+  # Before a word, the bracket comes alone
+  line!("name", 0)
+  typed("(")
+  @test b.lines[10] == "(name"
+  line!("f(name)", 2)
+  typed("\"")
+  @test b.lines[10] == "f(\"name)"
+  # A quote in a string ends the string
+  line!("s = \"hi")
+  typed("\"")
+  @test b.lines[10] == "s = \"hi\""
+  # ... and a bracket in a string still comes with its other one
+  line!("s = \"n = \"", 9)
+  typed("\$(")
+  @test b.lines[10] == "s = \"n = \$()\"" && b.caret == (10, 11)
+  # A ' after a name is a transpose. After a space it starts a character.
+  line!()
+  typed("x'")
+  @test b.lines[10] == "x'"
+  typed(" * f(x)'")
+  @test b.lines[10] == "x' * f(x)'"
+  line!()
+  typed("c = '")
+  @test b.lines[10] == "c = ''" && b.caret == (10, 5)
+  # Three quotes start a string of several lines, and bring the three that end it
+  line!()
+  typed("\"\"\"")
+  @test b.lines[10] == "\"\"\"\"\"\"" && b.caret == (10, 3)
+  typed("doc\"\"\"")
+  @test b.lines[10] == "\"\"\"doc\"\"\"" && b.caret == (10, 9)
+  # ... but three quotes that end such a string come alone
+  line!("\"\"\"\ndoc\n")
+  caret!(12)
+  typed("\"\"\"")
+  @test b.lines[12] == "\"\"\""
+  # A bracket goes round the text that's selected, and the text stays selected
+  line!("a + b")
+  b.anchor = (10, 0); frames()
+  typed("(")
+  @test b.lines[10] == "(a + b)" && (b.caret, b.anchor) == ((10, 6), (10, 1))
+  typed("\"")
+  @test b.lines[10] == "(\"a + b\")" && (b.caret, b.anchor) == ((10, 7), (10, 2))
+  # ⌫ between the two of an empty pair takes both away
+  line!()
+  typed("f(")
+  key(Keys.backspace)
+  @test b.lines[10] == "f" && b.caret == (10, 1)
+  typed("(x")
+  key(Keys.backspace)
+  @test b.lines[10] == "f()"
+  # With two carets, each bracket gets its own closing bracket
+  line!("a\nb", 1)
+  b.caret = b.anchor = (10, 1)
+  push!(b.others, ((11, 1), (11, 1))); K.keep_others!(b); frames()
+  typed("(1)")
+  @test b.lines[10:11] == ["a(1)", "b(1)"]
+  line!()
+  @test b.lines == kept
+  # A code block of a page does the same, and the page's words don't
+  K.open!(e, notes); frames()
+  K.focus(e)
+  b = e.buf
+  caret!(4, length(b.lines[4]))
+  typed(" + f(")
+  @test b.lines[4] == "wall_length = 4.2 + f()"
+  caret!(1, length(b.lines[1]))
+  typed(" (")
+  @test b.lines[1] == "# Notes ("
+  foreach(_ -> key(Keys.z, Keys.cmd), 1:4)
+  K.open!(e, file); frames()
+  K.focus(e)
+end
+
+@testset "the two brackets that the caret is between glow" begin
+  b = e.buf
+  kept = copy(b.lines)
+  line!(text) = (K.edit!(b, (10, 0), (length(b.lines), length(b.lines[end])), text); frames())
+  pair(i, col) = (caret!(i, col); K.caret_pair(e))
+  line!("f(a, [b, c], \"x)\") # (d")
+  @test pair(10, 2) == ((10, 1), (10, 17))
+  @test pair(10, 6) == ((10, 5), (10, 10))
+  @test pair(10, 10) == ((10, 5), (10, 10))   # just before the ] the caret is still between the two
+  @test pair(10, 11) == ((10, 1), (10, 17))   # ... and after it, the caret is between the outer two
+  @test pair(10, 12) == ((10, 1), (10, 17))   # the ) in the string doesn't close the (
+  @test pair(10, 1) === nothing && pair(10, 18) === nothing   # outside every bracket
+  @test pair(10, 15) === nothing   # in the string, whose ) has no ( in a string
+  @test pair(10, 23) === nothing   # in the comment, whose ( has no )
+  @test pair(9, 5) == ((9, 4), (9, 29))
+  # The brackets of a string are a pair for a caret that's in the string
+  line!("colorant\"rgb(1,2)\"")
+  @test pair(10, 13) == ((10, 12), (10, 16))
+  # ... and code in a string has the code's brackets
+  line!("\"n = \$(f(x))\"")
+  @test pair(10, 7) == ((10, 6), (10, 11))
+  @test pair(10, 9) == ((10, 8), (10, 10))
+  # The two can be on different lines
+  line!("f(a,\n  g[1],\n  b)")
+  @test pair(11, 2) == ((10, 1), (12, 3))
+  @test pair(11, 4) == ((11, 3), (11, 5))
+  @test pair(12, 3) == ((10, 1), (12, 3))
+  shot("brackets")
+  # A bracket that another kind of bracket closes doesn't glow, and nothing glows while text is selected
+  line!("f(a]")
+  @test pair(10, 2) === nothing
+  line!("f(a)")
+  @test pair(10, 2) == ((10, 1), (10, 3))
+  b.anchor = (10, 3); frames()
+  @test K.caret_pair(e) === nothing
+  # The bracket that typing brings is found as soon as it's there
+  line!("")
+  caret!(10)
+  typed("g(")
+  @test K.caret_pair(e) == ((10, 1), (10, 2))
+  # Two brackets that touch glow as one run of text, and two that don't are a run each
+  @test K.bracket_runs(((10, 1), (10, 2))) == [(10, 1, 3)]
+  @test K.bracket_runs(((10, 1), (10, 3))) == [(10, 1, 2), (10, 3, 4)]
+  @test K.bracket_runs(((10, 1), (11, 2))) == [(10, 1, 2), (11, 2, 3)]
+  shot("brackets-typed")
+  line!("")
+  @test b.lines == kept
+  # In a page, the brackets are those of the code block that the caret is in
+  K.open!(e, notes); frames()
+  K.focus(e)
+  b = e.buf
+  caret!(4, length(b.lines[4]))
+  typed(" + f(")
+  @test K.caret_pair(e) == ((4, 21), (4, 22))
+  caret!(1, length(b.lines[1]))
+  typed(" (x)")
+  @test pair(1, 10) === nothing   # the brackets in the page's words don't glow
+  foreach(_ -> key(Keys.z, Keys.cmd), 1:4)
+  K.open!(e, file); frames()
+  K.focus(e)
+end
+
 @testset "a file that isn't Julia, and one that isn't text, are only shown" begin
   K.open!(e, joinpath(dir, "walls.py")); frames()
   @test e.buf.view == :text && K.readonly(e.buf)

@@ -3926,7 +3926,8 @@ end
 #
 # A Julia file is one block of code, with no lines that open and close it. You
 # type in it as in a `julia` code block of a page: ⌘Return runs the expression
-# that the caret is in, a list offers names, and ⌘S writes the file.
+# that the caret is in, a list offers names, a bracket comes with the bracket
+# that closes it, and ⌘S writes the file.
 #
 #   - A file of text shows its text. A file of code has the colours that a code
 #     block has. You can select the text, copy it and find words in it.
@@ -11832,6 +11833,7 @@ draw(ctx, size, ui::ConcreteRect, d::Document) = begin
   with_others(() -> fill_selection(ctx, selection_boxes(ctx, e, ui)), b)
   ring_part(ctx, e, ui)
   annotate(ctx, e, ui)
+  glow_bracket_pair(ctx, e, ui)
   # A file that's only shown has a selection and no caret. So has a page that's never changed.
   if !(caretless(b) || readonly(b))
     carets(ctx, e, ui)
@@ -12554,6 +12556,233 @@ end
 # In a table the spaces belong to a cell
 backstep(b::Buffer, ::Type{Table}, n=0) = beside(b, b.caret, -1)
 
+# In code, a bracket that you type comes with the bracket that closes it, and
+# the caret stays between the two. A quote comes with the quote that ends the
+# string. This is so in a file of code and in a code block of a page.
+#
+#   - The closing one only comes where it can't join a word: at the end of the
+#     line, or before a space, a comma or another closing bracket.
+#   - A closing bracket or a quote that you type where the same one already is
+#     goes over that one. So `f(x)` typed one key after another is `f(x)`.
+#   - With text selected, a bracket or a quote goes round the text, and the
+#     text stays selected.
+#   - A quote that's typed in a string ends the string, and comes alone. A ' after
+#     a name is Julia's transpose, or the ' of a word like "don't", and comes alone too.
+#   - A third quote after two makes the six quotes of a string of several lines.
+#   - ⌫ between the two of a pair that has nothing in it takes both away.
+
+const PAIRS = Dict('(' => ')', '[' => ']', '{' => '}', '"' => '"', '\'' => '\'')
+const CLOSING = Set(values(PAIRS))
+
+"True when line `i` is code that's typed as text. A row of a sheet or a spreadsheet is typed as a cell."
+typed_code(b::Buffer, i::Int) = kinds(b)[i].kind == Kind.code && !insheet(b, i) && !inspread(b, i)
+
+"How many quotes in `text` start or end a string. One after a \\ is a character of its string."
+quotes(text::AbstractString) = count(r"(?<!\\)\"", text)
+
+"True when line `i` up to `before` is inside a string of several lines: an odd number of \"\"\" come before it in its code"
+in_long_string(b::Buffer, i::Int, before::AbstractString) = begin
+  top = b.view == :code ? 1 : codeblock(b, i)[1] + 1
+  isodd(sum(l -> count("\"\"\"", l), @view(b.lines[top:i-1]), init=0) + count("\"\"\"", before))
+end
+
+"""
+Type the character `c` at the caret, as code does: a bracket or a quote comes
+with the one that closes it. It returns false, and types nothing, where `c` is
+typed as any other character is.
+"""
+pair!(e, c::Char) = begin
+  b = e.buf
+  picked(b) === nothing || return false
+  lo, hi = minmax(b.caret, b.anchor)
+  all(i -> typed_code(b, i), lo[1]:hi[1]) || return false
+  close = get(PAIRS, c, nothing)
+  if lo != hi
+    # A bracket or a quote goes round the text that's selected, and the text stays selected
+    close === nothing && return false
+    back = b.caret < b.anchor
+    edit!(b, lo, hi, c * excerpt(b, lo, hi) * close)
+    from, to = (lo[1], lo[2] + 1), (hi[1], hi[2] + (lo[1] == hi[1]))
+    b.anchor, b.caret = back ? (to, from) : (from, to)
+    touch!(e)
+    return true
+  end
+  i, col = lo
+  before, after = head(b.lines[i], col), rest(b.lines[i], col)
+  next = isempty(after) ? nothing : first(after)
+  if next == c && c in CLOSING
+    # The one that closes is already here, so the caret goes over it
+    b.caret = b.anchor = (i, col + 1)
+    touch!(e)
+    return true
+  end
+  close === nothing && return false
+  # Before a word, the one that closes would have to be moved to the word's end by hand
+  roomy = next === nothing || isspace(next) || next in ")]},;:" || (c in "([{" && next == '"')
+  roomy || return false
+  if c == '"' && endswith(before, "\"\"") && !endswith(before, "\"\"\"")
+    # The third quote of three. It starts a string of several lines, or it ends the one that the caret is in.
+    in_long_string(b, i, chop(before, tail=2)) && return false
+    close = "\"\"\""
+  elseif c == '"'
+    isodd(quotes(before)) && return false   # this quote ends a string
+  elseif c == '\'' && !isempty(before)
+    prev = last(before)
+    (isnamechar(prev) || prev in ")]}'") && return false
+  end
+  edit!(b, lo, lo, c * close, typing=true)
+  b.caret = b.anchor = (i, col + 1)
+  touch!(e)
+  true
+end
+
+"True when the caret is in code between a bracket or a quote and the one that closes it, with nothing between them"
+in_empty_pair(b::Buffer) = begin
+  i, col = b.caret
+  line = b.lines[i]
+  (!selecting(b) && 0 < col < length(line) && typed_code(b, i)) || return false
+  at = nextind(line, 0, col)
+  get(PAIRS, line[at], nothing) == line[nextind(line, at)]
+end
+
+# In code, the two brackets that the caret is between glow: the nearest ( [
+# or { before the caret that's still open there, and the bracket that closes
+# it. The two can be on different lines. Each has a soft light in its own
+# shape, in the colour of a link, and two that touch have one light.
+#
+#   - A bracket in a string or a comment isn't one of the code's brackets. With
+#     the caret in a string or a comment, the brackets are the ones in the
+#     strings or the comments of the caret's line.
+#   - A bracket that's closed by another kind of bracket doesn't glow.
+#   - Nothing glows while text is selected.
+
+const PAIR_REACH = 2000   # lines. A bracket that's further from the caret than this isn't looked for.
+const OPENING, ENDING = "([{", ")]}"
+
+"What each character of line `i` is a part of: :code, :string or :comment"
+parts_of(b::Buffer, i::Int) = begin
+  out = Symbol[]
+  for t in tokens(b.lines[i], shared_lang(kinds(b)[i].lang))
+    append!(out, fill(t.kind in (:string, :comment) ? t.kind : :code, length(t.text)))
+  end
+  out
+end
+
+"""
+The places of the two brackets that the caret is between, in code: the one that
+opens and the one that closes. Nothing when the caret isn't between two.
+"""
+bracket_pair(b::Buffer) = begin
+  i, col = b.caret
+  (!selecting(b) && picked(b) === nothing && typed_code(b, i)) || return nothing
+  here = parts_of(b, i)
+  col = min(col, length(here))   # a caret that a change left past the end of its line is at the end
+  before = col > 0 ? here[col] : :code
+  after = col < length(here) ? here[col+1] : before == :comment ? :comment : :code
+  # At the edge of a string, the caret is in the code
+  part = before == after ? before : :code
+  top, bottom = b.view == :code ? (1, length(b.lines)) : codeblock(b, i) .+ (1, -1)
+  top, bottom = part == :code ? (max(top, i - PAIR_REACH), min(bottom, i + PAIR_REACH)) : (i, i)
+  # The characters of line `l` that are brackets of the caret's part, or nothing when it has none
+  brackets(l) = begin
+    any(in("()[]{}"), b.lines[l]) || return nothing
+    parts = l == i ? here : parts_of(b, l)
+    [(k, c) for (k, c) in enumerate(b.lines[l]) if (c in OPENING || c in ENDING) && parts[k] == part]
+  end
+  open = nothing
+  closed = Char[]   # the brackets between the caret and here that close one before here
+  for l in i:-1:top
+    found = brackets(l)
+    found === nothing && continue
+    for (k, c) in Iterators.reverse(found)
+      l == i && k > col && continue
+      if c in ENDING
+        push!(closed, c)
+      elseif isempty(closed)
+        open = (l, k - 1, c)
+        break
+      elseif closed[end] == PAIRS[c]
+        pop!(closed)
+      end
+    end
+    open === nothing || break
+  end
+  open === nothing && return nothing
+  opened = Char[]   # what closes the brackets that open between the caret and here
+  for l in i:bottom
+    found = brackets(l)
+    found === nothing && continue
+    for (k, c) in found
+      l == i && k <= col && continue
+      if c in OPENING
+        push!(opened, PAIRS[c])
+      elseif isempty(opened)
+        return c == PAIRS[open[3]] ? ((open[1], open[2]), (l, k - 1)) : nothing
+      elseif opened[end] == c
+        pop!(opened)
+      end
+    end
+  end
+  nothing
+end
+
+"The two brackets that the caret is between. They're looked for once for each place of the caret in each version of the text."
+caret_pair(e) = begin
+  b = e.buf
+  key = (b.path, b.version, b.caret, b.anchor)
+  kept = get(e.nodes, :bracket_pair, nothing)
+  kept !== nothing && kept[1] == key && return kept[2]
+  found = bracket_pair(b)
+  e.nodes[:bracket_pair] = (key, found)
+  found
+end
+
+"""
+The runs of text that glow for the two brackets at `found`: the line of each,
+and its columns. Two brackets with nothing between them are one run, so they
+have one light.
+"""
+bracket_runs((open, close)) =
+  open[1] == close[1] && close[2] == open[2] + 1 ? [(open[1], open[2], open[2] + 2)] : [(i, col, col + 1) for (i, col) in (open, close)]
+
+"""
+Make the two brackets that the caret is between glow: a soft light in the shape
+of each bracket, and the bracket over it in the light's colour. The page's text
+is at `ui`.
+"""
+glow_bracket_pair(ctx, e, ui) = begin
+  b = e.buf
+  (caretless(b) || readonly(b)) && return
+  w = window_of(e)
+  (w !== nothing && w.focus === e) || return   # as the caret does, the light shows while the page has the keyboard
+  found = caret_pair(e)
+  found === nothing && return
+  light, lit = ink(tint(colours.accent, 0.65)), ink(colours.accent)
+  blur = Skia.sk_maskfilter_new_blur_with_flags(Skia.SK_BLUR_STYLE_NORMAL, 3f0, true)
+  Skia.sk_paint_set_maskfilter(light, blur)
+  for it in e.layout[e.shown], (i, from, to) in bracket_runs(found)
+    f = it.content
+    (f isa Flow && it.first == i) || continue
+    for (k, vl) in enumerate(f.lines), seg in vl.segs
+      lo, hi = max(from, seg.col), min(to, seg.col + seg.n)
+      (hi > lo && seg.node === nothing && !seg.atomic) || continue
+      words = String(collect(seg.text)[lo-seg.col+1:hi-seg.col])
+      x = num(ui.left + seg.x + inset(seg, lo - seg.col))
+      # The brackets stand on the line that the text stands on
+      y = num(ui.top + it.top + line_top(f, k) + (vl.high + capital(seg.face)) / 2)
+      blob = Skia.sk_textblob_make_from_string(words, skia_font(seg.face.family, seg.face.size, seg.face.style).raw, Skia.SK_TEXT_ENCODING_UTF8)
+      # The light is drawn twice, since a bracket is thin
+      for paint in (light, light, lit)
+        Skia.sk_canvas_draw_text_blob(ctx, blob, Float32(x), Float32(y), paint)
+      end
+      Skia.sk_textblob_unref(blob)
+    end
+  end
+  Skia.sk_maskfilter_unref(blur)
+  Skia.sk_paint_delete(light)
+  Skia.sk_paint_delete(lit)
+end
+
 "Tab moves text in, and shift-Tab moves it back out. What they move depends on the block the caret is in."
 indent!(e, out::Bool) = begin
   b = e.buf
@@ -12928,6 +13157,12 @@ erase_back!(e) = begin
   picked(b) === nothing || return delete_lines!(e)   # the part that the caret is on as a whole goes
   emptyrow(b) && return backrow!(e)
   erase_start!(e) && return
+  if in_empty_pair(b)
+    # The bracket that closes goes with the bracket that it came with
+    i, col = b.caret
+    b.anchor, b.caret = (i, col - 1), (i, col + 1)
+    return type!(e, "")
+  end
   blk = block(b, b.caret[1])
   erase!(e, backstep(b, blk, length(indentation(e, blk))))
 end
@@ -13689,7 +13924,8 @@ ontype(e::Editor, ev::Typed) = begin
   (caretless(e.buf) || readonly(e.buf)) && return nothing
   # Nor does a character change a part that the caret is on as a whole, like a diagram
   picked(e.buf) === nothing || return nothing
-  each_selection!(() -> type!(e, string(c), typing=true), e)
+  # In code, a bracket or a quote comes with the one that closes it
+  each_selection!(() -> pair!(e, c) || type!(e, string(c), typing=true), e)
   # A code block offers names only just after a character is typed
   e.nodes[:typed_at] = (e.buf.path, e.buf.version, e.buf.caret)
   handled

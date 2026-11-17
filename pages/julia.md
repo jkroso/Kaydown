@@ -49,6 +49,23 @@ Type the first two letters of a name that the page's code has, like `ar` or `pa`
 
 ```
 
+## Brackets and quotes
+
+Type `(`, `[`, `{` or `"` in code, and the one that closes it comes too. The caret stays between the two. This is so in every code block and in a file of code.
+
+- Type the closing bracket where it already is, and the caret goes over it. So `f(x)` typed one key after another is `f(x)`.
+- Select some text and type a bracket or a quote. The pair goes round the text.
+- Press ⌫ between the two of a pair that has nothing in it, and both go.
+- Before a word, a bracket comes alone. A quote that ends a string comes alone too.
+- Type `"` three times for the six quotes of a string of several lines.
+
+The two brackets that the caret is between glow, so you can see where a bracket closes. The two can be on different lines. Put the caret after the `[` in this block to try it.
+
+```julia
+sizes = [round(2.4 * 3.6, digits=1),
+         round(1.2 * 0.9, digits=1)]
+```
+
 ## Functions and modules
 
 The box of a function opens to show the function's documentation and a table of its methods. The box of a module opens to show the module's readme, or its documentation, and a table of the names that it defines. Type in the field over that table to search the names. The wheel moves through an open box.

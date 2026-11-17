@@ -6,6 +6,7 @@ A code block does more than show code. What it does depends on its language:
 
 - `ui` runs its Julia code and shows what the code makes.
 - `julia` runs the line that the caret is in when you press ⌘Return, and shows what it comes to in a box after the line. It offers the names in scope as you type.
+- In any code, a bracket or a quote that you type comes with the one that closes it, and the caret stays between the two. With text selected, the pair goes round the text. The two brackets that the caret is between glow.
 - `sheet` works things out, a row at a time.
 - `spreadsheet` is a grid of cells with formulas.
 - `mermaid` shows a diagram, like a flowchart.

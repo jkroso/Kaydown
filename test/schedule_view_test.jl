@@ -267,11 +267,18 @@ end
   # Off the items, they go
   at(line_place(1))
   @test isempty(K.task_over(e))
-  # The item that the caret is on shows its markup, and no days
+  # As rich text, the item that the caret is on shows its days too
   e.buf.caret = e.buf.anchor = (4, 8)
   at(line_place(4))
+  @test !isempty(K.task_over(e))
+  # As plain text, that item shows its markup, and no days
+  e.plain = true
+  frames()
+  at(line_place(4))
   @test isempty(K.task_over(e))
+  e.plain = false
   e.buf.caret = e.buf.anchor = (1, 0)
+  frames()
 end
 
 @testset "a task that's renamed in the page keeps its line of the schedule" begin

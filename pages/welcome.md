@@ -1,6 +1,6 @@
 # Kaydown
 
-Kaydown is a Markdown editor made with UI.jl. This page is a Markdown file. Each line is drawn the way it will read, and the markup characters stay out of sight. **Click a line** and its markup shows again, so you can change it. Press ⌘S to write your changes to the file.
+Kaydown is a Markdown editor made with UI.jl. This page is a Markdown file. Each line is drawn the way it will read, and the markup characters stay out of sight. A line keeps that look while you type in it. To change its markup, **click the line and press ⌘E**, or click Plain at the top right: the part of the page with the caret shows its markup. ⌘E again, or Rich, hides it. Press ⌘S to write your changes to the file.
 
 ## Text
 
@@ -40,6 +40,7 @@ To play a video or a sound faster or slower, move the mouse over its player, and
 |------|--------------|
 | ⌘O | Finds a file in this folder by name |
 | ⌘F | Finds text in the page. Return goes to the next place that has it. |
+| ⌘E | Shows the markup of the part of the page that the caret is in, or hides it again |
 | ⌘P | Prints the page, or saves it as a PDF |
 | ⌘⇧E | Saves the page as a page of HTML, for a website |
 | ⌘Return | Sends the page to an agent that waits for it |
@@ -99,9 +100,9 @@ A file path shows as a breadcrumb. Click its last name to list what's in the fol
 fs"."
 ```
 
-To change the code, move the caret into the block with ↑ or ↓, or hold ⌥ and click the block.
+To change the code, hold ⌥ and click the block. Or press ⌘E, and move the caret into the block with ↑ or ↓.
 
-Code can run in a line of text too. Write a `!` and then the code between backticks, like \!`fs"."`. This page is in the folder !`fs"."` and its colours are !`page_theme()`. A number works too: 12 × 2.4 is !`12 * 2.4`. Click a line to see its code.
+Code can run in a line of text too. Write a `!` and then the code between backticks, like \!`fs"."`. This page is in the folder !`fs"."` and its colours are !`page_theme()`. A number works too: 12 × 2.4 is !`12 * 2.4`. Press ⌘E and click a line to see its code.
 
 The page [components.md](components.md) has a live block for each of UI.jl's components: checkboxes, switches, a slider, a menu, a colour picker, a viewer for 3D models, players for sound and video, diagrams, a text field, a tree and an inspector. It shows shadows too. Hold ⌘ and click the link to open it.
 

@@ -1,0 +1,441 @@
+# Tests for the two ways a page is written: as rich text, where a line keeps its
+# look when the caret comes onto it, and as plain text, where the part of the
+# page with the caret shows its markup. See "rich text and plain text" in main.jl. Run them with
+# `julia -O0 --project=. test/rich_test.jl`. They use windows that aren't on the screen.
+
+@use Test: @test, @testset
+@use "../main" => K
+@use "github.com/jkroso/MiniFB.jl" Window KeyPress Keys onkey Typed ontype
+@use "github.com/jkroso/UI.jl/Interface/draw" frame rect
+const px = K.px
+
+const dir = mktempdir()
+# The settings that these tests keep go to a file of their own, not to the one that Kaydown uses
+const kept = joinpath(dir, "settings")
+@eval K settings_file() = $kept
+
+"A window that isn't on the screen, on a file with `text` in it"
+window(text; name="page.md") = begin
+  path = joinpath(dir, name)
+  write(path, text)
+  e = K.build_editor(path)
+  w = Window(e, size=(900px, 700px))
+  frame(w); frame(w)
+  K.focus(e)
+  e, w
+end
+
+"Press the key `k` in window `w` with the keys `held` down"
+press(w, k, held...) = begin
+  foreach(h -> w.keys |= h, held)
+  onkey(w, KeyPress{k}(0, w))
+  foreach(h -> w.keys ⊻= h, held)
+  frame(w)
+end
+type(e, w, text) = (foreach(c -> ontype(e, Typed(c, w)), text); frame(w))
+caret!(e, w, line, col=0) = (e.buf.caret = e.buf.anchor = (line, col); K.touch!(e); frame(w))
+select!(e, w, lo, hi) = (e.buf.anchor = lo; e.buf.caret = hi; K.touch!(e); frame(w))
+click(w, node) = begin
+  r = rect(node)
+  w.mouse = typeof(w.mouse)(r.left + r.width / 2, r.top + r.height / 2)
+  frame(w)
+  w.keys |= Keys.mouse_left
+  onkey(w, KeyPress{Keys.mouse_left}(0, w))
+  w.keys ⊻= Keys.mouse_left
+  frame(w); frame(w)
+end
+"True when line `i` shows its markup"
+raw(e, i) = (c = K.item(e, i).content; c isa K.Flow && c.raw)
+const cmd, opt, shift = Keys.cmd, Keys.opt, Keys.shft
+
+@testset "rich text and plain text" begin
+
+PAGE = """
+# Title
+
+Some **bold** words and a [link](http://x.y) here.
+
+- first item
+- second **item**
+
+---
+
+```julia
+x = 1
+```
+
+```mermaid
+graph TD
+  A --> B
+```
+
+| a | b |
+|---|---|
+| **c** | d |
+
+last line
+"""
+
+@testset "a page opens as rich text, and the caret's line keeps its look" begin
+  e, w = window(PAGE)
+  @test !e.plain
+  # The caret starts at the heading's text, after the # that doesn't show
+  @test e.buf.caret == (1, 2)
+  caret!(e, w, 3, 9)
+  @test !raw(e, 3)
+  caret!(e, w, 1, 4)
+  @test !raw(e, 1)
+  # A selection puts each of its ends where the caret can stop too
+  caret!(e, w, 6, 4)
+  @test !raw(e, 6)
+end
+
+@testset "the caret goes over characters that don't show" begin
+  e, w = window(PAGE)
+  # Some **bold** words: the ** are at columns 5 and 11
+  caret!(e, w, 3, 4)
+  press(w, Keys.right)
+  @test e.buf.caret == (3, 5)   # before the bold text, and not in it
+  press(w, Keys.right)
+  @test e.buf.caret == (3, 8)   # past the ** and the b
+  caret!(e, w, 3, 10)
+  press(w, Keys.right)
+  @test e.buf.caret == (3, 11)  # at the end of the bold text, and in it
+  press(w, Keys.right)
+  @test e.buf.caret == (3, 14)  # past the ** and the space
+  press(w, Keys.left)
+  @test e.buf.caret == (3, 13)  # after the bold text, and not in it
+  press(w, Keys.left)
+  @test e.buf.caret == (3, 10)
+  # A caret that's put among the ** goes to the nearest place where it can stop
+  caret!(e, w, 3, 6)
+  @test e.buf.caret in ((3, 5), (3, 7))
+  # ← at the start of a heading's text goes to the line above, and → comes back to the text
+  caret!(e, w, 3, 0)
+  press(w, Keys.left); press(w, Keys.left)
+  @test e.buf.caret == (1, 7)
+  caret!(e, w, 1, 2)
+  press(w, Keys.left)
+  @test e.buf.caret[1] == 1 || e.buf.caret == (1, 2)   # the first line has nowhere to go back to
+  # The start of the line is the start of an item's text
+  caret!(e, w, 5, 8)
+  press(w, Keys.left, cmd)
+  @test e.buf.caret == (5, 2)
+  # A word to the left of an item's first word is on the line above
+  press(w, Keys.left, opt)
+  @test e.buf.caret[1] == 4 || e.buf.caret[1] == 3
+end
+
+@testset "what's typed beside bold text is bold on the side that the caret came from" begin
+  e, w = window(PAGE)
+  caret!(e, w, 3, 10)
+  press(w, Keys.right)
+  type(e, w, "er")
+  @test startswith(e.buf.lines[3], "Some **bolder** words")
+  caret!(e, w, 3, 16)
+  press(w, Keys.left)
+  @test e.buf.caret == (3, 15)
+  type(e, w, "!")
+  @test startswith(e.buf.lines[3], "Some **bolder**! words")
+end
+
+@testset "⌫ deletes what shows, and markup goes with the last of its text" begin
+  e, w = window("Some **bold** words\n\na **b** c\n\n# Title\n\n- item\n  - inner\n\n> quote\n")
+  # After the bold text, ⌫ takes the d and leaves the **
+  caret!(e, w, 1, 13)
+  press(w, Keys.backspace)
+  @test e.buf.lines[1] == "Some **bol** words"
+  @test e.buf.caret == (1, 10)   # in the bold text now, at its end
+  # The last letter of bold text takes its ** with it
+  caret!(e, w, 3, 7)
+  press(w, Keys.backspace)
+  @test e.buf.lines[3] == "a  c"
+  @test e.buf.caret == (3, 2)
+  # ⌦ does the same from the other side
+  press(w, Keys.z, cmd)
+  @test e.buf.lines[3] == "a **b** c"
+  caret!(e, w, 3, 2)
+  press(w, Keys.delete)
+  @test e.buf.lines[3] == "a  c"
+  # ⌫ at the start of a heading's text makes it a paragraph
+  caret!(e, w, 5, 2)
+  press(w, Keys.backspace)
+  @test e.buf.lines[5] == "Title"
+  @test e.buf.caret == (5, 0)
+  # An item of a list inside a list goes out a step, then stops being an item
+  caret!(e, w, 8, 4)
+  press(w, Keys.backspace)
+  @test e.buf.lines[8] == "- inner"
+  press(w, Keys.backspace)
+  @test e.buf.lines[8] == "inner"
+  caret!(e, w, 10, 2)
+  press(w, Keys.backspace)
+  @test e.buf.lines[10] == "quote"
+  # ⌥⌫ takes a whole bold word and its markup
+  caret!(e, w, 1, 12)
+  press(w, Keys.backspace, opt)
+  @test e.buf.lines[1] == "Some  words"
+end
+
+@testset "text that's deleted or typed over leaves the markup of what's left" begin
+  e, w = window("Some **bold** words\n\n# Title\n\n- one\n- two\n")
+  # From the middle of the bold word to the middle of the next
+  select!(e, w, (1, 9), (1, 16))
+  type(e, w, "x")
+  @test e.buf.lines[1] == "Some **box**rds"
+  @test e.buf.caret == (1, 10)
+  # ⌦ at the end of a line joins the next line's text to it, without what starts that line
+  caret!(e, w, 5, 5)
+  press(w, Keys.delete)
+  @test e.buf.lines[5] == "- onetwo"
+  @test e.buf.caret == (5, 5)
+  # A selection from inside one line to inside another joins what's left, without what starts the second
+  select!(e, w, (1, 2), (3, 4))
+  press(w, Keys.backspace)
+  @test e.buf.lines[1] == "Sotle"
+  # A selection of all of a heading's text and the line after it leaves the next line as it was
+  e, w = window("# Title\n- one\n- two\n")
+  select!(e, w, (1, 2), (2, 2))
+  press(w, Keys.backspace)
+  @test e.buf.lines[1:2] == ["- one", "- two"]
+  @test e.buf.caret == (1, 2)
+  # Text that's typed over a selection like that is in the first line, with what starts it
+  select!(e, w, (1, 2), (2, 4))
+  type(e, w, "x")
+  @test e.buf.lines[1] == "- xo"
+  # Everything selected leaves an empty page
+  press(w, Keys.a, cmd)
+  press(w, Keys.backspace)
+  @test e.buf.lines == [""]
+end
+
+@testset "Return keeps the look of each half of the text" begin
+  e, w = window("Some **bold** words\n\n# Title\n\n- an *item* here\n")
+  caret!(e, w, 1, 9)
+  press(w, Keys.enter)
+  @test e.buf.lines[1:2] == ["Some **bo**", "**ld** words"]
+  @test e.buf.caret == (2, 2)
+  # At the end of bold text, the new line has no bold text with nothing in it
+  caret!(e, w, 1, 9)
+  press(w, Keys.enter)
+  @test e.buf.lines[1:2] == ["Some **bo**", ""]
+  # At the start of a heading's text, the heading moves down
+  i = findfirst(==("# Title"), e.buf.lines)
+  caret!(e, w, i, 2)
+  press(w, Keys.enter)
+  @test e.buf.lines[i:i+1] == ["", "# Title"]
+  @test e.buf.caret == (i + 1, 2)
+  # A list item carries on, and so does its italic text
+  j = findfirst(==("- an *item* here"), e.buf.lines)
+  caret!(e, w, j, 8)
+  press(w, Keys.enter)
+  @test e.buf.lines[j:j+1] == ["- an *it*", "- *em* here"]
+end
+
+@testset "⌘B takes the bold from text that's all selected" begin
+  e, w = window("Some **bold** words\n")
+  # Each end of the selection is outside the ** that don't show
+  select!(e, w, (1, 5), (1, 13))
+  press(w, Keys.b, cmd)
+  @test e.buf.lines[1] == "Some bold words"
+  press(w, Keys.b, cmd)
+  @test e.buf.lines[1] == "Some **bold** words"
+end
+
+@testset "the caret steps over a part of the page that shows as one thing" begin
+  e, w = window(PAGE)
+  # The line across the page
+  caret!(e, w, 9, 0)
+  press(w, Keys.up)
+  @test e.buf.caret[1] == 7
+  press(w, Keys.down)
+  @test e.buf.caret[1] == 9
+  # The ``` lines of a code block. The code itself is text that the caret goes into.
+  press(w, Keys.down)
+  @test e.buf.caret[1] == 11
+  @test !raw(e, 10) && !raw(e, 12)
+  press(w, Keys.down)
+  @test e.buf.caret[1] == 13
+  # The diagram
+  press(w, Keys.down)
+  @test e.buf.caret[1] == 18
+  @test !(K.item(e, 15).content isa K.Flow)
+  press(w, Keys.up)
+  @test e.buf.caret[1] == 13
+  # → at the end of a line goes over it too
+  caret!(e, w, 13, 0)
+  press(w, Keys.right)
+  @test e.buf.caret == (18, 0)
+  # A key can't take the caret into the diagram's code, but something that puts it there shows the code
+  caret!(e, w, 15, 3)
+  @test e.buf.caret == (15, 3)
+  @test K.item(e, 15).content isa K.Flow
+  press(w, Keys.down); press(w, Keys.down)
+  @test e.buf.caret[1] == 18
+  @test !(K.item(e, 15).content isa K.Flow)
+  # In a table the ** of a cell don't show, with the caret in the cell or not
+  caret!(e, w, 21, 4)
+  press(w, Keys.right)
+  @test e.buf.caret == (21, 5)
+  press(w, Keys.right)
+  @test e.buf.caret[1] == 21 && e.buf.caret[2] > 7
+  @test K.item(e, 21).content isa K.Grid
+end
+
+@testset "⌫ after a part that shows as one thing" begin
+  e, w = window("one\n\n---\ntwo\n\n```julia\nx = 1\n```\n\nthree\n")
+  # After a line across the page, it takes the line away
+  caret!(e, w, 4, 0)
+  press(w, Keys.backspace)
+  @test e.buf.lines[1:3] == ["one", "", "two"]
+  # A line with nothing on it after a code block goes, and the caret is at the end of the code
+  i = findfirst(==("three"), e.buf.lines) - 1
+  caret!(e, w, i, 0)
+  press(w, Keys.backspace)
+  @test e.buf.lines[i] == "three"
+  @test e.buf.lines[e.buf.caret[1]] == "x = 1" && e.buf.caret[2] == 5
+  # A line with text after a code block stays, and so does the block
+  caret!(e, w, i, 0)
+  n = length(e.buf.lines)
+  press(w, Keys.backspace)
+  @test length(e.buf.lines) == n
+end
+
+@testset "↓ under a block at the end of the page starts a line" begin
+  e, w = window("text\n\n```mermaid\ngraph TD\n  A --> B\n```")
+  caret!(e, w, 1, 2)
+  press(w, Keys.down)
+  @test e.buf.caret[1] == 2
+  press(w, Keys.down)
+  @test e.buf.lines[end] == "" && e.buf.caret == (7, 0)
+end
+
+@testset "a part that's being typed shows as text until the caret leaves it" begin
+  e, w = window("text\n\n")
+  caret!(e, w, 3, 0)
+  type(e, w, "```")
+  # The third ` closes the block as well, and the caret is on the line that opens it
+  @test e.buf.lines[3:4] == ["```", "```"]
+  @test e.buf.caret == (3, 3)
+  @test raw(e, 3)
+  type(e, w, "mermaid")
+  press(w, Keys.enter)
+  type(e, w, "graph TD")
+  press(w, Keys.enter)
+  type(e, w, "A --> B")
+  frame(w)
+  @test e.buf.lines[3:6] == ["```mermaid", "graph TD", "  A --> B", "```"] || e.buf.lines[3:6] == ["```mermaid", "graph TD", "A --> B", "```"]
+  # Its code shows while the caret is in it
+  @test K.item(e, 4).content isa K.Flow
+  # ↑ leaves it, and it shows as a diagram
+  press(w, Keys.up); press(w, Keys.up)
+  frame(w)
+  @test e.buf.caret[1] == 2
+  @test !(K.item(e, 4).content isa K.Flow)
+  # A line across the page shows its dashes while they're typed
+  caret!(e, w, 2, 0)
+  type(e, w, "---")
+  @test raw(e, 2)
+  press(w, Keys.up)
+  @test !raw(e, 2)
+end
+
+@testset "as plain text the part with the caret shows its markup, and the caret goes anywhere" begin
+  e, w = window(PAGE)
+  caret!(e, w, 3, 8)
+  K.plain!(e, true)
+  frame(w); frame(w)
+  @test e.buf.plain
+  # Only the caret's line changes. Every other part of the page still shows as it reads.
+  @test raw(e, 3)
+  @test !any(i -> raw(e, i), (1, 5, 6, 8, 10, 12))
+  @test !(K.item(e, 15).content isa K.Flow)
+  @test K.item(e, 21).content isa K.Grid
+  caret!(e, w, 3, 6)
+  @test e.buf.caret == (3, 6)
+  press(w, Keys.right)
+  @test e.buf.caret == (3, 7)
+  # The caret takes the markup with it to the line that it goes to
+  caret!(e, w, 5, 1)
+  @test e.buf.caret == (5, 1)
+  @test raw(e, 5) && !raw(e, 3)
+  # A code block shows its ``` lines while the caret is in it
+  caret!(e, w, 11, 2)
+  @test raw(e, 10) && raw(e, 12)
+  # The caret goes into a diagram, which shows as its code
+  caret!(e, w, 13, 0)
+  press(w, Keys.down)
+  @test e.buf.caret[1] == 14
+  @test all(i -> K.item(e, i).content isa K.Flow && K.item(e, i).first == i, 14:17)
+  caret!(e, w, 15, 3)
+  @test e.buf.caret == (15, 3)
+  press(w, Keys.up)
+  @test e.buf.caret[1] == 14
+  # ⌫ deletes one character of the file
+  caret!(e, w, 3, 13)
+  press(w, Keys.backspace)
+  @test startswith(e.buf.lines[3], "Some **bold* words")
+  press(w, Keys.z, cmd)
+  # Back to rich text with the caret in the diagram's code: the diagram shows, and the caret is outside it
+  caret!(e, w, 15, 3)
+  K.plain!(e, false)
+  frame(w); frame(w)
+  @test !e.buf.plain
+  @test !(K.item(e, 15).content isa K.Flow)
+  @test e.buf.caret[1] in (13, 18)
+  @test !raw(e, 3)
+end
+
+@testset "the switch in the top bar, and ⌘E" begin
+  e, w = window(PAGE)
+  caret!(e, w, 3, 8)
+  press(w, Keys.e, cmd)
+  @test e.plain
+  frame(w)
+  @test raw(e, 3) && !raw(e, 1)
+  press(w, Keys.e, cmd)
+  @test !e.plain
+  frame(w)
+  click(w, e.nodes[(:mode, true)])
+  @test e.plain
+  click(w, e.nodes[(:mode, true)])
+  @test e.plain   # the half that's lit changes nothing
+  click(w, e.nodes[(:mode, false)])
+  @test !e.plain
+  @test K.tip(e.nodes[(:mode, true)]) == "Show the markup of the part with the caret  ⌘E"
+  # A file of code has no switch
+  e2, w2 = window("x = 1\n", name="code.jl")
+  @test !haskey(e2.nodes, (:mode, true))
+  @test isempty(K.mode_part(e2))
+end
+
+@testset "the settings file keeps how the page shows" begin
+  e, w = window(PAGE)
+  e.remember = true
+  K.plain!(e, true)
+  @test occursin("plain=true", read(kept, String))
+  o = K.Editor()
+  K.load_settings!(o)
+  @test o.plain
+  K.plain!(e, false)
+  @test occursin("plain=false", read(kept, String))
+  K.load_settings!(o)
+  @test !o.plain
+end
+
+@testset "the caret's line stays where it is when the page changes to plain text and back" begin
+  e, w = window(PAGE * join(["Line $i of the page, with some **bold** words." for i in 1:80], "\n\n") * "\n")
+  n = length(e.buf.lines)
+  caret!(e, w, n - 20, 3)
+  frame(w); frame(w)
+  @test e.scroll.offset > 0px
+  y = K.item(e, n - 20).top - e.scroll.offset
+  K.plain!(e, true)
+  frame(w); frame(w)
+  @test abs(K.num(K.item(e, n - 20).top - e.scroll.offset - y)) < 1
+  K.plain!(e, false)
+  frame(w); frame(w)
+  @test abs(K.num(K.item(e, n - 20).top - e.scroll.offset - y)) < 1
+end
+
+end

@@ -2,8 +2,8 @@
 #
 # A Markdown editor made with UI.jl, modelled on Constly. You type Markdown, and each line is drawn
 # the way it will read: headings are big, **bold** is bold, tables are tables.
-# The markup characters show again on the line the caret is in, so you can
-# change them. A table stays a table while you type in its cells. It opens the real files on your disk, and ⌘S writes your changes
+# A line keeps that look while you type in it. ⌘E, or the switch in the top bar, shows the
+# markup characters of the part that the caret is in, so you can change them. A table stays a table while you type in its cells. It opens the real files on your disk, and ⌘S writes your changes
 # to the file. It never writes anything until you press ⌘S. A Julia file opens as one block of
 # code that you change the same way: ⌘Return runs the expression that the caret is in.
 #
@@ -44,6 +44,9 @@
 #   - An agent writes a code block in the language `ask` to ask you a
 #     question with answers to click, and one in the language `changes` to
 #     show you a diff, with a button on each change that accepts or rejects it.
+#   - Type in a line and it keeps its look: that's rich text. Press ⌘E, or
+#     click Plain in the top bar, to see the markup of the part that the
+#     caret is in. ⌘E again, or Rich, hides it.
 #   - ⌘B and ⌘I make the selection bold or italic. ⌘Z and ⌘⇧Z undo and redo.
 #   - Double-click selects a word, triple-click a line. ⌘-click opens a link.
 #   - ⌘F finds text in the page. Return goes to the next place that has it.
@@ -88,7 +91,7 @@
 #     or Tab types the rest of it.
 #   - Write !`code` in a line of text. The page runs the code and shows what
 #     it makes in the line: a node like a switch or a file path, or a value
-#     as text. Click the line to see the code again.
+#     as text. Press ⌘E and click the line to see the code again.
 #   - Start a file with front matter: lines like `title: Notes` between two
 #     lines of ---, or lines like `title = "Notes"` between two lines of +++.
 #     It shows as a block of its own.
@@ -566,8 +569,12 @@ Base.@kwdef mutable struct Buffer
   kinds_at::Int = -1
   words::Int = 0
   chars::Int = 0
-  # After Escape the caret is hidden, and every line shows as it reads, until a click puts the caret back
+  # After Escape the caret is hidden, until a click puts the caret back
   reading::Bool = false
+  # True while the page is written as plain text: the part with the caret shows its markup. The window sets it from its setting.
+  plain::Bool = false
+  # Where the caret was when the page last looked at where it is, or nothing before the first look. See `rest!`.
+  stood::Union{Nothing,Pos} = nothing
   # How the file shows. A Markdown file is a document that you change, and :code is a file of
   # code that you change, which is one block of code. Any other file is only shown: :text shows
   # its text, :hex shows its bytes, and :file shows a viewer of its kind.
@@ -809,6 +816,7 @@ isspread(g::Grid) = g.head > 0px
   remember::Bool = false                # write the settings to a file when they change
   settings::Bool = false                # this window opened to show the settings page
   stat::Symbol = :words                 # what the count at the top right counts
+  plain::Bool = false                   # the part of the page with the caret shows its markup: plain text, and not rich text
   spelling::Bool = true                 # put a line of dots under each word that's spelt wrong
   updates::Bool = true                  # the app looks for a newer version of itself, and gets it, without being asked
   wrap::Bool = true                     # a line of a file of code that's too long for the window goes on under itself
@@ -856,6 +864,12 @@ end
 @def mutable struct TableButton <: SemanticUI
   action::Symbol = :none
   label::String = ""
+end
+"One half of the switch in the top bar that chooses rich text or plain text"
+@def mutable struct ModeTab <: SemanticUI
+  plain::Bool = false                         # true for the half that chooses plain text
+  rect::NTuple{4,px} = (0px, 0px, 0px, 0px)
+  quiet::Bool = false
 end
 "The file's name in the middle of the top bar. A right-click on it shows the file's menu."
 @def mutable struct Title <: SemanticUI end
@@ -1407,8 +1421,296 @@ incode(b::Buffer, i::Int) = begin
   s <= b.caret[1] <= t && s <= b.anchor[1] <= t
 end
 
-"True when line `i` shows its markup: it has the caret, and the selection doesn't reach another line"
-israw(b::Buffer, i::Int) = !b.reading && i == b.caret[1] == b.anchor[1]
+# --- rich text and plain text ----------------------------------------------------------------
+#
+# A page is written in one of two ways. A switch in the top bar changes from
+# one to the other, and so does ⌘E. You can change the text in both.
+#
+# As rich text, a line shows the way it reads: bold words are bold, and the
+# characters that make them bold don't show. A diagram shows as a diagram. A
+# line stays that way when the caret comes onto it, so the caret has rules:
+#
+#   - It can't stop among characters that don't show, like the ** of bold
+#     text or the # of a heading. A key that moves it goes over them.
+#   - It stays on the side of them that it came from. After **bold**, a caret
+#     that came from the left is in the bold text, and what's typed there is
+#     bold. A caret that came from the right is after the bold text.
+#   - It steps over a part of the page that shows as one thing: a picture, a
+#     diagram, a line across the page, the ``` lines of a code block.
+#
+# Only a part that's being typed shows its markup: the caret is on it because
+# its text was typed there, and it stays as text until the caret leaves.
+# Without that, a line like ```mermaid could never be typed.
+#
+# As plain text, the part of the page that the caret is in shows its markup:
+# its line, the cell of a table, the whole of a code block or a diagram. The
+# caret goes anywhere. Every other part of the page still shows as rich text.
+
+"The kinds of line whose text shows without its markup in rich text"
+const TEXT_KINDS = (Kind.paragraph, Kind.heading, Kind.bullet, Kind.ordered, Kind.todo, Kind.blockquote)
+
+"True when the page is written as rich text: it's a document, and the part with the caret doesn't show its markup"
+rich(b::Buffer) = !b.plain && b.view == :markdown
+
+"True when the caret is on line `i`, and the selection doesn't reach another line"
+alone(b::Buffer, i::Int) = !b.reading && i == b.caret[1] == b.anchor[1]
+
+"True when line `i` holds only a picture, a sound or a video"
+pictured(b::Buffer, i::Int) = kinds(b)[i].kind == Kind.paragraph && occursin("![", b.lines[i]) && occursin(PICTURE_LINE, b.lines[i])
+
+"""
+True when line `i` shows its markup. It has to have the caret. As plain text
+that's enough. As rich text, the line also has to be one that shows as
+something other than its text, which is only so while it's typed: a ``` line,
+a line across the page, a picture, a table's line of dashes.
+"""
+israw(b::Buffer, i::Int) = alone(b, i) && (!rich(b) || kinds(b)[i].kind in (Kind.fence, Kind.rule, Kind.table) || pictured(b, i))
+
+"""
+The spans of line `i` as rich text reads them: the text after what starts the
+line, or the text of each cell of a row of a table. `start` is the column
+where that text starts.
+"""
+richspans(b::Buffer, i::Int) = begin
+  text, line = b.lines[i], kinds(b)[i]
+  if line.kind in TEXT_KINDS
+    note = line.kind == Kind.paragraph ? match(NOTE, text) : nothing
+    start = note === nothing ? line.prefix : length(note.match)
+    return (start, spans(rest(text, start), start))
+  end
+  out = Span[]
+  line.kind == Kind.table && table(b, i) !== nothing || return (0, out)
+  for c in tablecells(text)
+    append!(out, spans(rest(head(text, c.hi), c.lo), c.lo))
+  end
+  (0, out)
+end
+
+"""
+The parts of line `i` that take no room in rich text, each as the column it
+starts at and the column it ends at: markup like **, and what starts a heading,
+a list item or a quote. Two that touch are one. The caret can't stop inside
+one. The part that starts a line starts at -1, so that column 0 is inside it.
+"""
+unseen(b::Buffer, i::Int) = begin
+  start, ss = richspans(b, i)
+  out = Tuple{Int,Int}[]
+  kinds(b)[i].kind == Kind.paragraph && start == kinds(b)[i].prefix || start == 0 || push!(out, (-1, start))
+  for s in ss
+    s.markup || continue
+    a, z = s.col, s.col + length(s.text)
+    !isempty(out) && last(out)[2] == a ? (out[end] = (last(out)[1], z)) : push!(out, (a, z))
+  end
+  out
+end
+
+"The parts of line `i` that each show as one thing in rich text: the name of a footnote, and inline code that runs"
+wholes(b::Buffer, i::Int) =
+  Tuple{Int,Int}[(s.col, s.col + length(s.text)) for s in richspans(b, i)[2] if !s.markup && (s.live || startswith(s.link, '^')) && length(s.text) > 1]
+
+"The first column of line `i` where the caret can stop in rich text: where the text of a heading or a list item starts"
+first_stop(b::Buffer, i::Int) = begin
+  rich(b) || return 0
+  hidden = unseen(b, i)
+  isempty(hidden) || first(hidden)[1] >= 0 ? 0 : first(hidden)[2]
+end
+
+"""
+The first and last line of the part of the page that line `i` is in, when the
+caret steps over that part in rich text. That's a part that shows as one
+thing: a block that shows as a diagram, a plan, a chart and so on, the front
+matter, a picture, a line across the page, a table's line of dashes. A ```
+line is such a part by itself. Nothing for a line of text or of code.
+"""
+solid(b::Buffer, i::Int) = begin
+  ks = kinds(b)
+  k = ks[i]
+  if k.kind in (Kind.fence, Kind.code)
+    s, t = codeblock(b, i)
+    lang = ks[s].lang
+    closed = t > s && ks[s].kind == Kind.fence && ks[t].kind == Kind.fence && ks[t].level == 1
+    whole = closed && (lang in (MATTER, TOML_MATTER, TAKEOFF, SCHEDULE, LIVE) || haskey(BLOCKS, lang) ||
+                       (lang == DIAGRAM && isdiagram(join(b.lines[s+1:t-1], "\n"))))
+    return whole ? (s, t) : k.kind == Kind.fence ? (i, i) : nothing
+  end
+  (k.kind == Kind.rule || pictured(b, i)) && return (i, i)
+  if k.kind == Kind.table
+    run = table(b, i)
+    run !== nothing && i == run[1] + 1 && return (i, i)
+  end
+  nothing
+end
+
+"""
+True when the caret can go to line `i` from line `from`. It can't go into a
+part that shows as one thing, but it can move about in one that it's already
+in, which shows as text because it's being typed. A ``` line only has the
+caret while it's typed.
+"""
+free(b::Buffer, i::Int, from::Int) = begin
+  run = solid(b, i)
+  run === nothing && return true
+  kinds(b)[i].kind == Kind.fence ? from == i : run[1] <= from <= run[2]
+end
+
+"The first line after `i`, or with `by` of -1 before it, that the caret can go to from line `from`. It's 0, or a line past the last, when there's none."
+step_over(b::Buffer, i::Int, by::Int, from::Int) = begin
+  while 1 <= i <= length(b.lines) && !free(b, i, from)
+    s, t = solid(b, i)
+    i = by > 0 ? t + 1 : s - 1
+  end
+  i
+end
+
+"Where the caret goes in rich text when it's sent to `p` from `from`, going in the direction `by`: the nearest place where it can stop"
+settle_rich(b::Buffer, p::Pos, by::Int, from::Pos) = begin
+  i, col = p
+  if !free(b, i, from[1])
+    found = false
+    for d in (by < 0 ? (-1, 1) : (1, -1))
+      j = step_over(b, i, d, from[1])
+      1 <= j <= length(b.lines) || continue
+      i, col, by, found = j, d > 0 ? 0 : length(b.lines[j]), d, true
+      break
+    end
+    found || return p   # the page has nothing but parts like that
+  end
+  for (a, z) in Iterators.flatten((unseen(b, i), wholes(b, i)))
+    a < col < z || continue
+    col = a < 0 || by > 0 ? z : by < 0 ? a : col - a < z - col ? a : z
+  end
+  (i, col)
+end
+
+"""
+Look at where the caret is, before the page is laid out. As rich text, a caret
+that something put among characters that don't show goes to the nearest place
+where it can stop. In a file that was just opened, and after a change from
+plain text to rich text, it also leaves a part of the page that shows as one
+thing. At any other time it stays in such a part, which then shows as text:
+a key or a click can't take it there, so something meant to. A click on the
+front matter does, and so does the menu that inserts a block.
+"""
+stand!(b::Buffer) = begin
+  b.caret == b.stood && return b
+  if rich(b) && !selecting(b) && isempty(b.others)
+    b.caret = b.anchor = b.stood === nothing ? settle(b, b.caret, 1, from=(0, 0)) :
+                                               settle(b, b.caret, cmp(b.caret, b.stood), from=b.caret)
+  end
+  b.stood = b.caret
+  b
+end
+
+"""
+The pairs of markup in `ss`, the spans of a line: for each, the place in `ss` of
+the span that opens it and of the one that closes it, like the two ** of bold
+text. A pair that's inside another comes before it.
+"""
+markpairs(ss) = begin
+  out = Tuple{Int,Int}[]
+  open = Int[]
+  for (k, s) in enumerate(ss)
+    (s.markup && s.text != "\\") || continue
+    o = isempty(open) ? "" : ss[last(open)].text
+    closes = !isempty(o) && (o == "[" ? startswith(s.text, "](") : o == "[^" ? s.text == "]" : o == "!`" ? s.text == "`" : o == s.text)
+    closes ? push!(out, (pop!(open), k)) : push!(open, k)
+  end
+  out
+end
+
+"""
+Which characters of line `i` go when the columns `x` to `y` of it are deleted
+as rich text: true for each one that goes. The text between goes. Markup
+stays if it still has text to mark, so bold text that loses its last words
+is still bold, and it goes with the last of its text. With `lead`, what starts
+the line goes too: that's for a line that's joined to the one before it.
+"""
+cutmask(b::Buffer, i::Int, x::Int, y::Int; lead=false) = begin
+  text, line = b.lines[i], kinds(b)[i]
+  n = length(text)
+  gone = falses(n)
+  if !(line.kind in TEXT_KINDS || (line.kind == Kind.table && table(b, i) !== nothing))
+    gone[x+1:y] .= true
+    return gone
+  end
+  start, ss = richspans(b, i)
+  mark = falses(n)
+  lead && (gone[1:min(start, y)] .= true)
+  # Text that no span holds, like the | between two cells, goes as it would in plain text
+  held = falses(n)
+  for s in ss
+    held[s.col+1:s.col+length(s.text)] .= true
+    s.markup ? (mark[s.col+1:s.col+length(s.text)] .= true) : (gone[max(s.col, x)+1:min(s.col + length(s.text), y)] .= true)
+  end
+  for c in max(x, start)+1:y
+    held[c] || (gone[c] = true)
+  end
+  # The \ before a character goes with the character
+  for s in ss
+    s.markup && s.text == "\\" && s.col + 2 <= n && gone[s.col+2] && (gone[s.col+1] = true)
+  end
+  for (o, c) in markpairs(ss)
+    from, to = ss[o].col + length(ss[o].text), ss[c].col
+    all(k -> mark[k] || gone[k], from+1:to) || continue
+    any(k -> gone[k], from+1:to) || continue   # nothing between them was deleted, so they stay
+    gone[ss[o].col+1:from] .= true
+    gone[to+1:to+length(ss[c].text)] .= true
+  end
+  gone
+end
+
+"""
+What to change to delete the text from `lo` to `hi` as rich text: the place
+where the change starts, the place where it ends, and the markup between them
+that stays. The change can reach past `lo` and `hi`, to take the markup of
+text that's all deleted. `typed` is true when something is typed in its place.
+"""
+richcut(b::Buffer, lo::Pos, hi::Pos; typed=false) = begin
+  kept(i, gone, x, y) = String([c for (k, c) in enumerate(b.lines[i]) if x < k <= y && !gone[k]])
+  reach(gone, x, y) = (min(x, something(findfirst(gone), x + 1) - 1), max(y, something(findlast(gone), y)))
+  if lo[1] == hi[1]
+    gone = cutmask(b, lo[1], lo[2], hi[2])
+    x, y = reach(gone, lo[2], hi[2])
+    return ((lo[1], x), (hi[1], y), kept(lo[1], gone, x, y))
+  end
+  # A selection that takes all the text of its first line takes what starts that line too, like the # of a
+  # heading. The last line then keeps what starts it, unless its text all goes. Any other selection joins
+  # what's left of the last line to the first, without what starts the last. So does one that's typed over:
+  # what's typed is in the first line, with what starts it.
+  whole = !typed && lo[2] <= first_stop(b, lo[1])
+  top = whole ? trues(length(b.lines[lo[1]])) : cutmask(b, lo[1], lo[2], length(b.lines[lo[1]]))
+  bottom = cutmask(b, hi[1], 0, hi[2], lead=!whole || hi[2] >= length(b.lines[hi[1]]))
+  x = whole ? 0 : reach(top, lo[2], lo[2])[1]
+  _, y = reach(bottom, hi[2], hi[2])
+  ((lo[1], x), (hi[1], y), kept(lo[1], top, x, length(b.lines[lo[1]])) * kept(hi[1], bottom, 0, y))
+end
+
+"""
+What Return adds in rich text to keep the look of each half of the text that
+the caret is in: the markup that closes what's open at the caret, to end the
+first line, and the markup that opens it again, to start the next. A caret
+at the very start or end of bold text goes outside it first, so neither line
+gets bold text with nothing in it.
+"""
+halves!(b::Buffer) = begin
+  i, col = b.caret
+  (rich(b) && !selecting(b) && kinds(b)[i].kind in TEXT_KINDS) || return ("", "")
+  _, ss = richspans(b, i)
+  found = markpairs(ss)
+  inside((o, c)) = (ss[o].col + length(ss[o].text), ss[c].col)
+  moved = true
+  while moved
+    moved = false
+    for p in found
+      from, to = inside(p)
+      col == to && to > from && (col = to + length(ss[p[2]].text); moved = true)
+      col == from && to > from && (col = ss[p[1]].col; moved = true)
+    end
+  end
+  b.caret = b.anchor = (i, col)
+  around = [p for p in found if inside(p)[1] < col < inside(p)[2]]
+  (join(ss[c].text for (_, c) in around), join(ss[o].text for (o, _) in reverse(around)))
+end
 
 "Lay out line `i` of the document"
 flow(e, i::Int, raw::Bool=israw(e.buf, i)) = begin
@@ -1418,8 +1720,8 @@ flow(e, i::Int, raw::Bool=israw(e.buf, i)) = begin
     length(e.flows) > 4000 && empty!(e.flows)
     return get!(() -> file_line(e, text, line, i), e.flows, (:file, text, line))
   end
-  # The lines that open and close a code block only show while the caret is in the block
-  line.kind == Kind.fence && (raw = incode(e.buf, i))
+  # The lines that open and close a code block show while the caret is in the block. As rich text, one only shows while it's typed.
+  line.kind == Kind.fence && (raw = rich(e.buf) ? israw(e.buf, i) : incode(e.buf, i))
   build() = laid(e, text, line, raw, i)
   # What inline code made can change its size, so its line is laid out again each time
   !raw && occursin(INLINE, text) && !(line.kind in (Kind.code, Kind.fence, Kind.rule)) && return build()
@@ -1494,7 +1796,19 @@ Where the caret goes when it's sent to `p`. In a table that's the same place
 if `p` is in a cell. Otherwise it's the next cell in the direction `by`, or the
 nearest cell when `by` is 0.
 """
-settle(b::Buffer, p::Pos, by::Int=0) = begin
+settle(b::Buffer, p::Pos, by::Int=0; from::Pos=b.caret) = begin
+  rich(b) || return settle_cells(b, p, by)
+  # As rich text the caret also keeps off what doesn't show. A place that one rule gives can break the other, so both look again.
+  for _ in 1:4
+    q = settle_rich(b, settle_cells(b, p, by), by, from)
+    q == p && break
+    p = q
+  end
+  p
+end
+
+"Where the caret goes when it's sent to `p`, by the rules of a table, a sheet and a spreadsheet"
+settle_cells(b::Buffer, p::Pos, by::Int=0) = begin
   run = sheet(b, p[1])
   run === nothing || return settle(b, run, p, by)
   run = spread(b, p[1])
@@ -1507,7 +1821,7 @@ settle(b::Buffer, p::Pos, by::Int=0) = begin
     # The line of dashes. Step over it, unless that's where a click put the caret.
     by == 0 && return p
     j = by < 0 ? s : s + 2
-    return j > t ? (t < length(b.lines) ? (t + 1, 0) : p) : settle(b, (j, col))
+    return j > t ? (t < length(b.lines) ? (t + 1, 0) : p) : settle_cells(b, (j, col))
   end
   cs = tablecells(b.lines[i])
   (isempty(cs) || any(c -> within(c, col), cs)) && return p
@@ -1590,10 +1904,10 @@ grid(e, from::Int, to::Int) = begin
       map(1:ncols) do c
         c <= length(cells[r]) || return Piece[]
         cell = cells[r][c]
-        # The cell with the caret shows its markup, and the spaces typed after its text
+        # The cell with the caret shows the spaces typed after its text, and as plain text its markup
         active = caret !== nothing && caret[1] == i && within(cell, caret[2])
         cellpieces(e, i, b.lines[i], cell.lo, active ? max(cell.hi, caret[2]) : cell.hi,
-                   r == 1 ? emboldened(base) : base, active)
+                   r == 1 ? emboldened(base) : base, active && b.plain)
       end
     end
     # Each column gets room in proportion to its longest cell
@@ -1609,7 +1923,7 @@ grid(e, from::Int, to::Int) = begin
   end
   # What inline code made can change its size, so a table with some in it is laid out again each time
   any(text -> occursin(INLINE, text), @view b.lines[from:to]) && return build()
-  get!(build, e.flows, (:grid, from, b.lines[from:to], caret))
+  get!(build, e.flows, (:grid, from, b.lines[from:to], caret, b.plain))
 end
 
 const TABLE_GAP = 8px   # above and below a table
@@ -1677,7 +1991,7 @@ unbroken(p::Piece) =
 "Lay out the spreadsheet whose code block opens on line `from` and closes on line `to`"
 spreadgrid(e, from::Int, to::Int) = begin
   b = e.buf
-  caret = israw(b, b.caret[1]) && from < b.caret[1] < to ? b.caret : nothing
+  caret = alone(b, b.caret[1]) && from < b.caret[1] < to ? b.caret : nothing
   build() = begin
     base = Face(body(e), size=body(e).size * 0.94)
     lh = base.size * 1.5
@@ -1730,7 +2044,7 @@ spreadsheet(e::Editor, it::Item, g::Grid) = begin
   b = e.buf
   line = border(1px, :solid, colours.line; between=true)
   size = body(e).size * 0.94
-  at = israw(b, b.caret[1]) ? gridcell(g, b.caret) : nothing
+  at = alone(b, b.caret[1]) ? gridcell(g, b.caret) : nothing
   # The letter and the number of the caret's cell are darker
   name(text, on) = Box(height(grow=grow), Alignment.Center, justify=Alignment.Center,
                        label(text, size * 0.72, color=on ? colours.ink : colours.dim, weight=on ? "Semibold" : ""))
@@ -2235,12 +2549,12 @@ vertical(e, it::Item, s::Sheet, by::Int) = begin
   1 <= r <= length(s.rows) && return place(s, r, by, x)
   if by < 0
     it.first == 1 && return b.caret
-    f = flow(e, it.first - 1, true)
+    f = flow(e, it.first - 1, b.plain)
     return (it.first - 1, colat(f, length(f.lines), x))
   end
   # ↓ on the last row of a sheet at the end of the document starts a line below it
   it.last == length(b.lines) && edit!(b, line_end(b, it.last), line_end(b, it.last), "\n")
-  (it.last + 1, colat(flow(e, it.last + 1, true), 1, x))
+  (it.last + 1, colat(flow(e, it.last + 1, e.buf.plain), 1, x))
 end
 
 "Return in a sheet starts a row under the caret's row. In a last row that's empty, it ends the sheet instead."
@@ -3764,8 +4078,8 @@ end
 #
 # A code block in the language `mermaid` shows the diagram that its code
 # describes: a flowchart, a sequence diagram, a state diagram, a class diagram
-# or a pie chart. UI.jl's Mermaid component reads the code and draws it. Put
-# the caret in the block, or click it with ⌥ held, to see its code.
+# or a pie chart. UI.jl's Mermaid component reads the code and draws it. Click
+# it with ⌥ held to see its code, or as plain text put the caret in the block.
 
 const DIAGRAM = "mermaid"
 
@@ -3791,7 +4105,7 @@ end
 #
 # A code block in the language `takeoff` shows a plan that you measure from: a
 # page of a PDF file, or a picture. takeoff.jl says how the block is written.
-# Put the caret in the block, or click it with ⌥ held, to see its lines.
+# Click it with ⌥ held to see its lines, or as plain text put the caret in the block.
 #
 #   - Drop a PDF file or a picture on the block, or click it, to choose the plan.
 #   - Set the scale: type it, like 1:100, or choose the ruler, click the two ends
@@ -9318,6 +9632,11 @@ end
 "Work out what the page shows and how tall each part is, for text that's `width` wide"
 layout!(e, width=text_width(e)) = begin
   b = e.buf
+  # The page is written as rich text or as plain text, as the switch in the top bar says. The pages of
+  # the settings are always rich text. After a change, the caret's place is looked at afresh.
+  shows = e.plain && b.view == :markdown && !issettings(e)
+  b.plain == shows || (b.plain = shows; b.stood = nothing)
+  stand!(b)
   ks = kinds(b)
   width == e.width || (e.width = width; empty!(e.flows))
   # A file that's only shown is one viewer, or lines of text that are laid out once and kept
@@ -10129,7 +10448,15 @@ type!(e, new; typing=false) = begin
   lo, hi = selection(b)
   # A third ` that opens a code block. Inside a block it would close that block instead.
   fence = new == "`" && lo == hi && kinds(b)[lo[1]].kind != Kind.code && strip(b.lines[lo[1]]) == "``" && lo[2] == length(b.lines[lo[1]])
-  edit!(b, lo, hi, new; typing)
+  if rich(b) && lo != hi
+    # As rich text, the markup of text that's only partly selected stays, after what's typed
+    from, to, kept = richcut(b, lo, hi, typed=!isempty(new))
+    edit!(b, from, to, new * kept; typing)
+    parts = split(new, '\n')
+    b.caret = b.anchor = (from[1] + length(parts) - 1, length(parts) == 1 ? from[2] + length(new) : length(last(parts)))
+  else
+    edit!(b, lo, hi, new; typing)
+  end
   if fence
     # The line that closes the block is typed too. Without it, the block would
     # take the line that opens the next block as its end, and turn every block
@@ -10143,16 +10470,43 @@ end
 
 line_end(b, i) = (i, length(b.lines[i]))
 
-"The place one character before or after `p`"
-beside(b::Buffer, (i, col)::Pos, by::Int) =
+"The place one character of the file before or after `p`"
+neighbour(b::Buffer, (i, col)::Pos, by::Int) =
   by < 0 ? (col > 0 ? (i, col - 1) : i > 1 ? line_end(b, i - 1) : (i, col)) :
            (col < length(b.lines[i]) ? (i, col + 1) : i < length(b.lines) ? (i + 1, 0) : (i, col))
+
+"""
+The place one character before or after `p`. As rich text that's one
+character that shows: the place is past any markup that's in the way, and past
+the whole of something that shows as one thing, like the number of a footnote.
+"""
+beside(b::Buffer, p::Pos, by::Int) = begin
+  rich(b) || return neighbour(b, p, by)
+  i, col = p
+  hidden, whole = unseen(b, i), wholes(b, i)
+  if by < 0
+    for (a, z) in hidden
+      a < col <= z && (col = a)
+    end
+    col <= 0 && return neighbour(b, (i, 0), by)
+    k = findfirst(r -> r[2] == col, whole)
+    (i, k === nothing ? col - 1 : whole[k][1])
+  else
+    for (a, z) in hidden
+      a <= col < z && (col = z)
+    end
+    col >= length(b.lines[i]) && return neighbour(b, line_end(b, i), by)
+    k = findfirst(r -> r[1] == col, whole)
+    (i, k === nothing ? col + 1 : whole[k][2])
+  end
+end
 
 "The place one word before or after `p`"
 word_step(b::Buffer, p::Pos, by::Int) = begin
   i, col = p
   chars = collect(b.lines[i])
-  (by < 0 ? col == 0 : col == length(chars)) && return beside(b, p, by)
+  # As rich text, a line's text can start after characters that don't show, like the # of a heading
+  (by < 0 ? col <= first_stop(b, i) : col == length(chars)) && return beside(b, p, by)
   if by < 0
     while col > 0 && !isword(chars[col]); col -= 1 end
     while col > 0 && isword(chars[col]); col -= 1 end
@@ -10176,12 +10530,22 @@ vertical(e, by::Int) = begin
   x = e.goal = something(e.goal, x)
   1 <= k + by <= length(f.lines) && return (i, colat(f, k + by, x))
   j = i + by
+  if rich(b)
+    # As rich text, the caret steps over a part of the page that shows as one thing, like a diagram
+    j = step_over(b, j, by, i)
+    if j > length(b.lines) && i < length(b.lines)
+      # ↓ over a block at the end of the document starts a line below it, as it does under a table
+      edit!(b, line_end(b, length(b.lines)), line_end(b, length(b.lines)), "\n")
+      return (length(b.lines), 0)
+    end
+  end
   j < 1 && return (1, 0)
   j > length(b.lines) && return line_end(b, i)
   # Into a sheet, the caret goes to the cell that's under it or over it
   into = item(e, j)
   into.content isa Sheet && return enter(e, into, into.content, by, x)
-  f = flow(e, j, true)
+  # The line is laid out as it will show with the caret on it
+  f = flow(e, j, b.plain)
   (j, colat(f, by < 0 ? length(f.lines) : 1, x))
 end
 
@@ -10268,7 +10632,18 @@ newline!(e) = begin
   selecting(b) ? type!(e, "\n") : newline!(e, block(b, b.caret[1]))
 end
 
-newline!(e, block) = type!(e, "\n")
+newline!(e, block) = begin
+  b = e.buf
+  i, col = b.caret
+  if rich(b) && kinds(b)[i].kind == Kind.heading && col <= first_stop(b, i) < length(b.lines[i])
+    # As rich text, Return at the start of a heading's text moves the heading down a line
+    edit!(b, (i, 0), (i, 0), "\n")
+    b.caret = b.anchor = (i + 1, col)
+    return touch!(e)
+  end
+  shut, opened = halves!(b)
+  type!(e, shut * "\n" * opened)
+end
 
 # In a list or a quote, the new line carries it on
 newline!(e, ::Type{<:Union{List,Quote,Paragraph}}) = begin
@@ -10283,7 +10658,9 @@ newline!(e, ::Type{<:Union{List,Quote,Paragraph}}) = begin
     b.anchor = (i, 0)
     return type!(e, "")
   end
-  type!(e, "\n" * carry(lead, k))
+  # As rich text, bold text that the new line cuts in two is bold on both lines
+  shut, opened = halves!(b)
+  type!(e, shut * "\n" * carry(lead, k) * opened)
 end
 
 "What starts the line after a list item or a quote that starts with `lead`: the next number, or a to-do box with no tick"
@@ -10419,6 +10796,22 @@ surround!(e, mark::String) = begin
   b = e.buf
   lo, hi = selection(b)
   lo[1] == hi[1] || return
+  if rich(b)
+    # As rich text, each end of a selection can be on either side of markup that doesn't show. A selection
+    # of all the text that `mark` marks is that text, whichever side its ends are on.
+    _, ss = richspans(b, lo[1])
+    hidden = unseen(b, lo[1])
+    for (o, c) in markpairs(ss)
+      ss[o].text == mark || continue
+      from, to = ss[o].col + length(mark), ss[c].col
+      opens = findfirst(r -> r[1] <= ss[o].col && from <= r[2], hidden)
+      closes = findfirst(r -> r[1] <= to && to + length(mark) <= r[2], hidden)
+      (opens === nothing || closes === nothing) && continue
+      hidden[opens][1] <= lo[2] <= hidden[opens][2] && hidden[closes][1] <= hi[2] <= hidden[closes][2] || continue
+      lo, hi = (lo[1], from), (hi[1], to)
+      break
+    end
+  end
   i, n = lo[1], length(mark)
   line = b.lines[i]
   inner = rest(head(line, hi[2]), lo[2])
@@ -10693,12 +11086,75 @@ caret_page!(e, by::Int, select::Bool) = foreach(_ -> move!(e, vertical(e, by), s
 erase_back!(e) = begin
   b = e.buf
   emptyrow(b) && return backrow!(e)
+  erase_start!(e) && return
   blk = block(b, b.caret[1])
   erase!(e, backstep(b, blk, length(indentation(e, blk))))
 end
 
+"""
+What ⌫ does in rich text when the caret is at the start of a line's text. It
+returns true when it did it, and false when the caret is somewhere else.
+
+- In a heading, a list item or a quote, it makes the line a paragraph. An item
+  of a list inside a list goes out a step first.
+- After a line across the page or a picture, it takes that away.
+- After any other part that shows as one thing, it takes away a line with
+  nothing on it. A line with text stays, and the caret goes over the part.
+"""
+erase_start!(e) = begin
+  b = e.buf
+  (rich(b) && !selecting(b)) || return false
+  i, col = b.caret
+  line = kinds(b)[i]
+  hidden = unseen(b, i)
+  if !isempty(hidden) && first(hidden)[1] < 0 && col <= first(hidden)[2]
+    n = line.kind in (Kind.bullet, Kind.ordered, Kind.todo) && line.level >= 2 ? 2 : richspans(b, i)[1]
+    edit!(b, (i, 0), (i, n), "")
+    b.caret = b.anchor = (i, max(0, col - n))
+    touch!(e)
+    return true
+  end
+  at = something(findfirst(r -> r[1] < col <= r[2], hidden), 0)
+  (at == 0 ? col : hidden[at][1]) == 0 && i > 1 && !free(b, i - 1, i) || return false
+  s, t = solid(b, i - 1)
+  if isempty(b.lines[i]) && line.kind != Kind.code
+    edit!(b, line_end(b, i - 1), (i, 0), "")
+    b.caret = b.anchor = settle(b, line_end(b, i - 1), -1, from=(0, 0))
+  elseif kinds(b)[s].kind == Kind.rule || pictured(b, s)
+    edit!(b, (s, 0), (i, 0), "")
+    b.caret = b.anchor = (s, col)
+  else
+    return (move!(e, line_end(b, i - 1), false, by=-1); true)
+  end
+  touch!(e)
+  true
+end
+
+"""
+What ⌦ does: it takes away what's after the caret. As rich text, at the end of
+a line it joins the next line's text to it, without what starts that line, or
+takes away a line across the page or a picture that comes next.
+"""
+erase_next!(e) = begin
+  b = e.buf
+  to = beside(b, b.caret, 1)
+  if rich(b) && !selecting(b) && to[1] > b.caret[1]
+    j = to[1]
+    if !free(b, j, b.caret[1])
+      s, t = solid(b, j)
+      (kinds(b)[j].kind == Kind.rule || pictured(b, j)) || return nothing
+      at = b.caret
+      edit!(b, line_end(b, j - 1), line_end(b, j), "")
+      b.caret = b.anchor = at
+      return touch!(e)
+    end
+    to = (j, first_stop(b, j))
+  end
+  erase!(e, to)
+end
+
 "Take away the rest of the caret's line. At the end of a line, it joins the next line to it."
-erase_line_end!(e) = (b = e.buf; at = line_end(b, b.caret[1]); erase!(e, at == b.caret ? beside(b, at, 1) : at))
+erase_line_end!(e) = (b = e.buf; at = line_end(b, b.caret[1]); at == b.caret ? erase_next!(e) : erase!(e, at))
 
 # --- commands for whole lines ---
 
@@ -10934,6 +11390,7 @@ const COMMAND_GROUPS = [
     Command(:settings, "Show or hide the settings", :window, "cmd+comma", (e, w, _) -> toggle_settings!(e)),
     Command(:sidebar, "Show or hide the sidebar", :window, "cmd+backslash", (e, w, _) -> toggle_panel!(e)),
     Command(:sidebar_keys, "Give the sidebar the keyboard", :window, "cmd+shift+backslash", (e, w, _) -> focus_panel!(e)),
+    Command(:plain, "Show the markup at the caret, or hide it again", :window, "cmd+e", (e, w, _) -> plain!(e, !e.plain)),
     Command(:hidden_files, "Show or hide the hidden files in the sidebar", :window, "cmd+shift+period", (e, w, _) -> hidden!(e, !e.hidden)),
     Command(:bigger, "Make the text bigger", :window, "cmd+equal", (e, w, _) -> zoom!(e, zoom_for(text_size(e) + 1))),
     Command(:smaller, "Make the text smaller", :window, "cmd+minus", (e, w, _) -> zoom!(e, zoom_for(text_size(e) - 1))),
@@ -10982,7 +11439,7 @@ const COMMAND_GROUPS = [
     Command(:page_down, "Down a screen", :move, "pagedown", (e, w, select) -> caret_page!(e, 1, select))],
   "Deleting" => [
     Command(:erase_back, "Delete what's before the caret", :type, "backspace", (e, w, _) -> erase_back!(e)),
-    Command(:erase, "Delete what's after the caret", :type, "delete", (e, w, _) -> erase!(e, beside(e.buf, e.buf.caret, 1))),
+    Command(:erase, "Delete what's after the caret", :type, "delete", (e, w, _) -> erase_next!(e)),
     Command(:erase_word_back, "Delete to the start of the word", :type, "opt+backspace", (e, w, _) -> erase!(e, word_step(e.buf, e.buf.caret, -1))),
     Command(:erase_word, "Delete to the end of the word", :type, "opt+delete", (e, w, _) -> erase!(e, word_step(e.buf, e.buf.caret, 1))),
     Command(:erase_line_start, "Delete to the start of the line", :type, "cmd+backspace", (e, w, _) -> erase!(e, (e.buf.caret[1], 0))),
@@ -11323,7 +11780,7 @@ onkey(e::Editor, ev::KeyPress{K}) where K = begin
     close_find!(e)
   elseif K == Keys.escape
     # Escape closes a popup. With none open, it takes away what the page's code came to. With
-    # none of that either, it hides the caret and every line shows as it reads.
+    # none of that either, it hides the caret, and so every line shows as it reads.
     if e.popup != :none
       e.popup = :none
     elseif !isempty(others(b))
@@ -11556,7 +12013,7 @@ end
 # Each button in the top bar says what it does while the mouse is over it. A
 # click hides what it says until the mouse leaves the button.
 
-const Tipped = Union{ToolButton,Count,SendButton}
+const Tipped = Union{ToolButton,Count,SendButton,ModeTab}
 const TIP_INK = colorant"rgb(240,240,240)"   # on the dark grey that every tooltip has
 
 "What a tooltip shows: `words`, with room around them"
@@ -11898,7 +12355,8 @@ describe(t::TopBar) = begin
   e = editor(t)
   b = e.buf
   # The settings window is narrow, and its tabs need the room between the two ends of the bar
-  side = issettings(e) ? 130px : 250px
+  mode = mode_part(e)
+  side = issettings(e) ? 130px : 250px + (isempty(mode) ? 0px : MODE_W)
   ended_rename!(e)
   # The top bar lies over the top of the sidebar. The file's name is in the
   # middle of the space beside the sidebar, so it moves as the sidebar slides.
@@ -11913,7 +12371,61 @@ describe(t::TopBar) = begin
                       # The app that the Mac uses for the file can change it, so a button opens the file there
                       button(e, :outside, "box-arrow-up-right")) :
                      # The pages of the settings are for choosing, not for writing, so they show no count
-                     issettings(e) ? () : (job_part(e)..., agent_part(e)..., node!(Count, e, :count)))...))
+                     issettings(e) ? () : (job_part(e)..., agent_part(e)..., mode..., node!(Count, e, :count)))...))
+end
+
+# --- the switch between rich text and plain text ---------------------------------------------
+#
+# The top bar of a document has a switch with two halves, Rich and Plain. The
+# half that's lit says how the page is written now, and a click on the other
+# half changes it. ⌘E changes it too. See "rich text and plain text" above for
+# what each one does.
+
+const MODE_W = 104px   # the room that the switch takes in the top bar
+
+describe(t::ModeTab) = begin
+  e = editor(t)
+  ishovered(t) || (t.quiet = false)
+  on = e.plain == t.plain
+  Box(height(grow=grow), padding(9px, 0px), radius(5px), Alignment.Center, name=t.plain ? "Plain text" : "Rich text",
+      background(on ? colours.bg : clear),
+    label(t.plain ? "Plain" : "Rich", 12px, color=on || ishovered(t) ? colours.ink : colours.dim))
+end
+
+cursor(::ModeTab) = :hand
+onkey(t::ModeTab, ::KeyPress{Keys.mouse_left}) = (e = editor(t); plain!(e, t.plain); hush!(t); focus(e); handled)
+tip(t::ModeTab) = (t.plain ? "Show the markup of the part with the caret" : "Show every part as it reads") * hint(editor(t), :plain)
+
+"The switch for the top bar, with a little room after it. Only a document has one: a file of code is always plain, and the settings are always rich."
+mode_part(e) = begin
+  (e.buf.view == :markdown && !issettings(e)) || return ()
+  (Row(height(24px), padding(2px), radius(7px), background(colours.hover),
+     node!(() -> ModeTab(plain=false), e, (:mode, false)), node!(() -> ModeTab(plain=true), e, (:mode, true))),
+   Box(width(6px)))
+end
+
+"""
+Write the page as plain text, or with `on` false as rich text. Only the part
+with the caret changes how it shows. Every window does the same, and the
+setting is kept. The caret's line stays where it is in the window. When the
+caret isn't in sight, the line at the top of the window stays there.
+"""
+plain!(e, on::Bool) = begin
+  e.plain == on && return e
+  e.plain = on
+  if !isempty(e.layout)
+    y = e.scroll.offset
+    line = e.buf.caret[1]
+    it = item(e, line)
+    if e.buf.reading || it.top + it.tall <= y || it.top >= y + e.scroll.viewport
+      k = something(findfirst(it -> it.top + it.tall > y, e.layout), 1)
+      it, line = e.layout[k], e.layout[k].first
+    end
+    e.nodes[:hold] = (line, it.top - y)
+  end
+  save_settings!(e)
+  rerun!(e, :plain)
+  e
 end
 
 # The window has no title bar, so you move it by dragging the top bar
@@ -15326,7 +15838,7 @@ end
 const pages_dir = Ref(joinpath(@__DIR__, "pages"))
 
 "The settings that every window has the same: each is a field of the editor"
-const SHARED = (:theme, :font, :weight, :zoom, :widest, :stat, :spelling, :updates, :wrap, :numbers, :shade, :indent, :code_scale, :code_font, :code_weight, :guide, :bundle, :rebound, :side, :hidden)
+const SHARED = (:theme, :font, :weight, :zoom, :widest, :stat, :plain, :spelling, :updates, :wrap, :numbers, :shade, :indent, :code_scale, :code_font, :code_weight, :guide, :bundle, :rebound, :side, :hidden)
 
 "The pages of the settings, in the order of their tabs: the name of each page's file, and what its tab says"
 const SETTINGS_PAGES = ("settings.md" => "General", "code-editor.md" => "Code editor", "key-bindings.md" => "Key bindings")
@@ -15416,7 +15928,7 @@ save_settings!(e) = begin
     mkpath(dirname(settings_file()))
     # After the bundle of key bindings comes a line for each command that has other keys than the bundle's, like key.save=ctrl+s
     changed = join(["key.$name=$(e.rebound[name])\n" for name in sort!(collect(keys(e.rebound)))])
-    write(settings_file(), "theme=$(e.theme)\nfont=$(e.font)\nweight=$(e.weight)\nzoom=$(e.zoom)\nwidth=$(e.widest.value)\ncount=$(e.stat)\nspelling=$(e.spelling)\nupdates=$(e.updates)\nwrap=$(e.wrap)\nnumbers=$(e.numbers)\nshade=$(e.shade)\nindent=$(e.indent)\ncode=$(e.code_scale)\ncodefont=$(e.code_font)\ncodeweight=$(e.code_weight)\nguide=$(e.guide)\nsidebar=$(e.side.value)\nhidden=$(e.hidden)\nkeys=$(e.bundle)\n$changed")
+    write(settings_file(), "theme=$(e.theme)\nfont=$(e.font)\nweight=$(e.weight)\nzoom=$(e.zoom)\nwidth=$(e.widest.value)\ncount=$(e.stat)\nplain=$(e.plain)\nspelling=$(e.spelling)\nupdates=$(e.updates)\nwrap=$(e.wrap)\nnumbers=$(e.numbers)\nshade=$(e.shade)\nindent=$(e.indent)\ncode=$(e.code_scale)\ncodefont=$(e.code_font)\ncodeweight=$(e.code_weight)\nguide=$(e.guide)\nsidebar=$(e.side.value)\nhidden=$(e.hidden)\nkeys=$(e.bundle)\n$changed")
   catch
     # A file that can't be written only means the settings last as long as the window
   end
@@ -15507,6 +16019,8 @@ load_settings!(e) = begin
       w === nothing || (e.widest = px(clamp(w, NARROWEST, WIDEST)))
     elseif name == "count" && Symbol(value) in STATS
       e.stat = Symbol(value)
+    elseif name == "plain"
+      e.plain = value == "true"
     elseif name == "spelling"
       e.spelling = value != "false"
     elseif name == "updates"

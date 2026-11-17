@@ -198,8 +198,8 @@ end
   b.anchor, b.caret = (1, 5), (2, 3)
   press(w, Keys.d, cmd)
   @test (b.anchor, b.caret) == ((1, 4), (2, 7))
-  # With no word at the caret, nothing changes
-  for at in ((3, 0), (4, 1))
+  # With no word at the caret, nothing changes. The text of the last line starts after its "+ ", which doesn't show.
+  for at in ((3, 0), (4, 2))
     caret!(e, w, at...)
     press(w, Keys.d, cmd)
     @test b.anchor == b.caret == at

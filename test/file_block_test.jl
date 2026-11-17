@@ -1,7 +1,8 @@
 # Tests for the blocks that a file defines, in main.jl: a code block in a
 # language that Kaydown doesn't know shows what a function of a file makes of
 # its lines, and the lines that the file's `written` gives go back into the
-# block. Run them with `julia -O0 --project=. test/file_block_test.jl`. They
+# block: when the component asks, at once when it says so, and before
+# something reads the page's text. Run them with `julia -O0 --project=. test/file_block_test.jl`. They
 # click and drag in a window that isn't on the screen, and use no network: a
 # folder stands in for a repository on GitHub. Set `KAYDOWN_SHOTS` to a
 # folder, and they save a picture of the page there.
@@ -9,7 +10,7 @@
 @use Test: @test, @testset
 @use "../main" => K
 @use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse
-@use "github.com/jkroso/UI.jl/Interface/draw" frame rect
+@use "github.com/jkroso/UI.jl/Interface/draw" frame rect changed!
 @use "github.com/jkroso/UI.jl/Interface/save" save_png
 @use GeometryBasics: Vec2
 const px = K.px
@@ -130,6 +131,8 @@ end
   made = v.value
   click(along(0.25))
   @test v.value === made && made.done == 0.25 && block("progress") == ["done: 0.25", "label: Framing"]
+  # Writes that are asked for less than a second apart are one step for ⌘Z, so this one comes after a pause
+  e.buf.typed = 0.0
   # A drag is written when the mouse lets go, as one change
   press(along(0.3)); at(along(0.5)); at(along(0.9))
   @test made.done == 0.9 && block("progress") == ["done: 0.25", "label: Framing"]
@@ -144,11 +147,52 @@ end
   # While the caret is in the block, the page shows its lines. Out of it, the block is made again.
   e.buf.caret = e.buf.anchor = (1, 0); frames()
   @test v.value.done == 0.4 && block("progress") == ["done: 40%", "label: Framing"]
-  # What a function made can change in code too, and its lines follow
+end
+
+@testset "when a block's lines are written" begin
   c = view("count_up")
   @test c.value.n == 4
+  K.save_page!(e)
+  # A change that nothing asked to be written waits, and the page has no changes
   c.value.n = 5; frames()
-  @test block("count_up") == ["5"] && c.value.n == 5 && endswith(said(c), "Count(5)")
+  @test block("count_up") == ["4"] && !K.dirty(e.buf)
+  # ⌘S reads the page's text, so the block is written first, and the file has it
+  K.save_page!(e)
+  @test block("count_up") == ["5"] && occursin("```count_up ./kinds.jl\n5\n```", read(page, String)) && endswith(said(c), "Count(5)")
+  # A component that says it can't wait is written in that call
+  c.value.n = 6; changed!(c, now=true)
+  @test block("count_up") == ["6"] && K.dirty(e.buf)
+  # One that asks is written in the next frame
+  c.value.n = 7; changed!(c)
+  @test block("count_up") == ["6"]
+  frames()
+  @test block("count_up") == ["7"]
+  # ... but not while the mouse is held, so that a drag is one change
+  w.keys |= Keys.mouse_left
+  c.value.n = 8; changed!(c); frames()
+  @test block("count_up") == ["7"]
+  w.keys ⊻= Keys.mouse_left; frames()
+  @test block("count_up") == ["8"]
+  # The caret going into the block shows its lines, so they're written as it goes in
+  c.value.n = 9; frames()
+  s = K.block_lines(e.buf, "count_up", 1)
+  e.buf.caret = e.buf.anchor = (s[1] + 1, 0); frames()
+  @test block("count_up") == ["9"]
+  e.buf.caret = e.buf.anchor = (1, 0); frames()
+  @test c.value.n == 9
+  # A copy, a page of HTML and another page taking the window read the text too
+  c.value.n = 10; K.write_blocks!(e)
+  @test block("count_up") == ["10"]
+  c.value.n = 11
+  @test occursin("11", K.page_html(e)) && block("count_up") == ["11"]
+  # Lines that changed under the block aren't written over: the block is made again from them
+  c.value.n = 12
+  s = K.block_lines(e.buf, "count_up", 1)
+  K.edit!(e.buf, (s[1] + 1, 0), K.line_end(e.buf, s[1] + 1), "40")
+  K.write_blocks!(e)
+  @test block("count_up") == ["40"]
+  e.buf.caret = e.buf.anchor = (1, 0); frames()
+  @test c.value.n == 40
 end
 
 "Write `text` to the file `name` of the folder, as an editor saves it, at a time that's later than the file's last"
@@ -167,9 +211,18 @@ save(name, text) = (file = joinpath(dir, name); was = mtime(file); write(file, t
   written(c::Count) = [string(c.n)]
   """)
   frames()
-  @test c.state == :made && c.value.step == 10 && c.value.n == 5
-  c.value.n += c.value.step; frames()
-  @test block("count_up") == ["15"]
+  @test c.state == :made && c.value.step == 10 && c.value.n == 40
+  c.value.n += c.value.step; changed!(c, now=true)
+  @test block("count_up") == ["50"]
+  # What a block holds and hasn't written is written before its file is loaded again
+  c.value.n = 60
+  save("kinds.jl", """
+  mutable struct Count; n::Int; step::Int end
+  count_up(lines) = Count(something(tryparse(Int, strip(get(lines, 1, ""))), 0), 5)
+  written(c::Count) = [string(c.n)]
+  """)
+  frames()
+  @test c.value.n == 60 && c.value.step == 5 && block("count_up") == ["60"]
   # A file that doesn't parse says so in its blocks, and a fix puts them back
   save("shout.jl", "shout(lines) = (")
   frames()

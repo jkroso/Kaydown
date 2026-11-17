@@ -153,7 +153,7 @@
 @use "github.com/jkroso/UI.jl/Interface/abstract" tabstop tabbed!
 @use "github.com/jkroso/UI.jl/Interface/draw" scene
 @use "github.com/jkroso/UI.jl/Interface/abstract" SemanticUI GeometricUI WrapMode Theme with_theme adopt_theme! light describe describe! reuse! detach! add_child! window_of focus handled carry! inputs version
-@use "github.com/jkroso/UI.jl/Interface/draw" ui draw ishovered cursor open_url viewport show_tooltip! hide_tooltip! hittest show_menu! hide_menu! redraw_in! rect popup! close_popup! MouseScroll Pinch onpinch placed! with_clip with_round_clip clipboard!
+@use "github.com/jkroso/UI.jl/Interface/draw" ui draw ishovered cursor open_url viewport show_tooltip! hide_tooltip! hittest show_menu! hide_menu! redraw_in! rect popup! close_popup! MouseScroll Pinch onpinch Changed onchanged placed! with_clip with_round_clip clipboard!
 @use "github.com/jkroso/UI.jl/Interface/objc" libobjc cls sel msg nsstring jstring with_pool send
 @use "github.com/jkroso/UI.jl/Interface/fonts" skia_font register_font weight_of weight_name isitalic installed_faces
 @use "github.com/jkroso/UI.jl/Interface/image" image_aspect image_source has_image
@@ -1054,6 +1054,7 @@ end
 open!(e, path) = begin
   # A sound that the last page was playing stops. A new window has no last page, and another window's sound plays on.
   isempty(e.buffers) || silence!()
+  write_blocks!(e)   # the page that leaves keeps what its blocks hold
   e.buf.offset = e.scroll.offset
   e.buf = get!(e.buffers, path) do
     isfile(path) ? load(path) : Buffer(path=path)
@@ -6882,6 +6883,7 @@ schedule was last written gets its new name in the schedule first, so that the
 file's schedule names the tasks as the file's to-do items do.
 """
 save_page!(e) = begin
+  write_blocks!(e)   # what a block that a file defines holds now goes into its lines
   for (key, node) in collect(e.nodes)
     (node isa ScheduleView && key[2] == e.buf.path) || continue
     span = block_lines(e.buf, SCHEDULE, node.n)
@@ -9814,13 +9816,27 @@ BLOCKS[EMAIL] = BlockKind("Emails", "envelope", EmailsView, emails_html)
 # The file has a function with the language's name. Kaydown gives it the lines
 # of the block, and shows what it makes, as a `ui` block shows what its code
 # makes: a node draws itself, and any other value shows as text. If the file
-# also has a function called `written`, Kaydown asks it for the lines of what
-# was made, in each frame. When they change, Kaydown writes them into the
-# block. So what you do to the block is in the page's file, and ⌘Z takes it back.
+# also has a function called `written`, it gives the lines of what was made,
+# and Kaydown writes them into the block. So what you do to the block is in
+# the page's file.
 #
 #     progress(lines)          makes a Progress from the lines of the block
 #     describe(p::Progress)    draws it
 #     written(p::Progress)     the lines of its block now
+#
+# There are three times that Kaydown writes a block's lines:
+#
+#   - Before something reads the page's text: ⌘S, the caret going into the
+#     block, a copy, a page of HTML, another page taking the window. The file
+#     does nothing for this.
+#   - When the component asks, with UI.jl's `changed!(p)`. Kaydown writes in
+#     the next frame that the mouse isn't held in. Changes that come one soon
+#     after another are one step for ⌘Z.
+#   - At once, when the component says `changed!(p, now=true)`.
+#
+# A change that's written only by the first of these doesn't mark the page as
+# edited until then, and ⌘Z can't take it back. So a component asks for a
+# write after each change that you'd want to take back.
 #
 # What was made is kept until the block's lines change some other way: you
 # type in them, or ⌘Z puts back older ones. Then the function makes it again.
@@ -9911,6 +9927,8 @@ end
   value::Any = nothing                     # what the function made
   shown::Any = nothing                     # the Shown that draws it
   said::Any = nothing                      # the lines that `written` last gave for it, or nothing
+  wants::Bool = false                      # what was made asked for its lines to be written
+  inside::Bool = false                     # the caret was in the block's lines in the last frame
   fault::String = ""                       # what went wrong
   parts::Dict{Any,Any} = Dict{Any,Any}()   # its button, kept between frames
 end
@@ -9982,6 +10000,7 @@ reload!(v::FileBlock) = begin
   at = mtime(v.file)
   at == 0 && return v   # the file is gone, so the block stays as it is
   if at != get(LOADED, v.file, at)
+    write_blocks!(editor(v))   # what the blocks hold goes into their lines first, since they're made again from those
     LOADED[v.file] = at
     delete!(BROKEN, v.file)
     m = get(Kip.modules, v.file, nothing)
@@ -10070,14 +10089,18 @@ make!(v::FileBlock; now=false) = begin
   v
 end
 
-# What the block made can change when you click it or type in it. Its new lines go into the page once the
-# mouse has let go, so that ⌘Z takes back a whole drag.
-block_tick!(v::FileBlock) = begin
-  v.state == :get && return make!(v, now=true)
-  # A repository that another block of the page asked about, and that you allowed there
-  v.state == :ask && repository(v.source) in ALLOWED && return make!(v)
-  reload!(v)
-  (v.state == :made && v.said !== nothing && !held(v, Keys.mouse_left)) || return v
+"""
+Write the lines of what the block of `v` made into the block, if they aren't
+the lines that it has. With `typing`, writes that come one soon after another
+are one step for ⌘Z. Nothing is written when the block's lines in the page
+aren't the ones that this was made from: then it's made again from those.
+"""
+write!(v::FileBlock; typing=false) = begin
+  v.wants = false
+  (v.state == :made && v.said !== nothing) || return v
+  b = editor(v).buf
+  span = block_lines(b, v.lang, v.n)
+  (span !== nothing && b.lines[span[1]+1:span[2]-1] == v.lines) || return v
   now = try
     lines_now(v)
   catch err
@@ -10087,7 +10110,40 @@ block_tick!(v::FileBlock) = begin
   v.said = v.lines = now
   # A value that shows as words has new words now
   Base.invokelatest(present, v.value) === nothing && (v.shown = shown(v))
-  write_block!(v, v.lang, now)
+  write_block!(v, v.lang, now; typing)
+end
+
+"The views of the blocks of the page of `e` that a file defines"
+file_blocks(e) = FileBlock[node for (key, node) in e.nodes if node isa FileBlock && key[3] == e.buf.path]
+
+"""
+Write the lines of every block of the page that a file defines. Whatever
+reads the page's text calls this first: a save, a copy, a page of HTML,
+another page that takes the window.
+"""
+write_blocks!(e) = (foreach(write!, file_blocks(e)); e)
+
+# What was made asks for its lines to be written, with UI.jl's `changed!`
+onchanged(v::FileBlock, ev::Changed) = begin
+  ev.now ? write!(v) : (v.wants = true; redraw_in!(v, 0))
+  handled
+end
+
+block_tick!(v::FileBlock) = begin
+  v.state == :get && return make!(v, now=true)
+  # A repository that another block of the page asked about, and that you allowed there
+  v.state == :ask && repository(v.source) in ALLOWED && return make!(v)
+  reload!(v)
+  v.state == :made || return v
+  # The page shows the block's lines while the caret is in them, so they're written as the caret goes in
+  b = editor(v).buf
+  span = block_lines(b, v.lang, v.n)
+  inside = span !== nothing && incode(b, span[1])
+  inside && !v.inside && write!(v)
+  v.inside = inside
+  # A write that was asked for waits until the mouse lets go, so that ⌘Z takes back a whole drag
+  v.wants && !held(v, Keys.mouse_left) && write!(v, typing=true)
+  v
 end
 
 act!(v::FileBlock, action, w) = begin
@@ -11572,6 +11628,7 @@ end
 "Copy what's selected. With several selections, each one's text goes on a line of its own, in the order of the page."
 copy_selection!(e) = begin
   b = e.buf
+  selecting(b) && write_blocks!(e)   # a block that a file defines is copied as what it holds now
   spans = selecting(b) ? [selection(b)] : Tuple{Pos,Pos}[]
   with_others(() -> selecting(b) && push!(spans, selection(b)), b)
   isempty(spans) ? false : clipboard(join((excerpt(b, s...) for s in sort(spans)), "\n"))
@@ -15358,6 +15415,7 @@ end
 
 "The document as a page of HTML"
 page_html(e) = begin
+  write_blocks!(e)   # a block that a file defines is in the page as what it holds now
   b = e.buf
   html(b.lines, title=title(b.path),
        block=(lang, s, t) -> lang == SHEET ? sheet_html(e, s, t) : lang == TAKEOFF ? takeoff_html(e, s, t) :

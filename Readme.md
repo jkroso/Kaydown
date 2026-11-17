@@ -204,9 +204,17 @@ written(p::Progress)     # the lines of the object's block now
 ```
 
 - `progress` can return any value. A UI.jl node draws itself. Any other value shows as text.
-- `written` is optional. With it, a block keeps what you do to it. Kaydown calls it in each frame, and writes the lines into the block when they change. ⌘Z takes the change back.
+- `written` is optional. With it, a block keeps what you do to it: Kaydown writes the lines that it gives into the block.
 - Kaydown keeps the object until the block's lines change some other way: you type in them, or ⌘Z puts back older ones. Then it calls `progress` again.
 - Kaydown loads the file again when you save it, and makes each of its blocks again. So a kind of block changes in the page as you write it.
+
+Kaydown writes a block's lines at three times:
+
+- **Before something reads the page's text.** That's ⌘S, the caret going into the block, a copy, a page of HTML, and another page taking the window. The file does nothing for this.
+- **When the component asks.** It calls UI.jl's `changed!(p)`. Kaydown writes in the next frame that the mouse isn't held in, so a drag is one change. Writes less than a second apart are one step for ⌘Z.
+- **At once.** The component calls `changed!(p, now=true)`, and Kaydown writes before that returns.
+
+A change that only the first of these writes doesn't mark the page as edited until then, and ⌘Z can't take it back. So call `changed!(p)` after each change that you'd want to take back, as `pages/progress.jl` does when you click its bar. Keep `now=true` for a change that can't wait.
 
 The line that opens the block can name where the function comes from, after the language:
 

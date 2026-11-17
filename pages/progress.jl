@@ -9,15 +9,17 @@
 # Kaydown finds this file by its name: a block in the language `progress` is
 # for `progress.jl` in the folder of its page. Kaydown gives the lines of the
 # block to the function `progress`, and shows what it makes. Click in the bar,
-# or drag in it, to say how much is done. Kaydown then asks `written` for the
-# lines, and writes them into the block. See welcome.md.
+# or drag in it, to say how much is done. The bar then asks for a write with
+# `changed!`, and Kaydown asks `written` for the lines and writes them into
+# the block. Without `changed!`, Kaydown still writes them when the page is
+# saved, but ⌘Z couldn't take the change back. See welcome.md.
 
 @use "github.com/jkroso/Prospects.jl" @def
 @use "github.com/jkroso/MiniFB.jl" Keys KeyPress MouseMove onkey onmouse
 @use "github.com/jkroso/Font.jl/units" px
 @use "github.com/jkroso/UI.jl/Interface/Geometric"...
 @use "github.com/jkroso/UI.jl/Interface/abstract" SemanticUI describe theme handled
-@use "github.com/jkroso/UI.jl/Interface/draw" rect cursor
+@use "github.com/jkroso/UI.jl/Interface/draw" rect cursor changed!
 
 "How much of something is done, from 0 to 1, and what it's called"
 @def mutable struct Progress <: SemanticUI
@@ -67,7 +69,9 @@ bar(p::Progress) = (r = rect(p); r === nothing ? nothing : r.children[1])
 "Say that the part of the bar to the left of `x` is done, to the nearest 1%"
 reach!(p::Progress, x) = begin
   b = bar(p)
-  b === nothing || (p.done = round(clamp(Float64((x - b.left) / b.width), 0, 1), digits=2))
+  b === nothing && return handled
+  p.done = round(clamp(Float64((x - b.left) / b.width), 0, 1), digits=2)
+  changed!(p)   # Kaydown writes the block's lines once the mouse lets go
   handled
 end
 

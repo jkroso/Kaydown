@@ -19,6 +19,8 @@ A line that holds only a picture, like `![plan](plan.png)`, shows the picture. D
 
 A line that holds only a video file shows a player for it, like `![The kitchen](walk.mov)`. To play only part of the video, add the seconds where the part starts and stops to the end of the file's name. `![The kitchen](walk.mov#t=61,86)` starts at 1:01 and stops at 1:26. Leave out the second number to play on to the end. To read what was said in the video, move the mouse over it, and click the button under the one that makes it fill the window. The first time, macOS writes down what's said in the file. A line that plays part of a file shows what was said in that part. A button in the drop-down copies the words.
 
+To play a video or a sound faster or slower, move the mouse over its player, and click the small 1× circle on the player's bottom edge. The circle also shows while the file plays. Each click goes to the next speed: 1½×, 2×, ½×, then 1× again. Once you've clicked a player, < and > change the speed by a quarter at a time, the space bar plays and stops, and ← and → go back and on by 5 seconds.
+
 ## Lists
 
 1. Press Return at the end of this line. The next number is typed for you.

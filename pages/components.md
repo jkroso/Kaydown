@@ -82,7 +82,15 @@ A second player plays a video. Its picture is over the button, and a click on th
 VideoPlayer("knot.mp4")
 ```
 
-Once you've clicked a player, the space bar plays and stops, and ← and → go back and on by 5 seconds. One file plays at a time, and it plays on while you scroll the page. Give the video player a `height` to make its picture bigger or smaller. macOS plays the files, so the players take what QuickTime takes: MP3, M4A, WAV, AIFF and FLAC sound, and MP4 and MOV video.
+While the mouse is over a player, or while its file plays, a small circle shows on the player's bottom edge. It says how fast the file plays. 1× is as fast as it was recorded. Click the circle to play at 1½×, then 2×, then ½×, then 1× again. Voices keep their own pitch at each speed.
+
+Once you've clicked a player, these keys work:
+
+- The space bar plays and stops.
+- ← and → go back and on by 5 seconds.
+- < and > play slower and faster, by a quarter at a time, from ½× to 2×.
+
+One file plays at a time, and it plays on while you scroll the page. Give the video player a `height` to make its picture bigger or smaller. macOS plays the files, so the players take what QuickTime takes: MP3, M4A, WAV, AIFF and FLAC sound, and MP4 and MOV video.
 
 A recorder records from the microphone into a file. Click its red button to start, and click it again to stop. While it records, the bars show how loud the sound is. Then it's a player for what it recorded. This one records into `memo.m4a`, beside this page. If that file is there already, the recorder is a player from the start, so delete the file to record again.
 

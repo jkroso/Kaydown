@@ -6,7 +6,8 @@
 @use Test: @test, @testset
 @use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse
 @use "github.com/jkroso/UI.jl/Interface/draw" frame rect popups pasteboard
-@use "github.com/jkroso/UI.jl/Interface/media" span ready
+@use "github.com/jkroso/UI.jl/Interface/media" span ready playing
+@use "github.com/jkroso/UI.jl/Interface/Semantic/Player" parts speed
 @use GeometryBasics: Vec2
 
 @use "../main" => K
@@ -113,6 +114,33 @@ if Sys.isapple() && Sys.which("ffmpeg") !== nothing
     @test abs(position(lounge.media) - 0.5) < 0.05
     # A file that isn't there shows the line's text
     @test player(10) === nothing && K.item(e, 10).content isa K.Flow
+  end
+
+  "Press `key` in `w` and let it go, while holding the keys after it"
+  key!(w, key, mods...) = begin
+    foreach(m -> w.keys |= m, mods)
+    onkey(w, KeyPress{key}(0, w)); onkey(w, KeyRelease{key}(0, w))
+    foreach(m -> w.keys ⊻= m, mods)
+    frames()
+  end
+
+  @testset "a click on the speed button of a video in a page gives it the keyboard, and its keys type nothing into the page" begin
+    lounge = player(3)
+    text, version = copy(e.buf.lines), e.buf.version
+    speeds = parts(lounge)[5]
+    click(middle(speeds))
+    @test speed(lounge) == 1.5 && w.focus === lounge
+    # Shift and the . key type >, and Shift and the , key type <
+    key!(w, Keys.period, Keys.shft)
+    @test speed(lounge) == 1.75
+    key!(w, Keys.comma, Keys.shft); key!(w, Keys.comma, Keys.shft); key!(w, Keys.comma, Keys.shft)
+    @test speed(lounge) == 1
+    # The space bar plays and stops it
+    key!(w, Keys.space)
+    @test playing(lounge.media)
+    key!(w, Keys.space)
+    @test !playing(lounge.media)
+    @test e.buf.lines == text && e.buf.version == version
   end
 
   @testset "while the mouse is over a video, a button under the fill button shows what was said" begin

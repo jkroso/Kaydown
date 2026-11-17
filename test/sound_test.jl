@@ -8,6 +8,7 @@
 @use "github.com/jkroso/MiniFB.jl" Window MouseMove onmouse
 @use "github.com/jkroso/UI.jl/Interface/draw" frame rect
 @use "github.com/jkroso/UI.jl/Interface/save" save_png
+@use "github.com/jkroso/UI.jl/Interface/Semantic/Player" parts
 @use GeometryBasics: Vec2
 
 @use "../main" => K
@@ -62,14 +63,19 @@ end
   at((num(r.left) + 200, num(r.top) + num(r.height) / 2))
   b = button_rect()
   @test b !== nothing
-  @test b.left ≈ r.left && b.top ≈ r.top + r.height + K.TRANSCRIBE_GAP
+  # It's under the player's card. The speed button hangs off the card's bottom edge, at the right, so the player reaches lower.
+  edge = K.card_bottom(K.recorder(sound.path).player)
+  speeds = parts(K.recorder(sound.path).player)[5]
+  @test edge < r.top + r.height
+  @test b.left ≈ r.left && b.top ≈ edge + K.TRANSCRIBE_GAP
+  @test b.left + b.width < speeds.left
   @test b.height ≈ K.TRANSCRIBE_H
   # The text under the player is where it was
   @test K.item(e, line("Some words under")).top == under
   @test K.item(e, line("![A recording]")).tall ≈ r.height + 2K.LIVE_GAP
   shot("2-over-the-player.png")
   # The mouse goes down from the player to the button, through the gap between them, and the button stays
-  at((num(b.left) + 20, num(r.top + r.height) + num(K.TRANSCRIBE_GAP) / 2))
+  at((num(b.left) + 20, num(edge) + num(K.TRANSCRIBE_GAP) / 2))
   @test button_rect() !== nothing
   at((num(b.left) + 20, num(b.top) + num(b.height) / 2))
   @test button_rect() !== nothing
@@ -91,7 +97,7 @@ end
   at((num(r.left) + 200, num(r.top) + num(r.height) / 2))
   @test !isempty(K.sound_over(e))
   b = rect(e.nodes[(:transcribe, other.path)])
-  @test b.top ≈ r.top + r.height + K.TRANSCRIBE_GAP
+  @test b.top ≈ K.card_bottom(K.recorder(other.path).player) + K.TRANSCRIBE_GAP
   shot("4-words-right-under.png")
   at((10, 10))
 end

@@ -134,7 +134,7 @@
 @use "github.com/jkroso/UI.jl/Interface/Semantic/TextInput" TextInput
 @use "github.com/jkroso/UI.jl/Interface/Semantic/ListTree" => Tree
 @use "github.com/jkroso/UI.jl/Interface/Semantic/STLViewer" STLViewer Mesh load!
-@use "github.com/jkroso/UI.jl/Interface/Semantic/Player" AudioPlayer VideoPlayer pause!
+@use "github.com/jkroso/UI.jl/Interface/Semantic/Player" AudioPlayer VideoPlayer pause! card_bottom
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Recorder" AudioRecorder record! stop! plays
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Mermaid" Mermaid problem
 @use "github.com/jkroso/UI.jl/Interface/media" silence! recording picture_size
@@ -11972,8 +11972,11 @@ sound_over(e) = begin
     (s isa SoundLine && plays(recorder(s.path))) || continue
     r = rect(s)
     r === nothing && continue
-    top = r.top + r.height + TRANSCRIBE_GAP
-    over = r.left <= x < r.left + r.width && r.top <= y < top + TRANSCRIBE_H
+    # Under the player's card. The speed button hangs off the card's bottom edge at the right, and this goes at the left.
+    p = recorder(s.path).player
+    edge = p === nothing ? nothing : card_bottom(p)
+    top = something(edge, r.top + r.height) + TRANSCRIBE_GAP
+    over = r.left <= x < r.left + r.width && r.top <= y < max(top + TRANSCRIBE_H, r.top + r.height)
     (over || transcribing(s.path)) || continue
     button = node!(() -> TranscribeButton(path=s.path), e, (:transcribe, s.path))
     button.parent === s || setfield!(button, :parent, s)

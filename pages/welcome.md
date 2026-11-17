@@ -115,6 +115,19 @@ Code can run in a line of text too. Write a `!` and then the code between backti
 
 The page [components.md](components.md) has a live block for each of UI.jl's components: checkboxes, switches, a slider, a menu, a colour picker, a viewer for 3D models, players for sound and video, diagrams, a text field, a tree and an inspector. It shows shadows too. Hold ⌘ and click the link to open it.
 
+## Blocks of your own
+
+A file can define a kind of block. The block below is in the language `progress`, which Kaydown doesn't know. The file `progress.jl` in this page's folder has a function called `progress`. Kaydown gives that function the lines of the block, and shows what it makes.
+
+```progress
+done: 0.7
+label: Framing
+```
+
+Click in the bar, or drag in it, to say how much is done. The file's function `written` gives the new lines, and Kaydown writes them into the block: press ⌘E to see them. ⌘Z takes the change back.
+
+The line that opens a block can name the file after the language, so one file can define many kinds of block: `progress ./widgets.jl`. It can name a repository on GitHub too, like `progress github.com/sam/blocks`. Kaydown asks you before it runs the code of a repository for the first time. Open [progress.jl](progress.jl) to see how a kind of block is written. When you save a change to that file, Kaydown loads it again, and the block above changes with it.
+
 ## Sheets
 
 A code block in the language `sheet` works things out. Each row has a name and a Julia expression. An expression can use the names of the rows above it, and numbers can have units.

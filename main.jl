@@ -1555,7 +1555,7 @@ solid(b::Buffer, i::Int) = begin
     lang = ks[s].lang
     closed = t > s && ks[s].kind == Kind.fence && ks[t].kind == Kind.fence && ks[t].level == 1
     whole = closed && (lang in (MATTER, TOML_MATTER, TAKEOFF, SCHEDULE, LIVE) || haskey(BLOCKS, lang) ||
-                       (lang == DIAGRAM && isdiagram(join(b.lines[s+1:t-1], "\n"))))
+                       (lang == DIAGRAM && isdiagram(join(b.lines[s+1:t-1], "\n"))) || block_source(b, s) !== nothing)
     return whole ? (s, t) : k.kind == Kind.fence ? (i, i) : nothing
   end
   (k.kind == Kind.rule || pictured(b, i)) && return (i, i)
@@ -9755,6 +9755,328 @@ end
 
 BLOCKS[EMAIL] = BlockKind("Emails", "envelope", EmailsView, emails_html)
 
+# --- blocks that a file defines --------------------------------------------------------------
+#
+# A page can have kinds of block that Kaydown doesn't know. A code block in a
+# language that isn't one of Kaydown's own, like `progress`, is such a block
+# when a file defines the language. The file is `progress.jl` in the page's
+# folder, or the file or the GitHub repository that the line that opens the
+# block names after the language:
+#
+#     ```progress                             progress.jl, beside the page
+#     ```progress ./widgets.jl                a file that has another name
+#     ```progress github.com/sam/blocks       a repository on GitHub
+#     ```progress github.com/sam/blocks@v2    one branch of it
+#
+# A file beside the page only counts if its text defines a function with the
+# language's name that takes one thing. So a page in a folder of Julia code
+# doesn't run `json.jl` because it has a block of JSON.
+#
+# The file has a function with the language's name. Kaydown gives it the lines
+# of the block, and shows what it makes, as a `ui` block shows what its code
+# makes: a node draws itself, and any other value shows as text. If the file
+# also has a function called `written`, Kaydown asks it for the lines of what
+# was made, in each frame. When they change, Kaydown writes them into the
+# block. So what you do to the block is in the page's file, and ⌘Z takes it back.
+#
+#     progress(lines)          makes a Progress from the lines of the block
+#     describe(p::Progress)    draws it
+#     written(p::Progress)     the lines of its block now
+#
+# What was made is kept until the block's lines change some other way: you
+# type in them, or ⌘Z puts back older ones. Then the function makes it again.
+#
+# Kaydown asks you before it runs the code of a GitHub repository for the
+# first time, and keeps the repositories that you allow in a file.
+#
+# A file on this Mac is loaded again when it's saved, so a kind of block
+# changes as you write it. Each block that the file defines is then made again.
+
+"The file or the repository that follows the language on the line that opens a code block"
+const SOURCE = r"^\s*(?:```|~~~)\s*[^\s`]+[ \t]+((?:\.{1,2}/|~?/|github\.com/)\S+)\s*$"
+
+"True when Kaydown itself says what a code block in the language `lang` shows"
+known_lang(lang) = lang in (LIVE, SHEET, SPREADSHEET, DIAGRAM, TAKEOFF, SCHEDULE, MATTER, TOML_MATTER, HEX, "julia") || haskey(BLOCKS, lang)
+
+"What was found in each file that could define a kind of block: when the file was saved, and whether its text defines the function"
+const DEFINES = Dict{Tuple{String,String},Tuple{Float64,Bool}}()
+
+"""
+True when the text of `file` defines a function called `name` that takes one
+thing, like `progress(lines) = ...` or `function progress(lines)`. The file
+is read again only when it's saved.
+"""
+defines(file::AbstractString, name::AbstractString) = begin
+  at = mtime(file)
+  at == 0 && return false
+  kept = get(DEFINES, (file, name), nothing)
+  kept !== nothing && kept[1] == at && return kept[2]
+  found = occursin(Regex("^(?:function[ \\t]+)?\\Q$name\\E\\([^,;)]+[;)]", "m"), read(file, String))
+  DEFINES[(file, name)] = (at, found)
+  found
+end
+
+"""
+Where the function of a block in the language `lang` comes from, as Kip names
+it: a file or a GitHub repository. `text` is the line that opens the block, and
+`folder` is the folder of its page. It's nothing when no file defines the language.
+"""
+block_source(text::AbstractString, lang::AbstractString, folder::AbstractString) = begin
+  (Base.isidentifier(lang) && !known_lang(lang)) || return nothing
+  m = match(SOURCE, text)
+  m === nothing || return String(m[1])
+  !isempty(folder) && defines(joinpath(folder, lang * ".jl"), lang) ? "./$lang.jl" : nothing
+end
+
+"Where the function of the block that opens on line `s` of `b` comes from, or nothing when no file defines its language"
+block_source(b::Buffer, s::Int) = block_source(b.lines[s], kinds(b)[s].lang, isempty(b.path) ? "" : dirname(b.path))
+
+"The `user/repo` of a source that's a GitHub repository, or nothing for a file on this Mac"
+repository(source::AbstractString) = (m = match(r"^github\.com/([\w\-.]+)/([\w\-.]+)", source); m === nothing ? nothing : "$(m[1])/$(m[2])")
+
+"The GitHub repositories whose code you let a block run, since Kaydown opened"
+const ALLOWED = Set{String}()
+
+"The file that keeps the repositories you allowed, one on each line"
+allowed_file() = joinpath(dirname(settings_file()), "repositories")
+
+"True when you have let a block run the code of the GitHub repository `repo`"
+allowed(e, repo::AbstractString) = repo in ALLOWED || (e.remember && isfile(allowed_file()) && repo in eachline(allowed_file()))
+
+"Let a block run the code of the GitHub repository `repo`, now and when Kaydown next opens"
+allow!(e, repo::AbstractString) = begin
+  allowed(e, repo) && return
+  push!(ALLOWED, repo)
+  e.remember || return
+  try
+    mkpath(dirname(allowed_file()))
+    open(io -> println(io, repo), allowed_file(), "a")
+  catch
+    # A file that can't be written only means Kaydown asks again the next time it opens
+  end
+  nothing
+end
+
+"A block that a file defines: what the file's function made of the lines of the block"
+@def mutable struct FileBlock <: SemanticUI
+  n::Int = 0                               # its place among the page's blocks in its language
+  first::Int = 0                           # the lines of its block, when the page was last laid out
+  last::Int = 0
+  lang::String = ""
+  source::String = ""                      # where its function comes from, as the page names it
+  lines::Vector{String} = String[]         # the lines that `value` was made from, or that it wrote last
+  state::Symbol = :new                     # :new, :ask (you haven't allowed its repository), :wait and :get (its repository comes), :made or :fault
+  from::Any = nothing                      # the module of the file
+  file::String = ""                        # the file on this Mac that the module comes from, or "" for a repository or a folder
+  read::Float64 = 0.0                      # when that file was last saved, as this block last knew it
+  value::Any = nothing                     # what the function made
+  shown::Any = nothing                     # the Shown that draws it
+  said::Any = nothing                      # the lines that `written` last gave for it, or nothing
+  fault::String = ""                       # what went wrong
+  parts::Dict{Any,Any} = Dict{Any,Any}()   # its button, kept between frames
+end
+
+cursor(::FileBlock) = :arrow
+
+"The view of the `n`th block of the page in the language `lang`, which the file or the repository `source` defines"
+file_block(e, lang, source, n) = begin
+  v = get!(() -> FileBlock(n=n, lang=lang), e.nodes, (:block, lang, e.buf.path, n))
+  own!(node!(Document, e, :document), v)
+  v.source == source || (v.source = source; v.from = nothing; v.file = ""; v.state = :new)
+  v
+end
+
+"What the block in the language `lang` from line `i` to line `t` shows. A file or a repository, `source`, defines the language."
+file_block_item(e, lang, source, i, t, n) = begin
+  v = file_block(e, lang, source, n)
+  v.first, v.last = i, t
+  reread!(v, e.buf.lines[i+1:t-1])
+  # Lay it out once to learn how tall it is
+  concrete = describe(Column(fixed(e.width), Alignment.Start, geometry(v)), (e.width, 9999px))
+  Live(v, concrete.height + 2LIVE_GAP)
+end
+
+reread!(v::FileBlock, lines) = begin
+  (lines == v.lines && v.state != :new) && return v
+  v.lines = lines
+  make!(v)
+end
+
+"True when Kip has the GitHub repository `repo` on this Mac, so that nothing has to come from GitHub"
+here(repo::AbstractString) = isdir(joinpath(Kip.repos, repo))
+
+"The module of the file or the repository `source`. A path like `./progress.jl` starts from the folder of the page."
+source_module(e, source::AbstractString) = begin
+  folder = isdir(docdir(e)) ? docdir(e) : pwd()
+  cd(() -> Base.invokelatest(Kip.require, source, folder), folder)
+end
+
+"True when `source` names a file or a folder that's on this Mac, as Kip looks for it: the path as it is, or with `.jl` after it"
+source_found(e, source::AbstractString) = begin
+  path = startswith(source, "~/") ? homedir() * source[2:end] : normpath(joinpath(docdir(e), source))
+  ispath(path) || isfile(path * ".jl")
+end
+
+"The file on this Mac that `source` names, or \"\" when it names a folder, or a file that isn't there"
+source_file(e, source::AbstractString) = begin
+  path = startswith(source, "~/") ? homedir() * source[2:end] : normpath(joinpath(docdir(e), source))
+  isfile(path) || (path *= ".jl")
+  isfile(path) ? realpath(path) : ""
+end
+
+"When each file that defines a kind of block was last loaded: the time that the disk gave for it then"
+const LOADED = Dict{String,Float64}()
+
+"The files that define a kind of block and didn't load, with what went wrong"
+const BROKEN = Dict{String,String}()
+
+"What went wrong, as a block shows it"
+trouble(err) = sprint(showerror, err isa LoadError ? err.error : err)
+
+"""
+Load the file of the block of `v` again if it was saved since it was loaded,
+so that a kind of block changes as you write it. Each block that the file
+defines is then made again from its lines.
+"""
+reload!(v::FileBlock) = begin
+  isempty(v.file) && return v
+  at = mtime(v.file)
+  at == 0 && return v   # the file is gone, so the block stays as it is
+  if at != get(LOADED, v.file, at)
+    LOADED[v.file] = at
+    delete!(BROKEN, v.file)
+    m = get(Kip.modules, v.file, nothing)
+    try
+      # The file's new code goes into the module that it has. A file that didn't load the first time has none yet.
+      m === nothing || Base.include(m, v.file)
+    catch err
+      BROKEN[v.file] = trouble(err)
+    end
+  end
+  v.read == get(LOADED, v.file, v.read) || (v.state = :new)
+  v
+end
+
+"The function called `name` of the module `from`, or nothing if the module has none"
+named(from, name::Symbol) = Base.invokelatest(isdefined, from, name) ? Base.invokelatest(getglobal, from, name) : nothing
+
+"""
+The lines of the block of `v` as what the block made writes them now. It's
+nothing when the file has no function `written` for what was made.
+"""
+lines_now(v::FileBlock) = begin
+  w = named(v.from, :written)
+  (w === nothing || !Base.invokelatest(applicable, w, v.value)) && return nothing
+  out = Base.invokelatest(w, v.value)
+  String[String(l) for l in (out isa AbstractString ? split(out, '\n') : out)]
+end
+
+"""
+The Shown that draws what the block of `v` made: its node, or its words when
+it has no node. Words show as they are, and any other value as Julia prints it.
+"""
+shown(v::FileBlock) = begin
+  node = Base.invokelatest(present, v.value)
+  words = node !== nothing ? "" : v.value isa AbstractString ? v.value : Base.invokelatest(repr, "text/plain", v.value)
+  s = own!(v, Shown(value=node === nothing ? note(words, colours.ink) : node))
+  s.value isa SemanticUI && own!(s, s.value)
+  s
+end
+
+"Note that the block of `v` can't show, and why"
+fault!(v::FileBlock, why) = begin
+  v.state, v.fault = :fault, String(why)
+  push!(problems, v.fault)
+  v
+end
+
+"""
+Make what the block of `v` shows from its lines: load its file, and give the
+lines to the function that has the language's name. A repository that you
+haven't allowed isn't loaded: the block asks first. With `now`, a repository
+that has to come from GitHub comes now. Without it, the block first says that
+it's coming, because the window stops while it comes.
+"""
+make!(v::FileBlock; now=false) = begin
+  e = editor(v)
+  old = v.shown
+  v.value = v.shown = v.said = nothing
+  repo = repository(v.source)
+  if v.from === nothing && repo !== nothing
+    allowed(e, repo) || (v.state = :ask; return v)
+    (now || here(repo)) || (v.state = :wait; return v)
+  end
+  v.from === nothing && repo === nothing && !source_found(e, v.source) &&
+    return fault!(v, "Kaydown can't find the file $(v.source). The line that opens this block names it.")
+  repo === nothing && isempty(v.file) && (v.file = source_file(e, v.source))
+  if !isempty(v.file)
+    v.read = get!(() -> mtime(v.file), LOADED, v.file)
+    haskey(BROKEN, v.file) && return fault!(v, BROKEN[v.file])
+  end
+  try
+    v.from === nothing && (v.from = source_module(e, v.source))
+    f = named(v.from, Symbol(v.lang))
+    f === nothing && return fault!(v, "$(v.source) has no function called $(v.lang). A block in the language $(v.lang) shows what that function makes of the block's lines.")
+    v.value = Base.invokelatest(f, copy(v.lines))
+    v.shown = shown(v)
+    # What a new value shows can carry on from what the last one showed, like a bar that slides to its new length
+    old isa Shown && v.shown.value isa SemanticUI && typeof(old.value) === typeof(v.shown.value) && Base.invokelatest(carry!, v.shown.value, old.value)
+    v.said = lines_now(v)
+    v.state = :made
+  catch err
+    # A file that didn't load is tried again when it's saved
+    v.from === nothing && !isempty(v.file) && (BROKEN[v.file] = trouble(err))
+    fault!(v, trouble(err))
+  end
+  v
+end
+
+# What the block made can change when you click it or type in it. Its new lines go into the page once the
+# mouse has let go, so that ⌘Z takes back a whole drag.
+block_tick!(v::FileBlock) = begin
+  v.state == :get && return make!(v, now=true)
+  # A repository that another block of the page asked about, and that you allowed there
+  v.state == :ask && repository(v.source) in ALLOWED && return make!(v)
+  reload!(v)
+  (v.state == :made && v.said !== nothing && !held(v, Keys.mouse_left)) || return v
+  now = try
+    lines_now(v)
+  catch err
+    return fault!(v, trouble(err))
+  end
+  (now === nothing || now == v.said) && return v
+  v.said = v.lines = now
+  # A value that shows as words has new words now
+  Base.invokelatest(present, v.value) === nothing && (v.shown = shown(v))
+  write_block!(v, v.lang, now)
+end
+
+act!(v::FileBlock, action, w) = begin
+  allow!(editor(v), repository(v.source))
+  v.state = :wait
+  make!(v)
+  handled
+end
+
+describe(v::FileBlock) = begin
+  v.state == :made && return Column(width(grow=grow), Alignment.Start, v.shown)
+  repo = something(repository(v.source), v.source)
+  if v.state == :ask
+    return Column(block_look()...,
+      Row(width(grow=grow), padding(12px, 16px), child_gap=12px, Alignment.Center,
+        Box(width(grow=grow), Alignment.Start,
+          Text("This block runs code from github.com/$repo. Run it only if you trust who wrote it.", size=13px, family=SANS, color=colours.dim, wrap=WrapMode.words)),
+        block_button!(v, :allow, :allow, words="Run the code", bold=true)))
+  end
+  if v.state in (:wait, :get)
+    # The words are drawn in one frame, and the repository comes in the next
+    v.state = :get
+    redraw_in!(v, 0)
+    return Column(block_look()..., block_note("Getting github.com/$repo…"))
+  end
+  note(v.fault, colours.accent)
+end
+
 # --- front matter as a card ---------------------------------------------------------
 #
 # While the caret isn't in it, front matter shows as a card: a small FRONTMATTER
@@ -9946,6 +10268,20 @@ layout!(e, width=text_width(e)) = begin
       t = codeblock(b, i)[2]
       if !incode(b, i) && t > i && ks[t].kind == Kind.fence && ks[t].level == 1
         content = block_item(e, lang, i, t, seen[lang])
+        push!(items, Item(i, t, top, content.tall, content))
+        top += content.tall
+        i = t + 1
+        continue
+      end
+    end
+    # A block in a language that a file defines shows what the file's function makes of it, unless the caret is in it
+    if ks[i].kind == Kind.fence && ks[i].level == 0 && !isempty(ks[i].lang) && !known_lang(ks[i].lang)
+      lang = ks[i].lang
+      seen[lang] = get(seen, lang, 0) + 1   # every block in the language counts, as `block_lines` counts them
+      source = block_source(b, i)
+      t = codeblock(b, i)[2]
+      if source !== nothing && !incode(b, i) && t > i && ks[t].kind == Kind.fence && ks[t].level == 1
+        content = file_block_item(e, lang, source, i, t, seen[lang])
         push!(items, Item(i, t, top, content.tall, content))
         top += content.tall
         i = t + 1
@@ -12990,8 +13326,8 @@ component(code) = begin
   i === nothing ? ("Layout", "bounding-box") : (made[i], "puzzle")
 end
 
-"The headings and the components among `lines`, from the top"
-outline(lines::Vector{String}, kinds::Vector{Line}) = begin
+"The headings and the components among `lines`, from the top. `folder` is the folder of their page, where a file can define a kind of block."
+outline(lines::Vector{String}, kinds::Vector{Line}, folder::AbstractString="") = begin
   out = Entry[]
   for (i, l) in enumerate(kinds)
     if l.kind == Kind.heading
@@ -13019,11 +13355,15 @@ outline(lines::Vector{String}, kinds::Vector{Line}) = begin
         # The caret goes under the block. In the block, it would show the block's code.
         push!(out, Entry(i, 7, name, icon, min(close + 1, length(lines))))
       end
+    elseif l.kind == Kind.fence && l.level == 0 && block_source(lines[i], l.lang, folder) !== nothing
+      # A block that a file defines has the name of its language. The caret goes under the block.
+      close = something(findnext(k -> k.kind == Kind.fence, kinds, i + 1), length(lines))
+      push!(out, Entry(i, 7, uppercasefirst(replace(l.lang, '_' => ' ')), "puzzle", min(close + 1, length(lines))))
     end
   end
   out
 end
-outline(b::Buffer) = outline(b.lines, kinds(b))
+outline(b::Buffer) = outline(b.lines, kinds(b), isempty(b.path) ? "" : dirname(b.path))
 
 """
 The headings and the components of the file at `path`. A file that has been
@@ -13037,7 +13377,7 @@ outline(e::Editor, path::String) = begin
   kept = get(e.nodes, (:read, path), nothing)
   kept !== nothing && kept[1] == at && return kept[2]
   lines = text(path)
-  found = outline(lines, classify(lines))
+  found = outline(lines, classify(lines), dirname(path))
   e.nodes[(:read, path)] = (at, found)
   found
 end

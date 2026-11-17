@@ -23,6 +23,7 @@ include("start.jl")
 @use "github.com/jkroso/UI.jl/Interface/Semantic" => Semantic
 @use "github.com/jkroso/UI.jl/Interface/Semantic/ListTree" => ListTree
 @use "../pages/widgets" => widgets
+@use "../pages/progress" => progress_block
 
 building && start_packages()
 
@@ -46,7 +47,7 @@ const page = read(WELCOME, String)
 const PAGES = dirname(WELCOME)
 "The text of each of the app's own pages, by file name. The model, the video, the recording and the plan that the pages show are here too, as the bytes of their files."
 const pages = Dict(name => read(joinpath(PAGES, name), String)
-                   for name in ("welcome.md", "examples.md", "components.md", "julia.md", "settings.md", "code-editor.md", "key-bindings.md", "email.md", "schedule.md", "widgets.jl", "knot.stl", "knot.mp4", "hello.m4a", "plan.pdf"))
+                   for name in ("welcome.md", "examples.md", "components.md", "julia.md", "settings.md", "code-editor.md", "key-bindings.md", "email.md", "schedule.md", "widgets.jl", "progress.jl", "knot.stl", "knot.mp4", "hello.m4a", "plan.pdf"))
 
 "The `user/repo/file` that a file Kip got from GitHub has there, or nothing for any other file"
 place(path) = begin
@@ -70,7 +71,8 @@ const sources = [(path, place(path), read(path, String)) for path in keys(Kip.mo
                  if isabspath(path) && isfile(path) && place(path) !== nothing]
 "The registered packages that were loaded by a GitHub path, as `user/repo`"
 const packages = [joinpath(m[1], m[2]) for m in (match(r"^github\.com/([^/]+)/([^/@]+)", k) for k in keys(Kip.modules)) if m !== nothing]
-const widgets_file = realpath(joinpath(PAGES, "widgets.jl"))
+"The Julia files that the pages load, and where each one was when the app was built"
+const code_files = Dict(name => realpath(joinpath(PAGES, name)) for name in ("widgets.jl", "progress.jl"))
 
 "Kaydown's folder for its own files"
 support() = joinpath(homedir(), "Library", "Application Support", "Kaydown")
@@ -94,6 +96,14 @@ unpack(dir) = begin
   foreach(p -> put(joinpath(repos, p, "Project.toml"), "name = \"$(splitext(basename(p))[1])\"\n"), packages)
   setglobal!(Kip, :repos, repos)
   setglobal!(Kip, :refs, joinpath(dir, "refs"))
+  # A file that the app wasn't built with, like one that defines a kind of block, is loaded from its
+  # source. Kip compiles such a file with a Julia that the app doesn't have, so it's told not to try.
+  ENV["KIP_FROZEN"] = "1"
+  # Kip gives the file's module `using Kip`, which looks for a package called Kip. This folder says
+  # that it's the Kip that's in the app already.
+  env = joinpath(dir, "env")
+  put(joinpath(env, "Project.toml"), "[deps]\nKip = \"$(Base.PkgId(Kip).uuid)\"\n")
+  env in LOAD_PATH || push!(LOAD_PATH, env)
   welcome = joinpath(dir, "Welcome")
   for (name, text) in pages
     file, was = joinpath(welcome, name), joinpath(dir, "written", name)
@@ -102,7 +112,9 @@ unpack(dir) = begin
     put(file, text)
     put(was, text)
   end
-  Kip.modules[realpath(joinpath(welcome, "widgets.jl"))] = Kip.modules[widgets_file]
+  for (name, file) in code_files
+    Kip.modules[realpath(joinpath(welcome, name))] = Kip.modules[file]
+  end
   pages_dir[] = welcome
   joinpath(welcome, "welcome.md")
 end

@@ -19,6 +19,8 @@ A code block does more than show code. What it does depends on its language:
 - `ask` is a question from an agent, with answers to click.
 - `changes` shows a diff from an agent, with a button on each change that accepts or rejects it.
 
+A file can define a kind of block too. [Make a kind of block of your own](#make-a-kind-of-block-of-your-own) says how.
+
 A page shows more than text:
 
 - A line that holds only a picture, a video or a sound file shows it, or a player for it. The page's Insert menu records a sound from the microphone, and a button under the player writes down what's said in it, on the Mac.
@@ -180,6 +182,43 @@ about: roof
 
 `with` can name several people, with a comma between two of them. `about` lists only the emails whose subject has those words. A click opens an email. The Reply button starts an answer to the newest one, and New email starts one to the block's address. `emails.jl` says how the block is written.
 
+## Make a kind of block of your own
+
+A code block in a language that Kaydown doesn't know can show as a component, if a file defines the language. The file has a function with the language's name. Kaydown gives that function the lines of the block, and shows what it makes.
+
+````
+```progress
+done: 0.7
+label: Framing
+```
+````
+
+This block is for `progress.jl` in the folder of its page. The file needs three things:
+
+```julia
+progress(lines)          # makes an object from the lines of the block
+describe(p::Progress)    # draws the object, as UI.jl draws any node
+written(p::Progress)     # the lines of the object's block now
+```
+
+- `progress` can return any value. A UI.jl node draws itself. Any other value shows as text.
+- `written` is optional. With it, a block keeps what you do to it. Kaydown calls it in each frame, and writes the lines into the block when they change. ⌘Z takes the change back.
+- Kaydown keeps the object until the block's lines change some other way: you type in them, or ⌘Z puts back older ones. Then it calls `progress` again.
+- Kaydown loads the file again when you save it, and makes each of its blocks again. So a kind of block changes in the page as you write it.
+
+The line that opens the block can name where the function comes from, after the language:
+
+- ```` ```progress ```` is for `progress.jl` beside the page.
+- ```` ```progress ./widgets.jl ```` is for a file that has another name, so one file can define many kinds of block.
+- ```` ```progress github.com/sam/blocks ```` is for a repository on GitHub. [Kip](https://github.com/jkroso/Kip.jl) gets it, as it does for `@use`.
+- ```` ```progress github.com/sam/blocks@v2 ```` is for the `v2` branch of that repository.
+
+Kaydown's own kinds of block come first. A file can't change what a `board` or a `chart` shows.
+
+Kaydown asks before it runs the code of a GitHub repository for the first time. The block shows the repository's name and a button, **Run the code**. Kaydown keeps the repositories that you allow in `~/Library/Application Support/Kaydown/repositories`. Take a line out of that file to make Kaydown ask again. Kaydown doesn't ask about a file on your Mac, as it doesn't ask about the code of a `ui` block.
+
+`pages/progress.jl` is a kind of block to copy, and `pages/welcome.md` shows it. The comment over `FileBlock` in `main.jl` says how it works.
+
 ## Test it
 
 ```sh
@@ -223,6 +262,7 @@ julia -O0 --project=. test/find_test.jl           # how a list of what's found i
 julia -O0 --project=. test/find_view_test.jl      # the list in the page, and a tick that goes to another page's file
 julia -O0 --project=. test/sketch_test.jl         # how a sketch is read and written, and what a click is on
 julia -O0 --project=. test/sketch_view_test.jl    # the tools of a sketch: drawing, moving and deleting shapes
+julia -O0 --project=. test/file_block_test.jl     # a kind of block that a file defines: what it shows, and what goes back into its lines
 julia -O0 --project=. test/emails_test.jl         # how a list of emails is read and written, and which emails it asks for
 julia -O0 --project=. test/emails_view_test.jl    # the list of the emails with a person, in a page
 julia -O0 --project=. test/mime_test.jl           # how an email becomes a Markdown page, and a page an email

@@ -40,6 +40,7 @@ The block at the top of this page is front matter: lines at the very top of a fi
 - [Julia code that runs where it is](julia.md)
 - [A live block, which shows what its code makes](welcome.md#live-blocks)
 - [Every component that a live block can show](components.md)
+- [A kind of block of your own, which a file defines](welcome.md#blocks-of-your-own)
 
 ## Blocks that draw and plan
 

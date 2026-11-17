@@ -68,6 +68,27 @@ end
   shot("ask.png")
 end
 
+@testset "the words of each row are level with its mark" begin
+  middle_y(r) = K.num(r.top + r.height / 2)
+  # The middle of the capitals of the first line, which is the only line of a short answer
+  caps_middle(t) = K.num(t.top + K.skia_cap_height(t.from) / 2)
+  click(option(1, 3))
+  for i in 1:3                                   # a long answer that wraps, a round mark and a ticked box
+    row = rect(ask(1).parts[(:option, i)])
+    mark, words = row.children[1].children[1], row.children[2].children[1]
+    @test abs(caps_middle(words) - middle_y(mark)) < 0.5
+  end
+  # The tick fills its box, so it's in the middle of it
+  box = rect(ask(1).parts[(:option, 3)]).children[1].children[1]
+  tick = box.children[1]
+  @test (tick.left, tick.top, tick.width, tick.height) == (box.left, box.top, box.width, box.height)
+  # The question is level with its icon
+  head = rect(ask(1)).children[1]
+  @test abs(caps_middle(head.children[2].children[1]) - middle_y(head.children[1].children[1])) < 0.5
+  K.undo!(e.buf); frames()
+  @test !ask(1).data.options[3].chosen
+end
+
 @testset "what's typed in the field goes under the answers" begin
   input = ask(2).parts[:input]
   click(middle(rect(input)))

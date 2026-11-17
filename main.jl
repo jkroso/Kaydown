@@ -157,6 +157,7 @@
 @use "github.com/jkroso/MiniFB.jl"... onfiledrop onscroll
 @use "github.com/jkroso/UI.jl/Interface/Geometric"...
 @use "github.com/jkroso/UI.jl/Interface/Specific"...
+@use "github.com/jkroso/UI.jl/Interface/Specific" skia_cap_height
 @use "github.com/jkroso/UI.jl/Interface/abstract" tabstop tabbed!
 @use "github.com/jkroso/UI.jl/Interface/draw" scene
 @use "github.com/jkroso/UI.jl/Interface/abstract" SemanticUI GeometricUI WrapMode Theme with_theme adopt_theme! light describe describe! reuse! detach! add_child! window_of focus handled carry! inputs version
@@ -8739,13 +8740,20 @@ block_tick!(v::AskView) = begin
   write_block!(v, ASK, Asks.written(v.data), typing=true)
 end
 
+"""
+A text beside a mark that is `tall`, such as an icon or a tick box. The text
+starts lower than the mark, so the middle of its capitals is level with the
+middle of the mark. A text that wraps keeps its first line there.
+"""
+beside_mark(tall, t::Text) = Box(width(grow=grow), padding(max(0px, (tall - skia_cap_height(t)) / 2), 0px, 0px, 0px), t)
+
 describe(o::AskOption) = begin
   q = o.of.data
   o.i <= length(q.options) || return Box(height(0px))
   opt = q.options[o.i]
+  # The tick is as big as its box. A smaller icon isn't put in the middle of the box.
   mark = opt.many ?
-    (opt.chosen ? Box(fixed(16px), height(16px), radius(4px), Alignment.Center, justify=Alignment.Center, background(colours.accent),
-                      Icon("check", size=14px, color=colours.bg)) :
+    (opt.chosen ? Box(fixed(16px), height(16px), radius(4px), background(colours.accent), Icon("check", size=16px, color=colours.bg)) :
                   Box(fixed(16px), height(16px), radius(4px), border(1.5px, :solid, colours.marker))) :
     Box(fixed(16px), height(16px), radius(8px), Alignment.Center, justify=Alignment.Center,
         border(1.5px, :solid, opt.chosen ? colours.accent : colours.marker),
@@ -8753,7 +8761,7 @@ describe(o::AskOption) = begin
   Row(width(grow=grow), padding(8px, 6px), radius(6px), child_gap=10px, Alignment.Start, name="Answer",
       background(opt.chosen ? colours.active : ishovered(o) ? colours.hover : clear),
     Box(mark),
-    Box(width(grow=grow), Text(opt.text, size=13.5px, family=SANS, subfamily=opt.chosen ? "Medium" : "", color=colours.ink, wrap=WrapMode.words)))
+    beside_mark(16px, Text(opt.text, size=13.5px, family=SANS, subfamily=opt.chosen ? "Medium" : "", color=colours.ink, wrap=WrapMode.words)))
 end
 
 cursor(::AskOption) = :hand
@@ -8780,8 +8788,8 @@ describe(v::AskView) = begin
     Column(block_look()..., padding(16px, 14px), child_gap=10px, name="Question",
       Row(width(grow=grow), child_gap=10px, Alignment.Start,
         Box(padding(0px, 1px), Icon("question-circle", size=16px, color=Asks.answered(q) ? colours.string : colours.accent)),
-        Box(width(grow=grow), Text(isempty(q.words) ? "A question with no words yet" : Asks.asked(q), size=15px, family=SANS,
-                                   subfamily="Semibold", color=isempty(q.words) ? colours.dim : colours.ink, wrap=WrapMode.words))),
+        beside_mark(18px, Text(isempty(q.words) ? "A question with no words yet" : Asks.asked(q), size=15px, family=SANS,
+                               subfamily="Semibold", color=isempty(q.words) ? colours.dim : colours.ink, wrap=WrapMode.words))),
       (isempty(q.options) ? () : (Column(width(grow=grow), Alignment.Start, child_gap=2px,
         [block_part!(() -> AskOption(of=v, i=i), v, (:option, i)) for i in eachindex(q.options)]...),))...,
       Row(width(grow=grow), child_gap=8px, Alignment.Center,

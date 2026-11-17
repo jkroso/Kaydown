@@ -1544,20 +1544,24 @@ said(value) = begin
   length(text) > LONGEST_VALUE ? first(text, LONGEST_VALUE) * "…" : text
 end
 
-# The page's fonts have no ⌘ or arrows, so those characters are drawn in one that does
-const SYMBOLS = r"[⌘⌥⇧⌃⏎⇥←→↑↓]+"
+# The page's fonts have no ⌘, ⌫ or arrows, so those characters are drawn in one that does
+const SYMBOLS = r"[⌘⌥⇧⌃⏎⇥⌫⌦⎋←→↑↓]+"
 
-"Add `text` to `out`, with its keyboard symbols in a font that has them"
+"""
+Add `text` to `out`, with its keyboard symbols in a font that has them. That's
+Lucida Grande, and for a symbol that it hasn't got, like ⏎, a font that macOS picks.
+"""
 symbols!(out, text, col, face, link="") = begin
   at = 1
-  add(part, symbol) = isempty(part) ||
-    (push!(out, piece(String(part), col, symbol ? Face(face, family=SYMBOL_FONT, style="") : face; link)); col += length(part))
+  add(part, f) = isempty(part) || (push!(out, piece(String(part), col, f; link)); col += length(part))
   for m in eachmatch(SYMBOLS, text)
-    add(SubString(text, at, prevind(text, m.offset)), false)
-    add(m.match, true)
+    add(SubString(text, at, prevind(text, m.offset)), face)
+    for (part, f) in runs(m.match, Face(face, family=SYMBOL_FONT, style=""))
+      add(part, f)
+    end
     at = m.offset + ncodeunits(m.match)
   end
-  add(SubString(text, at), false)
+  add(SubString(text, at), face)
   out
 end
 

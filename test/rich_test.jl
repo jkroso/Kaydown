@@ -548,4 +548,11 @@ end
   @test abs(K.num(K.item(e, n - 20).top - e.scroll.offset - y)) < 1
 end
 
+@testset "the symbol of a key is drawn in a font that has it, and not as a square" begin
+  for family in (K.SERIF, K.SANS), c in "⌘⌥⇧⌃⏎⇥⌫⌦⎋←→↑↓"
+    ps = K.symbols!(K.Piece[], "Press $c now", 0, K.Face(family, "", 16px, K.colours.ink, false))
+    @test all(p -> all(ch -> isascii(ch) || K.has(p.face, ch), p.text), ps)
+  end
+end
+
 end

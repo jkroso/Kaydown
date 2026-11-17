@@ -126,7 +126,9 @@ label: Framing
 
 Click in the bar, or drag in it, to say how much is done. The bar asks Kaydown for a write, the file's function `written` gives the new lines, and Kaydown writes them into the block: press ⌘E to see them. ⌘Z takes the change back. A block that doesn't ask is still written when you save the page.
 
-The line that opens a block can name the file after the language, so one file can define many kinds of block: `progress ./widgets.jl`. It can name a repository on GitHub too, like `progress github.com/sam/blocks`. Kaydown asks you before it runs the code of a repository for the first time. Open [progress.jl](progress.jl) to see how a kind of block is written. When you save a change to that file, Kaydown loads it again, and the block above changes with it.
+The line that opens a block can name the file after the language, so one file can define many kinds of block: `progress ./widgets.jl`. It can name a repository on GitHub too, like `progress github.com/sam/blocks`. Kaydown asks you before it runs the code of a repository for the first time. A Markdown page can define a kind of block too: Kaydown runs the code of the page's `julia` blocks. The page [counter.md](counter.md) defines one, and says in words what each part of its code does.
+
+Open [progress.jl](progress.jl) to see how a kind of block is written in a Julia file. When you save a change to that file, Kaydown loads it again, and the block above changes with it.
 
 ## Sheets
 

@@ -55,6 +55,7 @@ The `pages` folder has the pages that come with Kaydown:
 - `components.md` has a live block for each of UI.jl's components.
 - `julia.md` has code to run with ⌘Return.
 - `schedule.md` has a schedule to try.
+- `counter.md` defines a kind of block, and shows it.
 - `settings.md`, `code-editor.md`, `key-bindings.md` and `email.md` are the four pages of the settings window.
 
 ## Use it with an agent
@@ -225,9 +226,15 @@ The line that opens the block can name where the function comes from, after the 
 
 Kaydown's own kinds of block come first. A file can't change what a `board` or a `chart` shows.
 
+### A page that defines a kind of block
+
+The file can be a Markdown page: `progress.md` beside the page, when there's no `progress.jl`, or a path that ends in `.md`, like `progress ./kinds/progress.md` or `progress github.com/sam/blocks/progress.md`. Kaydown runs the code of each `julia` block of that page, from the top, in one module. The module defines the kind of block, as the module of a Julia file does: it needs the function with the language's name, and it can have `written`.
+
+So the page can say in words what its code does, and it can hold a block of its own kind to try. The code names what it loads with `@use` lines, as a Julia file does. If the code fails, the block says which line of the page failed. `pages/counter.md` is one to copy.
+
 Kaydown asks before it runs the code of a GitHub repository for the first time. The block shows the repository's name and a button, **Run the code**. Kaydown keeps the repositories that you allow in `~/Library/Application Support/Kaydown/repositories`. Take a line out of that file to make Kaydown ask again. Kaydown doesn't ask about a file on your Mac, as it doesn't ask about the code of a `ui` block.
 
-`pages/progress.jl` is a kind of block to copy, and `pages/welcome.md` shows it. The comment over `FileBlock` in `main.jl` says how it works.
+`pages/progress.jl` is a kind of block to copy, `pages/counter.md` is one that a page defines, and `pages/welcome.md` shows the first. The comment over `FileBlock` in `main.jl` says how it works.
 
 ## Save a page when you leave its window
 

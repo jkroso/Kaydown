@@ -41,6 +41,7 @@ The block at the top of this page is front matter: lines at the very top of a fi
 - [A live block, which shows what its code makes](welcome.md#live-blocks)
 - [Every component that a live block can show](components.md)
 - [A kind of block of your own, which a file defines](welcome.md#blocks-of-your-own)
+- [A kind of block that a page defines, with its code and an example](counter.md)
 
 ## Blocks that draw and plan
 

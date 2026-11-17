@@ -237,6 +237,73 @@ save(name, text) = (file = joinpath(dir, name); was = mtime(file); write(file, t
   @test b.state == :made && said(b) == "mended"
 end
 
+@testset "a Markdown page defines a kind of block" begin
+  # The page's `julia` blocks are its code, and the rest of it is words
+  stars = joinpath(dir, "stars.md")
+  write(stars, """
+  # Stars
+
+  A block in the language `stars` counts its stars.
+
+  ```julia
+  mutable struct Stars; n::Int end
+  stars(lines) = Stars(count(==('*'), join(lines)))
+  ```
+
+  This isn't code that runs:
+
+  ```python
+  stars(lines) = error("not Julia")
+  ```
+
+  ```julia
+  written(s::Stars) = ["*"^s.n]
+  ```
+
+  One to try:
+
+  ```stars
+  **
+  ```
+  """)
+  @test K.block_source("```stars", "stars", dir) == "./stars.md"
+  @test first.(K.page_code(stars)) == [6, 17] && K.defines(stars, "stars") && !K.defines(stars, "error")
+  # A Julia file with the same name comes first
+  write(joinpath(dir, "stars.jl"), "stars(lines) = 1\n")
+  @test K.block_source("```stars", "stars", dir) == "./stars.jl"
+  rm(joinpath(dir, "stars.jl"))
+  # A page whose `julia` blocks don't define the function is a page like any other
+  write(joinpath(dir, "notes.md"), "# Notes\n\n```julia\nx = 1\n```\n")
+  @test K.block_source("```notes", "notes", dir) === nothing
+  # A block of another page, with the page found by its name and with the page named
+  i = findfirst(==("The end."), e.buf.lines)
+  K.edit!(e.buf, (i, 0), (i, 0), "```stars\n***\n```\n\n```stars ./stars.md\n*\n```\n\n")
+  e.buf.caret = e.buf.anchor = (1, 0); frames()
+  a, b = view("stars"), view("stars", 2)
+  @test a.state == :made && a.value.n == 3 && b.state == :made && b.value.n == 1
+  @test typeof(a.value) === typeof(b.value)   # one module for the page
+  a.value.n = 5; changed!(a, now=true)
+  @test block("stars") == ["*****"]
+  # The page's own block is of the kind that the page defines
+  o = K.build_editor(stars)
+  win = Window(o, size=(1000px, 900px))
+  foreach(_ -> frame(win), 1:2)
+  own = o.nodes[(:block, "stars", stars, 1)]
+  @test own.state == :made && own.value.n == 2 && typeof(own.value) === typeof(a.value)
+  close(win)
+  # The page is run again when it's saved
+  save("stars.md", replace(read(stars, String), "count(==('*'), join(lines))" => "10 * count(==('*'), join(lines))"))
+  frames()
+  @test a.state == :made && a.value.n == 50
+  # Code that fails names the line of the page that it's on
+  save("stars.md", replace(read(stars, String), "written(s::Stars) = " => "nothing_called_this()\nwritten(s::Stars) = "))
+  frames()
+  @test a.state == :fault && startswith(a.fault, "Line 17 of stars.md: ")
+  save("stars.md", replace(read(stars, String), "nothing_called_this()\n" => ""))
+  frames()
+  @test a.state == :made
+end
+
 @testset "the caret" begin
   s = K.block_lines(e.buf, "progress", 1)
   # The caret steps over the block as a whole, and a language with no file is lines of code
@@ -270,6 +337,12 @@ end
     @test "sam/blocks" in K.ALLOWED && !("sam/elsewhere" in K.ALLOWED)
     # A window that a test makes keeps nothing in the user's own files
     @test !e.remember
+    # A page of a repository defines a kind of block too
+    write(joinpath(repos, "sam", "blocks", "seal.md"), "# Seal\n\n```julia\nseal(lines) = \"Sealed: \" * join(lines)\n```\n")
+    i = findfirst(==("The end."), e.buf.lines)
+    K.edit!(e.buf, (i, 0), (i, 0), "```seal github.com/sam/blocks/seal.md\nwax\n```\n\n")
+    e.buf.caret = e.buf.anchor = (1, 0); frames()
+    @test view("seal").state == :made && said(view("seal")) == "Sealed: wax"
     # A repository that isn't on this Mac says that it's coming before it comes
     K.allow!(e, "sam/elsewhere"); far.state = :new; K.make!(far)
     @test far.state == :wait
@@ -281,6 +354,27 @@ end
 
 close(w)
 rm(dir, recursive=true, force=true)
+
+@testset "the page that comes with Kaydown and defines a counter" begin
+  counter = joinpath(K.pages_dir[], "counter.md")
+  o = K.build_editor(counter)
+  win = Window(o, size=(1000px, 900px))
+  foreach(_ -> frame(win), 1:3)
+  v = o.nodes[(:block, "counter", counter, 1)]
+  @test v.source == "./counter.md" && v.state == :made && v.value.count == 3
+  # A click adds one, and the block's line has it once the mouse lets go
+  r = rect(v.value)
+  x, y = K.num(r.left + r.width / 2), K.num(r.top + r.height / 2)
+  win.mouse = typeof(win.mouse)(px(x), px(y)); onmouse(win, MouseMove(Vec2{px}(px(x), px(y)), win)); frame(win)
+  win.keys |= Keys.mouse_left; onkey(win, KeyPress{Keys.mouse_left}(0, win)); frame(win)
+  win.keys ⊻= Keys.mouse_left; onkey(win, KeyRelease{Keys.mouse_left}(0, win)); foreach(_ -> frame(win), 1:2)
+  s = K.block_lines(o.buf, "counter", 1)
+  @test v.value.count == 4 && o.buf.lines[s[1]+1:s[2]-1] == ["4"]
+  K.undo!(o.buf); foreach(_ -> frame(win), 1:2)
+  @test o.buf.lines[s[1]+1:s[2]-1] == ["3"] && v.value.count == 3 && !K.dirty(o.buf)
+  haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(ENV["KAYDOWN_SHOTS"], "counter.png"), win)
+  close(win)
+end
 
 @testset "the welcome page's own block" begin
   welcome = joinpath(K.pages_dir[], "welcome.md")

@@ -9814,6 +9814,12 @@ BLOCKS[EMAIL] = BlockKind("Emails", "envelope", EmailsView, emails_html)
 #     ```progress github.com/sam/blocks       a repository on GitHub
 #     ```progress github.com/sam/blocks@v2    one branch of it
 #
+# The file can be a Markdown page too: `progress.md` beside the page, when
+# there's no `progress.jl`, or a path that ends in `.md`. Kaydown runs the code
+# of the page's `julia` blocks, from the top, in one module, and that module
+# defines the kind of block as a Julia file's module does. So the page can say
+# in words what its code does, and can hold a block of its own kind to try.
+#
 # A file beside the page only counts if its text defines a function with the
 # language's name that takes one thing. So a page in a folder of Julia code
 # doesn't run `json.jl` because it has a block of JSON.
@@ -9871,7 +9877,8 @@ defines(file::AbstractString, name::AbstractString) = begin
   at == 0 && return false
   kept = get(DEFINES, (file, name), nothing)
   kept !== nothing && kept[1] == at && return kept[2]
-  found = occursin(Regex("^(?:function[ \\t]+)?\\Q$name\\E\\([^,;)]+[;)]", "m"), read(file, String))
+  code = ismarkdown(file) ? join(last.(page_code(file)), "\n") : read(file, String)
+  found = occursin(Regex("^(?:function[ \\t]+)?\\Q$name\\E\\([^,;)]+[;)]", "m"), code)
   DEFINES[(file, name)] = (at, found)
   found
 end
@@ -9885,7 +9892,65 @@ block_source(text::AbstractString, lang::AbstractString, folder::AbstractString)
   (Base.isidentifier(lang) && !known_lang(lang)) || return nothing
   m = match(SOURCE, text)
   m === nothing || return String(m[1])
-  !isempty(folder) && defines(joinpath(folder, lang * ".jl"), lang) ? "./$lang.jl" : nothing
+  isempty(folder) && return nothing
+  # A Julia file comes before a Markdown page with the same name
+  k = findfirst(ext -> defines(joinpath(folder, lang * ext), lang), (".jl", ".md"))
+  k === nothing ? nothing : "./$lang$((".jl", ".md")[k])"
+end
+
+"The Markdown pages that define a kind of block, with the module that each one's code runs in"
+const PAGE_MODULES = Dict{String,Module}()
+
+"The code of each `julia` block of the Markdown page at `path`, with the line of the page that it starts on"
+page_code(path::AbstractString) = begin
+  lines = text(path)
+  ks = classify(lines)
+  out = Tuple{Int,String}[]
+  for (i, k) in enumerate(ks)
+    (k.kind == Kind.fence && k.level == 0 && k.lang == "julia") || continue
+    t = something(findnext(c -> c.kind == Kind.fence, ks, i + 1), length(lines) + 1)
+    push!(out, (i + 1, join(lines[i+1:t-1], "\n")))
+  end
+  out
+end
+
+"""
+Run the code of the Markdown page at `path` in the module `m`: each of its
+`julia` blocks, from the top. An error names the line of the page that it's on.
+"""
+run_page!(m::Module, path::AbstractString) = begin
+  for (line, code) in page_code(path)
+    try
+      # Empty lines before the code give each line of it the number that it has in the page
+      include_string(m, "\n"^(line - 1) * code, path)
+    catch err
+      error("Line $(err isa LoadError ? err.line : line) of $(basename(path)): $(trouble(err))")
+    end
+  end
+  m
+end
+
+"The module that the `julia` blocks of the Markdown page at `path` define. It's made the first time, and kept."
+page_module(path::AbstractString) = get!(PAGE_MODULES, path) do
+  # A module holds its own name, so the name has a ⭒ in front, as Kip's modules have. A page called
+  # `stars` can then define a function called `stars`.
+  m = Module(Symbol("⭒", title(path)))
+  # What a Julia file that Kip loads starts with: Kip, for `@use`, and its own `eval` and `include`
+  Core.eval(m, :(const Kip = $Kip))
+  Core.eval(m, :(using .Kip))
+  Core.eval(m, :(eval(x) = Core.eval($m, x)))
+  Core.eval(m, :(include(file) = Base.include($m, file)))
+  run_page!(m, path)
+end
+
+"""
+The file on this Mac that the source `source` names inside a repository, like
+`github.com/sam/blocks/progress.md`. Kip gets the repository if it isn't here.
+"""
+repository_file(source::AbstractString) = begin
+  user, repo, tag, inside = match(Kip.gh_shorthand, source).captures
+  folder = Base.invokelatest(Kip.checkout, Base.invokelatest(Kip.getrepo, user, repo), user, repo, tag)
+  joinpath(folder, something(inside, ""))
 end
 
 "Where the function of the block that opens on line `s` of `b` comes from, or nothing when no file defines its language"
@@ -9970,6 +10035,12 @@ here(repo::AbstractString) = isdir(joinpath(Kip.repos, repo))
 "The module of the file or the repository `source`. A path like `./progress.jl` starts from the folder of the page."
 source_module(e, source::AbstractString) = begin
   folder = isdir(docdir(e)) ? docdir(e) : pwd()
+  # A Markdown page isn't Julia code, so Kip doesn't load it: the page's `julia` blocks make its module
+  if ismarkdown(source)
+    file = repository(source) === nothing ? source_file(e, source) : repository_file(source)
+    isfile(file) || error("Kaydown can't find the page $source.")
+    return cd(() -> Base.invokelatest(page_module, realpath(file)), folder)
+  end
   cd(() -> Base.invokelatest(Kip.require, source, folder), folder)
 end
 
@@ -10008,10 +10079,10 @@ reload!(v::FileBlock) = begin
     write_blocks!(editor(v))   # what the blocks hold goes into their lines first, since they're made again from those
     LOADED[v.file] = at
     delete!(BROKEN, v.file)
-    m = get(Kip.modules, v.file, nothing)
+    m = get(Kip.modules, v.file, get(PAGE_MODULES, v.file, nothing))
     try
       # The file's new code goes into the module that it has. A file that didn't load the first time has none yet.
-      m === nothing || Base.include(m, v.file)
+      m === nothing || (ismarkdown(v.file) ? Base.invokelatest(run_page!, m, v.file) : Base.include(m, v.file))
     catch err
       BROKEN[v.file] = trouble(err)
     end

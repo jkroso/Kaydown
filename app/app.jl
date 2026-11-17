@@ -11,7 +11,7 @@
 
 include("start.jl")
 
-@use ".." build_editor open_editor WELCOME restyle! problems pages_dir SIDEBAR_ICONS FILE_ICONS todo_at inbox Agent INSERTS PLAN_ICONS SCHEDULE_ICONS window! editors settings_editor theme! Update
+@use ".." build_editor open_editor WELCOME restyle! problems pages_dir SIDEBAR_ICONS FILE_ICONS todo_at inbox Agent INSERTS PLAN_ICONS SCHEDULE_ICONS BLOCK_ICONS window! editors settings_editor theme! Update
 @use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse Typed ontype
 @use "github.com/jkroso/Font.jl/units" px
 @use "github.com/jkroso/UI.jl/Interface/abstract" focus window_of
@@ -30,7 +30,7 @@ building && start_packages()
 # them now keeps them in the app, so it doesn't need that folder.
 foreach(load_icon, ["check", "chevron-down", "chevron-right", "chevron-up", "copy", "file-earmark", "file-earmark-text", "folder", "eye", "bell-fill", "bell",
                     "layout-sidebar", "pause-fill", "play-fill", "record-fill", "search", "stop-fill", "text-center", "text-left",
-                    "text-paragraph", "text-right", "x-lg", SIDEBAR_ICONS..., FILE_ICONS..., PLAN_ICONS..., SCHEDULE_ICONS...])
+                    "text-paragraph", "text-right", "x-lg", SIDEBAR_ICONS..., FILE_ICONS..., PLAN_ICONS..., SCHEDULE_ICONS..., BLOCK_ICONS...])
 
 # The welcome page's text, to type into while the app warms up
 const page = read(WELCOME, String)

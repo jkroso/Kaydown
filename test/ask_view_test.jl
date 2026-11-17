@@ -1,0 +1,104 @@
+# Tests for the `ask` block of main.jl: a question with answers to choose. Run
+# them with `julia -O0 --project=. test/ask_view_test.jl`. They click and type
+# in a window that isn't on the screen. Set `KAYDOWN_SHOTS` to a folder, and
+# they save a picture of the page there.
+
+@use Test: @test, @testset
+@use "../main" => K
+@use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse Typed ontype
+@use "github.com/jkroso/UI.jl/Interface/draw" frame rect
+@use "github.com/jkroso/UI.jl/Interface/save" save_png
+@use GeometryBasics: Vec2
+const px = K.px
+
+const dir = mktempdir()
+const page = joinpath(dir, "plan.md")
+write(page, """
+# A plan
+
+```ask
+Which database should the app use?
+( ) SQLite. It's one file, and needs no server, so there's nothing more to look after on the Mac that runs the app, and a copy of that one file is a copy of everything.
+( ) Postgres
+[ ] Keep a copy in the cloud
+```
+
+```ask
+What should the button say?
+```
+
+The end.
+""")
+
+const e = K.build_editor(page)
+const w = Window(e, size=(1000px, 900px))
+frames(n=2) = foreach(_ -> frame(w), 1:n)
+frames()
+ask(n) = e.nodes[(:block, K.ASK, page, n)]
+shot(name) = haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(ENV["KAYDOWN_SHOTS"], name), w)
+
+at((x, y)) = (w.mouse = typeof(w.mouse)(px(x), px(y)); onmouse(w, MouseMove(Vec2{px}(px(x), px(y)), w)); frames(1))
+press(place) = (at(place); w.keys |= Keys.mouse_left; onkey(w, KeyPress{Keys.mouse_left}(0, w)))
+release() = (w.keys ⊻= Keys.mouse_left; onkey(w, KeyRelease{Keys.mouse_left}(0, w)); frames())
+click(place) = (press(place); release())
+typed(s) = (foreach(c -> ontype(w, Typed(c, w)), s); frames())
+middle(r) = (K.num(r.left + r.width / 2), K.num(r.top + r.height / 2))
+block(n) = (s = K.block_lines(e.buf, K.ASK, n); e.buf.lines[s[1]+1:s[2]-1])
+option(n, i) = middle(rect(ask(n).parts[(:option, i)]))
+
+@testset "the block shows the question and its answers" begin
+  v = ask(1)
+  @test K.Asks.asked(v.data) == "Which database should the app use?" && length(v.data.options) == 3
+  # A long answer wraps, so its row is taller than a short one's
+  @test rect(v.parts[(:option, 1)]).height > rect(v.parts[(:option, 2)]).height
+  @test any(en -> en.title == "Question", K.outline(e.buf))
+  @test !K.dirty(e.buf)
+end
+
+@testset "a click chooses an answer" begin
+  click(option(1, 2))
+  @test block(1)[3] == "(x) Postgres" && startswith(block(1)[2], "( ) SQLite") && K.dirty(e.buf)
+  click(option(1, 1))
+  @test startswith(block(1)[2], "(x) SQLite") && block(1)[3] == "( ) Postgres"
+  click(option(1, 3))
+  @test block(1)[4] == "[x] Keep a copy in the cloud" && startswith(block(1)[2], "(x) SQLite")
+  K.undo!(e.buf); frames()
+  @test block(1)[4] == "[ ] Keep a copy in the cloud" && !ask(1).data.options[3].chosen
+  @test e.buf.lines[end-1] == "The end."
+  shot("ask.png")
+end
+
+@testset "what's typed in the field goes under the answers" begin
+  input = ask(2).parts[:input]
+  click(middle(rect(input)))
+  @test w.focus === input
+  typed("Save")
+  @test block(2) == ["What should the button say?", "> Save"]
+  typed(" it")
+  @test block(2)[2] == "> Save it" && K.Asks.answered(ask(2).data)
+  # The letters were typed one soon after another, so one ⌘Z takes them all back
+  K.undo!(e.buf); frames()
+  @test block(2) == ["What should the button say?"] && input.text == ""
+  K.redo!(e.buf); frames()
+  @test block(2)[2] == "> Save it" && input.text == "Save it"
+  # Return gives the keyboard back to the page
+  onkey(w, KeyPress{Keys.enter}(0, w)); frames()
+  @test w.focus === e && block(2)[2] == "> Save it"
+  html = K.page_html(e)
+  @test occursin("<strong>What should the button say?</strong>", html) && occursin("<blockquote>Save it</blockquote>", html)
+  @test occursin("☑ <strong>SQLite", html) && occursin("☐ Postgres", html)
+end
+
+@testset "an agent that waits gets a Send button" begin
+  @test !haskey(ask(1).parts, (:button, :send))
+  # This process stands in for a script that waits for the page
+  K.Agent.place[] = mktempdir()
+  write(joinpath(K.Agent.folder(), "$(getpid()).wait"), realpath(page) * "\nClaude\n")
+  delete!(e.nodes, :agents); frames()
+  click(middle(rect(ask(1).parts[(:button, :send)])))
+  sent = read(joinpath(K.Agent.folder(), "$(getpid()).sent"), String)
+  # The agent reads the answers in the lines that changed
+  @test occursin("-( ) SQLite", sent) && occursin("+(x) SQLite", sent) && occursin("+> Save it", sent)
+  @test !K.dirty(e.buf) && readlines(page)[end-3] == "> Save it"
+  K.Agent.place[] = ""
+end

@@ -11,6 +11,12 @@ A code block does more than show code. What it does depends on its language:
 - `mermaid` shows a diagram, like a flowchart.
 - `takeoff` shows a building plan that you measure from, and makes a quote from what you measure.
 - `schedule` shows the page's to-do items as bars on a line of days, and you drag the bars to plan the work.
+- `chart` draws the numbers of a table as bars, as lines or as a pie.
+- `board` shows the page's to-do items as cards in columns, and you drag a card to move it.
+- `sketch` is a drawing: lines by hand, arrows, boxes, ovals and words.
+- `find` lists the lines that match in every page of a folder, like each to-do item that isn't ticked.
+- `ask` is a question from an agent, with answers to click.
+- `changes` shows a diff from an agent, with a button on each change that accepts or rejects it.
 
 A page shows more than text:
 
@@ -51,6 +57,8 @@ The `pages` folder has the pages that come with Kaydown:
 
 An agent like Claude Code can show you a page in Kaydown and read what you change in it. The agent writes a Markdown file, opens it in Kaydown and waits. You read the page, tick a box or type a note, and click the bell at the top right, or press ⌘Return. That button is called "Nudge Claude". The agent gets the lines that you changed. The agent can change the page while you read it, and Kaydown keeps what you're typing.
 
+Two kinds of block are for an agent to write. A code block in the language `ask` is a question: its first lines are the question, a line that starts with `( )` is an answer that you choose one of, and a line that starts with `[ ]` is an answer that you choose any number of. You click an answer, or type in the field under them, and Kaydown writes that into the block. A code block in the language `changes` holds a diff, and shows each change with an Accept and a Reject button. Kaydown writes `[accepted]` or `[rejected]` at the end of the change's `@@` line, and changes no other file. Either way, the agent reads your answer in the lines that you changed. While an agent waits, a question has a Send button. `ask.jl` and `changes.jl` say how the blocks are written.
+
 The `plugin` folder is a plugin for Claude Code. It has a skill that tells Claude when and how to show a page, and a command, `kaydown`, that the skill runs. To install it, type these in Claude Code:
 
 ```
@@ -83,6 +91,49 @@ A code block in the language `schedule` finds every to-do item of its page, and 
 
 On a page with a schedule, a to-do item reads as it always does. Move the mouse over it, and the task's days show at the end of its line, with a button each side of them that makes the task a day shorter or longer. `pages/schedule.md` has a schedule to try.
 
+## Draw a table's numbers
+
+A code block in the language `chart` draws the numbers of a table of the page: a table, a spreadsheet or a sheet. With nothing in the block, it draws the table that's nearest above it, as bars. The buttons at the top of the chart make it lines or a pie. The mouse over a bar says its number.
+
+````
+| Month | Sales | Costs |
+|---|---|---|
+| July | $4,200 | $2,900 |
+| August | $5,100 | $3,100 |
+
+```chart
+title: Sales and costs
+```
+````
+
+A line in the block can say more:
+
+- `kind: lines` or `kind: pie` chooses the kind.
+- `show: Sales` draws only that column. Without it, the chart draws each column of numbers.
+- `by: Month` names the column whose words go under the bars.
+- `from: Budget` draws the first table under the heading "Budget".
+
+A chart can hold its own rows too, with a `|` between the cells. `chart.jl` says how the block is written.
+
+## Move the tasks of a page across a board
+
+A code block in the language `board` shows every to-do item of its page as a card, in the columns To do, Doing and Done. Drag a card to another column. The last column holds the items that are ticked: a card that you drop there ticks its item in the page, and a card that you drag out of it takes the tick away. Click a card twice to go to its item. The line `columns: Later, This week, Done` in the block names other columns. The block's lines hold the column of each card, and `board.jl` says how they're written.
+
+## Draw a sketch
+
+A code block in the language `sketch` is a drawing. The buttons at its top are the tools: one selects a shape, and the others draw by hand, a line, an arrow, a box, an oval and words. The dots choose a colour. Drag in the sketch to draw. With the first tool, click a shape to select it, drag it to move it, and press Delete to take it away. Each shape is a line of the block, so ⌘Z takes back the last thing you drew. `sketch.jl` says how the lines are written.
+
+## List what's in the pages of a folder
+
+A code block in the language `find` lists the lines that match in every page of its page's folder, and of the folders in that one. The name of each page is over that page's lines.
+
+- An empty block lists each to-do item that isn't ticked.
+- Words in the block list the lines that have every one of those words.
+- `what: headings` lists headings, and `what: done items` lists the to-do items that are ticked.
+- `in: jobs` looks only in the folder `jobs` beside the page.
+
+Click a line of the list to open its page at that line. Click the box of a to-do item to tick it in its own page. If that page isn't open in Kaydown, or is open with nothing to save, Kaydown writes the tick to the page's file at once. That's the one time that Kaydown writes to a file without ⌘S. `find.jl` says how the block is written.
+
 ## Test it
 
 ```sh
@@ -111,6 +162,18 @@ julia -O0 --project=. test/video_test.jl          # a line that holds only a vid
 julia -O0 --project=. test/html_test.jl           # the page of HTML that ⌘⇧E saves
 julia -O0 --project=. test/merge_test.jl          # your changes and an agent's changes to one page put together, and how the two talk
 julia -O0 --project=. test/pasteboard_test.jl     # what the Mac's clipboard holds: text, files and pictures
+julia -O0 --project=. test/chart_test.jl          # how a chart is read and written, and where its bars, lines and slices go
+julia -O0 --project=. test/chart_view_test.jl     # the chart of a table, a spreadsheet and a sheet, in a window that isn't on the screen
+julia -O0 --project=. test/ask_test.jl            # how a question and its answers are read and written
+julia -O0 --project=. test/ask_view_test.jl       # a question in the page: a click on an answer, and the field to type in
+julia -O0 --project=. test/changes_test.jl        # how a diff is read, and how your choices are written into it
+julia -O0 --project=. test/changes_view_test.jl   # the changes of a diff in the page, and the buttons that accept and reject them
+julia -O0 --project=. test/board_test.jl          # how a board is read and written, and the column of each to-do item
+julia -O0 --project=. test/board_view_test.jl     # the cards of a board, and a drag from one column to another
+julia -O0 --project=. test/find_test.jl           # how a list of what's found is read and written, and which lines match
+julia -O0 --project=. test/find_view_test.jl      # the list in the page, and a tick that goes to another page's file
+julia -O0 --project=. test/sketch_test.jl         # how a sketch is read and written, and what a click is on
+julia -O0 --project=. test/sketch_view_test.jl    # the tools of a sketch: drawing, moving and deleting shapes
 julia -O0 --project=. test/media_folder_test.jl   # the hidden folder for the files that a page makes, and the hidden files in the sidebar
 ```
 

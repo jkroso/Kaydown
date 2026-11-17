@@ -193,6 +193,60 @@ Every change goes into the block's lines, so the file holds the whole takeoff. T
 
 A code block in the language `schedule` plans the page's to-do items. Each item is a task, and the block shows each task as a bar on a line of days. Drag the end of a bar to say how long the task takes, and drag from the circle after a bar to the task that waits for it. On a page with a schedule, the mouse over a to-do item shows the task's days at the end of its line. The page [schedule.md](schedule.md) has one to try.
 
+## Charts
+
+A code block in the language `chart` draws the numbers of a table. It draws the table, the spreadsheet or the sheet that's nearest above it.
+
+| Month | Sales | Costs |
+|---|---|---|
+| July | $4,200 | $2,900 |
+| August | $5,100 | $3,100 |
+| September | $4,800 | $3,600 |
+| October | $6,300 | $3,900 |
+
+```chart
+title: Sales and costs
+```
+
+The three buttons at its top make it bars, lines or a pie. Change a number in the table, and the chart changes with it. Move the mouse over a bar to see its number.
+
+A line in the block can say more. `show: Sales` draws only that column. `by: Month` names the column whose words go under the bars. `from: Spreadsheets` draws the first table under that heading. A chart can hold its own rows too, with a `|` between the cells. To see the block's lines, hold ⌥ and click the chart.
+
+## Boards
+
+A code block in the language `board` shows this page's to-do items as cards in columns. Drag a card to another column. A card that you drop on the last column ticks its item, and a card that you drag out of that column takes the tick away. Click a card twice to go to its item.
+
+```board
+```
+
+The block's lines hold the column of each card. A line like `columns: Later, This week, Done` at their top names other columns.
+
+## Sketches
+
+A code block in the language `sketch` is a drawing. Choose a tool at its top, and drag in the sketch to draw with it: by hand, a line, an arrow, a box or an oval. For words, click where they start, type them in the field at the top and press Return. The dots choose a colour. With the first tool, click a shape to select it, drag it to move it, and press Delete to take it away.
+
+```sketch
+box 60,50 330,190
+text 70,38 Bathroom
+oval blue 90,80 180,150
+text blue 100,174 Basin
+box 230,70 310,170
+text 240,125 Shower
+arrow red 450,80 336,110
+text red 458,84 The door opens in
+```
+
+Each shape is a line of the block, so ⌘Z takes back the last thing you drew.
+
+## Find
+
+A code block in the language `find` lists the lines that match in every page of this page's folder, and of the folders in it. With nothing in the block, it lists each to-do item that isn't ticked. Click a box to tick the item in its own page. Click an item's words to go to it.
+
+```find
+```
+
+Words in the block list the lines that have those words. `what: headings` lists headings, and `what: done items` lists the items that are ticked. `in: jobs` looks only in the folder `jobs`.
+
 ## Recordings
 
 To record from your Mac's microphone, right-click the page and choose Insert › Recording. Kaydown starts to record at once, into a new file in the hidden folder `.media` beside this page. Bars show how loud the sound is, and you can type while it records. Click the red button to stop. The first time, macOS asks whether Kaydown may use the microphone.
@@ -204,6 +258,28 @@ A line that holds only a sound file shows a player for it. The line is written a
 ## Work with an agent
 
 An agent like Claude Code can write a page and show it to you here: a plan with a diagram, a table of options, a list of boxes to tick. While the agent waits for you, a bell shows at the top right. It's a button called "Nudge Claude". Change the page any way you like: tick a box, change a number, type a question on a new line. Then click the button, or press ⌘Return. Kaydown saves the page and gives the agent the lines that you changed.
+
+An agent can ask a question in a block of its own. Click an answer, or type one in the field, and then send the page. A round mark means that you choose one answer, and a square box means that you choose as many as you like.
+
+```ask
+Which should the agent do first?
+( ) Write the tests
+( ) Fix the bug
+[ ] Tell me when it's done
+```
+
+An agent can show you its changes to a file too. Accept or reject each one, and send the page. Kaydown changes no file: the agent reads your choices and makes the changes that you accepted.
+
+```changes
+--- a/greet.jl
++++ b/greet.jl
+@@ -1,3 +1,4 @@
+ greet(name) = begin
+-  println("Hello ", name)
++  isempty(name) && return
++  println("Hello, ", name, "!")
+ end
+```
 
 The agent can change the page while you read it. What you're typing stays, and the agent's changes show around it. A bar shows for a few seconds beside each line that the agent changed. If you missed them, click the button with an eye at the top right: it shows a bar beside every line that the agent changed since you last sent the page, until you click it again. In the list of files, a dot marks a page that an agent waits for. While the list is hidden, the dot shows beside the button that opens it. [Kaydown's page on GitHub](https://github.com/jkroso/Kaydown#use-it-with-an-agent) says how to set up an agent.
 
@@ -217,7 +293,7 @@ Click a file in the list that isn't Markdown to see it in the page. Kaydown show
 
 Right-click a file in the list to rename it, copy its path, show it in the Finder or move it to the Trash. Right-click the file's name at the top of the window for the same menu.
 
-Right-click the page to cut, copy or paste. The menu's Insert item adds a new block where you clicked: a heading, a list, a to-do item, a table, a sheet, a spreadsheet, a diagram, a takeoff, a schedule, a live block and more.
+Right-click the page to cut, copy or paste. The menu's Insert item adds a new block where you clicked: a heading, a list, a to-do item, a table, a sheet, a spreadsheet, a diagram, a takeoff, a schedule, a chart, a board, a sketch, a live block and more.
 
 A file can start with front matter: lines like `title: Notes` between two lines of `---`. Kaydown shows it as a block of its own, and leaves it out of the word count.
 

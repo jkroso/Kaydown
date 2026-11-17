@@ -41,7 +41,9 @@ What the user changed since your last version of the file (- is your line, + is 
 How to read it:
 
 - It lists only the user's changes. A change that you made to the file is not in it.
-- A box that changed from `[ ]` to `[x]` is a choice that the user made.
+- A box that changed from `[ ]` to `[x]` is a choice that the user made. So is an answer of an `ask` block that changed from `( )` to `(x)`.
+- A new line that starts with `>` in an `ask` block is what the user typed as their answer.
+- `[accepted]` or `[rejected]` at the end of an `@@` line of a `changes` block is the user's choice for that change.
 - A new line that talks to you, like the question above, is a note. Do what it asks, or answer it, and then take the note out of the page.
 - Any other changed text is the user's own wording. Keep it. Do not put your wording back.
 - "The user changed nothing in it" means that the user read the page and has nothing to add. If the page asked for approval, that is approval.
@@ -60,7 +62,11 @@ Exit code 3 means that Kaydown is not installed, or that it is too old to send a
 | To show | Write |
 |---------|-------|
 | Headings, **bold**, *italic*, `code`, links, quotes, lists, a rule | Markdown, as usual. The headings are also the page's list of contents. |
-| A choice or a task | `- [ ] Text`. The user clicks the box. |
+| A task | `- [ ] Text`. The user clicks the box. |
+| A question with answers to choose | An `ask` code block. See below. |
+| Changes to a file, to accept or reject | A `changes` code block. See below. |
+| Numbers as bars, lines or a pie | A `chart` code block. See below. |
+| The page's tasks as cards in columns | A `board` code block. See below. |
 | When each task is done, and what it waits for | A `schedule` code block. See below. |
 | A table | A Markdown table. The user can type in its cells and add rows. |
 | A flow, a sequence, states, classes, shares | A `mermaid` code block. See below. |
@@ -133,6 +139,73 @@ Move the price checks to the queue | from 2026-11-25 | after Write the worker
 
 After the name: `3 days` is how many working days the task takes, `after` and a task's name makes it wait for that task, and `from` and a day is the first day that it can start. A task can have several `after` parts. `start` is the day that the work starts. Saturday and Sunday aren't working days, unless the block has the line `days: every day`. Write a `\` before a `|` in a task's name.
 
+### A question
+
+An `ask` code block asks one question. Its first lines are the question. A line that starts with `( )` is an answer, and the user chooses one of those. A line that starts with `[ ]` is an answer that the user can choose with any others. Under the answers, Kaydown shows a field that the user can type in. A block with no answers is a question that the user answers in that field.
+
+````
+```ask
+Which queue should the price checks use?
+( ) The queue that Postgres has. Nothing new to run.
+( ) Redis. Faster, and one more thing to run.
+[ ] Keep the old checks running for a week
+```
+````
+
+The user clicks an answer, and Kaydown writes `(x)` or `[x]` in its line. What they type goes in a line that starts with `>`. Use one block for each question. An older Kaydown shows the block as code, and the user can still type an `x` between the brackets.
+
+### Changes to accept or reject
+
+A `changes` code block holds a diff, as `git diff` or `diff -u` writes one. Kaydown shows each change, with the lines that go in red and the lines that come in green, and an Accept and a Reject button.
+
+````
+```changes
+--- a/src/queue.js
++++ b/src/queue.js
+@@ -10,3 +10,4 @@ function take() {
+   const job = next()
+-  run(job)
++  if (!job) return
++  run(job)
+   done(job)
+```
+````
+
+Kaydown writes the user's choice at the end of the change's `@@` line: `[accepted]` or `[rejected]`. It changes no file but the page. So show the changes before you make them, and then make only the ones that the user accepted. Give each change that the user can choose apart from the others its own `@@` line.
+
+### A chart
+
+A `chart` code block draws the numbers of a table. With nothing in it, it draws the table, the spreadsheet or the sheet that is nearest above it, as bars. The first column that isn't numbers names the bars, and each column of numbers is drawn.
+
+````
+| Month | Sales | Costs |
+|---|---|---|
+| July | $4,200 | $2,900 |
+| August | $5,100 | $3,100 |
+
+```chart
+kind: lines
+title: Sales and costs
+```
+````
+
+`kind` is `bars`, `lines` or `pie`. `show: Sales` draws only that column. `by: Month` names the column whose words name the bars. `from: Budget` draws the first table under the heading "Budget". To draw numbers that are in no table, put the rows in the block, under an empty line, with a `|` between the cells and the names of the columns in the first row. Do not draw two measures with different units in one chart.
+
+### A board
+
+A `board` code block shows every `- [ ]` item of the page as a card, in the columns To do, Doing and Done. The user drags a card to another column. A ticked item is in the last column. Kaydown writes a line in the block for each card that is between the first column and the last: the item's text, a `|`, and the column.
+
+````
+- [ ] Add the queue table
+- [ ] Write the worker
+
+```board
+Add the queue table | Doing
+```
+````
+
+The line `columns: Later, This week, Done` at the top of the block names other columns.
+
 ### Code that runs
 
 A code block in the language `ui`, and code between backticks straight after a `!`, is Julia code that Kaydown runs when the page opens. Use these only if the user asks for a live block.
@@ -140,6 +213,6 @@ A code block in the language `ui`, and code between backticks straight after a `
 ## Write a page that is easy to answer
 
 - Put the answer or the decision first, then the detail.
-- Give each choice as tick boxes, and say whether the user picks one or many.
-- Ask each question on a line of its own, and leave an empty line under it for the answer.
+- Ask each question in an `ask` block. Use `( )` answers when the user picks one, and `[ ]` answers when they can pick many.
+- Show changes to code in a `changes` block before you make them, when the user may want only some of them.
 - Use a diagram for how things connect, a table to compare options, and a sheet for numbers that the user may want to change.

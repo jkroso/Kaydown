@@ -33,6 +33,17 @@
 #     items: each one is a bar on a line of days. Drag a bar's end to say how
 #     long the task takes, and drag from the circle at its end to the task that
 #     waits for it. The mouse over a to-do item shows the task's days.
+#   - Write a code block in the language `chart` under a table, a spreadsheet
+#     or a sheet to draw its numbers as bars, as lines or as a pie.
+#   - Write a code block in the language `board` to see the page's to-do
+#     items as cards in columns. Drag a card to the last column to tick its item.
+#   - Write a code block in the language `sketch` to draw: by hand, lines,
+#     arrows, boxes, ovals and words.
+#   - Write a code block in the language `find` to list the lines that match
+#     in every page of the folder, like each to-do item that isn't ticked.
+#   - An agent writes a code block in the language `ask` to ask you a
+#     question with answers to click, and one in the language `changes` to
+#     show you a diff, with a button on each change that accepts or rejects it.
 #   - ⌘B and ⌘I make the selection bold or italic. ⌘Z and ⌘⇧Z undo and redo.
 #   - Double-click selects a word, triple-click a line. ⌘-click opens a link.
 #   - ⌘F finds text in the page. Return goes to the next place that has it.
@@ -59,7 +70,8 @@
 #     rename it, copy its path, show it in the Finder or move it to the Trash.
 #   - Right-click the page to cut, copy and paste, and to insert a new block
 #     where you clicked: a heading, a list, a to-do item, a table, a sheet, a
-#     spreadsheet, a code block, a live block, a takeoff, a schedule, a recording or a divider.
+#     spreadsheet, a code block, a live block, a takeoff, a schedule, a chart, a
+#     board, a list of what's found, a sketch, a recording or a divider.
 #   - A line that holds only a sound file, like ![Recording](memo.m4a), shows
 #     a player. Insert › Recording records one from the microphone. A button
 #     under the player writes down what's said, in a paragraph under it.
@@ -152,6 +164,12 @@
 @use "./pasteboard" => Pasteboard
 @use "./takeoff" => Plans
 @use "./schedule" => Schedules
+@use "./chart" => Charts
+@use "./ask" => Asks
+@use "./changes" => Diffs
+@use "./board" => Boards
+@use "./find" => Searches
+@use "./sketch" => Sketches
 @use "./centient" => Centient
 @use "./update" => Update
 @use "github.com/jkroso/UI.jl/Interface/draw" Bubble
@@ -7716,6 +7734,1465 @@ zoom_key!(v::ZoomView, K, w, command) = begin
   handled
 end
 
+# --- blocks that show as a component ---------------------------------------------------------
+#
+# A code block in one of the languages of `BLOCKS` shows as a component of its
+# own, as a takeoff and a schedule do: a chart, a question, a set of changes,
+# a board, a list of what was found or a sketch. Each one
+# keeps all that it knows in the lines of its block, so the file holds the
+# whole of it, and ⌘Z takes back what you do to it. Move the caret into the
+# block, or click the block with ⌥ held, to see those lines.
+#
+# The view of a block is a node with these fields: `n`, its place among the
+# page's blocks in its language, `first` and `last`, the lines of its block,
+# `lines`, the lines that it was last read from, and `parts`, its buttons and
+# the rest that's kept between frames. `reread!(view, lines)` reads it again.
+
+"What a block in one language shows as"
+struct BlockKind
+  name::String   # what the sidebar calls it
+  icon::String   # and the icon beside that name
+  view::Any      # the type of its view
+  html::Any      # `html(e, view)` is the block as HTML, or nothing to show its lines
+end
+
+"The languages whose blocks show as a component, with what each shows as"
+const BLOCKS = Dict{String,BlockKind}()
+
+"The view of the `n`th block of the page that shows in the language `lang`"
+block_view(e, lang, n) = begin
+  v = get!(() -> BLOCKS[lang].view(n=n), e.nodes, (:block, lang, e.buf.path, n))
+  own!(node!(Document, e, :document), v)
+  v
+end
+
+"What the block in the language `lang` from line `i` to line `t` shows. `n` is its place among the page's blocks in that language."
+block_item(e, lang, i, t, n) = begin
+  v = block_view(e, lang, n)
+  v.first, v.last = i, t
+  reread!(v, e.buf.lines[i+1:t-1])
+  # Lay it out once to learn how tall it is
+  concrete = describe(Column(fixed(e.width), Alignment.Start, geometry(v)), (e.width, 9999px))
+  Live(v, concrete.height + 2LIVE_GAP)
+end
+
+"The place of the block that opens on line `s` among the blocks of `b` in the language `lang`"
+block_place(b::Buffer, lang, s) = count(i -> (k = kinds(b)[i]; k.kind == Kind.fence && k.level == 0 && k.lang == lang), 1:s)
+
+"The block in the language `lang` that opens on line `s`, as HTML, or nothing to show its lines"
+block_html(e, lang, s, t) = begin
+  ks = kinds(e.buf)
+  t > s && ks[t].kind == Kind.fence && ks[t].level == 1 || return nothing
+  v = block_view(e, lang, block_place(e.buf, lang, s))
+  v.first, v.last = s, t
+  reread!(v, e.buf.lines[s+1:t-1])
+  BLOCKS[lang].html(e, v)
+end
+
+"""
+Write `new` as the lines of the block of `v`, a view in the language `lang`.
+The caret stays where it was in the text, and ⌘Z takes the change back. With
+`typing`, changes that come one soon after another are taken back together.
+"""
+write_block!(v, lang, new::Vector{String}; typing=false) = begin
+  e = editor(v)
+  b = e.buf
+  readonly(b) && return v
+  span = block_lines(b, lang, v.n)
+  span === nothing && return v
+  i, t = span
+  v.first, v.last = i, t
+  old = b.lines[i+1:t-1]
+  new == old && return reread!(v, new)
+  caret, anchor = b.caret, b.anchor
+  edit!(b, line_end(b, i), line_end(b, t - 1), isempty(new) ? "" : "\n" * join(new, "\n"); typing)
+  by = length(new) - length(old)
+  moved(p) = p[1] >= t ? (p[1] + by, p[2]) : p[1] > i ? (i, 0) : p
+  b.caret, b.anchor = moved(caret), moved(anchor)
+  v.last += by
+  reread!(v, new)
+end
+
+"What happens to a block's view in each frame, before the page is laid out. Most kinds of block need nothing."
+block_tick!(v) = v
+
+"Do what each block of the page that shows needs in this frame"
+blocks_tick!(e) = for (key, node) in collect(e.nodes)
+  key isa Tuple && length(key) == 4 && key[1] == :block && key[3] == e.buf.path && block_tick!(node)
+end
+
+"A part of the block view `v` that's kept between frames"
+block_part!(make, v, key) = begin
+  node = get!(make, v.parts, key)
+  node.parent === nothing && setfield!(node, :parent, v)
+  node
+end
+
+"A button of a block. A click does `act!(view, action, window)`."
+@def mutable struct BlockButton <: SemanticUI
+  of::Any = nothing
+  action::Any = :none
+  icon::String = ""
+  words::String = ""
+  tip::String = ""
+  on::Bool = false                            # it's lit, like the kind of chart that shows now
+  off::Bool = false                           # it does nothing now, and shows that
+  bold::Bool = false                          # it's filled with colour, like the one button that a question waits for
+  rect::NTuple{4,px} = (0px, 0px, 0px, 0px)   # where it was last drawn, to put its tooltip under it
+  quiet::Bool = false                         # clicked, so no tooltip until the mouse leaves it
+end
+
+"The button of the block view `v` that's kept under `key`, with what it does and shows now"
+block_button!(v, key, action; icon="", words="", tip="", on=false, off=false, bold=false) = begin
+  b = block_part!(() -> BlockButton(of=v), v, (:button, key))
+  b.action, b.icon, b.words, b.tip, b.on, b.off, b.bold = action, icon, words, tip, on, off, bold
+  b
+end
+
+describe(b::BlockButton) = begin
+  ishovered(b) || (b.quiet = false)
+  filled = b.bold && !b.off
+  colour = b.off ? colours.faint : filled ? colours.bg : b.on ? colours.accent : colours.dim
+  back = filled ? (ishovered(b) ? RGBA(colours.accent, 0.85) : colours.accent) :
+         b.on ? colours.active : ishovered(b) && !b.off ? colours.hover : clear
+  Box(height(26px), padding(filled ? 10px : 7px, 0px), radius(6px), Alignment.Center, name="Button", background(back),
+    Row(Alignment.Center, child_gap=5px,
+      (isempty(b.icon) ? () : (Icon(b.icon, size=14px, color=colour),))...,
+      (isempty(b.words) ? () : (label(b.words, 12px, color=b.off ? colours.faint : filled ? colours.bg : colours.ink, weight=filled ? "Semibold" : ""),))...))
+end
+
+cursor(b::BlockButton) = b.off ? :arrow : :hand
+draw(ctx, size, ui::ConcreteRect, b::BlockButton) = (b.rect = (ui.left, ui.top, ui.width, ui.height); nothing)
+
+onmouse(b::BlockButton, ev::MouseMove) = begin
+  (b.quiet || isempty(b.tip)) && return
+  show_tooltip!(ev.window, tip_label(b.tip), b.rect..., placement=:bottom, gap=6px)
+end
+
+onkey(b::BlockButton, ev::KeyPress{Keys.mouse_left}) = begin
+  b.quiet = true
+  hide_tooltip!(ev.window)
+  b.off ? handled : act!(b.of, b.action, ev.window)
+end
+
+"What a block's box looks like in the page: round corners and a thin line, as a schedule has"
+block_look() = (width(grow=grow), Alignment.Start, radius(8px), border(1px, :solid, colours.line), background(takeoff_back()))
+
+"The row of buttons at the top of a block"
+block_bar(parts...) = Row(width(grow=grow), height(38px), padding(6px, 0px), child_gap=2px, Alignment.Center, background(colours.block), parts...)
+
+"A line of quiet words in a block that has nothing to show yet"
+block_note(words) = Row(width(grow=grow), padding(16px, 20px), Alignment.Center, clip=true,
+                        Box(width(grow=grow), Text(words, size=13px, family=SANS, color=colours.dim, wrap=WrapMode.words)))
+
+"A colour as CSS writes it, like #2a78d6"
+css_colour(c) = (c = RGBA(c); "#" * join(string(round(Int, 255x), base=16, pad=2) for x in (c.r, c.g, c.b)))
+
+# --- a chart of a table's numbers ------------------------------------------------------------
+#
+# A code block in the language `chart` draws the numbers of a table of the
+# page as bars, as lines or as a pie. chart.jl says how the block is written,
+# and works out where each bar goes. The three buttons at the top of the chart
+# choose its kind. The mouse over a bar, a dot or a slice says its number.
+
+const CHART = Charts.CHART
+const PLOT_H = 260px   # how tall bars and lines are
+const PIE_H = 220px    # and a pie
+"Every icon that a block can show. The built app reads them all when it's made."
+const BLOCK_ICONS = String["bar-chart", "graph-up", "pie-chart"]
+
+# The colours of the columns of numbers, in the order that a chart uses them. Each one can be told from
+# the one before it by a reader who doesn't see every colour. The first eight are for a light page.
+const SERIES_LIGHT = [colorant"#2a78d6", colorant"#eb6834", colorant"#1baf7a", colorant"#eda100",
+                      colorant"#e87ba4", colorant"#008300", colorant"#6250d6", colorant"#e34948"]
+const SERIES_DARK = [colorant"#3987e5", colorant"#d95926", colorant"#199e70", colorant"#c98500",
+                     colorant"#d55181", colorant"#0ca30c", colorant"#9085e9", colorant"#e66767"]
+series_colours() = dark_page() ? SERIES_DARK : SERIES_LIGHT
+
+"What a `chart` block shows: the numbers of a table, drawn"
+@def mutable struct ChartView <: SemanticUI
+  n::Int = 0                               # its place among the page's charts
+  first::Int = 0                           # the lines of its block, when the page was last laid out
+  last::Int = 0
+  spec::Charts.Chart = Charts.Chart()
+  lines::Vector{String} = String[]         # the lines that `spec` was read from
+  shown::Any = nothing                     # the version of the page, and what the chart shows of that page
+  marks::Vector{Charts.Mark} = Charts.Mark[]   # the parts of the chart, where they were last drawn
+  box::NTuple{4,Float64} = (0.0, 0.0, 0.0, 0.0)   # where the chart was last drawn in the window
+  parts::Dict{Any,Any} = Dict{Any,Any}()   # its buttons, kept between frames
+end
+
+"The part of a chart that shows the bars, the lines or the pie"
+@def mutable struct PlotArea <: SemanticUI
+  of::Any = nothing
+end
+
+reread!(v::ChartView, lines) = begin
+  lines == v.lines && return v
+  v.lines = lines
+  v.spec = Charts.chart(lines)
+  v.shown = nothing
+  v
+end
+
+"The text of a cell without the marks that make it bold or code"
+plain_cell(text) = String(strip(replace(text, r"\*\*|__|`" => "")))
+
+"""
+Every table of the page that shows: each table, each spreadsheet and each
+sheet. Each one has its first and last line, the heading that it's under, and
+the text of each cell of each row. A formula's cell holds what the formula
+comes to. `headed` is true when the first row has the names of the columns.
+"""
+page_tables(e) = begin
+  b = e.buf
+  key = (:tables, b.path, b.version)
+  haskey(e.flows, key) && return e.flows[key]
+  ks = kinds(b)
+  out = @NamedTuple{first::Int, last::Int, under::String, rows::Vector{Vector{String}}, headed::Bool}[]
+  under = ""
+  i = 1
+  while i <= length(ks)
+    k = ks[i]
+    stop = i
+    if k.kind == Kind.heading
+      under = plain_cell(rest(b.lines[i], k.prefix))
+    elseif k.kind == Kind.table
+      run = table(b, i)
+      if run !== nothing && run[1] == i
+        rows = [String[plain_cell(rest(head(b.lines[r], c.hi), c.lo)) for c in tablecells(b.lines[r])] for r in tablerows(run)]
+        push!(out, (first=i, last=run[2], under=under, rows=rows, headed=true))
+        stop = run[2]
+      end
+    elseif k.kind == Kind.fence && k.level == 0 && k.lang in (SPREADSHEET, SHEET)
+      t = codeblock(b, i)[2]
+      if t > i && ks[t].kind == Kind.fence && ks[t].level == 1
+        if k.lang == SPREADSHEET
+          texts = [spreadtexts(b.lines[r]) for r in i+1:t-1]
+          values = get!(() -> answers(texts), e.flows, (:answers, texts))
+          rows = [String[isformula(text) ? (values[r][c].failed ? "" : values[r][c].text) : String(strip(text)) for (c, text) in enumerate(row)]
+                  for (r, row) in enumerate(texts)]
+        else
+          texts = [parts(b.lines[r]) for r in i+1:t-1]
+          results = get!(() -> tally(texts), e.flows, (:sheetrun, texts))
+          rows = [String[strip(name), results[r].failed ? "" : results[r].text] for (r, (name, _)) in enumerate(texts)]
+        end
+        push!(out, (first=i, last=t, under=under, rows=rows, headed=false))
+        stop = t
+      end
+    elseif k.kind == Kind.fence && k.level == 0
+      stop = max(i, codeblock(b, i)[2])   # a table in a block of code isn't one
+    end
+    i = stop + 1
+  end
+  e.flows[key] = out
+end
+
+"""
+The rows that a chart draws: its own, or those of a table of the page. With
+`from`, that's the first table under the heading that `from` names. Without
+it, it's the table that's nearest above the chart, or the first one under it.
+"""
+chart_data(e, v::ChartView) = begin
+  c = v.spec
+  isempty(c.rows) || return Charts.data(c, c.rows)
+  tables = page_tables(e)
+  k = isempty(c.from) ? something(findlast(t -> t.last < v.first, tables), findfirst(t -> t.first > v.last, tables), 0) :
+                        something(findfirst(t -> Charts.same(t.under, c.from), tables), 0)
+  k == 0 && return Charts.nothing_to_draw(isempty(c.from) ?
+    "This page has no table yet. Put a table, a spreadsheet or a sheet over this chart, and the chart draws its numbers." :
+    "This page has no table under a heading called “$(c.from)”.")
+  Charts.data(c, tables[k].rows, headed=tables[k].headed)
+end
+
+"What the chart shows. It's worked out again when the page has changed."
+shown!(v::ChartView) = begin
+  e = editor(v)
+  key = (e.buf.version, v.first, v.lines)
+  (v.shown !== nothing && v.shown[1] == key) || (v.shown = (key, chart_data(e, v)))
+  v.shown[2]
+end
+
+"How wide `text` is in the font of a chart's words, at the size `size`"
+chart_measure(text, size) = num(measure(Face(SANS, "", px(size), colours.ink, false), text))
+
+"The three kinds of chart: the icon of each one's button, and what the button's tooltip says"
+const CHART_KINDS = ((:bars, "bar-chart", "Bars"), (:lines, "graph-up", "Lines"), (:pie, "pie-chart", "A pie"))
+
+describe(v::ChartView) = begin
+  e = editor(v)
+  d = shown!(v)
+  with_theme(component_theme(e.zoom)) do
+    bar = block_bar(
+      [block_button!(v, k, (:kind, k), icon=icon, tip=tip, on=v.spec.kind == k) for (k, icon, tip) in CHART_KINDS]...,
+      (isempty(v.spec.title) ? () : (rule(), Row(width(grow=grow), padding(6px, 0px), clip=true, Box(label(v.spec.title, 13px, weight="Semibold")))))...)
+    Column(block_look()..., clip=true, name="Chart", bar,
+           isempty(d.problem) ? block_part!(() -> PlotArea(of=v), v, :area) : block_note(d.problem))
+  end
+end
+
+cursor(::Union{ChartView,PlotArea}) = :arrow
+
+act!(v::ChartView, action, w) = begin
+  action isa Tuple && action[1] == :kind || return handled
+  v.spec.kind = action[2]
+  write_block!(v, CHART, Charts.written(v.spec))
+  handled
+end
+
+describe(a::PlotArea) = Box(width(grow=grow), height(a.of.spec.kind == :pie ? PIE_H : PLOT_H))
+
+"The mark of the chart that the mouse is over, or nothing"
+chart_hit(v::ChartView) = begin
+  w = window_of(v)
+  w === nothing ? nothing : Charts.hit(v.marks, num(w.mouse[1]) - v.box[1], num(w.mouse[2]) - v.box[2])
+end
+
+"Draw a filled circle"
+disc(ctx, x, y, r, colour) = begin
+  paint = ink(colour)
+  Skia.sk_canvas_draw_circle(ctx, Float32(x), Float32(y), Float32(r), paint)
+  Skia.sk_paint_delete(paint)
+end
+
+"Draw the marks of a chart, with the top left corner of the chart at `(x0, y0)`. The mark `hot` is the one under the mouse."
+draw_marks(ctx, marks, x0, y0, hot=nothing) = begin
+  cs, surface = series_colours(), takeoff_back()
+  for m in marks
+    # While the mouse is over a bar or a slice, the others are pale
+    pale = hot !== nothing && m.kind in (:bar, :slice) && (m.label, m.series) != (hot.label, hot.series)
+    colour = m.colour == 0 ? colours.dim : pale ? RGBA(cs[m.colour], 0.4) : cs[m.colour]
+    x, y = x0 + m.at[1], y0 + m.at[2]
+    if m.kind == :rule
+      trace(ctx, [(x, y), (x0 + m.at[3], y0 + m.at[4])], RGBA(colours.ink, m.style == :strong ? 0.3 : 0.08), 1.0)
+    elseif m.kind == :bar
+      w, h = m.at[3], m.at[4]
+      # Only the end that's away from the line of 0 has round corners, so the box is drawn longer and cut off at that line
+      with_clip(ctx, px(x), px(y), px(w), px(h)) do
+        round_box(ctx, x, m.style == :down ? y - 4 : y, w, h + 4, min(4.0, w / 2); fill=colour)
+      end
+    elseif m.kind == :line
+      trace(ctx, [(x0 + a, y0 + b) for (a, b) in m.points], colour, 2.0)
+    elseif m.kind == :dot
+      on = hot === m
+      r = on ? 5.5 : m.at[3]
+      r > 0 || continue
+      disc(ctx, x, y, r + 2, surface)   # a ring in the colour of the page keeps it apart from the line that it's on
+      disc(ctx, x, y, r, colour)
+    elseif m.kind == :slice
+      trace(ctx, [(x0 + a, y0 + b) for (a, b) in m.points], surface, 2.0; fill=colour, closed=true)
+    elseif m.kind == :swatch
+      round_box(ctx, x, y, m.at[3], m.at[4], 2.5; fill=colour)
+    elseif m.kind == :words
+      face = Face(SANS, "", px(m.size), m.tone == :ink ? colours.ink : colours.dim, false)
+      wide = num(measure(face, m.text))
+      write_ink(ctx, m.text, m.style == :end ? x - wide : m.style == :middle ? x - wide / 2 : x, y, face)
+    end
+  end
+end
+
+draw(ctx, size, ui::ConcreteRect, a::PlotArea) = begin
+  v = a.of
+  v.box = (num(ui.left), num(ui.top), num(ui.width), num(ui.height))
+  v.box[3] > 0 || return
+  v.marks = Charts.plot(shown!(v), v.spec.kind, v.box[3], v.box[4], chart_measure)
+  with_clip(ctx, ui.left, ui.top, ui.width, ui.height) do
+    draw_marks(ctx, v.marks, v.box[1], v.box[2], ishovered(a) ? chart_hit(v) : nothing)
+  end
+end
+
+# The mouse over a bar, a dot or a slice says its number
+onmouse(a::PlotArea, ev::MouseMove) = begin
+  v = a.of
+  m = Charts.hit(v.marks, num(ev.position[1]) - v.box[1], num(ev.position[2]) - v.box[2])
+  m === nothing && return nothing
+  x, y = v.box[1] + m.at[1], v.box[2] + m.at[2]
+  spot = m.kind == :bar ? (x, y, m.at[3], m.at[4]) : m.kind == :dot ? (x - 6, y - 6, 12.0, 12.0) :
+         (mid = (m.at[3] + m.at[4]) / 2; (x + 0.6m.size * cos(mid) - 4, y + 0.6m.size * sin(mid) - 4, 8.0, 8.0))
+  show_tooltip!(ev.window, tip_label(Charts.said(shown!(v), m)), px.(spot)..., placement=:top, gap=6px)
+  handled
+end
+
+"The chart as HTML: its title, and a picture of it"
+chart_html(e, v::ChartView) = begin
+  d = shown!(v)
+  isempty(d.problem) || return nothing
+  wide, tall = 720.0, num(v.spec.kind == :pie ? PIE_H : PLOT_H)
+  picture = Charts.svg(Charts.plot(d, v.spec.kind, wide, tall, chart_measure), wide, tall, colours=css_colour.(SERIES_LIGHT),
+                       ink="#2b2622", dim="#6b6259", line="#e6e0d0", surface="#fdfcf9", family="-apple-system, Helvetica, sans-serif")
+  title = isempty(v.spec.title) ? "" : "<p><strong>$(escape(v.spec.title))</strong></p>\n"
+  "<div class=\"diagram\">\n$title$picture\n</div>"
+end
+
+BLOCKS[CHART] = BlockKind("Chart", "bar-chart", ChartView, chart_html)
+
+# --- a question with answers to choose ---------------------------------------------------------
+#
+# A code block in the language `ask` shows a question, the answers to choose
+# from, and a field to type in. ask.jl says how the block is written. A click
+# on an answer chooses it, and what you type in the field goes under the
+# answers. Both are written into the block's lines. So an agent that waits for
+# the page reads your answer in the lines that you changed. While one waits, a
+# Send button beside the field sends them, as ⌘Return does.
+
+const ASK = Asks.ASK
+push!(BLOCK_ICONS, "question-circle", "check", "send")
+
+"What an `ask` block shows: a question, its answers and a field to type in"
+@def mutable struct AskView <: SemanticUI
+  n::Int = 0                               # its place among the page's questions
+  first::Int = 0                           # the lines of its block, when the page was last laid out
+  last::Int = 0
+  data::Asks.Question = Asks.Question()
+  lines::Vector{String} = String[]         # the lines that `data` was read from
+  parts::Dict{Any,Any} = Dict{Any,Any}()   # its answers, its field and its button, kept between frames
+end
+
+"An answer of a question. A click chooses it."
+@def mutable struct AskOption <: SemanticUI
+  of::Any = nothing
+  i::Int = 0
+end
+
+"The text field of a question"
+ask_input(v::AskView) = block_part!(v, :input) do
+  TextInput(placeholder="", font_family=SANS, font_size=13px,
+            look=(_, text) -> Row(width(grow=grow), height(grow=grow), clip=true, text))
+end
+
+reread!(v::AskView, lines) = begin
+  lines == v.lines && return v
+  v.lines = lines
+  v.data = Asks.question(lines)
+  # The field shows what the block says was typed, as it does after ⌘Z takes some of it back
+  i = ask_input(v)
+  i.text == v.data.note || (i.text = v.data.note; i.anchor = i.cursor = length(i.text))
+  v
+end
+
+"What happens to a question in each frame, before the page is laid out: what was typed in its field is written into its block"
+block_tick!(v::AskView) = begin
+  text = ask_input(v).text
+  text == v.data.note && return v
+  v.data.note = text
+  write_block!(v, ASK, Asks.written(v.data), typing=true)
+end
+
+describe(o::AskOption) = begin
+  q = o.of.data
+  o.i <= length(q.options) || return Box(height(0px))
+  opt = q.options[o.i]
+  mark = opt.many ?
+    (opt.chosen ? Box(fixed(16px), height(16px), radius(4px), Alignment.Center, justify=Alignment.Center, background(colours.accent),
+                      Icon("check", size=14px, color=colours.bg)) :
+                  Box(fixed(16px), height(16px), radius(4px), border(1.5px, :solid, colours.marker))) :
+    Box(fixed(16px), height(16px), radius(8px), Alignment.Center, justify=Alignment.Center,
+        border(1.5px, :solid, opt.chosen ? colours.accent : colours.marker),
+        (opt.chosen ? (Box(fixed(8px), height(8px), radius(4px), background(colours.accent)),) : ())...)
+  Row(width(grow=grow), padding(8px, 6px), radius(6px), child_gap=10px, Alignment.Start, name="Answer",
+      background(opt.chosen ? colours.active : ishovered(o) ? colours.hover : clear),
+    Box(mark),
+    Box(width(grow=grow), Text(opt.text, size=13.5px, family=SANS, subfamily=opt.chosen ? "Medium" : "", color=colours.ink, wrap=WrapMode.words)))
+end
+
+cursor(::AskOption) = :hand
+cursor(::AskView) = :arrow
+
+onkey(o::AskOption, ::KeyPress{Keys.mouse_left}) = begin
+  v = o.of
+  o.i <= length(v.data.options) || return handled
+  Asks.choose!(v.data, o.i)
+  write_block!(v, ASK, Asks.written(v.data))
+  handled
+end
+
+describe(v::AskView) = begin
+  e = editor(v)
+  q = v.data
+  input = ask_input(v)
+  input.color = colours.ink
+  input.placeholder = isempty(q.options) ? "Type your answer" : "Add a note"
+  w = window_of(v)
+  typing = w !== nothing && w.focus === input
+  waits = !isempty(agents(e))
+  with_theme(component_theme(e.zoom)) do
+    Column(block_look()..., padding(16px, 14px), child_gap=10px, name="Question",
+      Row(width(grow=grow), child_gap=10px, Alignment.Start,
+        Box(padding(0px, 1px), Icon("question-circle", size=16px, color=Asks.answered(q) ? colours.string : colours.accent)),
+        Box(width(grow=grow), Text(isempty(q.words) ? "A question with no words yet" : Asks.asked(q), size=15px, family=SANS,
+                                   subfamily="Semibold", color=isempty(q.words) ? colours.dim : colours.ink, wrap=WrapMode.words))),
+      (isempty(q.options) ? () : (Column(width(grow=grow), Alignment.Start, child_gap=2px,
+        [block_part!(() -> AskOption(of=v, i=i), v, (:option, i)) for i in eachindex(q.options)]...),))...,
+      Row(width(grow=grow), child_gap=8px, Alignment.Center,
+        Box(width(grow=grow), height(30px), padding(9px, 0px), radius(6px), border(1px, :solid, typing ? colours.accent : colours.line),
+            background(colours.bg), input),
+        (waits ? (block_button!(v, :send, :send, words="Send", icon="send", bold=true, tip="Send your answers to the agent  ⌘Return"),) : ())...))
+  end
+end
+
+act!(v::AskView, action, w) = (action == :send && send!(editor(v)); handled)
+# Return in the field gives the keyboard back to the page
+onkey(v::AskView, ::KeyPress{Keys.enter}) = (focus(editor(v)); handled)
+
+"The question as HTML: its words, and each answer with a mark on the ones that are chosen"
+ask_html(e, v::AskView) = begin
+  q = v.data
+  rows = ["<li>$(o.chosen ? "☑" : "☐") $(o.chosen ? "<strong>$(escape(o.text))</strong>" : escape(o.text))</li>" for o in q.options]
+  "<p><strong>$(escape(Asks.asked(q)))</strong></p>\n" * (isempty(rows) ? "" : "<ul style=\"list-style: none; padding-left: 0.5em\">\n" * join(rows, "\n") * "\n</ul>\n") *
+  (isempty(strip(q.note)) ? "" : "<blockquote>$(escape(q.note))</blockquote>")
+end
+
+BLOCKS[ASK] = BlockKind("Question", "question-circle", AskView, ask_html)
+
+# --- changes to accept or reject ----------------------------------------------------------------
+#
+# A code block in the language `changes` holds a diff, and shows each of its
+# changes with the lines that go in red and the lines that come in green.
+# changes.jl says how the block is written. Each change has an Accept and a
+# Reject button. Your choice is written at the end of the change's @@ line,
+# so an agent that waits for the page reads it in the lines that you changed.
+# Kaydown doesn't change the files that the diff is of.
+
+const CHANGES = Diffs.CHANGES
+const DIFF_ROW = 19.0   # px: how tall a line of a change is
+push!(BLOCK_ICONS, "file-diff", "check-lg", "x-lg")
+
+"What a `changes` block shows: each change of a diff, with buttons that accept it and reject it"
+@def mutable struct ChangesView <: SemanticUI
+  n::Int = 0                               # its place among the page's blocks of changes
+  first::Int = 0                           # the lines of its block, when the page was last laid out
+  last::Int = 0
+  data::Diffs.Changes = Diffs.Changes(String[], Diffs.Hunk[])
+  lines::Vector{String} = String[]         # the lines that `data` was read from
+  parts::Dict{Any,Any} = Dict{Any,Any}()   # its buttons and the lines of each change, kept between frames
+end
+
+"The lines of one change"
+@def mutable struct HunkArea <: SemanticUI
+  of::Any = nothing
+  k::Int = 0
+end
+
+reread!(v::ChangesView, lines) = begin
+  lines == v.lines && return v
+  v.lines = lines
+  v.data = Diffs.changes(lines)
+  v
+end
+
+"The colour of a line that a change takes away, and of the count of those lines"
+removed_colour() = dark_page() ? colorant"rgb(240,120,110)" : colorant"rgb(186,52,40)"
+"The colour of a line that a change adds"
+added_colour() = dark_page() ? colorant"rgb(130,200,120)" : colorant"rgb(40,128,56)"
+
+"How many lines a change adds and takes away, as two small numbers"
+tally_words(added, removed) =
+  ((added > 0 ? (Box(label("+$added", 12px, color=added_colour(), weight="Medium")),) : ())...,
+   (removed > 0 ? (Box(label("−$removed", 12px, color=removed_colour(), weight="Medium")),) : ())...)
+
+describe(v::ChangesView) = begin
+  e = editor(v)
+  c = v.data
+  with_theme(component_theme(e.zoom)) do
+    isempty(c.hunks) && return Column(block_look()..., clip=true, name="Changes",
+      block_note("This block has no changes yet. Put a diff in it, as git diff writes one: a line that starts with @@, then the lines that go with a - before each, and the lines that come with a +."))
+    all = length(c.hunks) > 1 ?
+      (rule(), block_button!(v, :accept_all, (:all, :accepted), icon="check-lg", words="Accept all", tip="Accept every change"),
+       block_button!(v, :reject_all, (:all, :rejected), icon="x-lg", words="Reject all", tip="Reject every change")) : ()
+    bar = block_bar(Box(padding(6px, 0px), label(Diffs.summary(c), 12px, color=colours.dim)), Box(width(grow=grow)),
+                    Row(child_gap=8px, padding(6px, 0px), tally_words(Diffs.counts(c)...)...), all...)
+    rows = Any[]
+    for (k, h) in enumerate(c.hunks)
+      # The name of a file is over the first of its changes
+      if !isempty(h.file) && (k == 1 || c.hunks[k-1].file != h.file)
+        push!(rows, Row(width(grow=grow), height(32px), padding(12px, 0px), child_gap=8px, Alignment.Center, border(1px, :solid, colours.line)[:top],
+                        Icon("file-diff", size=14px, color=colours.dim), Box(label(h.file, 13px, weight="Semibold")), Box(width(grow=grow))))
+      end
+      state = h.state
+      push!(rows, Row(width(grow=grow), height(34px), padding(0px, 6px, 0px, 12px), child_gap=8px, Alignment.Center, clip=true,
+                      border(1px, :solid, colours.line)[:top], background(colours.stripe),
+        Box(label(Diffs.place(h), 12px, color=colours.dim)),
+        Row(width(grow=grow), clip=true, Alignment.Start,
+            Box(Text(h.about, size=11.5px, family=codefont(), subfamily=codestyle(), color=colours.faint, wrap=WrapMode.none))),
+        tally_words(Diffs.counts(h)...)...,
+        block_button!(v, (:accept, k), (:choose, k, :accepted), icon="check-lg", words=state == :accepted ? "Accepted" : "Accept",
+                      on=state == :accepted, tip=state == :accepted ? "Take your choice away" : "Accept this change"),
+        block_button!(v, (:reject, k), (:choose, k, :rejected), icon="x-lg", words=state == :rejected ? "Rejected" : "Reject",
+                      on=state == :rejected, tip=state == :rejected ? "Take your choice away" : "Reject this change")))
+      push!(rows, block_part!(() -> HunkArea(of=v, k=k), v, (:hunk, k)))
+    end
+    Column(block_look()..., clip=true, name="Changes", bar, rows...)
+  end
+end
+
+cursor(::Union{ChangesView,HunkArea}) = :arrow
+
+act!(v::ChangesView, action, w) = begin
+  action[1] == :choose ? Diffs.choose!(v.data, action[2], action[3]) : Diffs.choose!(v.data, action[2])
+  write_block!(v, CHANGES, Diffs.written(v.data))
+  handled
+end
+
+describe(a::HunkArea) = begin
+  hunks = a.of.data.hunks
+  Box(width(grow=grow), height(px(a.k <= length(hunks) ? DIFF_ROW * length(hunks[a.k].rows) + 8 : 0)))
+end
+
+draw(ctx, size, ui::ConcreteRect, a::HunkArea) = begin
+  hunks = a.of.data.hunks
+  a.k <= length(hunks) || return
+  h = hunks[a.k]
+  left, top, wide = num(ui.left), num(ui.top) + 4, num(ui.width)
+  # A change that's rejected is pale
+  pale = h.state == :rejected
+  code = Face(codefont(), codestyle(), 12px, pale ? colours.faint : colours.ink, false)
+  small = Face(codefont(), codestyle(), 10.5px, colours.faint, false)
+  numbered = any(r -> r.old > 0 || r.new > 0, h.rows)
+  digits = numbered ? num(measure(small, string(maximum(r -> max(r.old, r.new), h.rows)))) + 10 : 0.0
+  gutter = numbered ? 2digits + 10 : 12.0
+  with_clip(ctx, ui.left, ui.top, ui.width, ui.height) do
+    for (j, r) in enumerate(h.rows)
+      y = top + (j - 1) * DIFF_ROW
+      colour = r.sign == '+' ? added_colour() : r.sign == '-' ? removed_colour() : nothing
+      colour === nothing || round_box(ctx, left, y, wide, DIFF_ROW, 0; fill=RGBA(colour, pale ? 0.05 : 0.13))
+      if numbered
+        for (number, right) in ((r.old, left + 6 + digits), (r.new, left + 6 + 2digits))
+          number > 0 && write_ink(ctx, string(number), right - num(measure(small, string(number))), y + 13.5, small)
+        end
+      end
+      r.sign == ' ' || write_ink(ctx, r.sign == '-' ? "−" : "+", left + gutter, y + 13.5, Face(code, color=pale ? colours.faint : colour))
+      write_ink(ctx, replace(r.text, '\t' => "  "), left + gutter + 16, y + 13.5, code)
+    end
+    # A change that's accepted has a green edge
+    h.state == :accepted && round_box(ctx, left, num(ui.top), 3, num(ui.height), 0; fill=added_colour())
+  end
+end
+
+"The changes as HTML: each one with its file, where it is and your choice, and its lines"
+changes_html(e, v::ChangesView) = begin
+  c = v.data
+  isempty(c.hunks) && return nothing
+  parts = map(c.hunks) do h
+    about = join(filter(!isempty, [h.file, Diffs.place(h), h.state == :open ? "" : uppercasefirst(string(h.state))]), " · ")
+    lines = map(h.rows) do r
+      text = escape((r.sign == ' ' ? "  " : r.sign == '-' ? "− " : "+ ") * r.text)
+      r.sign == '+' ? "<span style=\"background: #e2f2dc; display: block\">$text</span>" :
+      r.sign == '-' ? "<span style=\"background: #f8dfda; display: block\">$text</span>" : "<span style=\"display: block\">$text</span>"
+    end
+    "<p><strong>$(escape(about))</strong></p>\n<pre><code>" * join(lines) * "</code></pre>"
+  end
+  join(parts, "\n")
+end
+
+BLOCKS[CHANGES] = BlockKind("Changes", "file-diff", ChangesView, changes_html)
+
+# --- a board of the page's tasks ---------------------------------------------------------------
+#
+# A code block in the language `board` shows each to-do item of the page as a
+# card, in columns. board.jl says how the block is written. Drag a card to
+# another column to move it. The last column holds the items that are ticked:
+# a card that's dropped there ticks its item in the page, and a card that's
+# dragged out of it takes the tick away. Click a card twice to go to its line
+# of the page. The block's lines hold the column of each card that's between
+# the first column and the last.
+
+const BOARD = Boards.BOARD
+push!(BLOCK_ICONS, "kanban")
+
+"What a `board` block shows: the page's to-do items as cards in columns"
+@def mutable struct BoardView <: SemanticUI
+  n::Int = 0                               # its place among the page's boards
+  first::Int = 0                           # the lines of its block, when the page was last laid out
+  last::Int = 0
+  data::Boards.Board = Boards.Board()
+  lines::Vector{String} = String[]         # the lines that `data` was read from
+  shown::Any = nothing                     # the version of the page, and the cards of each column for that page
+  grab::Any = nothing                      # the card that the mouse holds: its name, where the mouse took it, and whether it has moved since
+  clicked::NTuple{3,Float64} = (0.0, 0.0, 0.0)   # when and where a card was last clicked
+  parts::Dict{Any,Any} = Dict{Any,Any}()   # its columns and cards, kept between frames
+end
+
+"A column of a board"
+@def mutable struct BoardColumn <: SemanticUI
+  of::Any = nothing
+  c::Int = 0
+end
+"A card of a board: one to-do item of the page"
+@def mutable struct BoardCard <: SemanticUI
+  of::Any = nothing
+  key::String = ""
+end
+"The card that the mouse drags, drawn over the board"
+@def mutable struct DragLayer <: SemanticUI
+  of::Any = nothing
+end
+
+reread!(v::BoardView, lines) = begin
+  lines == v.lines && return v
+  v.lines = lines
+  v.data = Boards.board(lines)
+  v.shown = nothing
+  v
+end
+
+"The cards of each column of the board. They're worked out again when the page has changed."
+columns!(v::BoardView) = begin
+  e = editor(v)
+  key = (e.buf.version, v.lines)
+  (v.shown !== nothing && v.shown[1] == key) || (v.shown = (key, Boards.arrange(v.data, page_todos(e))))
+  v.shown[2]
+end
+
+"The to-do item of the page that the card called `key` is for, or nothing"
+card_todo(v::BoardView, key) = (items = page_todos(editor(v)); k = findfirst(t -> t.key == key, items); k === nothing ? nothing : items[k])
+
+"True while the mouse drags a card of the board"
+dragging(v::BoardView) = v.grab !== nothing && v.grab[4]
+
+"The place of the column that the mouse is over, or nothing when the mouse isn't over the board"
+drop_column(v::BoardView) = begin
+  w = window_of(v)
+  r = rect(v)
+  (w === nothing || r === nothing) && return nothing
+  x, y = w.mouse[1], w.mouse[2]
+  (r.top - 40px <= y <= r.top + r.height + 40px) || return nothing
+  for c in eachindex(v.data.columns)
+    column = get(v.parts, (:column, c), nothing)
+    cr = column === nothing ? nothing : rect(column)
+    cr !== nothing && cr.left <= x < cr.left + cr.width && return c
+  end
+  nothing
+end
+
+describe(card::BoardCard) = begin
+  v = card.of
+  t = card_todo(v, card.key)
+  t === nothing && return Box(height(0px))
+  taken = dragging(v) && v.grab[1] == card.key
+  Row(width(grow=grow), padding(10px, 8px), radius(6px), child_gap=7px, Alignment.Start, name="Card",
+      background(taken ? clear : takeoff_back()), border(1px, :solid, taken ? colours.faint : ishovered(card) ? colours.marker : colours.line),
+    (t.done ? (Box(padding(0px, 2px), Icon("check", size=14px, color=taken ? colours.faint : colours.string)),) : ())...,
+    Box(width(grow=grow), Text(t.name, size=13px, family=SANS, color=taken ? colours.faint : t.done ? colours.dim : colours.ink, wrap=WrapMode.words)))
+end
+
+cursor(::BoardCard) = :hand
+cursor(::Union{BoardView,BoardColumn,DragLayer}) = :arrow
+
+onkey(card::BoardCard, ev::KeyPress{Keys.mouse_left}) = begin
+  v, w = card.of, ev.window
+  x, y = num(w.mouse[1]), num(w.mouse[2])
+  at, cx, cy = v.clicked
+  v.clicked = (time(), x, y)
+  t = card_todo(v, card.key)
+  # Two clicks in one place go to the card's line of the page
+  time() - at < 0.35 && hypot(x - cx, y - cy) < 4 && t !== nothing && return show_line!(editor(v), t.line)
+  v.grab = (card.key, x, y, false)
+  handled
+end
+
+describe(col::BoardColumn) = begin
+  v = col.of
+  cards = col.c <= length(columns!(v)) ? columns!(v)[col.c] : Schedules.Todo[]
+  over = dragging(v) && drop_column(v) == col.c
+  Column(width(grow=grow), Alignment.Start, radius(8px), padding(8px), child_gap=6px, name="Column",
+         background(over ? RGBA(colours.accent, 0.14) : colours.block),
+    Row(width(grow=grow), height(22px), padding(3px, 0px), child_gap=7px, Alignment.Center,
+        Box(label(get(v.data.columns, col.c, ""), 12px, color=colours.dim, weight="Semibold")),
+        Box(label(string(length(cards)), 11px, color=colours.faint)), Box(width(grow=grow))),
+    [block_part!(() -> BoardCard(of=v, key=t.key), v, (:card, t.key)) for t in cards]...,
+    (isempty(cards) ? (Box(width(grow=grow), height(34px)),) : ())...)
+end
+
+describe(v::BoardView) = begin
+  e = editor(v)
+  w = window_of(v)
+  g = v.grab
+  # A press that moves is a drag
+  if g !== nothing && !g[4] && w !== nothing && hypot(num(w.mouse[1]) - g[2], num(w.mouse[2]) - g[3]) > 4
+    v.grab = (g[1], g[2], g[3], true)
+  end
+  # The cards of items that the page had once are forgotten
+  length(v.parts) > 2length(page_todos(e)) + 40 && filter!(p -> !(p[1] isa Tuple && p[1][1] == :card) || card_todo(v, p[1][2]) !== nothing, v.parts)
+  with_theme(component_theme(e.zoom)) do
+    isempty(page_todos(e)) && return Column(block_look()..., clip=true, name="Board",
+      block_note("This page has no to-do items yet. Start a line with - [ ] to make a card."))
+    n = length(v.data.columns)
+    wide = (e.width - 2px - 16px - 8px * (n - 1)) / n   # each column is as wide as the next
+    columns = Row(width(grow=grow), padding(8px), child_gap=8px, Alignment.Start,
+      [Box(fixed(wide), Alignment.Start, block_part!(() -> BoardColumn(of=v, c=c), v, (:column, c))) for c in 1:n]...)
+    Stack(block_look()..., clip=true, name="Board", columns,
+          (dragging(v) ? (block_part!(() -> DragLayer(of=v), v, :drag),) : ())...)
+  end
+end
+
+describe(::DragLayer) = Box(width(grow=grow), height(grow=grow))
+
+draw(ctx, size, ui::ConcreteRect, layer::DragLayer) = begin
+  v = layer.of
+  w = window_of(v)
+  (w === nothing || !dragging(v)) && return
+  t = card_todo(v, v.grab[1])
+  column = get(v.parts, (:column, 1), nothing)
+  cr = column === nothing ? nothing : rect(column)
+  (t === nothing || cr === nothing) && return
+  # The card stays under the mouse where the mouse took hold of it
+  wide = num(cr.width) - 16
+  x, y = num(w.mouse[1]) - wide / 2, num(w.mouse[2]) - 17
+  face = Face(SANS, "", 13px, colours.ink, false)
+  round_box(ctx, x + 1, y + 3, wide, 34, 6; fill=RGBA(0, 0, 0, 0.12))
+  round_box(ctx, x, y, wide, 34, 6; fill=takeoff_back(), line=colours.accent, wide=1.5)
+  write_ink(ctx, elide(t.name, 13px, px(wide - 20)), x + 10, y + 22, face)
+end
+
+"A drag ended. The card goes to the column that it was dropped on, and its item is ticked if that's the last one."
+drop!(v::BoardView) = begin
+  g = v.grab
+  v.grab = nothing
+  (g === nothing || !g[4]) && return v
+  c = drop_column(v)
+  e = editor(v)
+  b = e.buf
+  items = page_todos(e)
+  t = card_todo(v, g[1])
+  (c === nothing || t === nothing || readonly(b) || Boards.column(v.data, t, items) == c) && return v
+  Boards.prune!(v.data, items)
+  tick = Boards.move!(v.data, t, c, items)
+  # The tick and the block's lines change together, so one ⌘Z takes both back
+  b.typed = 0.0
+  if tick !== nothing
+    caret, anchor = b.caret, b.anchor
+    col = findfirst('[', b.lines[t.line])
+    edit!(b, (t.line, col), (t.line, col + 1), tick ? "x" : " ", typing=true)
+    b.caret, b.anchor = caret, anchor
+  end
+  write_block!(v, BOARD, Boards.written(v.data), typing=true)
+  b.typed = 0.0
+  v.shown = nothing
+  v
+end
+
+block_tick!(v::BoardView) = (v.grab !== nothing && !held(v, Keys.mouse_left) && drop!(v); v)
+# A drag is the board's, so the page's text doesn't select
+onmouse(v::BoardView, ::MouseMove) = v.grab === nothing ? nothing : handled
+
+"The board as HTML: a table with a column for each of the board's columns"
+board_html(e, v::BoardView) = begin
+  columns = columns!(v)
+  all(isempty, columns) && return nothing
+  heads = join("<th>$(escape(name))</th>" for name in v.data.columns)
+  cells = join("<td style=\"vertical-align: top\">" * join((escape(t.name) for t in cards), "<br>") * "</td>" for cards in columns)
+  "<table>\n<tr>$heads</tr>\n<tr>$cells</tr>\n</table>"
+end
+
+BLOCKS[BOARD] = BlockKind("Board", "kanban", BoardView, board_html)
+
+# --- a list of what was found in the pages of a folder -----------------------------------------
+#
+# A code block in the language `find` lists the lines that match in every page
+# of a folder: every to-do item that isn't ticked, say, or each line that has
+# some words. find.jl says how the block is written. The list has the name of
+# each page over that page's lines. A click on a line opens its page at that
+# line. A click on the box of a to-do item ticks it in its own page. If that
+# page isn't open, or is open with nothing to save, Kaydown writes the tick to
+# the page's file at once. An item that you tick stays in the list, ticked,
+# until the page that shows the list is opened again.
+
+const FIND = Searches.FIND
+const FIND_MOST = 200     # the most lines that a list shows
+const FIND_PAGES = 3000   # the most pages that a list reads
+const FIND_EVERY = 3      # seconds between two looks at the folder, while the window is drawn
+const FIND_BUDGET = 0.3   # seconds that one look at the folder can take
+push!(BLOCK_ICONS, "search", "file-earmark-text")
+
+"What a `find` block shows: the lines of a folder's pages that match"
+@def mutable struct SearchView <: SemanticUI
+  n::Int = 0                               # its place among the page's lists
+  first::Int = 0                           # the lines of its block, when the page was last laid out
+  last::Int = 0
+  data::Searches.Query = Searches.Query()
+  lines::Vector{String} = String[]         # the lines that `data` was read from
+  shown::Any = nothing                     # what the list was last worked out for, and what it found
+  kept::Vector{Searches.Match} = Searches.Match[]   # the items whose box was clicked here. They stay in the list.
+  pages::Dict{String,Any} = Dict{String,Any}()      # what was found in each page, and the mark of the page's text then
+  parts::Dict{Any,Any} = Dict{Any,Any}()   # its rows, kept between frames
+end
+
+"The name of a page, over the lines of that page in the list"
+@def mutable struct SearchPage <: SemanticUI
+  of::Any = nothing
+  path::String = ""
+end
+"A line of the list"
+@def mutable struct SearchRow <: SemanticUI
+  of::Any = nothing
+  i::Int = 0
+  box::Any = nothing   # its SearchTick
+end
+"The box of a to-do item in the list. A click ticks the item in its own page."
+@def mutable struct SearchTick <: SemanticUI
+  of::Any = nothing    # the row
+end
+
+reread!(v::SearchView, lines) = begin
+  lines == v.lines && return v
+  v.lines = lines
+  v.data = Searches.query(lines)
+  v.shown = nothing
+  empty!(v.pages)
+  v
+end
+
+"""
+The Markdown files in `folder`, then those of each folder in it, in the order
+of their names, and whether that's all of them. A folder whose name starts
+with a dot is left out. A folder with a great many files in it, like a whole
+disk, is read for a part of a second only, so that the window doesn't stop.
+"""
+pages_under(folder; budget=FIND_BUDGET) = begin
+  out, whole, started = String[], true, time()
+  for (root, dirs, files) in walkdir(folder, onerror=_ -> nothing)
+    filter!(d -> !startswith(d, '.') && d != "node_modules", dirs)
+    sort!(dirs, by=lowercase)
+    append!(out, (joinpath(root, f) for f in sort(files, by=lowercase) if ismarkdown(f) && !startswith(f, '.')))
+    (length(out) > FIND_PAGES || time() - started > budget) && (whole = false; break)
+  end
+  first(out, FIND_PAGES), whole
+end
+
+# What each folder that a list looks in held when it was last read: its pages, with when each file last changed
+const FOLDER_PAGES = Dict{String,Any}()
+
+"""
+The pages of `folder`, with when the file of each last changed. The folder is
+read again after a few seconds, and after longer when reading it takes long.
+"""
+folder_pages(folder) = begin
+  kept = get(FOLDER_PAGES, folder, nothing)
+  kept !== nothing && time() < kept.next && return kept
+  started = time()
+  pages, whole = pages_under(folder)
+  found = [(path, mtime(path)) for path in pages]
+  FOLDER_PAGES[folder] = (next=time() + max(FIND_EVERY, 20 * (time() - started)), read=started, pages=found, whole=whole)
+end
+
+# The text of each page that a list has read, with when the file last changed, so a file is read again only when it changes
+const PAGE_TEXTS = Dict{String,Tuple{Float64,Vector{String},Vector{Line}}}()
+
+"""
+The lines of the page at `path`, what each line is, and a mark that changes
+when the page's text does. A page that's open gives its text as it is now,
+with the changes that aren't saved. `at` is when the page's file last changed.
+"""
+page_text(e, path, at) = begin
+  b = get(e.buffers, path, nothing)
+  b !== nothing && !readonly(b) && return b.lines, kinds(b), (:open, b.version)
+  kept = get(PAGE_TEXTS, path, nothing)
+  kept !== nothing && kept[1] == at && return kept[2], kept[3], at
+  lines = filesize(path) > 2_000_000 ? String[] : try text(path) catch; String[] end
+  length(PAGE_TEXTS) > 2FIND_PAGES && empty!(PAGE_TEXTS)
+  PAGE_TEXTS[path] = (at, lines, classify(lines))
+  lines, PAGE_TEXTS[path][3], at
+end
+
+"The folder that the list looks in"
+search_folder(e, q::Searches.Query) = isempty(q.folder) ? docdir(e) : abspath(joinpath(docdir(e), expanduser(q.folder)))
+
+"""
+What the list shows: the lines that match, page by page, whether every page of
+the folder was read, and why there are no lines when the folder can't be read.
+It's worked out again when a page changes in Kaydown, and when the folder is
+read again. Only the pages that changed are looked through again.
+"""
+found!(v::SearchView) = begin
+  e = editor(v)
+  q = v.data
+  folder = search_folder(e, q)
+  listed = isdir(folder) ? folder_pages(folder) : nothing
+  # ⌘Z gives a page the version that it had before, so the version of each open page is looked at, not only the newest one
+  key = (v.lines, hash([b.version for b in values(e.buffers)]), listed === nothing ? 0.0 : listed.read, folder, length(v.kept))
+  v.shown !== nothing && v.shown[1] == key && return v.shown[2]
+  listed === nothing && return (v.shown = (key, (matches=Searches.Match[], whole=true, problem="There's no folder called “$(q.folder)” beside this page.")))[2]
+  every, kept = Searches.Match[], Searches.Match[]
+  for (path, at) in listed.pages
+    lines, ks, mark = page_text(e, path, at)
+    had = get(v.pages, path, nothing)
+    ms = had !== nothing && had[1] == mark ? had[2] : (v.pages[path] = (mark, Searches.matches(q, path, lines, ks)))[2]
+    # An item whose box was clicked here stays in the list, though it no longer matches
+    for k in v.kept
+      k.path == path || continue
+      i = Searches.locate(k, lines, ks)
+      i === nothing && continue
+      push!(kept, Searches.Match(path, i, k.text, k.kind))
+      any(m -> m.line == i, ms) || (ms = sort!([ms; kept[end]], by=m -> m.line))
+    end
+    append!(every, ms)
+  end
+  v.kept = kept
+  key = (key[1:4]..., length(v.kept))
+  (v.shown = (key, (matches=every, whole=listed.whole, problem="")))[2]
+end
+
+"The name of the page at `path` as the list shows it: where it is in the list's folder, without the end of its file's name"
+page_name(v::SearchView, path) = splitext(relpath(path, search_folder(editor(v), v.data)))[1]
+
+describe(p::SearchPage) =
+  Row(width(grow=grow), height(30px), padding(12px, 0px), child_gap=7px, Alignment.Center, name="Page",
+    Icon("file-earmark-text", size=13px, color=colours.dim),
+    Box(label(page_name(p.of, p.path), 12.5px, color=ishovered(p) ? colours.accent : colours.ink, weight="Semibold")), Box(width(grow=grow)))
+
+describe(t::SearchTick) = begin
+  row = t.of
+  ms = found!(row.of).matches
+  done = row.i <= length(ms) && ms[row.i].kind == :done
+  side = 15px
+  Box(fixed(side), height(side), radius(4px), Alignment.Center, justify=Alignment.Center,
+      (done ? (background(colours.accent),) : (border(1.5px, :solid, ishovered(t) ? colours.accent : colours.marker),))...,
+      (done ? (Icon("check", size=13px, color=colours.bg),) : ())...)
+end
+
+describe(r::SearchRow) = begin
+  ms = found!(r.of).matches
+  r.i <= length(ms) || return Box(height(0px))
+  m = ms[r.i]
+  r.box === nothing && (r.box = SearchTick(of=r); setfield!(r.box, :parent, r))
+  boxed = m.kind in (:todo, :done)
+  Row(width(grow=grow), padding(4px, 12px, 4px, 31px), child_gap=9px, Alignment.Start, name="Found", background(ishovered(r) ? colours.hover : clear),
+    (boxed ? (Box(padding(0px, 1px, 0px, 0px), r.box),) : ())...,
+    Box(width(grow=grow), Text(m.text, size=13.5px, family=SANS, subfamily=m.kind == :heading ? "Semibold" : "",
+                               color=m.kind == :done ? colours.dim : colours.ink, wrap=WrapMode.words)))
+end
+
+cursor(::Union{SearchPage,SearchRow,SearchTick}) = :hand
+cursor(::SearchView) = :arrow
+
+"Show the page at `path`, with the caret at the end of the line that `m` is on now"
+visit!(e, path, m=nothing) = begin
+  path == e.buf.path || open!(e, path)
+  focus(e)
+  m === nothing && return handled
+  i = Searches.locate(m, e.buf.lines, kinds(e.buf))
+  i === nothing ? handled : show_line!(e, i)
+end
+
+onkey(p::SearchPage, ::KeyPress{Keys.mouse_left}) = visit!(editor(p.of), p.path)
+onkey(r::SearchRow, ::KeyPress{Keys.mouse_left}) = begin
+  ms = found!(r.of).matches
+  r.i <= length(ms) ? visit!(editor(r.of), ms[r.i].path, ms[r.i]) : handled
+end
+
+"""
+Tick the to-do item `m` in its own page, or take its tick away. A page that's
+open is changed as if you'd clicked the box there. If it isn't the page that
+shows, and it had nothing to save, it's saved. A page that isn't open is
+changed in its file.
+"""
+tick_found!(v::SearchView, m::Searches.Match) = begin
+  e = editor(v)
+  done = m.kind != :done
+  b = get(e.buffers, m.path, nothing)
+  if b !== nothing && !readonly(b)
+    i = Searches.locate(m, b.lines, kinds(b))
+    i === nothing && return handled
+    clean = !dirty(b)
+    caret, anchor = b.caret, b.anchor
+    col = findfirst('[', b.lines[i])
+    edit!(b, (i, col), (i, col + 1), done ? "x" : " ")
+    b.caret, b.anchor = caret, anchor
+    b !== e.buf && clean && save!(b)
+  else
+    isfile(m.path) || return handled
+    lines = text(m.path)
+    i = Searches.locate(m, lines)
+    i === nothing && return handled
+    lines[i] = Searches.ticked(lines[i], done)
+    # A file that can't be written, like one of the pages that come with the app, stays as it is
+    try write(m.path, join(lines, "\n")) catch; return handled end
+    empty!(FOLDER_PAGES)   # the folder is read again, so that the list has the file as it is now
+  end
+  # The item stays in this list. A second click, which puts it back as it was, lets it go.
+  now = Searches.Match(m.path, m.line, m.text, done ? :done : :todo)
+  k = findfirst(x -> x.path == m.path && x.text == m.text && x.kind == m.kind, v.kept)
+  k === nothing ? push!(v.kept, now) : (v.kept[k] = now)
+  Searches.kind(v.data) == now.kind && filter!(x -> !(x.path == now.path && x.text == now.text), v.kept)
+  v.shown = nothing
+  handled
+end
+
+onkey(t::SearchTick, ::KeyPress{Keys.mouse_left}) = begin
+  row = t.of
+  ms = found!(row.of).matches
+  row.i <= length(ms) ? tick_found!(row.of, ms[row.i]) : handled
+end
+
+describe(v::SearchView) = begin
+  e = editor(v)
+  found = found!(v)
+  ms = found.matches
+  q = v.data
+  with_theme(component_theme(e.zoom)) do
+    words = Searches.summary(q, length(ms), length(unique(m.path for m in ms)))
+    bar = block_bar(Box(padding(6px, 0px), Icon("search", size=13px, color=colours.dim)), Box(label(words, 12px, color=colours.dim)),
+                    Box(width(grow=grow)), (isempty(q.folder) ? () : (Box(padding(8px, 0px), label(q.folder, 12px, color=colours.faint)),))...)
+    isempty(found.problem) || return Column(block_look()..., clip=true, name="Found", bar, block_note(found.problem))
+    rows = Any[]
+    pages = 0
+    for i in 1:min(length(ms), FIND_MOST)
+      if i == 1 || ms[i-1].path != ms[i].path
+        page = block_part!(() -> SearchPage(of=v), v, (:page, pages += 1))
+        page.path = ms[i].path
+        push!(rows, page)
+      end
+      push!(rows, block_part!(() -> SearchRow(of=v, i=i), v, (:row, i)))
+    end
+    length(ms) > FIND_MOST && push!(rows, block_note("And $(length(ms) - FIND_MOST) more. Add words to the block's with: line to list fewer."))
+    found.whole || push!(rows, block_note("This folder has more pages than Kaydown reads for a list. Name a folder in it with the block's in: line."))
+    Column(block_look()..., clip=true, name="Found", bar, rows..., Box(height(isempty(rows) ? 0px : 6px)))
+  end
+end
+
+"The list as HTML: the name of each page, and its lines under it"
+find_html(e, v::SearchView) = begin
+  ms = found!(v).matches
+  isempty(ms) && return "<p>$(escape(Searches.summary(v.data, 0, 0)))</p>"
+  out = String[]
+  for (i, m) in enumerate(ms)
+    if i == 1 || ms[i-1].path != m.path
+      i == 1 || push!(out, "</ul>")
+      push!(out, "<p><strong>$(escape(page_name(v, m.path)))</strong></p>\n<ul style=\"list-style: none; padding-left: 0.5em\">")
+    end
+    push!(out, "<li>$(m.kind == :done ? "☑ " : m.kind == :todo ? "☐ " : "")$(escape(m.text))</li>")
+  end
+  join(out, "\n") * "\n</ul>"
+end
+
+BLOCKS[FIND] = BlockKind("Find", "search", SearchView, find_html)
+
+# --- a sketch ---------------------------------------------------------------------------------
+#
+# A code block in the language `sketch` is a drawing. sketch.jl says how the
+# block is written. The buttons at its top choose a tool: the arrow selects a
+# shape, and the others draw by hand, a line, an arrow, a box, an oval or
+# words. The dots after them choose the colour of the next shape, or of the
+# shape that's selected.
+#
+#   - Drag in the sketch to draw with the tool. For words, click where they
+#     start, type them in the field at the top, and press Return.
+#   - With the arrow, click a shape to select it, and drag it to move it.
+#     Delete takes the selected shape away.
+#   - The sketch gets taller when a shape is near its bottom edge.
+#
+# Each shape is a line of the block, so the file holds the whole drawing, and
+# ⌘Z takes back the last thing you drew.
+
+const SKETCH = Sketches.SKETCH
+"The tools of a sketch: the icon of each one's button, and what the button's tooltip says"
+const SKETCH_TOOLS = ((:select, "cursor", "Select a shape, and drag it to move it"), (:pen, "pencil", "Draw by hand"),
+                      (:line, "slash-lg", "Draw a line"), (:arrow, "arrow-up-right", "Draw an arrow"), (:box, "square", "Draw a box"),
+                      (:oval, "circle", "Draw an oval"), (:text, "type", "Write words: click where they start"))
+push!(BLOCK_ICONS, "pencil", "slash-lg", "arrow-up-right", "square", "circle", "type", "trash", "cursor")
+
+"What a `sketch` block shows: a drawing, and the tools that draw it"
+@def mutable struct SketchView <: SemanticUI
+  n::Int = 0                               # its place among the page's sketches
+  first::Int = 0                           # the lines of its block, when the page was last laid out
+  last::Int = 0
+  data::Sketches.Sketch = Sketches.Sketch()
+  lines::Vector{String} = String[]         # the lines that `data` was read from
+  tool::Symbol = :pen
+  colour::Symbol = :ink                    # the colour of the next shape
+  draft::Any = nothing                     # the shape that's being drawn, or nothing
+  picked::Int = 0                          # the place of the shape that's selected, or 0
+  grab::Any = nothing                      # a drag of the selected shape: where the mouse was last, and whether the shape has moved
+  asking::Any = nothing                    # the place that the words in the text field will start at, or nothing
+  box::NTuple{4,Float64} = (0.0, 0.0, 0.0, 0.0)   # where the drawing was last drawn in the window
+  parts::Dict{Any,Any} = Dict{Any,Any}()   # its buttons and its text field, kept between frames
+end
+
+"The part of a sketch that's drawn in"
+@def mutable struct SketchArea <: SemanticUI
+  of::Any = nothing
+end
+"A dot in the top of a sketch that chooses a colour"
+@def mutable struct InkDot <: SemanticUI
+  of::Any = nothing
+  colour::Symbol = :ink
+end
+
+reread!(v::SketchView, lines) = begin
+  lines == v.lines && return v
+  v.lines = lines
+  v.data = Sketches.sketch(lines)
+  v.picked = min(v.picked, length(v.data.shapes))
+  v
+end
+
+"The colour that a sketch draws the colour called `name` in"
+sketch_colour(name::Symbol) = begin
+  cs = series_colours()
+  name == :red ? cs[8] : name == :blue ? cs[1] : name == :green ? cs[6] : name == :orange ? cs[2] : colours.ink
+end
+
+sketch_area(v::SketchView) = block_part!(() -> SketchArea(of=v), v, :area)
+
+"The text field of a sketch, for the words of a text shape"
+sketch_input(v::SketchView) = block_part!(v, :input) do
+  TextInput(placeholder="", font_family=SANS, font_size=13px,
+            look=(_, text) -> Row(width(grow=grow), height(grow=grow), clip=true, text))
+end
+
+"How many px of the window one of the sketch's own measure is"
+sketch_scale(v::SketchView) = v.box[3] > 0 ? v.box[3] / Sketches.WIDE : num(editor(v).width - 2px) / Sketches.WIDE
+
+"The place in the sketch that's under the mouse"
+sketch_place(v::SketchView, w) = (s = sketch_scale(v); ((num(w.mouse[1]) - v.box[1]) / s, (num(w.mouse[2]) - v.box[2]) / s))
+
+"How wide the words of a text shape are, in the sketch's own measure"
+sketch_measure(text, size) = num(measure(Face(SANS, "", px(size), colours.ink, false), text))
+
+"Write the sketch into its block"
+commit!(v::SketchView) = write_block!(v, SKETCH, Sketches.written(v.data))
+
+describe(d::InkDot) = begin
+  v = d.of
+  on = (v.picked > 0 ? v.data.shapes[v.picked].colour : v.colour) == d.colour
+  Box(fixed(22px), height(26px), Alignment.Center, justify=Alignment.Center, name="Colour",
+    Box(fixed(16px), height(16px), radius(8px), Alignment.Center, justify=Alignment.Center,
+        border(1.5px, :solid, on ? colours.accent : ishovered(d) ? colours.marker : clear),
+      Box(fixed(10px), height(10px), radius(5px), background(sketch_colour(d.colour)))))
+end
+
+cursor(::InkDot) = :hand
+
+# A click on a colour gives it to the shape that's selected, and to the shapes that are drawn next
+onkey(d::InkDot, ::KeyPress{Keys.mouse_left}) = begin
+  v = d.of
+  v.colour = d.colour
+  v.picked > 0 && (v.data.shapes[v.picked].colour = d.colour; commit!(v))
+  handled
+end
+
+describe(v::SketchView) = begin
+  e = editor(v)
+  sketch_input(v).color = colours.ink
+  with_theme(component_theme(e.zoom)) do
+    tools = v.asking === nothing ?
+      ([block_button!(v, tool, (:tool, tool), icon=icon, tip=tip, on=v.tool == tool) for (tool, icon, tip) in SKETCH_TOOLS]..., rule(),
+       [block_part!(() -> InkDot(of=v, colour=c), v, (:ink, c)) for c in Sketches.COLOURS]...,
+       Box(width(grow=grow)),
+       (v.picked > 0 ? (block_button!(v, :delete, :delete, icon="trash", tip="Take the selected shape away  Delete"),) : ())...) :
+      (Box(width(6px)), Box(label("Words", 12px)), Box(width(6px)),
+       Box(fixed(300px), height(24px), padding(6px, 0px), radius(5px), border(1px, :solid, colours.accent), background(colours.bg), sketch_input(v)),
+       Box(width(8px)), Box(label("then Return", 12px, color=colours.dim)), Box(width(grow=grow)))
+    Column(block_look()..., clip=true, name="Sketch", block_bar(tools...), sketch_area(v))
+  end
+end
+
+act!(v::SketchView, action, w) = begin
+  if action == :delete
+    1 <= v.picked <= length(v.data.shapes) || return handled
+    deleteat!(v.data.shapes, v.picked)
+    v.picked = 0
+    commit!(v)
+  elseif action[1] == :tool
+    v.tool = action[2]
+    v.tool == :select || (v.picked = 0)
+  end
+  focus(sketch_area(v))
+  handled
+end
+
+describe(a::SketchArea) = begin
+  v = a.of
+  # While a shape is drawn or moved, the sketch keeps its height, and gets taller when the mouse lets go
+  Box(width(grow=grow), height(px(Sketches.tall(v.data) * sketch_scale(v))))
+end
+
+"Draw a line through `points` whose corners are round, as a line drawn by hand has them"
+draw_curve(ctx, points, colour, wide) = begin
+  length(points) < 2 && return
+  shape = Skia.sk_path_new()
+  Skia.sk_path_move_to(shape, Float32(points[1][1]), Float32(points[1][2]))
+  # The line goes from the middle of each part to the middle of the next, and bends at the place between
+  for i in 2:length(points)-1
+    mid = (points[i] .+ points[i+1]) ./ 2
+    Skia.sk_path_quad_to(shape, Float32(points[i][1]), Float32(points[i][2]), Float32(mid[1]), Float32(mid[2]))
+  end
+  Skia.sk_path_line_to(shape, Float32(points[end][1]), Float32(points[end][2]))
+  paint = ink(colour, wide)
+  Skia.sk_canvas_draw_path(ctx, shape, paint)
+  Skia.sk_paint_delete(paint)
+  Skia.sk_path_delete(shape)
+end
+
+"Draw one shape of a sketch whose top left corner is at `(x0, y0)` in the window. `s` is how many px one of the sketch's measure is."
+draw_shape(ctx, shape, x0, y0, s) = begin
+  colour = sketch_colour(shape.colour)
+  at(p) = (x0 + p[1] * s, y0 + p[2] * s)
+  wide = max(1.2, 2s)
+  if shape.kind == :text
+    x, y = at(shape.points[1])
+    write_ink(ctx, shape.text, x, y, Face(SANS, "", px(Sketches.TEXT_SIZE * s), colour, false))
+  elseif shape.kind == :box
+    l, t, r, b = Sketches.bounds(shape)
+    round_box(ctx, at((l, t))..., (r - l) * s, (b - t) * s, 3s; line=colour, wide=wide)
+  elseif shape.kind == :oval
+    l, t, r, b = Sketches.bounds(shape)
+    (x1, y1), (x2, y2) = at((l, t)), at((r, b))
+    paint = ink(colour, wide)
+    edges = Ref(Skia.sk_rect_t(Float32(x1), Float32(y1), Float32(x2), Float32(y2)))
+    Skia.sk_canvas_draw_oval(ctx, edges, paint)
+    Skia.sk_paint_delete(paint)
+  elseif shape.kind == :pen
+    draw_curve(ctx, at.(shape.points), colour, wide)
+  else
+    trace(ctx, at.(shape.points), colour, wide)
+    if shape.kind == :arrow
+      a, b = Sketches.barbs(shape.points[1], shape.points[2])
+      trace(ctx, [at(a), at(shape.points[2]), at(b)], colour, wide)
+    end
+  end
+end
+
+draw(ctx, size, ui::ConcreteRect, a::SketchArea) = begin
+  v = a.of
+  v.box = (num(ui.left), num(ui.top), num(ui.width), num(ui.height))
+  v.box[3] > 0 || return
+  s = sketch_scale(v)
+  with_clip(ctx, ui.left, ui.top, ui.width, ui.height) do
+    isempty(v.data.shapes) && v.draft === nothing && v.asking === nothing &&
+      write_ink(ctx, "Drag here to draw", v.box[1] + 16, v.box[2] + 28, Face(SANS, "", 13px, colours.faint, false))
+    foreach(shape -> draw_shape(ctx, shape, v.box[1], v.box[2], s), v.data.shapes)
+    v.draft === nothing || draw_shape(ctx, v.draft, v.box[1], v.box[2], s)
+    if 1 <= v.picked <= length(v.data.shapes)
+      # A line of dashes goes round the shape that's selected
+      l, t, r, b = Sketches.bounds(v.data.shapes[v.picked], sketch_measure)
+      x1, y1, x2, y2 = v.box[1] + l * s - 6, v.box[2] + t * s - 6, v.box[1] + r * s + 6, v.box[2] + b * s + 6
+      trace(ctx, [(x1, y1), (x2, y1), (x2, y2), (x1, y2)], colours.accent, 1.2, closed=true, dashed=true)
+    end
+    # A small cross marks where the words will start
+    if v.asking !== nothing
+      x, y = v.box[1] + v.asking[1] * s, v.box[2] + v.asking[2] * s
+      trace(ctx, [(x, y - 14s), (x, y + 3s)], colours.accent, 1.5)
+    end
+  end
+end
+
+cursor(a::SketchArea) = a.of.tool == :select ? (a.of.grab !== nothing ? :hand : :arrow) : a.of.tool == :text ? :ibeam : :crosshair
+cursor(::SketchView) = :arrow
+
+onkey(a::SketchArea, ev::KeyPress{Keys.mouse_left}) = begin
+  v, w = a.of, ev.window
+  readonly(editor(v).buf) && return handled
+  v.asking === nothing || stop_asking!(v)
+  focus(a)
+  p = sketch_place(v, w)
+  if v.tool == :select
+    k = Sketches.hit(v.data, p, 7.0, sketch_measure)
+    v.picked = something(k, 0)
+    v.grab = k === nothing ? nothing : (p, false)
+  elseif v.tool == :text
+    v.picked = 0
+    v.asking = p
+    i = sketch_input(v)
+    i.text = ""
+    i.anchor = i.cursor = 0
+    focus(i)
+  else
+    v.picked = 0
+    v.draft = Sketches.Shape(v.tool, v.colour, v.tool == :pen ? [p] : [p, p])
+  end
+  handled
+end
+
+onmouse(a::SketchArea, ev::MouseMove) = begin
+  v, w = a.of, ev.window
+  (v.draft === nothing && v.grab === nothing) && return nothing
+  Keys.mouse_left in w.keys || return handled
+  p = sketch_place(v, w)
+  if v.draft !== nothing
+    d = v.draft
+    # A line drawn by hand gets a new place when the mouse has moved a little
+    d.kind == :pen ? (hypot((p .- d.points[end])...) >= 1.5 && push!(d.points, p)) : (d.points[2] = p)
+  elseif 1 <= v.picked <= length(v.data.shapes)
+    from, _ = v.grab
+    (p == from) && return handled
+    Sketches.move!(v.data.shapes[v.picked], p[1] - from[1], p[2] - from[2])
+    v.grab = (p, true)
+  end
+  handled   # the drag is the sketch's, so the page's text doesn't select
+end
+
+"The mouse let go. The shape that was drawn joins the sketch, and a shape that moved is written down."
+drop!(v::SketchView) = begin
+  d, g = v.draft, v.grab
+  v.draft = v.grab = nothing
+  if d !== nothing
+    d.kind == :pen && (d.points = Sketches.simplify(d.points))
+    # A click without a drag draws nothing
+    (d.kind == :pen ? length(d.points) < 2 : Sketches.slight(d)) && return v
+    push!(v.data.shapes, d)
+    commit!(v)
+  elseif g !== nothing && g[2]
+    commit!(v)
+  end
+  v
+end
+
+"Add the words that were typed as a text shape, at the place that was clicked"
+answer!(v::SketchView) = begin
+  v.asking === nothing && return handled
+  words = String(strip(sketch_input(v).text))
+  p = v.asking
+  stop_asking!(v)
+  isempty(words) && return handled
+  push!(v.data.shapes, Sketches.Shape(:text, v.colour, [p], join(split(words), " ")))
+  commit!(v)
+  handled
+end
+
+"Take the text field away. The keyboard goes back to the drawing."
+stop_asking!(v::SketchView) = begin
+  v.asking = nothing
+  w = window_of(v)
+  w !== nothing && w.focus === sketch_input(v) && focus(sketch_area(v))
+  handled
+end
+
+onkey(v::SketchView, ::KeyPress{Keys.enter}) = v.asking === nothing ? nothing : answer!(v)
+onkey(v::SketchView, ::KeyPress{Keys.escape}) = v.asking === nothing ? nothing : stop_asking!(v)
+onmouse(v::SketchView, ::MouseMove) = held(v, Keys.mouse_left) && (v.draft !== nothing || v.grab !== nothing) ? handled : nothing
+
+block_tick!(v::SketchView) = begin
+  (v.draft !== nothing || v.grab !== nothing) && !held(v, Keys.mouse_left) && drop!(v)
+  # A click somewhere else took the keyboard from the text field. Words that were typed are kept.
+  w = window_of(v)
+  v.asking !== nothing && w !== nothing && w.focus !== sketch_input(v) && answer!(v)
+  v
+end
+
+# Esc lets go of the shape that's selected, then gives the keyboard back to the text. Delete takes the shape away.
+onkey(a::SketchArea, ::KeyPress{Keys.escape}) = a.of.picked > 0 ? (a.of.picked = 0; handled) : nothing
+onkey(a::SketchArea, ::KeyPress{K}) where K = begin
+  v = a.of
+  K in (Keys.backspace, Keys.delete) && return v.picked > 0 ? act!(v, :delete, window_of(a)) : handled
+  if (command = command_of(editor(v), window_of(a), K)) in (:undo, :redo)
+    b = editor(v).buf
+    command == :redo ? redo!(b) : undo!(b)
+    return handled
+  end
+  nothing
+end
+
+"The sketch as HTML: a picture of it"
+sketch_html(e, v::SketchView) = begin
+  isempty(v.data.shapes) && return nothing
+  cs = css_colour.(SERIES_LIGHT)
+  picture = Sketches.svg(v.data, colours=(ink="#2b2622", red=cs[8], blue=cs[1], green=cs[6], orange=cs[2]), family="-apple-system, Helvetica, sans-serif")
+  "<div class=\"diagram\">\n$picture\n</div>"
+end
+
+BLOCKS[SKETCH] = BlockKind("Sketch", "pencil", SketchView, sketch_html)
+
 # --- front matter as a card ---------------------------------------------------------
 #
 # While the caret isn't in it, front matter shows as a card: a small FRONTMATTER
@@ -7852,6 +9329,7 @@ layout!(e, width=text_width(e)) = begin
   n = length(b.lines)
   plans = 0   # how many takeoff blocks there have been so far
   schedules = 0   # and how many schedules
+  seen = Dict{String,Int}()   # and how many blocks in each of the languages of `BLOCKS`
   while i <= n
     j = i
     if ks[i].kind == Kind.table
@@ -7888,6 +9366,19 @@ layout!(e, width=text_width(e)) = begin
       t = codeblock(b, i)[2]
       if !incode(b, i) && t > i && ks[t].kind == Kind.fence && ks[t].level == 1
         content = schedule_item(e, i, t, schedules)
+        push!(items, Item(i, t, top, content.tall, content))
+        top += content.tall
+        i = t + 1
+        continue
+      end
+    end
+    # A block in one of the languages of `BLOCKS` shows as its component, unless the caret is in it
+    if ks[i].kind == Kind.fence && ks[i].level == 0 && haskey(BLOCKS, ks[i].lang)
+      lang = ks[i].lang
+      seen[lang] = get(seen, lang, 0) + 1   # each one keeps its view by its place among the page's blocks in its language
+      t = codeblock(b, i)[2]
+      if !incode(b, i) && t > i && ks[t].kind == Kind.fence && ks[t].level == 1
+        content = block_item(e, lang, i, t, seen[lang])
         push!(items, Item(i, t, top, content.tall, content))
         top += content.tall
         i = t + 1
@@ -10551,7 +12042,7 @@ const COMPONENTS = Dict(
 const LAYOUTS = ("Box", "Row", "Column", "Stack", "Scroll", "Text", "Image")
 "Every icon that the sidebar can show. The built app reads them all when it's made."
 const SIDEBAR_ICONS = unique(["eye", "eye-slash", "file-earmark-text", "chevron-right", "chevron-down", "calculator", "grid-3x3", "puzzle", "bounding-box", "rulers", "bar-chart-steps",
-                              ("type-h$n" for n in 1:6)..., (icon for (_, icon) in values(COMPONENTS))...])
+                              ("type-h$n" for n in 1:6)..., (icon for (_, icon) in values(COMPONENTS))..., (kind.icon for kind in values(BLOCKS))...])
 
 """
 The name and the icon of what a block of `ui` code shows. It's read from the
@@ -10576,7 +12067,7 @@ outline(lines::Vector{String}, kinds::Vector{Line}) = begin
   for (i, l) in enumerate(kinds)
     if l.kind == Kind.heading
       push!(out, Entry(i, l.level, rest(lines[i], l.prefix), "type-h$(l.level)", i))
-    elseif l.kind == Kind.fence && l.level == 0 && l.lang in (LIVE, SHEET, SPREADSHEET, DIAGRAM, TAKEOFF, SCHEDULE)
+    elseif l.kind == Kind.fence && l.level == 0 && (l.lang in (LIVE, SHEET, SPREADSHEET, DIAGRAM, TAKEOFF, SCHEDULE) || haskey(BLOCKS, l.lang))
       # The line that closes the block, or the last line when nothing closes it
       close = something(findnext(k -> k.kind == Kind.fence, kinds, i + 1), length(lines))
       if l.lang == SHEET
@@ -10588,6 +12079,8 @@ outline(lines::Vector{String}, kinds::Vector{Line}) = begin
         push!(out, Entry(i, 7, "Takeoff", "rulers", min(close + 1, length(lines))))
       elseif l.lang == SCHEDULE
         push!(out, Entry(i, 7, "Schedule", "bar-chart-steps", min(close + 1, length(lines))))
+      elseif haskey(BLOCKS, l.lang)
+        push!(out, Entry(i, 7, BLOCKS[l.lang].name, BLOCKS[l.lang].icon, min(close + 1, length(lines))))
       elseif l.lang == DIAGRAM
         # Code that can't be drawn as a diagram is a code block like any other.
         # The caret goes under the block. In the block, it would show the block's code.
@@ -11105,6 +12598,11 @@ const INSERTS = [
   # The caret goes to an empty line under the block. In the block, it would show the block's lines.
   ("Takeoff",       ["```$TAKEOFF", "```", "", ""], (4, 0)),
   ("Schedule",      ["```$SCHEDULE", "```", "", ""], (4, 0)),
+  # An agent writes a question and a set of changes, so the menu has neither
+  ("Chart",         ["```$CHART", "```", "", ""],   (4, 0)),
+  ("Board",         ["```$BOARD", "```", "", ""],   (4, 0)),
+  ("Find",          ["```$FIND", "```", "", ""],    (4, 0)),
+  ("Sketch",        ["```$SKETCH", "```", "", ""],  (4, 0)),
   # This one records from the microphone into a new file, and the line shows the recorder. The caret goes
   # to an empty line under it, so that you can type while it records.
   ("Recording",     ["![Recording]()", "", ""],     (3, 0)),
@@ -12475,6 +13973,7 @@ page_html(e) = begin
   html(b.lines, title=title(b.path),
        block=(lang, s, t) -> lang == SHEET ? sheet_html(e, s, t) : lang == TAKEOFF ? takeoff_html(e, s, t) :
                              lang == SCHEDULE ? schedule_html(e, s, t) :
+                             haskey(BLOCKS, lang) ? block_html(e, lang, s, t) :
                              lang == DIAGRAM ? diagram_html(e, s, t) : nothing,
        value=code -> (made = get(e.nodes, (:inline, b.path, code, 1), nothing); made isa Tuple && !made[2] ? made[1] : nothing))
 end
@@ -13611,7 +15110,7 @@ end
 const NAMES_SHOWN = 8                         # the most names in the list
 const NAME = r"[\p{L}_][\p{L}\p{N}_!]*"       # a name in code
 # The blocks that aren't code, and a block with no language
-const NO_NAMES = (MATTER, TOML_MATTER, HEX, SHEET, SPREADSHEET, DIAGRAM, TAKEOFF, SCHEDULE, "")
+const NO_NAMES = (MATTER, TOML_MATTER, HEX, SHEET, SPREADSHEET, DIAGRAM, TAKEOFF, SCHEDULE, keys(BLOCKS)..., "")
 
 "The language that code in `lang` shares its names with. `jl` and a live block are Julia."
 shared_lang(lang) = (l = lowercase(lang); l in JULIA || l == LIVE ? "julia" : l)
@@ -13733,6 +15232,7 @@ describe(e::Editor) = begin
   sound_tick!(e)
   takeoff_tick!(e)
   schedule_tick!(e)
+  blocks_tick!(e)
   job_tick!(e)
   update_tick!(e)
   zoom_tick!(e)

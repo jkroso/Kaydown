@@ -251,3 +251,37 @@ end
   @test rf.left + rf.width > K.panel_w(e)      # the arrows are past the sidebar's edge
   @test rf.left + rf.width <= title.left
 end
+
+@testset "the two buttons at the side of a mouse go back and forward" begin
+  e, w, _ = window("a.md", "b.md", "c.md")
+  side(k) = (w.keys |= k; onkey(w, KeyPress{k}(0, w)); w.keys ⊻= k; frames(w))
+  K.follow!(e, "b.md"); frames(w)
+  K.follow!(e, "c.md"); frames(w)
+  side(Keys.mouse_back)
+  @test showing(e) == "b.md"
+  side(Keys.mouse_back)
+  @test showing(e) == "a.md"
+  side(Keys.mouse_back)                      # no file showed before the first
+  @test showing(e) == "a.md"
+  side(Keys.mouse_forward)
+  @test showing(e) == "b.md"
+  # They aren't for the place that the mouse is over: over the sidebar's list, a press still goes forward
+  sidebar!(e, w)
+  w.mouse = typeof(w.mouse)(60px, 300px); frames(w)
+  side(Keys.mouse_forward)
+  @test showing(e) == "c.md"
+  # While the field that finds text has the keyboard, they still work
+  K.open_find!(e); frames(w)
+  @test w.focus === K.find_input(e)
+  side(Keys.mouse_back)
+  @test showing(e) == "b.md"
+  # While the file finder is open, the page under it stays
+  K.focus(e)
+  K.open_finder!(e); frames(w)
+  side(Keys.mouse_back)
+  @test showing(e) == "b.md" && e.popup == :finder
+  press(w, Keys.escape)
+  # No command can have one as its shortcut
+  @test !haskey(K.KEY_NAMES, "mouse_back") && !haskey(K.KEY_NAMES, "mouse_forward")
+  @test K.ismouse(Keys.mouse_back) && K.ismouse(Keys.mouse_forward)
+end

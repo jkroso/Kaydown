@@ -66,7 +66,8 @@
 #     Drag the right edge of that list to make it wider or narrower.
 #     ⌘O finds a Markdown file by name.
 #   - ⌘⌥← goes back to the file that showed before, and ⌘⌥→ goes forward
-#     again. The two arrows at the top right of that list do the same.
+#     again. The two arrows at the top right of that list do the same, and so
+#     do the two buttons at the side of a mouse that has them.
 #   - Click a file in that list that isn't Markdown to see it. Kaydown shows it
 #     and doesn't change it: the text of a file of code, a picture, a model, a
 #     sound, a video, a PDF file, a table. A file that it has no way to show is
@@ -1127,7 +1128,8 @@ end
 # sidebar, and they aren't there while the sidebar is closed, or while
 # something fills the window (see `filled`). An arrow is
 # faint when it has no file to go to, and its tooltip names the file that it
-# goes to. Any way of showing a file adds to the list: a link, the
+# goes to. The two buttons at the side of a mouse go back and forward as well,
+# if the mouse has them. Any way of showing a file adds to the list: a link, the
 # list of files, the file finder, a line of a `find` block. A file shows from
 # the place that it was scrolled to, because its buffer keeps that. A link to
 # a heading of the page that shows adds nothing, because the file is the same.
@@ -11946,7 +11948,7 @@ side!(e, w) = begin
   e
 end
 
-ismouse(k) = k in (Keys.mouse_left, Keys.mouse_right, Keys.mouse_middle)
+ismouse(k) = k in (Keys.mouse_left, Keys.mouse_right, Keys.mouse_middle, Keys.mouse_back, Keys.mouse_forward)
 
 # --- key bindings ------------------------------------------------------------------------
 #
@@ -11983,7 +11985,7 @@ const HELD = Keys.ctrl | Keys.cmd | Keys.opt | Keys.shft
 
 "Each key that a shortcut can have, by the name that the settings file has for it, like \"z\", \"f5\" or \"pageup\""
 const KEY_NAMES = Dict{String,Keys}(lstrip(string(name), '_') => getproperty(Keys, name) for name in keys(instances(Keys))
-                                    if !(name in (:shft, :cmd, :opt, :ctrl, :capslock, :fn, :mouse_left, :mouse_right, :mouse_middle)))
+                                    if !(name in (:shft, :cmd, :opt, :ctrl, :capslock, :fn, :mouse_left, :mouse_right, :mouse_middle, :mouse_back, :mouse_forward)))
 const KEY_OF = Dict{Keys,String}(key => name for (name, key) in KEY_NAMES)
 
 "What the key bindings page shows for a key that isn't a letter, a number or an F key"
@@ -12696,6 +12698,20 @@ onkey(b::KeyReset, ::KeyPress{Keys.mouse_left}) = begin
   e = editor(b)
   lost_note!(e, b.name, put_back!(e, b.name))
   handled
+end
+
+# A mouse can have two buttons at its side, which go back and forward in a web browser. Here they do what
+# ⌘⌥← and ⌘⌥→ do. A press of one isn't for the place that the mouse is over. It comes to the part of the
+# window that has the keyboard, and from there to here.
+onkey(e::Editor, ev::KeyPress{Keys.mouse_back}) = side_button!(e, ev.window, :back)
+onkey(e::Editor, ev::KeyPress{Keys.mouse_forward}) = side_button!(e, ev.window, :forward)
+
+"Run the `command` of a button at the side of the mouse: `:back` or `:forward`"
+side_button!(e, w, command) = begin
+  # While a picture fills the window, or the file finder is open, the page under it stays, as it does for the keys
+  (zooming(e) === nothing && e.popup == :none) || return nothing
+  run!(e, w, command)
+  nothing
 end
 
 # A press of a mouse button that nothing under the mouse took comes here. It has a method of its own, so the

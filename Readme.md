@@ -238,7 +238,7 @@ Kaydown asks before it runs the code of a GitHub repository for the first time. 
 
 ## Go back to the file that showed before
 
-Each window keeps the files that it showed, in the order that it showed them. ⌘⌥← goes back to the file that showed before the one that shows now, at the place that it was scrolled to. ⌘⌥→ goes forward again. While the sidebar is open, two arrows at its top right go back and forward too. An arrow is faint when it has no file to go to. It works after a link, a click in the list of files, the file finder, and any other way of showing a file. The key bindings page changes the keys. ⌘[ and ⌘] already show the email before and the next email.
+Each window keeps the files that it showed, in the order that it showed them. ⌘⌥← goes back to the file that showed before the one that shows now, at the place that it was scrolled to. ⌘⌥→ goes forward again. While the sidebar is open, two arrows at its top right go back and forward too. An arrow is faint when it has no file to go to. The two buttons at the side of a mouse go back and forward as well, if the mouse has them. It works after a link, a click in the list of files, the file finder, and any other way of showing a file. The key bindings page changes the keys. ⌘[ and ⌘] already show the email before and the next email.
 
 ## Save a page when you leave its window
 

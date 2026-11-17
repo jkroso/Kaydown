@@ -41,6 +41,17 @@ The end.
 
 ```changes
 ```
+
+```changes
+--- a/greet.jl
++++ b/greet.jl
+@@ -1,3 +1,4 @@
+ greet(name) = begin
+-  println("Hello ", name)   # say hello to the person whose name it is, and end the line with a mark that shows how glad we are to see them
++  isempty(name) && return
++  println("Hello, ", name, "!")   # say hello to the person whose name it is, and end the line with a mark that shows how glad we are to see them
+ end
+```
 """)
 
 const e = K.build_editor(page)
@@ -56,7 +67,7 @@ release() = (w.keys ⊻= Keys.mouse_left; onkey(w, KeyRelease{Keys.mouse_left}(0
 click(place) = (press(place); release())
 middle(r) = (K.num(r.left + r.width / 2), K.num(r.top + r.height / 2))
 button(key) = click(middle(rect(view(1).parts[(:button, key)])))
-block() = (s = K.block_lines(e.buf, K.CHANGES, 1); e.buf.lines[s[1]+1:s[2]-1])
+block(n=1) = (s = K.block_lines(e.buf, K.CHANGES, n); e.buf.lines[s[1]+1:s[2]-1])
 
 @testset "the block shows each change" begin
   v = view(1)
@@ -64,6 +75,13 @@ block() = (s = K.block_lines(e.buf, K.CHANGES, 1); e.buf.lines[s[1]+1:s[2]-1])
   # The lines of a change are as tall as the change has lines
   @test rect(v.parts[(:hunk, 1)]).height == px(5 * K.DIFF_ROW + 8) && rect(v.parts[(:hunk, 2)]).height == px(2 * K.DIFF_ROW + 8)
   @test rect(v.parts[(:hunk, 3)]).top > rect(v.parts[(:hunk, 2)]).top > rect(v.parts[(:hunk, 1)]).top
+  # The row over a change names its file, so a file has no row of its own
+  @test K.change_words(v.data.hunks[1]) == ("src/app.js", "lines 10 to 13") && K.change_words(v.data.hunks[3]) == ("Readme.md", "lines 1 to 2")
+  @test K.change_words(K.Diffs.changes(["@@ -3 +3 @@", "-a", "+b"]).hunks[1]) == ("", "Line 3")
+  @test rect(v.parts[(:hunk, 3)]).top - (rect(v.parts[(:hunk, 2)]).top + rect(v.parts[(:hunk, 2)]).height) == 34px
+  # A long path loses its first folders
+  @test K.short_path("src/app.js") == "src/app.js"
+  @test K.short_path("packages/editor/src/components/toolbar/buttons/Bold.jsx", 30) == "…/toolbar/buttons/Bold.jsx"
   @test isempty(view(2).data.hunks)
   @test any(en -> en.title == "Changes", K.outline(e.buf))
   @test !K.dirty(e.buf)
@@ -89,4 +107,104 @@ end
   @test e.buf.lines[findfirst(==("The end."), e.buf.lines)] == "The end."
   html = K.page_html(e)
   @test occursin("<strong>src/app.js · Lines 10 to 13 · Accepted</strong>", html) && occursin("+   const c = 4</span>", html)
+end
+
+@testset "the lines of a change" begin
+  v = view(3)
+  wide = K.diff_wide(v)
+  l = K.laid(v, 1, wide)
+  @test rect(v.parts[(:hunk, 1)]).width == px(wide) && !l.beside
+  # A line that's too long goes on under itself, as far in as the line's first word
+  @test length(l.bands) == 5 && length(l.bands[4].lines[1]) > 1 && l.bands[4].tall == K.DIFF_ROW * length(l.bands[4].lines[1])
+  @test rect(v.parts[(:hunk, 1)]).height == px(l.tall + 8) && l.tall > 5 * K.DIFF_ROW
+  @test K.hang(l.texts[4], l.room) == l.texts[4].xs[3] && all(span -> last(span) - first(span) + 1 <= l.room / l.texts[4].xs[2], l.bands[4].lines[1])
+  @test join(String(l.texts[4].chars[span]) for span in l.bands[4].lines[1]) == v.data.hunks[1].rows[4].text
+  # The lines have the colours of Julia code, because the file is greet.jl
+  @test (3:9, :call) in l.texts[2].parts && (11:18, :string) in l.texts[2].parts && any(p -> p[2] == :comment, l.texts[2].parts)
+  @test all(t -> all(p -> p[2] == :plain, t.parts), K.laid(view(1), 3, wide).texts)   # Readme.md has none
+  # The old line is beside its new version, and the new line's other words are marked
+  @test l.texts[4].marks[1] == 17:17 && isempty(l.texts[3].marks)
+  shot("changes-under.png")
+end
+
+@testset "the old lines beside the new" begin
+  v = view(3)
+  wide = K.diff_wide(v)
+  before = rect(view(1).parts[(:hunk, 1)]).height
+  button(:beside)
+  @test e.beside && v.parts[(:button, :beside)].on && !v.parts[(:button, :under)].on
+  l = K.laid(v, 1, wide)
+  @test l.beside && [b.rows for b in l.bands] == [(1, 1), (0, 3), (2, 4), (5, 5)]
+  @test rect(v.parts[(:hunk, 1)]).height == px(l.tall + 8)
+  # The first change of the first block has a line less across: the line that goes is beside the first line that comes
+  @test rect(view(1).parts[(:hunk, 1)]).height == before - px(K.DIFF_ROW)
+  shot("changes-beside.png")
+  button(:under)
+  @test !e.beside && rect(view(1).parts[(:hunk, 1)]).height == before
+  # A block that's too narrow shows the new lines under the old, whatever the setting
+  @test !K.beside(v, K.BESIDE_LEAST - 1) && (e.beside = true; K.beside(v, K.BESIDE_LEAST)) && (e.beside = false; true)
+end
+
+@testset "a comment on a line" begin
+  v = view(3)
+  # The block is near the bottom of the window, so the page goes up to show all of it
+  e.scroll.offset += rect(v).top - 120px; frames()
+  area = v.parts[(:hunk, 1)]
+  l = K.laid(v, 1)
+  tall = rect(area).height
+  row(j) = (r = rect(area); b = K.laid(v, 1).bands[findfirst(b -> b.note == 0 && j in b.rows, K.laid(v, 1).bands)];
+            (K.num(r.left) + 200, K.num(r.top) + 4 + b.top + 6))
+  input = K.note_input(v)
+  type(words) = (input.text *= words; input.anchor = input.cursor = length(input.text); frames())
+  # The mouse on a line shows that a click does something, and the click opens a field under the line
+  at(row(3))
+  @test area.over == 3 && K.cursor(area) == :hand
+  shot("changes-hover.png")
+  click(row(3))
+  @test v.noting == (1, 3) && w.focus === input && rect(area).height == tall + px(K.NOTE_FIELD + 8)
+  @test rect(input) !== nothing && rect(input).top > rect(area).top + px(K.laid(v, 1).bands[3].top)
+  shot("changes-field.png")
+  # What's typed is written at the end of the block as it's typed
+  type("Throw an error ")
+  @test block(3)[end-1:end] == ["# Comment on change 1, line 3: +  isempty(name) && return", "# Throw an error "]
+  @test v.noting == (1, 3) && input.text == "Throw an error " && K.Diffs.summary(v.data) == "1 change  ·  1 comment"
+  # Return closes the field, and the comment shows under its line
+  onkey(w, KeyPress{Keys.enter}(0, w)); frames()
+  @test v.noting === nothing && block(3)[end] == "# Throw an error" && w.focus !== input
+  bands = K.laid(v, 1).bands
+  @test bands[4].note == 3 && bands[4].said == ["Throw an error"] && rect(area).height == tall + px(K.NOTE_ROW + 18)
+  shot("changes-comment.png")
+  # A click on the comment opens it again. Esc puts back what it said.
+  r = rect(area)
+  click((K.num(r.left) + 200, K.num(r.top) + 4 + bands[4].top + 10))
+  @test v.noting == (1, 3) && input.text == "Throw an error"
+  type(", and say why")
+  @test block(3)[end] == "# Throw an error, and say why"
+  onkey(w, KeyPress{Keys.escape}(0, w)); frames()
+  @test v.noting === nothing && block(3)[end] == "# Throw an error"
+  # A choice keeps the comment, and the page as HTML has it
+  button3(key) = click(middle(rect(v.parts[(:button, key)])))
+  button3((:accept, 1))
+  @test block(3)[3] == "@@ -1,3 +1,4 @@ [accepted]" && block(3)[end] == "# Throw an error"
+  @test occursin("<blockquote><code>+  isempty(name) &amp;&amp; return</code><br>Throw an error</blockquote>", K.page_html(e))
+  # A long comment goes on under itself
+  click(row(2)); type("This line said hello to the person whose name it is, and that was all that it did, so say why it has to say more now than it did")
+  click(row(1))
+  @test v.noting == (1, 1) && length(K.laid(v, 1).bands[findfirst(b -> b.note == 2, K.laid(v, 1).bands)].said) == 2
+  # A click somewhere else closes the field, and a field with no words leaves no comment
+  click((300, 60))
+  @test v.noting === nothing && !haskey(v.data.notes, (1, 1)) && length(v.data.notes) == 2
+  # The button beside the field takes the comment away
+  click(row(3)); button3(:unsay)
+  @test v.noting === nothing && collect(keys(v.data.notes)) == [(1, 2)] && count(startswith("# Comment"), block(3)) == 1
+  # With the old lines beside the new, the comment on a line that goes is under the old lines
+  button3(:beside)
+  l = K.laid(v, 1)
+  @test l.beside && K.note_box(true, l.gutter, '-', 778.0)[1] < 389 < K.note_box(true, l.gutter, '+', 778.0)[1]
+  shot("changes-comment-beside.png")
+  button3(:under)
+  # A click with ⌥ held is the page's. It opens no field, and the caret goes into the block to show its lines.
+  w.keys |= Keys.opt; click(row(3)); w.keys ⊻= Keys.opt
+  span = K.block_lines(e.buf, K.CHANGES, 3)
+  @test v.noting === nothing && span[1] < e.buf.caret[1] <= span[2]
 end

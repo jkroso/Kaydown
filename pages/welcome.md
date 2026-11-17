@@ -323,6 +323,10 @@ Which should the agent do first?
 
 An agent can show you its changes to a file too. Accept or reject each one, and send the page. Kaydown changes no file: the agent reads your choices and makes the changes that you accepted.
 
+The lines have the colours of their code. Where a new line is another version of an old line, a darker mark shows the words that are different. The two buttons at the top of the block choose how the lines show: the new lines under the old lines, or the old lines at the left and the new lines at the right. A window that's too narrow for two columns shows the new lines under the old.
+
+Click a line of a change to say something about it. A field opens under the line. Type your comment, and press Return. The comment stays under its line, and the agent reads it with your choices. Click a comment to change it. To take it away, click it and then click the bin beside the field. The second change below has a comment.
+
 ```changes
 --- a/greet.jl
 +++ b/greet.jl
@@ -332,6 +336,13 @@ An agent can show you its changes to a file too. Accept or reject each one, and 
 +  isempty(name) && return
 +  println("Hello, ", name, "!")
  end
+@@ -8,3 +9,3 @@
+ farewell(name) = begin
+-  println("Bye ", name)
++  println("Goodbye, ", name, ".")
+ end
+# Comment on change 2, line 3: +  println("Goodbye, ", name, ".")
+# Say "See you soon" here. It's friendlier.
 ```
 
 The agent can change the page while you read it. What you're typing stays, and the agent's changes show around it. A bar shows for a few seconds beside each line that the agent changed. If you missed them, click the button with an eye at the top right: it shows a bar beside every line that the agent changed since you last sent the page, until you click it again. In the list of files, a dot marks a page that an agent waits for. While the list is hidden, the dot shows beside the button that opens it. [Kaydown's page on GitHub](https://github.com/jkroso/Kaydown#use-it-with-an-agent) says how to set up an agent.

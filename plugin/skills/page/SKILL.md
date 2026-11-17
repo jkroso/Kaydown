@@ -44,6 +44,7 @@ How to read it:
 - A box that changed from `[ ]` to `[x]` is a choice that the user made. So is an answer of an `ask` block that changed from `( )` to `(x)`.
 - A new line that starts with `>` in an `ask` block is what the user typed as their answer.
 - `[accepted]` or `[rejected]` at the end of an `@@` line of a `changes` block is the user's choice for that change.
+- Two new lines that start with `#` at the end of a `changes` block are the user's comment on one line of the diff. The first starts with `# Comment on change 2, line 3:` and has that line of the diff after it. The second has the user's words.
 - A new line that talks to you, like the question above, is a note. Do what it asks, or answer it, and then take the note out of the page.
 - Any other changed text is the user's own wording. Keep it. Do not put your wording back.
 - "The user changed nothing in it" means that the user read the page and has nothing to add. If the page asked for approval, that is approval.
@@ -172,6 +173,15 @@ A `changes` code block holds a diff, as `git diff` or `diff -u` writes one. Kayd
 ````
 
 Kaydown writes the user's choice at the end of the change's `@@` line: `[accepted]` or `[rejected]`. It changes no file but the page. So show the changes before you make them, and then make only the ones that the user accepted. Give each change that the user can choose apart from the others its own `@@` line.
+
+The user can click a line of the diff and say something about it. Kaydown writes that at the end of the block, in two lines:
+
+```
+# Comment on change 1, line 2: -  run(job)
+# Keep this line, and log the job that's missing.
+```
+
+The changes are counted from the top of the block, and the lines from the first line under the change's `@@` line. The first line also has the line of the diff that the comment is about. Do what the comment asks before you make the change. When you write the block again with new changes, leave the old comments out.
 
 ### A chart
 

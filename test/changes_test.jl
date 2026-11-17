@@ -65,3 +65,64 @@ end
   D.choose!(again, 1, :accepted)
   @test D.written(again)[2] == "@@"
 end
+
+@testset "the words that are different" begin
+  alike, gone, come = D.compare("  const b = 2", "  const b = 3")
+  @test alike > 0.8 && gone == [13:13] && come == [13:13]
+  # One space between two words that are different is marked with them
+  alike, gone, come = D.compare("say(\"Hi You\")", "say(\"Hello There\")")
+  @test gone == [6:11] && come == [6:16]
+  @test D.compare("stop()", "stop(now)")[2:3] == ([], [6:8])
+  @test D.compare("alpha beta", "gamma delta")[1] == 0
+  @test D.compare("", "")[1] == 1
+  @test D.words("a_1 +  b") == [(1, "a_1"), (4, " "), (5, "+"), (6, "  "), (8, "b")]
+end
+
+@testset "the lines that are versions of each other" begin
+  # The line that goes is matched with the line that's most like it, not with the first line that comes
+  h = D.changes(["@@ -1,3 +1,4 @@", " greet(name) = begin", "-  println(\"Hello \", name)", "+  isempty(name) && return",
+                 "+  println(\"Hello, \", name, \"!\")", " end"]).hunks[1]
+  other, marks = D.matched(h)
+  # The new line has all the words of the old one, so only the new line has words to mark
+  @test other == [0, 4, 0, 2, 0] && isempty(marks[3]) && isempty(marks[2]) && marks[4] == [17:17, 26:30]
+  @test D.sides(h) == [(1, 1), (0, 3), (2, 4), (5, 5)]
+  # Lines that aren't alike have no match, and still share a line across
+  h = D.changes(["@@", "-alpha beta", "-one(two)", "+gamma delta", " same"]).hunks[1]
+  other, marks = D.matched(h)
+  @test other == [0, 0, 0, 0] && all(isempty, marks)
+  @test D.sides(h) == [(1, 3), (2, 0), (4, 4)]
+  # Lines that only come, and lines that only go
+  h = D.changes(["@@", "+a", "+b", " c", "-d"]).hunks[1]
+  @test D.sides(h) == [(0, 1), (0, 2), (3, 3), (4, 0)] && D.matched(h)[1] == [0, 0, 0, 0]
+  # A line that only moved in or out has nothing to mark
+  h = D.changes(["@@", "-  x = 1", "+    x = 1"]).hunks[1]
+  @test D.matched(h) == ([2, 1], [[], []])
+end
+
+@testset "what you say about a line" begin
+  c = D.changes(BLOCK)
+  D.note!(c, 1, 3, "Why 3?")
+  D.note!(c, 2, 1, "- keep this\nline")
+  out = D.written(c)
+  # The comments are at the end of the block, each with the line that it's about
+  @test out[1:length(BLOCK)] == BLOCK && out[end-3:end] == ["# Comment on change 1, line 3: +  const b = 3", "# Why 3?",
+                                                              "# Comment on change 2, line 1: -  stop()", "# - keep this line"]
+  again = D.changes(out)
+  @test again.notes == Dict((1, 3) => "Why 3?", (2, 1) => "- keep this line") && D.written(again) == out
+  @test length(again.hunks) == 3 && [length(h.rows) for h in again.hunks] == [5, 2, 1]
+  @test D.summary(again) == "3 changes  ·  1 accepted  ·  2 comments"
+  # A choice and a comment are written together, and the words keep a space at their end while you type
+  D.choose!(again, 1, :rejected); D.note!(again, 1, 3, "Why 3? ")
+  out = D.written(again)
+  @test out[5] == "@@ -10,4 +10,5 @@ function start() { [rejected]" && out[end-2] == "# Why 3? " && D.changes(out).notes[(1, 3)] == "Why 3? "
+  # Empty words take the comment away
+  D.note!(again, 1, 3, " "); D.note!(again, 2, 1, "")
+  @test D.written(again)[[1:4; 6:end]] == BLOCK[[1:4; 6:end]] && isempty(again.notes)
+  # A change with no numbers gets its comment too, after its last line
+  c = D.changes(["-hello", "+hello there", " world"])
+  D.note!(c, 1, 2, "Too long")
+  out = D.written(c)
+  @test out == ["-hello", "+hello there", " world", "# Comment on change 1, line 2: +hello there", "# Too long"]
+  again = D.changes(out)
+  @test length(again.hunks) == 1 && length(again.hunks[1].rows) == 3 && again.notes == Dict((1, 2) => "Too long")
+end

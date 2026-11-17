@@ -111,3 +111,64 @@ end
   K.go_folder!(e, dir); frames()
   @test isopen("b.md")
 end
+
+@testset "a heading or a component with changes that aren't saved has a dot" begin
+  write(joinpath(dir, "parts.md"), """
+  # Parts
+
+  Words under the first heading.
+
+  ## One
+
+  Words under One.
+
+  ```sheet
+  Width = 3
+  ```
+
+  Words after the sheet.
+
+  ### Inner
+
+  Words under Inner.
+
+  ## Two
+
+  Words under Two.
+  """)
+  K.go_folder!(e, dir); K.open!(e, joinpath(dir, "parts.md")); frames()
+  b = e.buf
+  line(text) = findfirst(startswith(text), b.lines)
+  type!(text, new) = (i = line(text); K.edit!(b, (i, 0), (i, length(b.lines[i])), new); K.touch!(e); frames())
+  "The titles of the headings and the components that have a dot"
+  dots() = [item.firstchild.title for item in K.items(file("parts.md"), hidden=true) if K.edited(item.firstchild)]
+  @test isempty(dots())
+  # A line under a heading marks that heading, and no other
+  type!("Words under Two", "New words under Two.")
+  @test dots() == ["Two"] && K.dirty(b)
+  # A line in a component's block marks the component. A line after the block marks the heading over it.
+  type!("Width = 3", "Width = 4")
+  @test dots() == ["Sheet", "Two"]
+  type!("Words after the sheet", "New words after the sheet.")
+  @test dots() == ["One", "Sheet", "Two"]
+  # A change in a group that's closed marks the heading of the group
+  type!("Words under Inner", "New words under Inner.")
+  @test dots() == ["One", "Sheet", "Inner", "Two"]
+  K.undo!(b); K.undo!(b); K.undo!(b); frames()
+  type!("Words under Inner", "New words under Inner.")
+  @test dots() == ["Inner", "Two"]
+  one = only(item for item in K.items(file("parts.md"), hidden=true) if item.firstchild.title == "One")
+  one.collapsed = true; frames()
+  @test K.edited(one.firstchild)
+  one.collapsed = false; frames()
+  @test !K.edited(one.firstchild)
+  # A line that's taken away marks the heading that it was under
+  K.undo!(b); K.undo!(b); frames()
+  @test isempty(dots())
+  i = line("Words under the first heading")
+  K.edit!(b, (i - 1, 0), (i, length(b.lines[i])), ""); K.touch!(e); frames()
+  @test dots() == ["Parts"]
+  # The dots go when the page is saved
+  K.save!(b); frames()
+  @test isempty(dots()) && !K.dirty(b)
+end

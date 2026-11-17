@@ -40,15 +40,30 @@
 #     or a sheet to draw its numbers as bars, as lines or as a pie.
 #   - Write a code block in the language `board` to see the page's to-do
 #     items as cards in columns. Drag a card to the last column to tick its item.
+#   - Write a code block in the language `gallery` to show the pictures of a
+#     folder as a grid of small squares. Click one to make it fill the window,
+#     and press ← and → there to see the others.
+#   - Write a code block in the language `calendar` to see a month, with the
+#     page's tasks, its to-do items that have a day like 2026-11-25 in their
+#     text, and events of its own. Drag a thing to another day to move it.
 #   - Write a code block in the language `sketch` to draw: by hand, lines,
 #     arrows, boxes, ovals and words. Click it to make it fill the window,
 #     where its tools are.
+#   - Write a code block in the language `signature` for a place to sign:
+#     press in its box and drag to draw. The file holds each stroke.
+#   - Write a code block in the language `map` with an address in it to show
+#     the map of that place. The + and the − on the map show less and more
+#     of what's round it. Drag the map to move it, and click it to put the
+#     pin where you clicked.
 #   - Write a code block in the language `find` to list the to-do items
 #     that aren't ticked in every page of the folder. At its top, type words
 #     to keep only the lines that have them, and choose the kind of line and
 #     the folder from two menus.
 #   - Write a code block in the language `email` to list the emails with a
 #     person, once Kaydown has your email account.
+#   - Write a code block in the language `timelog` to keep the hours of a
+#     job. Type a task and click Start, and click Stop when you stop. The
+#     block adds up the hours of each task.
 #   - An agent writes a code block in the language `ask` to ask you a
 #     question with answers to click, and one in the language `changes` to
 #     show you a diff, with a button on each change that accepts or rejects it.
@@ -69,6 +84,11 @@
 #   - Write ![name](picture.png) on a line of its own to show a picture, or drop
 #     a file on the page from the Finder. ⌘V pastes a file that you copied in
 #     the Finder the same way, and a picture that you copied, like a screenshot.
+#   - Write ![Prices](prices.csv) on a line of its own to show a CSV file as a
+#     table. A `chart` block under the line draws the file's numbers.
+#   - Write a web page as a picture is written, on a line of its own, like
+#     ![Julia](https://julialang.org), to show a card with the page's title,
+#     its description and its picture. ⌘-click the card to open the page.
 #   - Write [^1] in a line and [^1]: on another line to make a footnote.
 #   - Right-click a word with red dots under it to put its spelling right.
 #   - The button at the top left, or ⌘\, shows the other files in the folder.
@@ -93,7 +113,7 @@
 #   - Right-click the page to cut, copy and paste, and to insert a new block
 #     where you clicked: a heading, a list, a to-do item, a table, a sheet, a
 #     spreadsheet, a code block, a live block, a takeoff, a schedule, a chart, a
-#     board, a list of what's found, a sketch, a list of emails, a recording or a divider.
+#     board, a calendar, a list of what's found, a sketch, a signature, a map, a list of emails, a link card, a recording or a divider.
 #   - A line that holds only a sound file, like ![Recording](memo.m4a), shows
 #     a player. Insert › Recording records one from the microphone. A button
 #     under the player writes down what's said, in a paragraph under it.
@@ -125,6 +145,9 @@
 #   - Click the word count to count characters or reading time instead.
 #   - ⌘+ and ⌘- change the text size by a pixel. ⌘0 puts it back.
 #   - ⌘P prints the page, or saves it as a PDF. ⌘⇧E saves it as a page of HTML.
+#   - ⌃⌘⇧P shows the page as slides, one at a time, for when you show a plan to
+#     someone. A slide starts at each heading of level 1 or 2, and at each line
+#     across the page. → and ← go on and back, and esc shows the page again.
 #   - ⌘, opens the settings in a window of their own, where you choose the
 #     colours, the font and its weight, the text size, the width of the page
 #     and what the count at the top right counts. A button there makes
@@ -193,7 +216,7 @@
 @use "./spelling" misspelt guesses learn!
 @use "./transcribe" Transcription check! finished phrases words_between
 @use "./html" html footnotes NOTE escape
-@use "./markdown" Kind Line Span Cell classify spans tablecells isdivider words isdone front_matter MATTER TOML_MATTER MATH
+@use "./markdown" Kind Line Span Cell classify spans tablecells isdivider words isdone front_matter MATTER TOML_MATTER MATH CALLOUTS callout opens_callout
 @use "./highlight" tokens
 @use "./sheet" SHEET Result sheetcells parts uses tally known units shown
 @use "./spreadsheet" SPREADSHEET Value spreadcells spreadtexts isformula letters answers moved
@@ -203,16 +226,24 @@
 @use "./takeoff" => Plans
 @use "./schedule" => Schedules
 @use "./chart" => Charts
+@use "./csv" => Csvs
 @use "./math" => Maths
 @use "./ask" => Asks
 @use "./changes" => Diffs
 @use "./board" => Boards
+@use "./gallery" => Galleries
+@use "./calendar" => Calendars
+@use "./linkcard" => Cards
 @use "./find" => Searches
 @use "./sketch" => Sketches
+@use "./signature" => Signatures
+@use "./map" => Maps
 @use "./emails" => Posts
+@use "./timelog" => Timelogs
 @use "./centient" => Centient
 @use "./update" => Update
 @use "./mail" => Mail
+@use "./slides" => Slides
 @use "github.com/jkroso/UI.jl/Interface/draw" Bubble
 @use "github.com/jkroso/URI.jl/FSPath" FSPath
 @use Colors: @colorant_str, RGBA, Colorant
@@ -1209,7 +1240,9 @@ face(e, line::Line) = begin
   b = body(e)
   k = line.kind
   k == Kind.heading ? Face(emboldened(b), size=b.size * HEADINGS[line.level]) :
-  k == Kind.blockquote ? Face(b, style=slanted(b.style), color=colours.dim) :
+  # A callout's text is the page's own. Its title is bold, in the colour of its kind.
+  opens_callout(line) ? Face(emboldened(b), color=callout_colour(line.lang)) :
+  k == Kind.blockquote ? (isempty(line.lang) ? Face(b, style=slanted(b.style), color=colours.dim) : b) :
   # Code is the size that the settings page chooses. The markup of a table or a rule is code's usual size.
   k in (Kind.code, Kind.fence) ? Face(b, family=codefont(), style=codestyle(), size=code_size(e)) :
   k in (Kind.table, Kind.rule) ? Face(b, family=codefont(), style=codestyle(), size=b.size * CODE_SCALE) : b
@@ -1453,6 +1486,9 @@ pieces(e, text::String, line::Line, raw::Bool, i::Int=0) = begin
     k == Kind.todo && isdone(text) && (base = Face(base, color=colours.dim))
   elseif k == Kind.paragraph
     isempty(lead) || push!(out, piece(lead, 0, base))
+  elseif opens_callout(line) && !raw
+    # The line that names a callout's kind shows the kind's icon, and its name when the line has no title of its own
+    push!(out, callout_mark(e, line, base, length(text) > line.prefix))
   elseif raw && !isempty(lead)
     push!(out, piece(lead, 0, Face(base, color=colours.faint)))
   end
@@ -1479,6 +1515,61 @@ pieces(e, text::String, line::Line, raw::Bool, i::Int=0) = begin
     s.live && !raw && i >= 0 ? push!(out, inline(e, i, s, base)) : symbols!(out, s.text, s.col, face(base, s), s.link)
   end
   out
+end
+
+# --- callouts ------------------------------------------------------------------------------
+#
+# A callout is a quote that stands out: a note, a tip, a warning. Its first
+# line names its kind, as GitHub writes it: `> [!NOTE]`. The lines of the quote
+# under that one are the callout's text. The page shows the first line as the
+# kind's icon and its name, like "Note", in the kind's colour. Words after the
+# `]` are a title, and show in place of the name. The callout's lines have a
+# line of that colour down their left, and a little of the colour behind them.
+# `markdown.jl` reads the lines.
+
+"The icon of each kind of callout"
+const CALLOUT_ICONS = (note="info-circle", tip="lightbulb", important="exclamation-square", warning="exclamation-triangle", caution="exclamation-octagon")
+
+"The colour of a kind of callout. Each is a colour that code has in this page's colours."
+callout_colour(kind) =
+  kind == "tip" ? colours.string : kind == "important" ? colours.keyword : kind == "warning" ? colours.number :
+  kind == "caution" ? removed_colour() : colours.call
+
+"What a callout of this kind is called when it has no title of its own, like \"Note\""
+callout_name(kind) = uppercasefirst(kind)
+
+"The colour behind the lines of a callout: a little of its kind's colour over the page"
+callout_tint(kind) = (c = RGBA(callout_colour(kind)); RGBA(c.r, c.g, c.b, dark_page() ? 0.12 : 0.08))
+
+"What shows in place of the `> [!NOTE]` that starts a callout: the kind's icon, and the kind's name when `name` isn't empty"
+@def mutable struct CalloutMark <: SemanticUI
+  kind::String = "note"
+  name::String = ""
+  face::Face = Face("", "", TEXT_SIZE, colours.ink, false)   # of the name
+end
+
+const CALLOUT_GAP = 0.45   # the room between the icon and the words after it, as a part of the size of the text
+
+icon_size(m::CalloutMark) = px(round(num(m.face.size) * 0.95))
+wide(m::CalloutMark) = icon_size(m) + m.face.size * CALLOUT_GAP + measure(m.face, m.name)
+
+describe(m::CalloutMark) =
+  Row(fixed(wide(m)), Alignment.Center, justify=Alignment.Start, child_gap=m.face.size * CALLOUT_GAP,
+    Icon(getproperty(CALLOUT_ICONS, Symbol(m.kind)), size=icon_size(m), color=m.face.color),
+    (isempty(m.name) ? () : (Box(Text(m.name, size=m.face.size, family=m.face.family, subfamily=m.face.style, color=m.face.color, wrap=WrapMode.none)),))...)
+
+inputs(m::CalloutMark) = (m.kind, m.name, m.face)
+
+"""
+The piece that stands for what starts the first line of a callout, in text
+drawn in `base`. `titled` is true when the line has a title of its own after
+it. The piece then shows only the icon.
+"""
+callout_mark(e, line::Line, base::Face, titled::Bool) = begin
+  m = CalloutMark(kind=line.lang, name=titled ? "" : callout_name(line.lang), face=base)
+  # It's part of its line, which is laid out once and kept. It can reach the document, and it isn't one of the document's children.
+  setfield!(m, :parent, node!(Document, e, :document))
+  piece(callout_name(line.lang), 0, base, atomic=true, n=line.prefix, node=Inline(m, wide(m), base.size * 1.2))
 end
 
 # --- inline code -------------------------------------------------------------------------
@@ -3671,32 +3762,8 @@ mutable struct FileTable
   scroll::Scroll
 end
 
-"""
-The cells of one line of a CSV file. `mark` is the character between two
-cells. A cell that has the mark in it is in quotes, and a quote in such a cell
-is written twice.
-"""
-csv_cells(line, mark::Char) = begin
-  out, cell, quoted = String[], IOBuffer(), false
-  chars = collect(line)
-  i = 1
-  while i <= length(chars)
-    c = chars[i]
-    if quoted && c == '"' && i < length(chars) && chars[i+1] == '"'
-      write(cell, '"')
-      i += 1
-    elseif c == '"'
-      quoted = !quoted
-    elseif c == mark && !quoted
-      push!(out, String(take!(cell)))
-    else
-      write(cell, c)
-    end
-    i += 1
-  end
-  push!(out, String(take!(cell)))
-  out
-end
+"The cells of one line of a CSV file, as csv.jl reads them. `mark` is the character between two cells."
+const csv_cells = Csvs.cells
 
 "The rows of the CSV file at `path`. The mark between its cells is the one its first line has most of: a comma, a tab or a semicolon."
 tabled(path) = begin
@@ -4337,11 +4404,13 @@ end
 # --- diagrams -----------------------------------------------------------------------
 #
 # A code block in the language `mermaid` shows the diagram that its code
-# describes: a flowchart, a sequence diagram, a state diagram, a class diagram
-# or a pie chart. UI.jl's Mermaid component reads the code and draws it. Click
+# describes: a flowchart, a sequence diagram, a state diagram, a class diagram,
+# a pie chart, a mind map, an entity relationship diagram, a Gantt chart or a
+# timeline. UI.jl's Mermaid component reads the code and draws it. Click
 # it with ⌥ held to see its code, or as plain text put the caret in the block.
-# A diagram that fills the window can be changed there: see "a picture, a
-# diagram or a page that fills the window".
+# A diagram of the first five kinds can be changed while it fills the window:
+# see "a picture, a diagram or a page that fills the window". The last four
+# fill the window too, and are changed in their code.
 
 const DIAGRAM = "mermaid"
 
@@ -8308,13 +8377,14 @@ describe(v::ZoomView) = begin
                     label(v.zoom > 0 ? "$(round(Int, 100v.zoom))%" : "", 12px, color=colours.dim)),
                 button!(v, :bigger, (:zoom, ZOOM_STEP), icon="zoom-in", tip="Bigger  pinch, or ⌘ and scroll"),
                 button!(v, :fit, :fit, icon="aspect-ratio", tip="Fit the window  ⌘0")]
+  prepend!(buttons, gallery_buttons(v))   # a picture of a gallery says where it is in the gallery, with a button to each side
   if what[1] == :pdf && v.pages > 1
     push!(buttons, button!(v, :back, (:page, -1), icon="chevron-left", tip="The page before  ←", off=v.page <= 1),
           Box(Alignment.Center, padding(4px, 0px), label("Page $(v.page) of $(v.pages)", 12px, color=colours.dim)),
           button!(v, :on, (:page, 1), icon="chevron-right", tip="The next page  →", off=v.page >= v.pages))
   end
   push!(buttons, close)
-  Stack(width(grow=grow), height(grow=grow), Alignment.Start, part!(() -> ZoomArea(of=v), v, :area), bar(buttons...))
+  Stack(width(grow=grow), height(grow=grow), Alignment.Start, part!(() -> ZoomArea(of=v), v, :area), gallery_edges(v)..., bar(buttons...))
 end
 
 describe(::ZoomArea) = Box(width(grow=grow), height(grow=grow))
@@ -8623,6 +8693,8 @@ zoom_key!(v::ZoomView, K, w, command) = begin
   command == :smaller && return zoom_by!(v, 1 / ZOOM_STEP, view_middle(v)...)
   command == :usual_size && return fit_now!(v)
   !(Keys.cmd in w.keys) && v.what[1] == :pdf && K in (Keys.left, Keys.right) && return turn!(v, K == Keys.left ? -1 : 1)
+  # A picture of a gallery: ← and → go to the picture before it and the next one
+  !(Keys.cmd in w.keys) && v.from isa GalleryView && K in (Keys.left, Keys.right) && return step!(v.from, K == Keys.left ? -1 : 1)
   handled
 end
 
@@ -8630,7 +8702,7 @@ end
 #
 # A code block in one of the languages of `BLOCKS` shows as a component of its
 # own, as a takeoff and a schedule do: a chart, a question, a set of changes,
-# a board, a list of what was found, a sketch or a list of emails. Each one
+# a board, a calendar, a list of what was found, a sketch or a list of emails. Each one
 # keeps all that it knows in the lines of its block, so the file holds the
 # whole of it, and ⌘Z takes back what you do to it. Move the caret into the
 # block, or click the block with ⌥ held, to see those lines.
@@ -8845,7 +8917,7 @@ comes to. `headed` is true when the first row has the names of the columns.
 """
 page_tables(e) = begin
   b = e.buf
-  key = (:tables, b.path, b.version)
+  key = (:tables, b.path, b.version, table_reads[])
   haskey(e.flows, key) && return e.flows[key]
   ks = kinds(b)
   out = @NamedTuple{first::Int, last::Int, under::String, rows::Vector{Vector{String}}, headed::Bool}[]
@@ -8879,8 +8951,18 @@ page_tables(e) = begin
         push!(out, (first=i, last=t, under=under, rows=rows, headed=false))
         stop = t
       end
+    elseif k.kind == Kind.fence && k.level == 0 && k.lang == TIMELOG
+      # A log of hours is a table of its tasks, with the hours of each
+      t = codeblock(b, i)[2]
+      if t > i && ks[t].kind == Kind.fence && ks[t].level == 1
+        rows = Timelogs.table(Timelogs.timelog(b.lines[i+1:t-1]), Timelogs.now())
+        length(rows) > 1 && push!(out, (first=i, last=t, under=under, rows=rows, headed=true))
+        stop = t
+      end
     elseif k.kind == Kind.fence && k.level == 0
       stop = max(i, codeblock(b, i)[2])   # a table in a block of code isn't one
+    elseif k.kind == Kind.paragraph && (rows = table_rows(e, i)) !== nothing
+      push!(out, (first=i, last=i, under=under, rows=rows, headed=true))   # a line that shows a CSV file as a table
     end
     i = stop + 1
   end
@@ -8895,6 +8977,8 @@ it, it's the table that's nearest above the chart, or the first one under it.
 chart_data(e, v::ChartView) = begin
   c = v.spec
   isempty(c.rows) || return Charts.data(c, c.rows)
+  drawn = chart_file(e, c)   # `from` can name a CSV file
+  drawn === nothing || return drawn
   tables = page_tables(e)
   k = isempty(c.from) ? something(findlast(t -> t.last < v.first, tables), findfirst(t -> t.first > v.last, tables), 0) :
                         something(findfirst(t -> Charts.same(t.under, c.from), tables), 0)
@@ -8907,7 +8991,7 @@ end
 "What the chart shows. It's worked out again when the page has changed."
 shown!(v::ChartView) = begin
   e = editor(v)
-  key = (e.buf.version, v.first, v.lines)
+  key = (e.buf.version, v.first, v.lines, table_reads[])
   (v.shown !== nothing && v.shown[1] == key) || (v.shown = (key, chart_data(e, v)))
   v.shown[2]
 end
@@ -9025,17 +9109,342 @@ end
 
 BLOCKS[CHART] = BlockKind("Chart", "bar-chart", ChartView, chart_html)
 
+# --- a map of a place ---------------------------------------------------------------------------
+#
+# A code block in the language `map` shows the map round a place, with a pin
+# on the place and the address under it. map.jl says how the block is
+# written, and gets the picture: a program of its own makes it with the Mac's
+# maps. The window never waits for that program. Until the picture is there,
+# the block shows a grey box. Each picture is kept on the Mac, so a page shows
+# its map at once the next time, with no network.
+#
+#   - The − and the + on the map show more and less of what's round the
+#     place. The block keeps that as a line like `zoom: 15`.
+#   - A drag moves the map. When the mouse lets go, the block keeps the
+#     middle of what shows as a line like `centre: -33.86120, 151.21010`.
+#     A third button beside the − takes that line away, so the place is in
+#     the middle again.
+#   - A click moves the place: the pin goes where the click was, and the
+#     block's place becomes that point's latitude and longitude.
+#   - Open in Maps opens the Mac's Maps app at the place.
+#   - The button beside the map's top right corner makes it fill the window,
+#     as a picture does, and so does Return with the caret on the map.
+#
+# Every picture is drawn where its own middle is on the map that shows now.
+# So after a drag, a click or a change of zoom, the picture that showed stays
+# in its place until the right one is there, and the map never jumps.
+#
+# A window that isn't on the screen, like one a test makes, never runs the
+# program and never opens the Maps app. A test puts functions of its own in
+# `Maps.HELPER` and `Maps.OPENER` to see what the block does with them.
+
+const MAP = Maps.MAP
+const MAP_PAUSE = 0.3   # seconds that a map keeps one width before Kaydown asks for a picture that wide
+const MAP_ROUND = 7.0   # the radius of the map's top corners, which are just inside the round corners of its block
+const MAP_SLACK = 4.0   # px that the mouse can move between a press and a release that are still a click
+push!(BLOCK_ICONS, "geo-alt", "plus-lg", "dash-lg", "box-arrow-up-right", "crosshair")
+
+"What a `map` block shows: a picture of the map round a place, and the address under it"
+@def mutable struct MapView <: SemanticUI
+  n::Int = 0                               # its place among the page's maps
+  first::Int = 0                           # the lines of its block, when the page was last laid out
+  last::Int = 0
+  data::Maps.Site = Maps.Site()
+  lines::Vector{String} = String[]         # the lines that `data` was read from
+  asked::Any = nothing                     # how wide the map is, and when it got that width
+  got::Any = nothing                       # what `Maps.picture!` last said of the picture that the map needs now
+  # The last picture that was there: its file, its zoom, the latitude and the longitude in its middle, its place,
+  # and the latitude and the longitude of that place. It shows until the next one is there.
+  shown::Any = nothing
+  # While the mouse button is down on the map: where it went down, the middle of the map then, and whether the mouse has dragged the map
+  grab::Any = nothing
+  at::Any = nothing                        # the latitude and the longitude in the middle of the map while a drag moves it
+  box::NTuple{4,Float64} = (0.0, 0.0, 0.0, 0.0)   # where the picture was last drawn in the window
+  parts::Dict{Any,Any} = Dict{Any,Any}()   # its buttons and its picture, kept between frames
+end
+
+"The part of a map that shows the picture"
+@def mutable struct MapArea <: SemanticUI
+  of::Any = nothing
+end
+
+reread!(v::MapView, lines) = begin
+  lines == v.lines && return v
+  v.lines = lines
+  v.data = Maps.site(lines)
+  v
+end
+
+"The place of the block, as two blocks that name one place have it"
+map_place(v::MapView) = lowercase(Maps.query(v.data.place))
+
+"How wide the picture of the map is, in px: as wide as the page's text"
+map_wide(v::MapView) = round(Int, num(editor(v).width))
+
+"The zoom that the map's picture is made at: the block's, or a higher one on a page that's too wide for it"
+map_zoom(v::MapView) = Maps.fit(v.data.zoom, map_wide(v), Maps.TALL)
+
+"""
+Where the pin is: the latitude and the longitude of the block's place. For an
+address, that's what Apple has for it, which is known once a picture of the
+place has come. It's nothing until then.
+"""
+map_pin(v::MapView) = begin
+  at = Maps.coordinates(v.data.place)
+  at !== nothing && return at
+  s = v.shown
+  s !== nothing && s.place == map_place(v) ? s.pin : nothing
+end
+
+"""
+The latitude and the longitude in the middle of the map: where a drag has it
+now, what the block's `centre` line says, or the place. It's nothing while
+the place of an address isn't known.
+"""
+map_middle(v::MapView) = something(v.at, v.data.centre, map_pin(v), Some(nothing))
+
+"True when the map has a picture to draw: one of this place, or one whose place on the map that shows now is known"
+map_shows(v::MapView) = v.shown !== nothing && (v.shown.place == map_place(v) || (v.shown.centre !== nothing && map_middle(v) !== nothing))
+
+"""
+True when a drag can move the map and a click can move its place: the page
+can be changed, and the map shows a picture whose middle is known.
+"""
+map_moves(v::MapView) = begin
+  b = editor(v).buf
+  !readonly(b) && !b.fixed && map_shows(v) && v.shown.centre !== nothing && map_middle(v) !== nothing
+end
+
+"True in a window that's on the screen. A window that a test makes isn't."
+on_screen(node) = (w = window_of(node); w !== nothing && !isempty(w.glfw))
+
+"True when `file` holds a picture that Kaydown can draw"
+whole_picture(file) = try image_aspect(file) > 0 catch; false end
+
+"""
+The picture that the map needs now: as wide as the page's text, at the block's
+zoom, with the block's `centre` in its middle, dark on a dark page.
+`Maps.picture!` says what it gives. The program
+that makes the picture is started here, when the picture isn't kept. While the
+window changes size, the map has another width in each frame, so the program
+is only started once the width has stayed for a moment.
+"""
+map_picture!(v::MapView) = begin
+  e = editor(v)
+  s = v.data
+  wide, dark = map_wide(v), dark_page()
+  zoom = map_zoom(v)
+  (v.asked === nothing || v.asked[1] != wide) && (v.asked = (wide, v.asked === nothing ? 0.0 : time()))
+  rest = MAP_PAUSE - (time() - v.asked[2])
+  runs = on_screen(v) || Maps.HELPER[] !== Maps.run_program
+  ask(start) = Maps.picture!(media_dir(), s.place, zoom, wide, Maps.TALL, dark; centre=s.centre, start)
+  p = ask(runs && rest <= 0)
+  # A file that was cut short is no picture. It's taken away, and made again later.
+  p.state == :there && !whole_picture(p.file) && (Maps.spoiled!(p.file); p = ask(false))
+  if p.state == :there
+    found = Maps.facts(p.file)
+    pin = something(Maps.coordinates(s.place), found.lat === nothing ? nothing : (found.lat, found.lon), Some(nothing))
+    v.shown = (file=p.file, zoom=zoom, centre=something(s.centre, pin, Some(nothing)), place=map_place(v), pin=pin)
+  end
+  v.shown === nothing || isfile(v.shown.file) || (v.shown = nothing)
+  # The window looks again when the program may have finished, when the width has stayed, or when it's time to try again
+  wait = min(p.wait, runs && rest > 0 ? rest : Inf)
+  isfinite(wait) && redraw_in!(v, max(wait, 0.05))
+  v.got = (p, runs)
+end
+
+"What a map says in place of a picture that isn't there, or \"\" when it has a picture to show"
+map_words(v::MapView) = begin
+  map_shows(v) && return ""
+  p, runs = v.got
+  p.state == :lost ? p.problem : p.state == :failed ? p.problem * (runs ? " It tries again in a minute." : "") :
+  p.state == :none && !runs ? Maps.FAILED : "Finding the place…"
+end
+
+"The address under a map: the one that Apple has for the place, or the place as the block has it"
+map_address(v::MapView) = begin
+  p, _ = v.got
+  found = p.state == :there ? Maps.facts(p.file).address :
+          v.shown !== nothing && v.shown.place == map_place(v) ? Maps.facts(v.shown.file).address : ""
+  isempty(found) ? v.data.place : found
+end
+
+describe(v::MapView) = begin
+  e = editor(v)
+  s = v.data
+  with_theme(component_theme(e.zoom)) do
+    isempty(s.place) && return Column(block_look()..., clip=true, name="Map",
+      block_note("Write an address in this block, or a latitude and a longitude, to see the map of that place."))
+    map_picture!(v)
+    area = block_part!(() -> MapArea(of=v), v, :area)
+    least, most = first(Maps.ZOOMS), last(Maps.ZOOMS)
+    # On a page that's too wide for the lowest zooms, the − stops at the lowest zoom that a picture is made at
+    lowest = s.zoom <= least || Maps.fit(s.zoom - 1, map_wide(v), Maps.TALL) == map_zoom(v)
+    buttons = Row(radius(7px), padding(2px), child_gap=1px, background(colours.float), border(1px, :solid, colours.line),
+      (s.centre === nothing ? () : (block_button!(v, :home, :home, icon="crosshair", tip="Put the place back in the middle of the map"),))...,
+      block_button!(v, :out, (:zoom, -1), icon="dash-lg", tip="Show more of what's round the place", off=lowest),
+      block_button!(v, :in, (:zoom, 1), icon="plus-lg", tip="Show the place closer", off=s.zoom >= most))
+    Column(block_look()..., clip=true, name="Map",
+      Stack(width(grow=grow), height(px(Maps.TALL)), Alignment.Start,
+        map_shows(v) ? fillable(v, (:picture, v.shown.file), area, wide=:grow) : area,
+        Row(width(grow=grow), padding(8px), Alignment.Start, justify=Alignment.End, buttons)),
+      Row(width(grow=grow), padding(5px, 6px, 5px, 12px), child_gap=8px, Alignment.Center,
+        Box(Icon("geo-alt", size=14px, color=colours.dim)),
+        Box(width(grow=grow), Alignment.Start, clip_x=true, Text(map_address(v), size=12.5px, family=SANS, color=colours.dim, wrap=WrapMode.words)),
+        block_button!(v, :open, :open, words="Open in Maps", icon="box-arrow-up-right", tip="Open the Maps app at this place")))
+  end
+end
+
+describe(a::MapArea) = begin
+  words = map_words(a.of)
+  # Only its top corners are round, as the corners of its block are
+  Box(width(grow=grow), height(px(Maps.TALL)), Alignment.Center, justify=Alignment.Center, padding(60px, 0px),
+      radius(px(MAP_ROUND), px(MAP_ROUND), 0px, 0px), background(colours.block),
+      (isempty(words) ? () : (Box(Text(words, size=13px, family=SANS, color=colours.dim, wrap=WrapMode.words)),))...)
+end
+
+"Draw a pin whose point is at `(x, y)`, like the one that map.swift draws in a picture"
+pin_ink(ctx, x, y) = begin
+  red = RGBA(0.92, 0.26, 0.21, 1.0)
+  trace(ctx, [(x, y), (x - 9.9, y - 21.3), (x + 9.9, y - 21.3)], red, 1.0; fill=red, closed=true)
+  disc(ctx, x, y - 26, 11, red)
+  disc(ctx, x, y - 26, 4, RGBA(1.0, 1.0, 1.0, 1.0))
+end
+
+# The picture is drawn at its own size, with its middle where that latitude and longitude is on the map that
+# shows now. So a picture that was made for another width, or for another middle, shows the same streets in
+# the same places until the right one is there, and the part with no picture yet is grey. A picture that was
+# made at another zoom is drawn as big as the map of this zoom is. A place that a click has just moved has a
+# pin drawn on it at once, until its own picture is there.
+draw(ctx, size, ui::ConcreteRect, a::MapArea) = begin
+  v = a.of
+  x, y, w, h = v.box = (num(ui.left), num(ui.top), num(ui.width), num(ui.height))
+  (map_shows(v) && whole_picture(v.shown.file)) || return
+  shown, middle, zoom = v.shown, map_middle(v), map_zoom(v)
+  # Only the top corners are round: the box that's cut out goes on under the map's foot
+  with_clip(ctx, ui.left, ui.top, ui.width, ui.height) do
+    with_round_clip(ctx, ui.left, ui.top, ui.width, ui.height + px(2MAP_ROUND), px(MAP_ROUND)) do
+      image = image_source(shown.file)
+      k = 2.0^(zoom - shown.zoom) / Maps.SCALE
+      wide, tall = image.width * k, image.height * k
+      # A picture whose middle isn't known is of this place, and goes in the middle
+      cx, cy = middle === nothing || shown.centre === nothing ? (w / 2, h / 2) : Maps.point(shown.centre, middle, zoom, w, h)
+      paint_picture(ctx, image.raw, (0, 0, image.width, image.height), (x + cx - wide / 2, y + cy - tall / 2, wide, tall))
+      pin = map_pin(v)
+      if pin !== nothing && middle !== nothing && pin != shown.pin
+        at = Maps.point(pin, middle, zoom, w, h)
+        pin_ink(ctx, x + at[1], y + at[2])
+      end
+    end
+  end
+end
+
+cursor(::MapView) = :arrow
+# UI.jl has no open hand, so a map that a drag can move has the hand that points
+cursor(a::MapArea) = map_moves(a.of) ? :hand : :arrow
+onpinch(v::MapView, ev::Pinch) = pinch_open(v, ev)
+
+# A press on the map starts a drag that moves the map, or a click that moves the place. The press is the
+# map's own, so the page's text takes no caret and no selection from it. With ⌥ held, the press shows the
+# block's lines, as it does on any block. A page that can't be changed takes no drag and no click.
+onkey(a::MapArea, ev::KeyPress{Keys.mouse_left}) = begin
+  v = a.of
+  (held(v, Keys.opt) || !map_moves(v)) && return nothing
+  w = ev.window
+  focus(editor(v))
+  v.grab = (from=(num(w.mouse[1]), num(w.mouse[2])), middle=map_middle(v), dragged=false)
+  handled
+end
+
+# While the button is down, the mouse is the map's wherever it goes, so the page doesn't select text behind it
+onmouse(a::MapArea, ev::MouseMove) = begin
+  v = a.of
+  g = v.grab
+  g === nothing && return nothing
+  Keys.mouse_left in ev.window.keys || (map_drop!(v); return handled)
+  dx, dy = num(ev.position[1]) - g.from[1], num(ev.position[2]) - g.from[2]
+  (g.dragged || hypot(dx, dy) >= MAP_SLACK) || return handled
+  g.dragged || (v.grab = merge(g, (dragged=true,)))
+  zoom = map_zoom(v)
+  v.at = Maps.held(Maps.moved(g.middle, dx, dy, zoom), zoom, Maps.TALL)
+  handled
+end
+
+onkey(a::MapArea, ::KeyRelease{Keys.mouse_left}) = a.of.grab === nothing ? nothing : (map_drop!(a.of); handled)
+# The button can come up while the mouse is off the map, where the map doesn't hear of it
+block_tick!(v::MapView) = (v.grab !== nothing && !held(v, Keys.mouse_left) && map_drop!(v); v)
+
+"""
+The mouse button came up. After a drag, the middle of what shows is written
+as the block's `centre` line. After a click, the block's place becomes the
+latitude and the longitude of the point that was clicked, and the middle that
+showed is written too, so the map stays where it is and only the pin moves.
+⌘Z takes either back.
+"""
+map_drop!(v::MapView) = begin
+  g, v.grab = v.grab, nothing
+  at, v.at = v.at, nothing
+  (g === nothing || !map_moves(v)) && return v
+  s = v.data
+  if g.dragged
+    at === nothing && return v
+    s.centre = Maps.rounded(at)
+  else
+    clicked = Maps.latlon((g.from[1] - v.box[1], g.from[2] - v.box[2]), g.middle, map_zoom(v), v.box[3], v.box[4])
+    s.centre === nothing && (s.centre = Maps.rounded(g.middle))
+    s.place = Maps.text(clicked)
+  end
+  write_block!(v, MAP, Maps.written(s))
+  v
+end
+
+act!(v::MapView, action, w) = begin
+  if action == :open
+    # Only a window that's on the screen opens another app
+    (on_screen(v) || Maps.OPENER[] !== Maps.open_app) && Maps.open_place(v.data.place)
+  elseif action == :home
+    v.data.centre = nothing
+    write_block!(v, MAP, Maps.written(v.data))
+  elseif action isa Tuple && action[1] == :zoom
+    Maps.zoom!(v.data, action[2]) && write_block!(v, MAP, Maps.written(v.data))
+  end
+  handled
+end
+
+"""
+The map as HTML: its picture, when one is kept, and the address under it as a
+link to Apple Maps. The picture is in the page itself, so the page needs no
+other file. A page of HTML is light, so it gets the light map when that one
+is kept.
+"""
+map_html(e, v::MapView) = begin
+  s = v.data
+  isempty(s.place) && return nothing
+  wide = map_wide(v)
+  kept = [Maps.picture!(media_dir(), s.place, map_zoom(v), wide, Maps.TALL, dark, centre=s.centre, start=false) for dark in (false, true)]
+  k = findfirst(p -> p.state == :there, kept)
+  file = k !== nothing ? kept[k].file : v.shown !== nothing && v.shown.place == map_place(v) && isfile(v.shown.file) ? v.shown.file : nothing
+  found = file === nothing ? "" : Maps.facts(file).address
+  address = escape(isempty(found) ? s.place : found)
+  across = file === nothing ? nothing : Maps.wide(file)
+  picture = across === nothing ? "" : "<img src=\"$(Maps.data_uri(file))\" alt=\"A map of $address\" width=\"$across\">\n"
+  "<div class=\"diagram\">\n$picture<p><a href=\"$(escape(Maps.link(s.place)))\">$address</a></p>\n</div>"
+end
+
+BLOCKS[MAP] = BlockKind("Map", "geo-alt", MapView, map_html)
+
 # --- a question with answers to choose ---------------------------------------------------------
 #
 # A code block in the language `ask` shows a question, the answers to choose
 # from, and a field to type in. ask.jl says how the block is written. A click
 # on an answer chooses it, and what you type in the field goes under the
 # answers. Both are written into the block's lines. So an agent that waits for
-# the page reads your answer in the lines that you changed. While one waits, a
-# Send button beside the field sends them, as ⌘Return does.
+# the page reads your answer in the lines that you changed. The block has no
+# button that sends them: the bell in the top bar sends the page, and so does
+# ⌘Return.
 
 const ASK = Asks.ASK
-push!(BLOCK_ICONS, "question-circle", "check", "send")
+push!(BLOCK_ICONS, "question-circle", "check")
 
 "What an `ask` block shows: a question, its answers and a field to type in"
 @def mutable struct AskView <: SemanticUI
@@ -9120,7 +9529,6 @@ describe(v::AskView) = begin
   input.placeholder = isempty(q.options) ? "Type your answer" : "Add a note"
   w = window_of(v)
   typing = w !== nothing && w.focus === input
-  waits = !isempty(agents(e))
   with_theme(component_theme(e.zoom)) do
     Column(block_look()..., padding(16px, 14px), child_gap=10px, name="Question",
       Row(width(grow=grow), child_gap=10px, Alignment.Start,
@@ -9129,14 +9537,11 @@ describe(v::AskView) = begin
                                subfamily="Semibold", color=isempty(q.words) ? colours.dim : colours.ink, wrap=WrapMode.words))),
       (isempty(q.options) ? () : (Column(width(grow=grow), Alignment.Start, child_gap=2px,
         [block_part!(() -> AskOption(of=v, i=i), v, (:option, i)) for i in eachindex(q.options)]...),))...,
-      Row(width(grow=grow), child_gap=8px, Alignment.Center,
-        Box(width(grow=grow), height(30px), padding(9px, 0px), radius(6px), border(1px, :solid, typing ? colours.accent : colours.line),
-            background(colours.bg), input),
-        (waits ? (block_button!(v, :send, :send, words="Send", icon="send", bold=true, tip="Send your answers to the agent  ⌘Return"),) : ())...))
+      Box(width(grow=grow), height(30px), padding(9px, 0px), radius(6px), border(1px, :solid, typing ? colours.accent : colours.line),
+          background(colours.bg), input))
   end
 end
 
-act!(v::AskView, action, w) = (action == :send && send!(editor(v)); handled)
 # Return in the field gives the keyboard back to the page
 onkey(v::AskView, ::KeyPress{Keys.enter}) = (focus(editor(v)); handled)
 
@@ -9654,6 +10059,443 @@ changes_html(e, v::ChangesView) = begin
 end
 
 BLOCKS[CHANGES] = BlockKind("Changes", "file-diff", ChangesView, changes_html)
+
+# --- a calendar of the page's days -------------------------------------------------------------
+#
+# A code block in the language `calendar` shows one month as a grid of days,
+# from Monday to Sunday. calendar.jl says how the block is written. Each day
+# shows the things of the page that are on it: the tasks of the page's
+# schedule, the to-do items that have a day in their text, and the events
+# that the block's own lines hold.
+#
+#   - The arrows at the top go to the month before and the month after, and
+#     Today goes back to the month of today.
+#   - Click a thing to select it, and click it twice to go to its line.
+#   - Click the box of a to-do item to tick it in the page.
+#   - Drag a to-do item or an event to another day. Kaydown writes the new day
+#     into the item's text or the event's line. A task stays where it is: the
+#     schedule says when it's done.
+#   - Click a day twice to add an event to it, type its words, and press Return.
+#   - A day with more things than it has room for says how many more there
+#     are. Click those words to make the week tall enough for all of them.
+
+const CALENDAR = Calendars.CALENDAR
+push!(BLOCK_ICONS, "calendar3", "chevron-left", "chevron-right")
+const DAY_ROWS = 3        # how many lines of things a day has room for
+const DAY_HEAD = 26px     # how tall the number of a day is
+const THING_H = 20px      # how tall a thing of a day is
+const THING_GAP = 2px     # and the space under it
+const DAY_TIGHT = 76px    # a day that's narrower than this has less space round its things, and no box or tick before their words
+
+"The day that counts as today, or nothing for the real one. A test names a day here, so that it doesn't depend on the day that it runs."
+const calendar_day = Ref{Union{Nothing,Date}}(nothing)
+calendar_today() = something(calendar_day[], Dates.today())
+
+"What a `calendar` block shows: a month, with the things of the page on their days"
+@def mutable struct CalendarView <: SemanticUI
+  n::Int = 0                               # its place among the page's calendars
+  first::Int = 0                           # the lines of its block, when the page was last laid out
+  last::Int = 0
+  data::Calendars.Calendar = Calendars.Calendar()
+  lines::Vector{String} = String[]         # the lines that `data` was read from
+  shown::Any = nothing                     # the version of the page and the day, and the things of each day for them
+  picked::Any = nothing                    # the thing that's selected, by what `Calendars.id` gives
+  grab::Any = nothing                      # the thing that the mouse holds, where the mouse took it, and whether it has moved since
+  clicked::NTuple{3,Float64} = (0.0, 0.0, 0.0)   # when and where it was last clicked
+  open::Set{Date} = Set{Date}()            # the Monday of each week that shows every thing of its days
+  adding::Union{Nothing,Date} = nothing    # the day that a new event is being typed for
+  wide::px = 0px                           # how wide a day is
+  weeks::Int = 0                           # how many weeks the month that shows is in
+  parts::Dict{Any,Any} = Dict{Any,Any}()   # its buttons, days and things, kept between frames
+end
+
+"A day of a calendar"
+@def mutable struct CalendarDay <: SemanticUI
+  of::Any = nothing
+  i::Int = 0                 # its place among the days that show
+  day::Date = Date(2000)
+  tall::px = 0px             # how tall its week is
+end
+"A thing of a day: a task, a to-do item or an event"
+@def mutable struct CalendarThing <: SemanticUI
+  of::Any = nothing
+  thing::Any = nothing
+  box::Any = nothing         # the box of a to-do item
+  cut::Bool = false          # its words have no room, and end with …
+end
+"The box of a to-do item in a calendar. A click ticks the item in the page."
+@def mutable struct CalendarTick <: SemanticUI
+  of::Any = nothing          # the thing
+end
+"The words under a day that has more things than room: a click shows them all, or hides them again"
+@def mutable struct CalendarMore <: SemanticUI
+  of::Any = nothing
+  day::Date = Date(2000)
+  more::Int = 0              # how many things don't show, or 0 when they all do
+end
+"The thing that the mouse drags, drawn over the calendar"
+@def mutable struct CalendarDrag <: SemanticUI
+  of::Any = nothing
+end
+
+reread!(v::CalendarView, lines) = begin
+  lines == v.lines && return v
+  v.lines = lines
+  v.data = Calendars.calendar(lines)
+  v.shown = nothing
+  v
+end
+
+"The first day of the month that the calendar shows"
+month_shown(v::CalendarView) = Calendars.shown(v.data, today=calendar_today())
+
+"""
+The tasks of the page's first schedule with their days, and whether its work
+is done on Saturday and Sunday too. A page with no schedule has no tasks.
+"""
+calendar_tasks(e) = begin
+  b = e.buf
+  span = block_lines(b, SCHEDULE, 1)
+  span === nothing && return Schedules.Planned[], false
+  s = schedule_view(e, 1)
+  reread!(s, b.lines[span[1]+1:span[2]-1])
+  tasks!(s), s.data.weekends
+end
+
+"The things of each day. They're worked out again when the page has changed, and on a new day."
+things!(v::CalendarView) = begin
+  e = editor(v)
+  key = (e.buf.version, v.lines, calendar_today())
+  (v.shown !== nothing && v.shown[1] == key) || (v.shown = (key, Calendars.things(v.data, page_todos(e), calendar_tasks(e)...)))
+  v.shown[2]
+end
+
+"The things of the day `d`"
+day_things(v::CalendarView, d::Date) = get(things!(v), d, Calendars.Thing[])
+
+"The line of the page that the thing `t` is on, or 0 when its block has gone"
+thing_line(v::CalendarView, t) = begin
+  t.kind == :event || return t.line
+  span = block_lines(editor(v).buf, CALENDAR, v.n)
+  span === nothing ? 0 : span[1] + t.line
+end
+
+"The text field of a calendar, for the words of a new event"
+calendar_input(v::CalendarView) = block_part!(v, :input) do
+  TextInput(placeholder="New event", font_family=SANS, font_size=12px,
+            look=(_, text) -> Row(width(grow=grow), height(grow=grow), clip=true, text))
+end
+
+"True when the days are narrow, as they are in a narrow window"
+tight(v::CalendarView) = v.wide < DAY_TIGHT
+
+"How much room the words of a thing have in a day. `lead` is how wide the box or the tick before them is, with the space after it."
+words_room(v::CalendarView, lead=0px) = max(v.wide - (tight(v) ? 13px : 19px) - lead, 1px)
+
+"True while the mouse drags a thing of the calendar"
+dragging(v::CalendarView) = v.grab !== nothing && v.grab[4]
+
+"The day that the mouse is over, or nothing when the mouse isn't over a day"
+drop_day(v::CalendarView) = begin
+  w = window_of(v)
+  w === nothing && return nothing
+  x, y = w.mouse[1], w.mouse[2]
+  for i in 1:7v.weeks
+    c = get(v.parts, (:day, i), nothing)
+    r = c === nothing ? nothing : rect(c)
+    r !== nothing && r.left <= x < r.left + r.width && r.top <= y < r.top + r.height && return c.day
+  end
+  nothing
+end
+
+"Note a click at `(x, y)`. True when it's the second of two clicks in one place."
+click_twice!(v::CalendarView, x, y) = begin
+  at, cx, cy = v.clicked
+  v.clicked = (time(), x, y)
+  time() - at < 0.35 && hypot(x - cx, y - cy) < 4
+end
+
+"How many lines the day `d` needs when its week shows every thing: its things, the field for a new event, and the words that hide them again"
+day_lines(v::CalendarView, d::Date) = (n = length(day_things(v, d)); n + (v.adding == d ? 1 : 0) + (n > DAY_ROWS ? 1 : 0))
+
+"How many lines of things each day of a week has room for. A week that shows every thing has room for the day with the most."
+week_rows(v::CalendarView, week) = week[1] in v.open ? max(DAY_ROWS, maximum(d -> day_lines(v, d), week)) : DAY_ROWS
+
+describe(t::CalendarTick) = begin
+  thing = t.of.thing
+  done = thing !== nothing && thing.done
+  side = 13px
+  Box(fixed(side), height(side), radius(3.5px), Alignment.Center, justify=Alignment.Center,
+      (done ? (background(RGBA(colours.accent, 0.6)),) : (border(1.5px, :solid, ishovered(t) ? colours.accent : colours.marker),))...,
+      (done ? (Icon("check", size=11px, color=colours.bg),) : ())...)
+end
+
+onkey(t::CalendarTick, ::KeyPress{Keys.mouse_left}) = begin
+  c = t.of
+  v, thing = c.of, c.thing
+  settle!(v)
+  e = editor(v)
+  (thing === nothing || readonly(e.buf)) && return handled
+  items = page_todos(e)
+  k = findfirst(it -> it.key == thing.key, items)
+  k === nothing || tick!(e, items[k].line)
+  handled
+end
+
+describe(c::CalendarThing) = begin
+  v, t = c.of, c.thing
+  t === nothing && return Box(height(0px))
+  on = v.picked == Calendars.id(t)
+  taken = dragging(v) && Calendars.id(v.grab[1]) == Calendars.id(t)
+  c.box === nothing && (c.box = CalendarTick(of=c); setfield!(c.box, :parent, c))
+  if t.kind == :task
+    # A task looks like its bar in the schedule
+    hue = t.done ? colours.string : colours.accent
+    look = (background(RGBA(hue, on ? 0.32 : 0.17)), border(on ? 1.5px : 1px, :solid, RGBA(hue, 0.9)))
+    lead = t.done && !tight(v) ? (Icon("check", size=12px, color=hue),) : ()
+  else
+    look = (background(taken ? clear : colours.block),
+            border(on && !taken ? 1.5px : 1px, :solid, taken ? colours.faint : on ? colours.accent : ishovered(c) ? colours.marker : colours.line))
+    # A narrow day has no room for the box: the words need it
+    lead = t.kind == :todo && !tight(v) ? (c.box,) : ()
+  end
+  words = elide(t.words, 12px, words_room(v, isempty(lead) ? 0px : 18px))
+  c.cut = words != t.words
+  Row(width(grow=grow), height(THING_H), padding(tight(v) ? 3px : 5px, 0px), radius(5px), child_gap=5px, Alignment.Center, clip=true, name="Thing", look...,
+    lead..., Box(label(words, 12px, color=taken ? colours.faint : t.done ? colours.dim : colours.ink)), Box(width(grow=grow)))
+end
+
+cursor(::Union{CalendarThing,CalendarTick,CalendarMore}) = :hand
+cursor(::Union{CalendarView,CalendarDay,CalendarDrag}) = :arrow
+
+onkey(c::CalendarThing, ev::KeyPress{Keys.mouse_left}) = begin
+  v, w, t = c.of, ev.window, c.thing
+  settle!(v)
+  hide_tooltip!(w)
+  t === nothing && return handled
+  x, y = num(w.mouse[1]), num(w.mouse[2])
+  twice = click_twice!(v, x, y)
+  again = v.picked == Calendars.id(t)
+  v.picked = Calendars.id(t)
+  # Two clicks in one place go to the thing's line of the page
+  twice && again && return show_line!(editor(v), thing_line(v, t))
+  # A task's days are the schedule's, so a task stays where it is
+  t.kind == :task || readonly(editor(v).buf) || (v.grab = (t, x, y, false))
+  # The press isn't a click on the page's text, so the text doesn't select when the mouse leaves the calendar with the thing
+  e = editor(v)
+  e.clicked = (e.clicked[1], e.clicked[2], 0)
+  handled
+end
+
+# A thing whose words are cut short shows all of them over it
+onmouse(c::CalendarThing, ev::MouseMove) = begin
+  v, r = c.of, rect(c)
+  (c.cut && c.thing !== nothing && v.grab === nothing && r !== nothing) || return nothing
+  show_tooltip!(ev.window, tip_label(c.thing.words), r.left, r.top, r.width, r.height, placement=:top, gap=6px)
+  nothing
+end
+
+describe(m::CalendarMore) = begin
+  words = m.more > 0 ? "$(m.more) more" : "Fewer"
+  Row(width(grow=grow), height(THING_H), padding(tight(m.of) ? 4px : 6px, 0px), Alignment.Center, clip=true, name="More",
+    Box(label(elide(words, 11px, words_room(m.of)), 11px, color=ishovered(m) ? colours.accent : colours.dim)), Box(width(grow=grow)))
+end
+
+onkey(m::CalendarMore, ::KeyPress{Keys.mouse_left}) = begin
+  v, week = m.of, Calendars.monday(m.day)
+  settle!(v)
+  week in v.open ? delete!(v.open, week) : push!(v.open, week)
+  handled
+end
+
+describe(c::CalendarDay) = begin
+  v, d = c.of, c.day
+  list = day_things(v, d)
+  open = Calendars.monday(d) in v.open
+  some, more = open ? (list, 0) : Calendars.fit(list, DAY_ROWS)
+  inside = Dates.month(d) == Dates.month(month_shown(v))
+  weekend = Dates.dayofweek(d) > 5
+  number = string(Dates.day(d))
+  head = d == calendar_today() ?
+    Row(fixed(20px), height(20px), radius(10px), Alignment.Center, justify=Alignment.Center, background(colours.accent),
+        Box(label(number, 11px, color=colours.bg, weight="Semibold"))) :
+    Row(height(20px), padding(4px, 0px), Alignment.Center,
+        Box(label(number, 11px, color=!inside ? colours.faint : weekend ? colours.dim : colours.ink)))
+  field = v.adding == d ?
+    (Box(width(grow=grow), height(THING_H), padding(tight(v) ? 3px : 5px, 0px), radius(5px), border(1px, :solid, colours.accent), background(colours.bg), calendar_input(v)),) : ()
+  under = more > 0 || (open && length(list) > DAY_ROWS) ?
+    ((m = block_part!(() -> CalendarMore(of=v), v, (:more, c.i)); m.day = d; m.more = more; m),) : ()
+  over = dragging(v) && drop_day(v) == d
+  Column(width(grow=grow), height(c.tall), padding(tight(v) ? 2px : 3px, 0px), child_gap=THING_GAP, Alignment.Start, clip=true, name="Day",
+         border(1px, :solid, colours.line)[(c.i % 7 == 1 ? (:top,) : (:top, :left))...],
+         background(over ? RGBA(colours.accent, 0.14) : weekend ? RGBA(colours.ink, 0.035) : clear),
+    Row(width(grow=grow), height(DAY_HEAD - THING_GAP), padding(tight(v) ? 2px : 1px, 0px), Alignment.Center, head, Box(width(grow=grow))),
+    [(t = block_part!(() -> CalendarThing(of=v), v, (:thing, c.i, k)); t.thing = thing; t) for (k, thing) in enumerate(some)]...,
+    field..., under...)
+end
+
+onkey(c::CalendarDay, ev::KeyPress{Keys.mouse_left}) = begin
+  v, w = c.of, ev.window
+  settle!(v)
+  v.picked = nothing
+  # Two clicks on a day start a new event there
+  click_twice!(v, num(w.mouse[1]), num(w.mouse[2])) && !readonly(editor(v).buf) && return add_event!(v, c.day)
+  handled
+end
+
+"Show the field for a new event on the day `d`, and give it the keyboard"
+add_event!(v::CalendarView, d::Date) = begin
+  i = calendar_input(v)
+  i.color = colours.ink
+  i.text = ""
+  i.anchor = i.cursor = 0
+  v.adding = d
+  v.clicked = (0.0, 0.0, 0.0)          # the next click isn't the second of two
+  push!(v.open, Calendars.monday(d))   # the week grows, so that the field has room
+  focus(i)
+  handled
+end
+
+"Take the field for a new event away. With `keep`, the words that were typed are written into the block as an event."
+settle!(v::CalendarView; keep=true) = begin
+  d = v.adding
+  d === nothing && return handled
+  v.adding = nothing
+  i = calendar_input(v)
+  w = window_of(v)
+  w !== nothing && w.focus === i && focus(editor(v))
+  words = strip(replace(i.text, r"\s+" => " "))
+  keep && !isempty(words) && write_block!(v, CALENDAR, Calendars.added(v.lines, d, words))
+  handled
+end
+
+onkey(v::CalendarView, ::KeyPress{Keys.enter}) = v.adding === nothing ? nothing : settle!(v)
+onkey(v::CalendarView, ::KeyPress{Keys.escape}) = v.adding === nothing ? nothing : settle!(v, keep=false)
+# A click beside a button is the block's, and doesn't move the caret
+onkey(v::CalendarView, ::KeyPress{Keys.mouse_left}) = (settle!(v); handled)
+# A drag is the calendar's, so the page's text doesn't select
+onmouse(v::CalendarView, ::MouseMove) = v.grab !== nothing || held(v, Keys.mouse_left) ? handled : nothing
+
+"Do what a button of a calendar does: show the month before, the month after or the month of today"
+act!(v::CalendarView, action, w) = begin
+  settle!(v)
+  empty!(v.open)
+  to = action == :today ? nothing : month_shown(v) + Dates.Month(action == :before ? -1 : 1)
+  write_block!(v, CALENDAR, Calendars.turned(v.lines, to))
+  handled
+end
+
+describe(v::CalendarView) = begin
+  e = editor(v)
+  w = window_of(v)
+  g = v.grab
+  # A press that moves is a drag, and isn't the first click of two
+  if g !== nothing && !g[4] && w !== nothing && hypot(num(w.mouse[1]) - g[2], num(w.mouse[2]) - g[3]) > 4
+    v.grab = (g[1], g[2], g[3], true)
+    v.clicked = (0.0, 0.0, 0.0)
+  end
+  calendar_input(v).color = colours.ink
+  with_theme(component_theme(e.zoom)) do
+    month = month_shown(v)
+    weeks = Calendars.weeks(month)
+    v.wide = (e.width - 2px) / 7   # each day is as wide as the next
+    v.weeks = length(weeks)
+    off = readonly(e.buf)
+    bar = block_bar(
+      block_button!(v, :before, :before, icon="chevron-left", tip="The month before", off=off),
+      Row(fixed(max(min(122px, e.width - 150px), 10px)), Alignment.Center, justify=Alignment.Center, clip=true,
+          Box(label(Calendars.title(month), 13px, weight="Semibold"))),
+      block_button!(v, :after, :after, icon="chevron-right", tip="The month after", off=off),
+      Box(width(grow=grow)),
+      block_button!(v, :today, :today, words="Today", tip="Show the month of today", off=off || v.data.month === nothing))
+    names = Row(width(grow=grow), height(24px), Alignment.Center,
+      [Row(fixed(v.wide), padding(8px, 0px), Alignment.Center, clip=true,
+           Box(label(name, 11px, color=i > 5 ? colours.faint : colours.dim)), Box(width(grow=grow))) for (i, name) in enumerate(Calendars.DAYS)]...)
+    rows = map(enumerate(weeks)) do (k, week)
+      tall = DAY_HEAD + week_rows(v, week) * (THING_H + THING_GAP) + 3px
+      days = map(enumerate(week)) do (i, d)
+        c = block_part!(() -> CalendarDay(of=v), v, (:day, 7(k - 1) + i))
+        c.i, c.day, c.tall = 7(k - 1) + i, d, tall
+        Box(fixed(v.wide), Alignment.Start, c)
+      end
+      Row(width(grow=grow), Alignment.Start, days...)
+    end
+    Stack(block_look()..., clip=true, name="Calendar", Column(width(grow=grow), Alignment.Start, bar, names, rows...),
+          (dragging(v) ? (block_part!(() -> CalendarDrag(of=v), v, :drag),) : ())...)
+  end
+end
+
+describe(::CalendarDrag) = Box(width(grow=grow), height(grow=grow))
+
+draw(ctx, size, ui::ConcreteRect, layer::CalendarDrag) = begin
+  v = layer.of
+  w = window_of(v)
+  (w === nothing || !dragging(v)) && return
+  t = v.grab[1]
+  # The thing stays under the mouse
+  wide = max(num(v.wide) - 6, 40.0)
+  x, y = num(w.mouse[1]) - wide / 2, num(w.mouse[2]) - 10
+  face = Face(SANS, "", 12px, colours.ink, false)
+  round_box(ctx, x + 1, y + 3, wide, 20, 5; fill=RGBA(0, 0, 0, 0.12))
+  round_box(ctx, x, y, wide, 20, 5; fill=takeoff_back(), line=colours.accent, wide=1.5)
+  write_ink(ctx, elide(t.words, 12px, px(wide - 12)), x + 6, y + 14, face)
+end
+
+"A drag ended. Kaydown writes the day that the thing was dropped on into the to-do item's text, or into the event's line."
+drop!(v::CalendarView) = begin
+  g = v.grab
+  v.grab = nothing
+  (g === nothing || !g[4]) && return v
+  t, d = g[1], drop_day(v)
+  e = editor(v)
+  b = e.buf
+  (d === nothing || d == t.day || readonly(b)) && return v
+  if t.kind == :event
+    write_block!(v, CALENDAR, Calendars.moved(v.lines, t.line, d))
+  elseif t.kind == :todo
+    k = findfirst(it -> it.key == t.key, page_todos(e))
+    k === nothing && return v
+    line = page_todos(e)[k].line
+    at = Calendars.stamp_at(b.lines[line], t.day)
+    at === nothing && return v
+    caret, anchor = b.caret, b.anchor
+    edit!(b, (line, at[1]), (line, at[2]), string(d))
+    kept(p) = p[1] == line ? (line, min(p[2], length(b.lines[line]))) : p
+    b.caret, b.anchor = kept(caret), kept(anchor)
+    # The item's name has the new day in it, and the item stays selected
+    k = findfirst(it -> it.line == line, page_todos(e))
+    k === nothing || (v.picked = (:todo, page_todos(e)[k].key))
+  end
+  v.shown = nothing
+  v
+end
+
+"What happens to a calendar in each frame, before the page is laid out: a drag that ended is written down, and the field that lost the keyboard closes"
+block_tick!(v::CalendarView) = begin
+  v.grab !== nothing && !held(v, Keys.mouse_left) && drop!(v)
+  w = window_of(v)
+  # A click somewhere else took the keyboard from the field. The words that were typed are kept.
+  v.adding !== nothing && w !== nothing && w.focus !== calendar_input(v) && settle!(v)
+  v
+end
+
+"A thing of a day as HTML. A thing that's done has a tick, and is grey."
+thing_html(t) = t.done ? "<span style=\"color: #8a8176\">✓ $(escape(t.words))</span>" : escape(t.words)
+
+"The calendar as HTML: a table with a row for each week of the month, and the things of each day in the day's cell"
+calendar_html(e, v::CalendarView) = begin
+  month = month_shown(v)
+  days = things!(v)
+  cell(d) = begin
+    number = Dates.month(d) == Dates.month(month) ? "<b>$(Dates.day(d))</b>" : "<span style=\"color: #a89f91\">$(Dates.day(d))</span>"
+    "<td style=\"vertical-align: top\">" * join([number; thing_html.(get(days, d, Calendars.Thing[]))], "<br>") * "</td>"
+  end
+  heads = join("<th>$name</th>" for name in Calendars.DAYS)
+  rows = join(("<tr>" * join(cell.(week)) * "</tr>" for week in Calendars.weeks(month)), "\n")
+  "<table style=\"width: 100%; table-layout: fixed\">\n<caption>$(Calendars.title(month))</caption>\n<tr>$heads</tr>\n$rows\n</table>"
+end
+
+BLOCKS[CALENDAR] = BlockKind("Calendar", "calendar3", CalendarView, calendar_html)
 
 # --- a board of the page's tasks ---------------------------------------------------------------
 #
@@ -10420,6 +11262,392 @@ end
 
 BLOCKS[FIND] = BlockKind("Find", "search", SearchView, find_html)
 
+# --- a gallery of a folder's pictures ----------------------------------------------------------
+#
+# A code block in the language `gallery` shows the pictures of a folder as a
+# grid of small squares. gallery.jl says how the block is written. A square
+# shows the middle of its picture, cut to fit. The top of the block says how
+# many pictures there are and where they are. A button there changes the size
+# of the squares, and writes the size into the block.
+#
+#   - A click on a picture makes it fill the window, as a picture in the text
+#     does. There, ← and → go to the picture before it and the next one of
+#     the gallery, and Esc puts the page back.
+#   - While it fills the window, the bar under it says where it is in the
+#     gallery, like "2 of 6", and the name of its file. A button on each side
+#     of those words goes to the picture before and to the next one. While
+#     the mouse is near the left or the right edge of the window, a large
+#     arrow shows there that does the same.
+#   - The mouse over a picture shows the name of its file.
+#   - A picture that's dropped on the gallery from the Finder is copied into
+#     the gallery's folder. A gallery that only lists its pictures gets a
+#     line for the picture, and the file stays where it is.
+#
+# A big folder mustn't stop the window. macOS makes a small picture of each
+# file, as it does for the Finder, and Kaydown asks for a few of them in each
+# frame. Only the rows of the grid that are in the window are built. The
+# folder is read again every few seconds while the window is drawn.
+
+const GALLERY = Galleries.GALLERY
+const GALLERY_KINDS = (PICTURES..., MAC_PICTURES...)   # the ends of the names of the files that a gallery shows
+const GALLERY_EVERY = 3        # seconds between two looks at the folder, while the window is drawn
+const GALLERY_BUDGET = 0.012   # seconds of a frame that making small pictures can take. One is always made.
+const GALLERY_TOP = 38px       # how tall the line at the top of a gallery is
+const GALLERY_PAD = 12px       # between the edge of a gallery and its pictures
+const GALLERY_ROUND = 6px      # how round the corners of a square are
+const GALLERY_EDGE = 44px      # how big the arrow is at an edge of the window, while a picture fills the window
+const GALLERY_NEAR = 140       # px: the mouse is this near an edge of the window when that edge's arrow shows
+const GALLERY_NAME = 200       # px: the most room that the name of a file has in the bar under a picture
+"For each size of square: the icon of the button that changes the size, and what the button says"
+const GALLERY_SIZES = (small=("grid-3x3-gap", "Small"), medium=("grid", "Medium"), large=("square", "Large"))
+push!(BLOCK_ICONS, "images", "image", "grid-3x3-gap", "grid", "square")
+
+"What a `gallery` block shows: the pictures of a folder as a grid of squares"
+@def mutable struct GalleryView <: SemanticUI
+  n::Int = 0                               # its place among the page's galleries
+  first::Int = 0                           # the lines of its block, when the page was last laid out
+  last::Int = 0
+  data::Galleries.Gallery = Galleries.Gallery()
+  lines::Vector{String} = String[]         # the lines that `data` was read from
+  shown::Any = nothing                     # what the gallery showed when its folder was last read, and when to read it again
+  small::Dict{Any,Any} = Dict{Any,Any}()   # the key of the small picture of each file, or nothing for a file that has none
+  wanted::Vector{Galleries.Picture} = Galleries.Picture[]   # the pictures in the window whose small pictures aren't made yet
+  side::px = 0px                           # how big each square was when the grid was last laid out
+  showing::String = ""                     # the file of the picture that fills the window, or that last did
+  parts::Dict{Any,Any} = Dict{Any,Any}()   # its squares and its button, kept between frames
+end
+
+"A square of a gallery: one picture"
+@def mutable struct GalleryThumb <: SemanticUI
+  of::Any = nothing
+  i::Int = 0   # its place among the gallery's pictures
+end
+
+reread!(v::GalleryView, lines) = begin
+  lines == v.lines && return v
+  v.lines = lines
+  v.data = Galleries.gallery(lines)
+  v.shown = nothing
+  v
+end
+
+"True while the page is drawn for paper. `print_pdf` puts the caret on no line then."
+on_paper(e) = e.buf.caret[1] == 0
+
+"""
+What the gallery shows: its pictures, the lines that name no picture, and why
+there are no pictures. The folder is read again after a few seconds, and after
+longer when reading it takes long.
+"""
+found!(v::GalleryView) = begin
+  dir = docdir(editor(v))
+  key = (v.lines, dir)
+  s = v.shown
+  s !== nothing && s.key == key && time() < s.next && return s.found
+  started = time()
+  found = Galleries.pictures(v.data, dir, kinds=GALLERY_KINDS)
+  v.shown = (key=key, next=time() + max(GALLERY_EVERY, 20 * (time() - started)), found=found)
+  found
+end
+
+"Picture `i` of the gallery, or nothing when it has no such picture"
+picture_at(v::GalleryView, i::Int) = get(found!(v).pictures, i, nothing)
+
+"What the small picture of `p` is kept under: its file, when the file last changed, and how many pixels the squares need now"
+small_mark(v::GalleryView, p) = (p.path, p.at, Galleries.pixels(num(v.side)))
+
+"The key, for drawing, of the small picture of `p`. It's nothing for a file that has no picture, and `missing` until it's made."
+small(v::GalleryView, p) = get(v.small, small_mark(v, p), missing)
+
+"Make the small picture of `p`: the one that macOS makes for the Finder, or the whole picture when macOS has none"
+small!(v::GalleryView, p) = begin
+  mark = small_mark(v, p)
+  key = thumbnail(p.path, mark[3])
+  v.small[mark] = key === nothing ? picture_key(p.path) : key
+end
+
+"""
+Make the small pictures that the last frame had none for: as many as `budget`
+seconds have room for, and one at the least. The next frame asks for the rest.
+"""
+make_small!(v::GalleryView; budget=GALLERY_BUDGET) = begin
+  started = time()
+  for p in v.wanted
+    ismissing(small(v, p)) || continue
+    small!(v, p)
+    time() - started > budget && break
+  end
+  empty!(v.wanted)
+  v
+end
+
+# In each frame, before the page is laid out, a gallery makes a few small pictures, so the window never waits long
+block_tick!(v::GalleryView) = make_small!(v)
+
+"""
+The rows of the grid `g` that are in the window, and a few on each side of
+them. On paper, every row shows.
+"""
+rows_in_view(v::GalleryView, g) = begin
+  e = editor(v)
+  on_paper(e) && return 1:g.rows
+  _, h = window_size(e)
+  k = findfirst(it -> it.content isa Live && it.content.node === v, e.layout)
+  # A gallery that the page hasn't laid out yet is taken to be at the top of the window
+  k === nothing && return Galleries.rows_between(0, num(h), g.rows, g.side)
+  top = e.layout[k].top + LIVE_GAP + 1px + GALLERY_TOP   # of the grid, from the top of the page's text
+  Galleries.rows_between(num(e.scroll.offset - PAGE_TOP - 200px - top), num(e.scroll.offset + h + 200px - top), g.rows, g.side)
+end
+
+describe(t::GalleryThumb) = begin
+  v = t.of
+  p = picture_at(v, t.i)
+  # A file that has no picture to show has an icon in its square
+  none = p !== nothing && small(v, p) === nothing
+  Box(fixed(v.side), height(v.side), radius(GALLERY_ROUND), Alignment.Center, justify=Alignment.Center, name="Picture", background(colours.block),
+      (none ? (Icon("image", size=20px, color=colours.faint),) : ())...)
+end
+
+# The square shows the middle of the small picture, cut to fit, with round corners
+draw(ctx, size, ui::ConcreteRect, t::GalleryThumb) = begin
+  v = t.of
+  p = picture_at(v, t.i)
+  p === nothing && return
+  key = small(v, p)
+  left, top, wide, tall = num(ui.left), num(ui.top), num(ui.width), num(ui.height)
+  if key isa String
+    image = image_source(key)
+    with_round_clip(ctx, ui.left, ui.top, ui.width, ui.height, GALLERY_ROUND) do
+      paint_picture(ctx, image.raw, Galleries.crop(image.width, image.height), (left, top, wide, tall))
+    end
+  end
+  # The square under the mouse has a line round it
+  ishovered(t) && round_box(ctx, left + 1, top + 1, wide - 2, tall - 2, num(GALLERY_ROUND) - 1; line=colours.accent, wide=2.0)
+  nothing
+end
+
+cursor(::GalleryThumb) = :hand
+cursor(::GalleryView) = :arrow
+
+onmouse(t::GalleryThumb, ev::MouseMove) = begin
+  p = picture_at(t.of, t.i)
+  p === nothing || show_tooltip!(ev.window, tip_label(p.name), t, placement=:bottom, gap=6px)
+  nothing
+end
+
+onkey(t::GalleryThumb, ev::KeyPress{Keys.mouse_left}) = (hide_tooltip!(ev.window); show_picture!(t.of, t.i))
+
+"Make picture `i` of the gallery fill the window. A file that can't be read as a picture stays in its square."
+show_picture!(v::GalleryView, i::Int) = begin
+  p = picture_at(v, i)
+  key = p === nothing ? nothing : picture_key(p.path)
+  key === nothing && return handled
+  v.showing = p.path
+  zoom_in!(editor(v), (:picture, key), v)
+end
+
+"""
+While a picture of the gallery fills the window, go `by` pictures on: to the
+one before it, or to the next one. A file that can't be read as a picture is
+passed over. At the first picture and the last, nothing changes.
+"""
+step!(v::GalleryView, by::Int) = begin
+  pics = found!(v).pictures
+  i = something(findfirst(p -> p.path == v.showing, pics), 0) + by
+  while i in eachindex(pics)
+    picture_key(pics[i].path) === nothing || return show_picture!(v, i)
+    i += by
+  end
+  handled
+end
+
+"""
+Where the picture that fills the window is in its gallery: the gallery, the
+picture's place, how many pictures there are, and the name of its file. It's
+nothing for a picture that isn't from a gallery.
+"""
+gallery_place(z::ZoomView) = begin
+  g = z.from
+  (g isa GalleryView && z.what !== nothing && z.what[1] == :picture) || return nothing
+  pics = found!(g).pictures
+  i = findfirst(p -> p.path == g.showing, pics)
+  i === nothing ? nothing : (gallery=g, i=i, n=length(pics), name=pics[i].name)
+end
+
+"What the bar under a picture says of the picture's place, like “2 of 6”"
+place_words(at) = "$(at.i) of $(at.n)"
+
+"""
+True when the gallery has a picture to show `by` pictures on from picture `i`:
+one before it, or one after it. A file that's known to have no picture doesn't
+count, because `step!` passes over it.
+"""
+can_step(v::GalleryView, i::Int, by::Int) = begin
+  pics = found!(v).pictures
+  any(k -> small(v, pics[k]) !== nothing, by < 0 ? (1:i-1) : (i+1:length(pics)))
+end
+
+"""
+What the bar under a picture of a gallery starts with: a button for the
+picture before, the picture's place, a button for the next picture, the name
+of its file and a line. The bar of any other picture has none of them. In a
+window that's too narrow for them all, the name goes first, and then the place.
+"""
+gallery_buttons(z::ZoomView) = begin
+  at = gallery_place(z)
+  at === nothing && return ()
+  g = at.gallery
+  button(key, by, icon, tip) = begin
+    b = part!(() -> PlanButton(of=g), z, (:button, key))
+    b.action, b.icon, b.tip, b.off = (:step, by), icon, tip, !can_step(g, at.i, by)
+    b
+  end
+  face = Face(SANS, "", 12px, colours.dim, false)
+  # The rest of the bar, with its two buttons here and the room on each side of it, is 281px wide
+  spare = num(window_size(editor(z))[1]) - 281
+  place = place_words(at)
+  placed = num(measure(face, place)) + 8
+  room = min(spare - placed - 14, GALLERY_NAME)
+  words(text) = label(text, 12px, color=colours.dim)
+  (button(:before, -1, "chevron-left", "The picture before  ←"),
+   (spare >= placed ? (Box(Alignment.Center, padding(4px, 0px), words(place)),) : ())...,
+   button(:next, 1, "chevron-right", "The next picture  →"),
+   (room >= 60 ? (Box(Alignment.Center, padding(6px, 0px), words(elide(at.name, 12px, px(room)))),) : ())...,
+   rule())
+end
+
+"A large arrow at the left or the right edge of the window, while a picture of a gallery fills it. A click goes to the picture before, or to the next one."
+@def mutable struct GalleryEdge <: SemanticUI
+  of::Any = nothing   # the gallery
+  by::Int = 1         # -1 for the picture before, and 1 for the next one
+end
+
+describe(a::GalleryEdge) =
+  Box(width(GALLERY_EDGE), height(GALLERY_EDGE), radius(GALLERY_EDGE / 2), Alignment.Center, justify=Alignment.Center, name="Button",
+      background(ishovered(a) ? colours.hover : RGBA(colours.float, 0.85)), border(1px, :solid, colours.line),
+    Icon(a.by < 0 ? "chevron-left" : "chevron-right", size=20px, color=colours.dim))
+
+cursor(::GalleryEdge) = :hand
+onkey(a::GalleryEdge, ::KeyPress{Keys.mouse_left}) = step!(a.of, a.by)
+
+"""
+The arrows at the left and the right edge of a picture of a gallery that
+fills the window, in the middle of the picture's height. Each one shows while
+the mouse is near its edge, and there's a picture to go to. Any other picture
+has none.
+"""
+gallery_edges(z::ZoomView) = begin
+  at = gallery_place(z)
+  w = window_of(z)
+  (at === nothing || w === nothing) && return ()
+  wide = num(window_size(editor(z))[1])
+  x, y = num(w.mouse[1]), num(w.mouse[2])
+  arrow(by) = begin
+    near = y > num(TOPBAR_H) && (by < 0 ? x < GALLERY_NEAR : x > wide - GALLERY_NEAR)
+    near && can_step(at.gallery, at.i, by) ? part!(() -> GalleryEdge(of=at.gallery, by=by), z, (:edge, by)) : Box(width(GALLERY_EDGE))
+  end
+  (Row(width(grow=grow), height(grow=grow), Alignment.Center, padding(0px, 16px, BAR_ROOM, 16px), arrow(-1), Box(width(grow=grow)), arrow(1)),)
+end
+
+"""
+Do what a button of a gallery does. The one at its top gives its squares the
+next size, which goes into the block. The two under a picture that fills the
+window go to the picture before it and to the next one.
+"""
+act!(v::GalleryView, action, w) = begin
+  action isa Tuple && action[1] == :step && return step!(v, action[2])
+  action == :size || return handled
+  v.data.size = Galleries.next_size(v.data.size)
+  # A page that can't be changed still shows the new size
+  readonly(editor(v).buf) || write_block!(v, GALLERY, Galleries.written(v.data))
+  handled
+end
+
+describe(v::GalleryView) = begin
+  e = editor(v)
+  found = found!(v)
+  pics = found.pictures
+  paper = on_paper(e)
+  with_theme(component_theme(e.zoom)) do
+    lost = Galleries.lost_words(found.lost)
+    isempty(pics) && return Column(block_look()..., clip=true, name="Gallery", block_note(isempty(lost) ? found.problem : lost))
+    icon, words = GALLERY_SIZES[v.data.size]
+    bigger = lowercase(GALLERY_SIZES[Galleries.next_size(v.data.size)][2])
+    top = Row(width(grow=grow), height(GALLERY_TOP), padding(0px, 6px, 0px, GALLERY_PAD), Alignment.Center, clip=true,
+              Box(label(Galleries.summary(v.data, found), 12px, color=colours.dim)), Box(width(grow=grow)),
+              (paper ? () : (block_button!(v, :size, :size, icon=icon, words=words, tip="Make the pictures $bigger"),))...)
+    g = Galleries.grid(length(pics), num(e.width - 2px - 2GALLERY_PAD), v.data.size)
+    v.side = px(g.side)
+    rows = rows_in_view(v, g)
+    places = [i for r in rows for i in Galleries.row_places(r, g.columns, length(pics))]
+    # On paper every picture shows, so each small picture is made now. In the window, the next frames make them.
+    paper && foreach(i -> ismissing(small(v, pics[i])) && small!(v, pics[i]), places)
+    v.wanted = [pics[i] for i in places if ismissing(small(v, pics[i]))]
+    isempty(v.wanted) || redraw_in!(v, 0)
+    gap, step = px(Galleries.GAP), g.side + Galleries.GAP
+    # The rows that aren't built leave their room empty, so the block is as tall as the whole grid
+    above = isempty(rows) ? px(Galleries.tall(g.rows, g.side)) : px((first(rows) - 1) * step) - gap
+    below = isempty(rows) ? 0px : px((g.rows - last(rows)) * step) - gap
+    grid = Column(width(grow=grow), Alignment.Start, padding(0px, GALLERY_PAD, GALLERY_PAD, GALLERY_PAD), child_gap=gap,
+      (above > 0px ? (Box(width(grow=grow), height(above)),) : ())...,
+      [Row(height(v.side), child_gap=gap, Alignment.Start,
+           [block_part!(() -> GalleryThumb(of=v, i=i), v, (:thumb, i)) for i in Galleries.row_places(r, g.columns, length(pics))]...)
+       for r in rows]...,
+      (below > 0px ? (Box(width(grow=grow), height(below)),) : ())...)
+    # A line of the block that names no picture is named under the grid
+    note = isempty(lost) ? () : (Row(width(grow=grow), padding(0px, GALLERY_PAD, GALLERY_PAD, GALLERY_PAD), Alignment.Start, clip=true,
+                                     Box(width(grow=grow), Text(lost, size=12px, family=SANS, color=colours.dim, wrap=WrapMode.words))),)
+    Column(block_look()..., clip=true, name="Gallery", top, grid, note...)
+  end
+end
+
+"The gallery under the mouse, or nothing. Only a gallery that the page shows now is where it was last drawn."
+gallery_at(e, w) = begin
+  x, y = w.mouse
+  for it in view(e.layout, intersect(e.shown, eachindex(e.layout)))
+    node = it.content isa Live ? it.content.node : nothing
+    node isa GalleryView || continue
+    r = rect(node)
+    r !== nothing && r.left <= x < r.left + r.width && r.top <= y < r.top + r.height && return node
+  end
+  nothing
+end
+
+"""
+Add the pictures among the files at `paths` to the gallery, as a drop on it
+does. Each one is copied into the gallery's folder. A gallery that only lists
+its pictures gets a line for each one, and the files stay where they are.
+It's true when the gallery took a picture.
+"""
+add_pictures!(v::GalleryView, paths) = begin
+  e = editor(v)
+  dir = docdir(e)
+  new = [rstrip(String(p), '/') for p in paths]
+  filter!(p -> isfile(p) && Galleries.ispicture(p, GALLERY_KINDS), new)
+  (isempty(new) || readonly(e.buf) || !isdir(dir)) && return false
+  to = Galleries.folder(v.data, dir)
+  if to === nothing
+    append!(v.data.listed, unique(name for name in (named(e, p) for p in new) if !(name in v.data.listed)))
+    write_block!(v, GALLERY, Galleries.written(v.data))
+  else
+    foreach(p -> Galleries.keep(to, p), new)
+    list_files!(e)   # the sidebar lists the new files too
+  end
+  v.shown = nothing
+  true
+end
+
+"The gallery as HTML: a grid of its pictures, each one named as a picture in the text names its file"
+gallery_html(e, v::GalleryView) = begin
+  found = found!(v)
+  isempty(found.pictures) && return "<p>$(escape(isempty(found.lost) ? found.problem : Galleries.lost_words(found.lost)))</p>"
+  look = "width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: $(round(Int, num(GALLERY_ROUND)))px"
+  pictures = join(("<img src=\"$(escape(escaped(named(e, p.path))))\" alt=\"$(escape(splitext(p.name)[1]))\" loading=\"lazy\" style=\"$look\">" for p in found.pictures), "\n")
+  "<div class=\"gallery\" style=\"display: grid; grid-template-columns: repeat(auto-fill, minmax($(Galleries.SIDES[v.data.size])px, 1fr)); gap: $(Galleries.GAP)px\">\n$pictures\n</div>"
+end
+
+BLOCKS[GALLERY] = BlockKind("Gallery", "images", GalleryView, gallery_html)
+
 # --- a sketch ---------------------------------------------------------------------------------
 #
 # A code block in the language `sketch` is a drawing. sketch.jl says how the
@@ -11103,6 +12331,396 @@ end
 
 BLOCKS[SKETCH] = BlockKind("Sketch", "pencil", SketchView, sketch_html)
 
+# --- a log of the hours on each task -----------------------------------------------------------
+#
+# A code block in the language `timelog` keeps the hours that someone works
+# on each task. timelog.jl says how the block is written, and adds the hours
+# up. The block shows a row for each stretch of work, and the totals under
+# the rows. At its top, a field takes a task, and the button beside it starts
+# the clock on that task: a new line for now, with no stop time. While a line
+# runs, its row counts up, and the button is lit and reads Stop. A click on it
+# then writes the time now into the line. A task that's typed in the field
+# while a line runs makes the button read Start again: a click stops that
+# line and starts the new task. The field offers the tasks that the log
+# already has, in a list like the one under a button of a `find` block. A
+# click on a time or a task of a row lets you change it where it is, with no
+# box round it, and Return writes what's typed there into the line. A `chart` block under a log draws
+# the hours of each task.
+
+const TIMELOG = Timelogs.TIMELOG
+const TASKS_KEY = :timelog_tasks   # the key of the list of tasks under the field
+const MOST_TASKS = 6               # the rows that the list shows before it scrolls
+const LOG_ROW = 28px               # how tall a row of the log is
+const LOG_DAY, LOG_TIME, LOG_HOURS = 104px, 58px, 124px   # how wide the columns before the task are
+const LOG_NARROW = 470px           # a log that's narrower than this has each day on a line of its own, and no column for the day
+const LOG_SLIM = (52px, 112px)     # how wide the columns of a time and of the hours are in such a log
+const LOG_WRONG = colorant"rgb(214,69,65)"   # the line under a time that's being changed and can't be read
+push!(BLOCK_ICONS, "stopwatch", "play-fill", "stop-fill")
+
+"What a `timelog` block shows: a row for each stretch of work, the totals, and a field and a button that start the clock"
+@def mutable struct TimelogView <: SemanticUI
+  n::Int = 0                               # its place among the page's time logs
+  first::Int = 0                           # the lines of its block, when the page was last laid out
+  last::Int = 0
+  data::Timelogs.Log = Timelogs.Log()
+  lines::Vector{String} = String[]         # the lines that `data` was read from
+  parts::Dict{Any,Any} = Dict{Any,Any}()   # its fields, its button and its cells, kept between frames
+  editing::Any = nothing                   # the cell that's being changed where it is: its row, and :from, :to or :task
+  wrong::Bool = false                      # what's typed there isn't a time
+  offers::Vector{String} = String[]        # the tasks that the list under the field offers
+  pick::Int = 0                            # the one of them that Return takes, or 0 for none
+  typed::Any = nothing                     # what the field held when the offers were last worked out, or nothing while it has no keyboard
+  minute::Int = -1                         # the minute that the page's charts last drew a running log for
+end
+
+"A time or a task of a row. A click lets you change it where it is."
+@def mutable struct LogCell <: SemanticUI
+  of::Any = nothing
+  i::Int = 0
+  part::Symbol = :task
+end
+"The list of tasks that floats under the field of a log"
+@def mutable struct TaskOffers <: SemanticUI
+  of::Any = nothing
+  side::Symbol = :bottom   # the side of the field that it's on
+  pick::Int = 0            # the row that was picked when it was last drawn. A row that the keys pick is brought in sight.
+end
+"A row of that list: a task that the log has"
+@def mutable struct TaskOffer <: SemanticUI
+  of::Any = nothing
+  k::Int = 0
+end
+
+"The field at the top of a log. It holds the task that Start starts."
+task_input(v::TimelogView) = block_part!(v, :input) do
+  TextInput(placeholder="What are you working on?", font_family=SANS, font_size=13px,
+            look=(_, text) -> Row(width(grow=grow), height(grow=grow), clip=true, text))
+end
+
+"The field that takes the place of a time or a task while you change it"
+cell_input(v::TimelogView) = block_part!(v, :edit) do
+  TextInput(placeholder="", font_family=SANS, font_size=13px,
+            look=(_, text) -> Row(width(grow=grow), height(grow=grow), clip=true, text))
+end
+
+reread!(v::TimelogView, lines) = begin
+  lines == v.lines && return v
+  v.lines = lines
+  v.data = Timelogs.timelog(lines)
+  # The row of the cell that's being changed can go, as when ⌘Z takes its line back
+  v.editing === nothing || Timelogs.stretch(v.data, v.editing[1]) !== nothing || (v.editing = nothing)
+  v
+end
+
+"True when the page can't be changed, so the log can't be"
+log_fixed(v::TimelogView) = (b = editor(v).buf; readonly(b) || b.fixed)
+
+"Write the log into the lines of its block"
+write_log!(v::TimelogView) = write_block!(v, TIMELOG, Timelogs.written(v.data))
+
+"True when the button starts the clock: no line runs, or the field holds a task to change to"
+starts(v::TimelogView) = Timelogs.running(v.data) === nothing || !isempty(strip(task_input(v).text))
+
+"What the button does: it starts the clock on the task in the field, or it stops the line that runs"
+clock!(v::TimelogView) = begin
+  log_fixed(v) && return handled
+  input = task_input(v)
+  at = Timelogs.now()
+  starts(v) ? Timelogs.start!(v.data, input.text, at) : Timelogs.stop!(v.data, at)
+  input.text = ""
+  input.anchor = input.cursor = 0
+  shut_offers!(v)
+  write_log!(v)
+  handled
+end
+
+# A click on the button gives the keyboard back to the page, if the field had it
+act!(v::TimelogView, action, w) = (action == :clock && clock!(v); w.focus === task_input(v) && focus(editor(v)); handled)
+
+"The words of a part of the stretch `s`: a time as its line has it, or its task"
+cell_words(s::Timelogs.Stretch, part::Symbol) =
+  part == :task ? s.task : part == :from ? Timelogs.hhmm(s.from) : s.to === nothing ? "" : Timelogs.hhmm(s.to)
+
+"""
+Write what the field in a row holds into its line, and take the field away.
+It gives false, and the field stays, when a time can't be read.
+"""
+settle_cell!(v::TimelogView) = begin
+  v.editing === nothing && return true
+  i, part = v.editing
+  s = Timelogs.stretch(v.data, i)
+  text = cell_input(v).text
+  if s !== nothing && !log_fixed(v) && strip(text) != cell_words(s, part)
+    Timelogs.set!(v.data, i, part, text) || (v.wrong = true; return false)
+    write_log!(v)
+  end
+  v.editing, v.wrong = nothing, false
+  true
+end
+
+"Put a field in the place of the cell `c`, with the cell's words in it and selected"
+open_cell!(c::LogCell) = begin
+  v = c.of
+  log_fixed(v) && return handled
+  settle_cell!(v) || (v.editing = nothing)   # another cell that was being changed is written first
+  s = Timelogs.stretch(v.data, c.i)
+  s === nothing && return handled
+  input = cell_input(v)
+  input.color = colours.ink
+  input.text = cell_words(s, c.part)
+  input.anchor, input.cursor = 0, length(input.text)
+  v.editing, v.wrong = (c.i, c.part), false
+  focus(input)
+  handled
+end
+
+"Show the list of the tasks to offer under the field"
+show_offers!(v::TimelogView, w) = begin
+  list = TaskOffers(of=v)
+  v.parts[:offers] = list
+  r = rect(task_input(v))
+  # The keys stay with the field, and a click outside the list is the app's, as it is with no list
+  popup!(w, list, anchor=task_input(v), placement=:bottom, gap=9px, width=max(220px, r === nothing ? 0px : r.width + 16px), key=TASKS_KEY, modal=false,
+         onclose=() -> (v.offers = String[]; v.pick = 0), theme=component_theme(editor(v).zoom))
+end
+
+"Take the list of tasks away. It comes back when what's in the field changes."
+shut_offers!(v::TimelogView) = begin
+  v.offers, v.pick = String[], 0
+  w = window_of(v)
+  w === nothing || close_popup!(w, TASKS_KEY)
+  handled
+end
+
+"Put the task at row `k` of the list in the field, with the caret after it. Start, or Return, then starts it."
+take_offer!(v::TimelogView, k::Int) = begin
+  input = task_input(v)
+  k in eachindex(v.offers) && (input.text = v.offers[k]; input.anchor = input.cursor = length(input.text))
+  v.typed = input.text
+  focus(input)
+  shut_offers!(v)
+end
+
+"""
+What happens to a log in each frame, before the page is laid out. A click
+somewhere else writes what the field in a row holds. The list under the top
+field gets the tasks that have what's typed there, and goes when the field
+loses the keyboard. A chart of a log that runs is drawn again each minute.
+"""
+block_tick!(v::TimelogView) = begin
+  w = window_of(v)
+  v.editing !== nothing && (w === nothing || w.focus !== cell_input(v)) && (settle_cell!(v) || (v.editing = nothing))
+  input = task_input(v)
+  if w === nothing || w.focus !== input
+    v.typed === nothing || (v.typed = nothing; shut_offers!(v))
+  elseif input.text != v.typed
+    v.typed = input.text
+    v.offers, v.pick = Timelogs.offered(v.data, input.text), 0
+    isempty(v.offers) ? close_popup!(w, TASKS_KEY) : show_offers!(v, w)
+  end
+  if Timelogs.running(v.data) !== nothing && (minute = Dates.minute(Timelogs.now())) != v.minute
+    v.minute = minute
+    e = editor(v)
+    delete!(e.flows, (:tables, e.buf.path, e.buf.version))
+    foreach(node -> node isa ChartView && (node.shown = nothing), values(e.nodes))
+  end
+  v
+end
+
+describe(o::TaskOffer) = begin
+  v = o.of
+  o.k <= length(v.offers) ? float_row(v.offers[o.k], picked=v.pick == o.k) : Box(height(0px))
+end
+
+cursor(::TaskOffer) = :hand
+onkey(o::TaskOffer, ::KeyPress{Keys.mouse_left}) = take_offer!(o.of, o.k)
+# The mouse picks the task that it's over, as the arrow keys do
+onmouse(o::TaskOffer, ::MouseMove) = begin
+  v = o.of
+  v.pick = o.k
+  list = get(v.parts, :offers, nothing)
+  list === nothing || (list.pick = o.k)   # it's in sight already, so the list doesn't scroll to it
+  handled
+end
+
+describe(l::TaskOffers) = begin
+  v = l.of
+  c = found_colours()
+  n, high = length(v.offers), FLOAT_ROW
+  scroll = get!(() -> Scroll(width(grow=grow)), v.parts, :offer_scroll)
+  # Half a row at the bottom says that the list goes on
+  scroll.height = height(n <= MOST_TASKS ? n * high : MOST_TASKS * high - high / 2)
+  l.pick == v.pick || (l.pick = v.pick; v.pick > 0 && scroll_into_view!(scroll, high * (v.pick - 1), high * v.pick))
+  Box(width(grow=grow), padding(6px), radius(8px), background(c.frame), border(1px, :solid, c.line),
+      shadow(0, 6, 16, RGBA(60 / 255, 45 / 255, 20 / 255, 0.2)), name="Tasks",
+    reuse!(scroll, Column(width(grow=grow), Alignment.Start, [block_part!(() -> TaskOffer(of=v, k=k), v, (:offer, k)) for k in 1:n]...)))
+end
+
+placed!(l::TaskOffers, side) = (l.side = side; nothing)
+draw(ctx, size, ui::ConcreteRect, l::TaskOffers) = caret(ctx, ui, l.side, rect(task_input(l.of)))
+
+# The keys that a field of the log has no use for come here. Return in the field of a row writes what's typed
+# there. In the top field, it takes the task that's picked in the list, or does what the button does.
+onkey(v::TimelogView, ev::KeyPress{Keys.enter}) = begin
+  w = ev.window
+  if w.focus === cell_input(v)
+    settle_cell!(v) && focus(editor(v))
+  elseif w.focus === task_input(v)
+    v.pick > 0 && return take_offer!(v, v.pick)
+    starts(v) && clock!(v)
+    focus(editor(v))
+  else
+    return nothing
+  end
+  handled
+end
+# Esc leaves a row as it was. In the top field, it closes the list, and then gives the keyboard back to the page.
+onkey(v::TimelogView, ev::KeyPress{Keys.escape}) = begin
+  w = ev.window
+  if w.focus === cell_input(v)
+    v.editing, v.wrong = nothing, false
+    focus(editor(v))
+  elseif w.focus === task_input(v)
+    isempty(v.offers) ? focus(editor(v)) : shut_offers!(v)
+  else
+    return nothing
+  end
+  handled
+end
+onkey(v::TimelogView, ::KeyPress{Keys.down}) = isempty(v.offers) ? nothing : (v.pick = min(v.pick + 1, length(v.offers)); handled)
+onkey(v::TimelogView, ::KeyPress{Keys.up}) = isempty(v.offers) ? nothing : (v.pick = max(v.pick - 1, 0); handled)
+
+"True when the log is too narrow for a column of days. Each day is then on a line of its own, over its rows."
+log_narrow(v::TimelogView) = editor(v).width < LOG_NARROW
+
+"Words in a column of a log. `wide` says how wide the column is."
+log_column(wide, words; size=13px, color=colours.ink, weight="") =
+  Row(wide, height(24px), padding(6px, 0px), Alignment.Center, clip=true, Box(label(words, size, color=color, weight=weight)))
+
+describe(c::LogCell) = begin
+  v = c.of
+  s = Timelogs.stretch(v.data, c.i)
+  s === nothing && return Box(width(0px))
+  wide = c.part == :task ? width(grow=grow) : fixed(log_narrow(v) ? LOG_SLIM[1] : LOG_TIME)
+  if v.editing == (c.i, c.part)
+    # The words are changed where they are, with no box round them. A time that can't be read has a red line under it.
+    field = Row(wide, height(24px), padding(6px, 0px), Alignment.Center, Box(width(grow=grow), height(grow=grow), cell_input(v)))
+    v.wrong && (field.border = border(1px, :solid, LOG_WRONG)[:bottom])
+    return field
+  end
+  words = cell_words(s, c.part)
+  # A row with no stop time says "now" while it runs. A row with no task says so.
+  shown = !isempty(words) ? words : c.part == :task ? "No task" : Timelogs.running(v.data) == c.i ? "now" : "–"
+  Row(wide, height(24px), padding(6px, 0px), radius(5px), Alignment.Center, clip=true, background(ishovered(c) && !log_fixed(v) ? colours.hover : clear),
+      Box(label(shown, 13px, color=isempty(words) ? colours.faint : colours.ink)))
+end
+
+cursor(c::LogCell) = log_fixed(c.of) ? :arrow : :ibeam
+cursor(::TimelogView) = :arrow
+onkey(c::LogCell, ::KeyPress{Keys.mouse_left}) = c.of.editing == (c.i, c.part) ? nothing : open_cell!(c)
+
+"What the button's tooltip says after \"Start the clock\": the task, if there is one"
+on_task(task) = isempty(task) ? "" : " on " * task
+
+describe(v::TimelogView) = begin
+  e = editor(v)
+  log = v.data
+  at = Timelogs.now()
+  run = Timelogs.running(log)
+  # The row that runs counts up, so the window draws again when the next second starts
+  run === nothing || redraw_in!(v, 1.02 - Dates.millisecond(at) / 1000)
+  with_theme(component_theme(e.zoom)) do
+    input = task_input(v)
+    input.color = colours.ink
+    w = window_of(v)
+    typing = w !== nothing && w.focus === input
+    field = Row(width(grow=grow), height(26px), padding(8px, 0px), child_gap=7px, radius(6px), Alignment.Center, background(colours.bg),
+                border(1px, :solid, typing ? colours.accent : colours.line),
+                Icon("stopwatch", size=12px, color=run === nothing ? colours.dim : colours.accent), Box(width(grow=grow), height(grow=grow), input))
+    # The button reads what a click does. It's lit while a line runs, and its tooltip says which task the click is for.
+    typed = Timelogs.tidy(input.text)
+    next = on_task(isempty(typed) ? Timelogs.last_task(log) : typed)
+    button = !starts(v) ? block_button!(v, :clock, :clock, icon="stop-fill", words="Stop", on=true, tip="Stop the clock" * on_task(log.rows[run].task)) :
+             block_button!(v, :clock, :clock, icon="play-fill", words="Start", bold=true, off=log_fixed(v),
+                           tip=run === nothing ? "Start the clock" * next : "Stop the clock" * on_task(log.rows[run].task) * ", and start it" * next)
+    bar = block_bar(field, Box(width(4px)), button)
+    isempty(log.rows) && return Column(block_look()..., clip=true, name="Time log", bar,
+      block_note("This log has no hours yet. Type a task in the field and click Start."))
+    narrow = log_narrow(v)
+    time_wide, hours_wide = narrow ? LOG_SLIM : (LOG_TIME, LOG_HOURS)
+    head = Row(width(grow=grow), height(24px), padding(6px, 0px), Alignment.Center,
+      (narrow ? () : (log_column(fixed(LOG_DAY), "Day", size=11px, color=colours.dim),))...,
+      log_column(fixed(time_wide), "From", size=11px, color=colours.dim), log_column(fixed(time_wide), "To", size=11px, color=colours.dim),
+      log_column(fixed(hours_wide), "Hours", size=11px, color=colours.dim), log_column(width(grow=grow), "Task", size=11px, color=colours.dim))
+    rows, day = Any[], nothing
+    for (i, r) in enumerate(log.rows)
+      if r isa String
+        # A line that can't be read shows as it's written
+        push!(rows, Row(width(grow=grow), height(LOG_ROW), padding(12px, 0px), Alignment.Center, clip=true, Box(label(r, 13px, color=colours.faint)), Box(width(grow=grow))))
+        continue
+      end
+      # The day shows once, for the first of its rows
+      fresh = r.day != day
+      day = r.day
+      narrow && fresh && push!(rows, Row(width(grow=grow), height(24px), padding(12px, 0px), Alignment.Center,
+                                         Box(label(Timelogs.day(r.day), 12px, color=colours.dim, weight="Semibold")), Box(width(grow=grow))))
+      runs = i == run
+      hours = runs ? Timelogs.elapsed(Timelogs.seconds(log, i, at)) : r.to === nothing ? "–" : Timelogs.hours(Timelogs.counted(log, i, at))
+      push!(rows, Row(width(grow=grow), height(LOG_ROW), padding(6px, 0px), Alignment.Center, background(runs ? RGBA(colours.accent, 0.09) : clear),
+        (narrow ? () : (log_column(fixed(LOG_DAY), fresh ? Timelogs.day(r.day) : "", color=colours.dim),))...,
+        block_part!(() -> LogCell(of=v, i=i, part=:from), v, (:cell, i, :from)), block_part!(() -> LogCell(of=v, i=i, part=:to), v, (:cell, i, :to)),
+        log_column(fixed(hours_wide), hours, color=runs ? colours.accent : r.to === nothing ? colours.faint : colours.ink, weight=runs ? "Semibold" : ""),
+        block_part!(() -> LogCell(of=v, i=i, part=:task), v, (:cell, i, :task))))
+    end
+    # Under the rows: the total, and the hours of each task when the log has more than one
+    sums = Any[]
+    if any(r -> r isa Timelogs.Stretch, log.rows)
+      lead = (narrow ? 0px : LOG_DAY) + 2time_wide
+      sum_row(name, minutes, weight) = Row(width(grow=grow), height(LOG_ROW), padding(6px, 0px), Alignment.Center,
+        log_column(fixed(lead), elide(name, 13px, lead - 12px), color=isempty(weight) ? colours.dim : colours.ink, weight=weight),
+        log_column(fixed(hours_wide), Timelogs.hours(minutes), weight=weight),
+        log_column(width(grow=grow), something(Timelogs.money(log, minutes), ""), weight=weight))
+      tasks = Timelogs.tasks(log, at)
+      push!(sums, Box(width(grow=grow), padding(12px, 4px), Box(width(grow=grow), height(1px), background(colours.line))),
+            sum_row("Total", Timelogs.total(log, at), "Semibold"))
+      length(tasks) > 1 && append!(sums, (sum_row(isempty(name) ? "No task" : name, minutes, "") for (name, minutes) in tasks))
+    end
+    Column(block_look()..., clip=true, name="Time log", bar, head, rows..., sums..., Box(height(6px)))
+  end
+end
+
+"The log as HTML: a table with a row for each stretch of work, and the totals at its foot"
+timelog_html(e, v::TimelogView) = begin
+  log = v.data
+  isempty(log.rows) && return nothing
+  at = Timelogs.now()
+  run = Timelogs.running(log)
+  rows, day = String[], nothing
+  for (i, r) in enumerate(log.rows)
+    if r isa String
+      push!(rows, "<tr><td colspan=\"5\" style=\"color: #a39a8a\">$(escape(r))</td></tr>")
+      continue
+    end
+    shown = r.day == day ? "" : Timelogs.day(r.day)
+    day = r.day
+    to = r.to !== nothing ? Timelogs.hhmm(r.to) : i == run ? "now" : ""
+    hours = r.to === nothing && i != run ? "" : Timelogs.hours(Timelogs.counted(log, i, at))
+    push!(rows, "<tr><td>$shown</td><td>$(Timelogs.hhmm(r.from))</td><td>$to</td><td>$hours</td><td>$(escape(r.task))</td></tr>")
+  end
+  sum_row(name, minutes, cell) =
+    "<tr><$cell colspan=\"3\">$(escape(name))</$cell><$cell>$(Timelogs.hours(minutes))</$cell><$cell>$(something(Timelogs.money(log, minutes), ""))</$cell></tr>"
+  sums = String[]
+  if any(r -> r isa Timelogs.Stretch, log.rows)
+    tasks = Timelogs.tasks(log, at)
+    push!(sums, sum_row("Total", Timelogs.total(log, at), "th"))
+    length(tasks) > 1 && append!(sums, (sum_row(isempty(name) ? "No task" : name, minutes, "td") for (name, minutes) in tasks))
+  end
+  "<table>\n<thead><tr><th>Day</th><th>From</th><th>To</th><th>Hours</th><th>Task</th></tr></thead>\n<tbody>\n" * join(rows, "\n") *
+  "\n</tbody>\n<tfoot>\n" * join(sums, "\n") * "\n</tfoot>\n</table>"
+end
+
+BLOCKS[TIMELOG] = BlockKind("Time log", "stopwatch", TimelogView, timelog_html)
+
 # --- a list of the emails with someone ---------------------------------------------------------
 #
 # A code block in the language `email` lists the emails with one person, or
@@ -11268,6 +12886,215 @@ emails_html(e, v::EmailsView) = begin
 end
 
 BLOCKS[EMAIL] = BlockKind("Emails", "envelope", EmailsView, emails_html)
+
+# --- a signature -------------------------------------------------------------------------------
+#
+# A code block in the language `signature` is a place where a person signs
+# the page with the mouse or the trackpad. signature.jl says how the block is
+# written. The block shows a box with a line to sign on, and under it the
+# name of who signs. A block with no name has a field there to type it in.
+#
+#   - Press in the box and drag to draw. Each stroke is a line of the block,
+#     so the file holds the signature, and ⌘Z takes back the last stroke.
+#   - The first stroke writes the day and the time. From then on the block
+#     says who signed and on which day.
+#   - A stroke that leaves the box goes on when the mouse comes back. The
+#     page's text doesn't select meanwhile, and the page doesn't scroll.
+#   - While the mouse is over a signed block, a Clear button shows. It takes
+#     the strokes and the day away, and ⌘Z brings them back.
+#   - A page that can't be changed, like an email, takes no strokes.
+
+const SIGNATURE = Signatures.SIGNATURE
+push!(BLOCK_ICONS, "pen")
+const SIGN_STEP = 1.0   # how far the mouse moves, in the box's own measure, before a stroke gets a new place
+"The clock that says when a block is signed. A test puts its own clock here."
+const sign_clock = Ref{Function}(Dates.now)
+
+"What a `signature` block shows: a box to sign in, and the name of who signs"
+@def mutable struct SignatureView <: SemanticUI
+  n::Int = 0                               # its place among the page's signatures
+  first::Int = 0                           # the lines of its block, when the page was last laid out
+  last::Int = 0
+  data::Signatures.Signature = Signatures.Signature()
+  lines::Vector{String} = String[]         # the lines that `data` was read from
+  draft::Any = nothing                     # the places of the stroke that's being drawn, or nothing
+  asked::Bool = false                      # the block had no name once, so its field takes the name
+  stay::px = 0px                           # how far the page was scrolled when the stroke started
+  box::NTuple{4,Float64} = (0.0, 0.0, 0.0, 0.0)   # where the box was last drawn in the window
+  parts::Dict{Any,Any} = Dict{Any,Any}()   # its box, its field and its button, kept between frames
+end
+
+"The box of a signature that's drawn in"
+@def mutable struct SignArea <: SemanticUI
+  of::Any = nothing
+end
+
+sign_area(v::SignatureView) = block_part!(() -> SignArea(of=v), v, :area)
+
+"The text field that takes the name of who signs"
+signer_input(v::SignatureView) = block_part!(v, :input) do
+  TextInput(placeholder="Type your name", font_family=SANS, font_size=13px,
+            look=(_, text) -> Row(width(grow=grow), height(grow=grow), clip=true, text))
+end
+
+reread!(v::SignatureView, lines) = begin
+  lines == v.lines && return v
+  v.lines = lines
+  v.data = Signatures.signature(lines)
+  # The field shows the name that the block has, as it does after ⌘Z takes some of it back
+  i = signer_input(v)
+  strip(i.text) == v.data.name || (i.text = v.data.name; i.anchor = i.cursor = length(i.text))
+  v
+end
+
+"True for a signature in a page that can't be changed, like an email. It takes no strokes."
+locked(v::SignatureView) = (b = editor(v).buf; readonly(b) || b.fixed)
+
+"True while the page is drawn for paper. Printing puts the caret on no line."
+on_paper(v::SignatureView) = editor(v).buf.caret[1] == 0
+
+"""
+True when a field under the box takes the name: the block has no name, or it
+had none and the name was typed in the field. A signed block has no field.
+"""
+asks(v::SignatureView) = begin
+  isempty(v.data.name) && (v.asked = true)
+  v.asked && !Signatures.issigned(v.data) && !locked(v) && !on_paper(v)
+end
+
+"How wide the box is in the page: 420 px at the usual size of the text, and no wider than the page's text"
+sign_wide(v::SignatureView) = (e = editor(v); min(px(Signatures.WIDE * e.zoom), e.width))
+
+"How many px of the window one of the box's own measure is"
+sign_scale(v::SignatureView) = v.box[3] > 0 ? v.box[3] / Signatures.WIDE : num(sign_wide(v)) / Signatures.WIDE
+
+"The place in the box that's at `pos` in the window. A place outside the box has numbers that are outside it."
+sign_place(v::SignatureView, pos) = (s = sign_scale(v); ((num(pos[1]) - v.box[1]) / s, (num(pos[2]) - v.box[2]) / s))
+
+describe(a::SignArea) = begin
+  wide = sign_wide(a.of)
+  Box(fixed(wide), height(wide * (Signatures.TALL / Signatures.WIDE)), radius(8px), border(1px, :solid, colours.line),
+      background(takeoff_back()), name="Box to sign in")
+end
+
+draw(ctx, size, ui::ConcreteRect, a::SignArea) = begin
+  v = a.of
+  v.box = (num(ui.left), num(ui.top), num(ui.width), num(ui.height))
+  v.box[3] > 0 || return
+  s = sign_scale(v)
+  at(p) = (v.box[1] + p[1] * s, v.box[2] + p[2] * s)
+  with_round_clip(ctx, ui.left, ui.top, ui.width, ui.height, 8px) do
+    # The line to sign on, and the ✕ at its left end, as paper forms have
+    trace(ctx, [at((Signatures.EDGE, Signatures.LINE)), at((Signatures.WIDE - Signatures.EDGE, Signatures.LINE))], colours.marker, 1.0)
+    foreach(((from, to),) -> trace(ctx, [at(from), at(to)], colours.dim, max(1.0, 1.5s)), Signatures.CROSS)
+    # The words go with the first stroke. A page that takes no strokes doesn't ask for one.
+    if !Signatures.issigned(v.data) && v.draft === nothing && !locked(v)
+      face = Face(SANS, "", 13px * editor(v).zoom, colours.faint, false)
+      write_ink(ctx, "Sign here", v.box[1] + (v.box[3] - num(measure(face, "Sign here"))) / 2, at((0.0, Signatures.LINE - 12))[2], face)
+    end
+    # The ink is the colour of the page's text, with round ends
+    paint = ink(colours.ink, max(1.2, Signatures.INK * s))
+    foreach(points -> draw_curve(ctx, at.(points), paint), v.data.strokes)
+    v.draft === nothing || draw_curve(ctx, at.(v.draft), paint)
+    Skia.sk_paint_delete(paint)
+  end
+end
+
+cursor(a::SignArea) = locked(a.of) ? :arrow : :crosshair
+cursor(::SignatureView) = :arrow
+
+# A press in the box starts a stroke. The click goes on to the page, which takes the keyboard back from the
+# name's field. With ⌥ held the page shows the block's lines, and a page that can't be changed takes no strokes.
+onkey(a::SignArea, ev::KeyPress{Keys.mouse_left}) = begin
+  v = a.of
+  (held(v, Keys.opt) || locked(v) || v.box[3] <= 0) && return nothing
+  v.draft === nothing || drop!(v)   # a stroke that no frame has taken yet
+  v.draft = Signatures.Place[sign_place(v, ev.window.mouse)]
+  v.stay = editor(v).scroll.offset
+  nothing
+end
+
+# UI.jl gives the box each move of the mouse while its button is down, in the box or out of it
+onmouse(a::SignArea, ev::MouseMove) = begin
+  v = a.of
+  v.draft === nothing && return nothing
+  Keys.mouse_left in ev.window.keys || return handled
+  p = sign_place(v, ev.position)
+  hypot((p .- v.draft[end])...) >= SIGN_STEP && push!(v.draft, p)
+  handled   # the drag is the signature's, so the page's text doesn't select
+end
+
+# The wheel doesn't scroll the page under a stroke that's being drawn
+onscroll(a::SignArea, ::MouseScroll) = a.of.draft === nothing ? nothing : handled
+
+"The mouse let go. The stroke that was drawn joins the signature, and the first stroke writes the day and the time."
+drop!(v::SignatureView) = begin
+  points = v.draft
+  v.draft = nothing
+  points === nothing && return v
+  Signatures.sign!(v.data, points, sign_clock[]()) && write_block!(v, SIGNATURE, Signatures.written(v.data))
+  v
+end
+
+block_tick!(v::SignatureView) = begin
+  if v.draft !== nothing
+    # The page stays where it was while a stroke is drawn, whatever scrolls it
+    held(v, Keys.mouse_left) ? (editor(v).scroll.offset = v.stay) : drop!(v)
+  end
+  # What was typed in the field is written into the block as the name
+  name = String(strip(signer_input(v).text))
+  name == v.data.name && return v
+  v.data.name = name
+  write_block!(v, SIGNATURE, Signatures.written(v.data), typing=true)
+end
+
+describe(v::SignatureView) = begin
+  e = editor(v)
+  s = v.data
+  signed = Signatures.issigned(s)
+  input = signer_input(v)
+  input.color = colours.ink
+  w = window_of(v)
+  typing = w !== nothing && w.focus === input
+  with_theme(component_theme(e.zoom)) do
+    # Under the box: who signed and when, or the field that takes the name, or the name. The words are
+    # bigger in a page whose text is bigger, as the box is.
+    size = 13px * e.zoom
+    under = signed ? (Box(width(grow=grow), Text(Signatures.caption(s), size=size, family=SANS, color=colours.dim, wrap=WrapMode.words)),) :
+            asks(v) ? (Box(fixed(min(sign_wide(v), 240px * e.zoom)), height(28px * e.zoom), padding(9px, 0px), radius(6px), background(colours.bg),
+                           border(1px, :solid, typing ? colours.accent : colours.line), input), Box(width(grow=grow))) :
+            (Box(width(grow=grow), Text(s.name, size=size, family=SANS, subfamily="Medium", color=colours.ink, wrap=WrapMode.words)),)
+    # The Clear button shows while the mouse is over a signed block, and never on paper
+    clear = signed && ishovered(v) && v.draft === nothing && !locked(v) && !on_paper(v) ?
+      (block_button!(v, :clear, :clear, words="Clear", tip="Take the signature away"),) : ()
+    Box(width(grow=grow), Alignment.Start,
+      Column(fixed(sign_wide(v)), Alignment.Start, child_gap=6px, name="Signature",
+        sign_area(v),
+        Row(width(grow=grow), height(min=26px), child_gap=8px, Alignment.Center, under..., clear...)))
+  end
+end
+
+# Clear takes the strokes and the day away in one change, so one ⌘Z brings them back
+act!(v::SignatureView, action, w) = begin
+  action == :clear || return handled
+  Signatures.clear!(v.data)
+  write_block!(v, SIGNATURE, Signatures.written(v.data))
+  handled
+end
+
+# Return in the name's field gives the keyboard back to the page
+onkey(v::SignatureView, ::KeyPress{Keys.enter}) = (focus(editor(v)); handled)
+
+"The signature as HTML: a picture of the box and its strokes, with who signed and when under it"
+signature_html(e, v::SignatureView) = begin
+  s = v.data
+  picture = Signatures.svg(s, ink="#2b2622", line="#d8d0bd", mark="#6b6259")
+  under = Signatures.issigned(s) ? Signatures.caption(s) : s.name
+  "<div class=\"diagram\">\n$picture\n</div>" *
+  (isempty(under) ? "" : "\n<p style=\"margin-top: -0.5em; font-size: 0.88em; color: #6b6259\">$(escape(under))</p>")
+end
+
+BLOCKS[SIGNATURE] = BlockKind("Signature", "pen", SignatureView, signature_html)
 
 # --- blocks that a file defines --------------------------------------------------------------
 #
@@ -12045,7 +13872,7 @@ layout!(e, width=text_width(e)) = begin
       i += 1
     end
   end
-  e.layout = items
+  e.layout = slide_items(e, items)   # while the page shows as slides, only the items of one slide
 end
 
 "The item that shows line `i`"
@@ -12128,7 +13955,10 @@ describe(e::Editor, it::Item, f::Flow) = begin
   if k == Kind.code || k == Kind.fence
     col.background = background(colours.block)
   elseif k == Kind.blockquote
-    col.border = border(edge, :solid, colours.line)[:left]
+    # A callout has its kind's colour down its left, and a little of that colour behind it
+    kind = 1 <= it.first <= length(e.buf.lines) ? callout(kinds(e.buf)[it.first]) : ""
+    col.border = border(edge, :solid, isempty(kind) ? colours.line : callout_colour(kind))[:left]
+    isempty(kind) || (col.background = background(callout_tint(kind)))
   end
   col
 end
@@ -12210,6 +14040,7 @@ end
 cursor(d::Document) = begin
   e = editor(d)
   e.buf.view == :file && return :arrow   # a viewer has no text to select
+  slideshow(e) === nothing || return slide_cursor(e)   # nor has a slide
   w = window_of(e)
   w === nothing && return :ibeam
   # A click on a to-do item's box ticks it
@@ -12628,6 +14459,7 @@ tick!(e, i::Int) = begin
 end
 
 press!(e, pos) = begin
+  slideshow(e) === nothing || return slide_press!(e, pos)   # a click on a slide goes to the next one, or back
   b = e.buf
   box = held(e, Keys.opt) ? nothing : todo_at(e, pos)
   if box !== nothing
@@ -13041,6 +14873,11 @@ newline!(e, ::Type{<:Union{List,Quote,Paragraph}}) = begin
   k = line.kind
   col < line.prefix && return type!(e, "\n")
   lead = head(text, line.prefix)
+  # The line after the one that names a callout is a line of the callout: it starts with the > and no more
+  if opens_callout(line)
+    shut, opened = halves!(b)
+    return type!(e, shut * "\n> " * opened)
+  end
   # Return on an empty list item ends the list
   # What starts the item goes as it's written. As rich text, a selection that's
   # deleted keeps what starts its line, so `type!` would leave the item there.
@@ -14008,6 +15845,7 @@ const COMMAND_GROUPS = [
     Command(:forward, "Go forward again, to the file that you went back from", :window, "cmd+opt+right", (e, w, _) -> go_forward!(e)),
     Command(:print, "Print the page", :window, "cmd+p", (e, w, _) -> print!(e, w)),
     Command(:export, "Export the page as HTML", :window, "cmd+shift+e", (e, w, _) -> export_html!(e, w)),
+    Command(:slides, "Show the page as slides, or as a page again", :window, "ctrl+cmd+shift+p", (e, w, _) -> slides!(e)),
     Command(:close, "Close the window", :window, "cmd+w", (e, w, _) -> close(w)),
     Command(:settings, "Show or hide the settings", :window, "cmd+comma", (e, w, _) -> toggle_settings!(e)),
     Command(:sidebar, "Show or hide the sidebar", :window, "cmd+backslash", (e, w, _) -> toggle_panel!(e)),
@@ -14090,7 +15928,7 @@ ones in the bundle called Kaydown, with the shortcuts it gives them.
 """
 const BUNDLES = [
   "Kaydown" => Pair{Symbol,String}[],
-  # ⌘P finds a file, as Quick Open does, so printing has another key
+  # ⌘P finds a file, as Quick Open does, so printing has another key. The slides' key, ⌃⌘⇧P, is free in every bundle.
   "VS Code" => [
     :open => "cmd+p, cmd+o", :print => "cmd+opt+p", :back => "ctrl+minus", :forward => "ctrl+shift+minus",
     :line_up => "opt+up", :line_down => "opt+down", :duplicate_line => "opt+shift+down, opt+shift+up"],
@@ -14368,6 +16206,7 @@ onkey(e::Editor, ev::Union{KeyPress{Keys.mouse_left},KeyPress{Keys.mouse_right},
   pop!(e.nodes, :chose, false) && return
   # While a picture or a model fills the window, a right-click has no menu
   zooming(e) === nothing || e.popup != :none || return
+  slideshow(e) === nothing || return   # nor has a right-click on a slide
   ev isa KeyPress{Keys.mouse_right} && return context_menu!(e, ev.window)
   nothing
 end
@@ -14390,6 +16229,8 @@ onkey(e::Editor, ev::KeyPress{K}) where K = begin
   # While a picture or a model fills the window, the keys are its own. Esc puts the page back.
   zoomed = zooming(e)
   zoomed === nothing || e.popup != :none || zoom_key!(zoomed, K, w, command) !== handled || return
+  # While the page shows as slides, the keys go from one slide to another. Esc shows the page again.
+  slideshow(e) === nothing || slide_key!(e, K, w, command) !== handled || return
   shift, cmd, opt = Keys.shft in w.keys, Keys.cmd in w.keys, Keys.opt in w.keys
   b = e.buf
   # While a part of a live block has the keyboard, the keys are its own and don't change the text.
@@ -14489,7 +16330,8 @@ end
 #
 # A file that's dropped on the page from the Finder goes into the text. A
 # picture goes on a line of its own under the line it's dropped on, written as
-# ![name](path), so the page shows it. A Markdown file goes in where it's
+# ![name](path), so the page shows it. A CSV file goes in the same way, and
+# the page shows it as a table. A Markdown file goes in where it's
 # dropped as a link to it. Any other file, and a folder, goes in there as a
 # path that shows as a breadcrumb: !`fs"path"`.
 
@@ -14506,15 +16348,19 @@ ispicture(path) = (ext = lowercase(splitext(path)[2]); ext in PICTURES || ext in
 "The Markdown that shows the file or the folder at `path`"
 markdown_for(e, path) = begin
   name, at = splitext(basename(path))[1], named(e, path)
-  ispicture(path) ? "![$name]($(escaped(at)))" : ismarkdown(path) ? "[$name]($(escaped(at)))" : "!`fs\"$(replace(at, '"' => "\\\""))\"`"
+  ispicture(path) || istable(path) ? "![$name]($(escaped(at)))" : ismarkdown(path) ? "[$name]($(escaped(at)))" : "!`fs\"$(replace(at, '"' => "\\\""))\"`"
 end
 
 onfiledrop(e::Editor, w::Window, paths) = begin
   e.buf.view == :markdown || return nothing   # a file goes into a page as Markdown
+  slideshow(e) === nothing || return nothing   # the text doesn't change while the page shows as slides
   # A PDF file or a picture that's dropped on a takeoff is its plan
   v = takeoff_at(e, w)
   plan = v === nothing ? nothing : findfirst(p -> isfile(p) && (ispdf(p) || ispicture(p)), paths)
   plan === nothing || return plan!(v, rstrip(String(paths[plan]), '/'))
+  # A picture that's dropped on a gallery goes into the gallery
+  g = gallery_at(e, w)
+  g !== nothing && add_pictures!(g, paths) && return nothing
   put_files!(e, paths, settle(e.buf, locate(e, w.mouse)))
 end
 
@@ -14524,8 +16370,9 @@ put_files!(e, paths, at::Pos) = begin
   isempty(paths) && return
   b = e.buf
   b.view == :markdown || return   # only a page has text for the path to go into, as Markdown
-  pictures = [markdown_for(e, p) for p in paths if isfile(p) && ispicture(p)]
-  others = [markdown_for(e, p) for p in paths if !(isfile(p) && ispicture(p))]
+  # A CSV file goes on a line of its own as a picture does, so the page shows it as a table
+  pictures = [markdown_for(e, p) for p in paths if isfile(p) && (ispicture(p) || istable(p))]
+  others = [markdown_for(e, p) for p in paths if !(isfile(p) && (ispicture(p) || istable(p)))]
   if !isempty(others)
     line = b.lines[at[1]]
     # What's dropped on a word goes after the word, not into it
@@ -15051,6 +16898,8 @@ filled(e) = full_block(e) !== nothing || lowered(e) !== nothing || zooming(e) !=
 
 describe(t::TopBar) = begin
   e = editor(t)
+  # While the page shows as slides, the bar is empty. It's still what you drag to move the window.
+  slideshow(e) === nothing || return Row(width(grow=grow), height(TOPBAR_H), name="TopBar")
   b = e.buf
   mail = mail_part(e)
   # An email has more buttons
@@ -15281,6 +17130,339 @@ refill!(e, kept) = begin
   e
 end
 
+# --- a page as slides ------------------------------------------------------------------------
+#
+# ⌃⌘⇧P, or Show as Slides in the page's menu, shows the page one part at a
+# time, for when you show a plan to someone. A slide starts at each heading of
+# level 1 or 2, and at each line across the page. slides.jl says which lines
+# each slide shows.
+#
+#   - The window shows one slide and nothing else of the app: no sidebar, and
+#     nothing in the top bar. The slide is in the middle of the window. Its
+#     text is up to twice as big as the page's, so that the slide suits the
+#     window's height. A slide that's too tall at the page's own size scrolls.
+#   - →, ↓, Space, Page Down and Return go to the next slide. ←, ↑, Page Up
+#     and ⇧Space go back. Home and End go to the first slide and the last.
+#   - A click on the right half of the window goes on, and a click on the left
+#     half goes back. A click on a to-do item's box ticks it, and a click on a
+#     link opens it. A part of a block that takes clicks, like the button of a
+#     video, still takes them.
+#   - Everything in a slide shows as it does in the page. A video plays, and
+#     stops when another slide shows.
+#   - Nothing that's typed changes the text, and there's no caret.
+#   - Esc, or ⌃⌘⇧P again, shows the page again, with the caret at the start of
+#     the slide that showed last.
+#   - When the file changes on the disk, the slides show the new text. The
+#     slide with the same number stays, or the last one when there are fewer.
+#
+# The slides belong to one window. The document draws a slide as it draws the
+# page: `layout!` lays out the page, and `slide_items` keeps the items of the
+# slide's lines. The editor's zoom is bigger while a slide shows. The page has
+# its own zoom again when the slides end.
+
+"The slides of a page, while they show in a window"
+Base.@kwdef mutable struct SlideShow
+  path::String = ""                    # the page. The slides end when another file shows.
+  at::Int = 1                          # the number of the slide that shows
+  first::Int = 1                       # the number of the slide that showed first
+  list::Vector{Slides.Slide} = Slides.Slide[]
+  version::Int = -1                    # the version of the page that `list` was read from
+  caret::Pos = (1, 0)                  # where the page's caret was in the last frame
+  zoom::Float64 = 1.0                  # the page's own zoom
+  set::Float64 = 1.0                   # the zoom that the slides last gave the editor
+  scale::Float64 = 1.0                 # how many times bigger than the page's text the slide's text is
+  talls::Vector{px} = px[]             # how tall each slide is at the page's own zoom
+  measured::Any = nothing              # the page, the window's width and the settings that `talls` was worked out for
+  scales::Dict{Tuple{Int,px},Float64} = Dict{Tuple{Int,px},Float64}()   # the scale of each slide that has shown, for the room it had
+  fitted::Any = nothing                # the slide and the room that `scale` is for
+  fitted_at::Float64 = 0.0             # when `scale` was worked out
+  measuring::Bool = false              # true while the whole page is laid out, to learn `talls`
+  tall::px = 0px                       # how tall the slide was when it was last laid out
+  seen::Union{Nothing,px} = nothing    # how tall it was in the first frame after `scale` was worked out
+  panel::Bool = false                  # the sidebar showed before the slides did
+  offset::px = 0px                     # how far the page was scrolled then
+end
+
+"The commands that do what they always do while the page shows as slides. A key of any other command does nothing."
+const SLIDE_COMMANDS = (:save, :inspector)
+
+"The slides that show in the window of `e`, or nothing while the page shows"
+slideshow(e) = get(e.nodes, :slides, nothing)
+
+"How tall a slide can be before it scrolls: the window's height, less the top bar and the room above and below the page's text"
+slide_room(e) = max(0px, window_size(e)[2] - TOPBAR_H - PAGE_TOP - page_bottom(e))
+
+"""
+Show the page as slides, from the slide that the caret is in. A page with
+nothing to show stays as it is, and so does a file that isn't a page. Nothing
+happens while something else fills the window, like a sketch or a picture.
+"""
+show_slides!(e) = begin
+  b = e.buf
+  (slideshow(e) === nothing && b.view == :markdown && !filled(e) && e.popup == :none) || return e
+  list = Slides.slides(b.lines, kinds(b))
+  isempty(list) && return e
+  finding(e) && close_find!(e)
+  # A slide has no caret and nothing selected, and a drag on it selects nothing
+  b.anchor = b.caret
+  empty!(b.others)
+  e.clicked = (0.0, (0, 0), 0)
+  at = Slides.number(list, b.caret[1])
+  e.nodes[:slides] = SlideShow(path=b.path, at=at, first=at, caret=b.caret, zoom=e.zoom, set=e.zoom,
+                               panel=e.panel, offset=e.scroll.offset)
+  # The sidebar goes at once, without sliding
+  e.panel, e.slid = false, 0.0
+  e.scroll.offset = 0px
+  focus(e)
+  e
+end
+
+"""
+Show the page again. The sidebar and the page's zoom are what they were. The
+caret is at the start of the slide that showed last, and that line is near the
+top of the window. When that's the slide that showed first, with the caret in
+it, the caret and the page stay where they were.
+"""
+end_slides!(e) = begin
+  s = pop!(e.nodes, :slides, nothing)
+  s === nothing && return handled
+  zoom = own_zoom!(e, s)
+  e.zoom == zoom || (e.zoom = zoom; empty!(e.flows); rerun!(e, :zoom))
+  e.panel, e.slid = s.panel, 0.0
+  b = get(e.buffers, s.path, nothing)
+  b === nothing && return handled
+  b.reading = false
+  # Another file shows now. The page is where it was when it next shows.
+  b === e.buf || return (b.offset = s.offset; handled)
+  e.scroll.offset = s.offset
+  list = Slides.slides(b.lines, kinds(b))
+  k = clamp(s.at, 1, max(1, length(list)))
+  if !isempty(list) && !(k == s.first && Slides.number(list, b.caret[1]) == k)
+    b.caret = b.anchor = (list[k].first, 0)
+    e.nodes[:hold] = (list[k].first, 24px - PAGE_TOP)   # the next frame puts that line near the top of the window
+    e.reveal = true
+  end
+  e.blink = time()
+  e.goal = nothing
+  focus(e)
+  handled
+end
+
+"Show the page as slides, or show it as a page again"
+slides!(e) = slideshow(e) === nothing ? show_slides!(e) : end_slides!(e)
+
+"Show slide `k` from its top, or the first or the last slide when there's no slide `k`"
+go_slide!(e, k) = begin
+  s = slideshow(e)
+  s === nothing && return handled
+  k = clamp(k, 1, max(1, length(s.list)))
+  k == s.at && return handled
+  silence!()   # a video or a sound that the last slide was playing stops
+  s.at = k
+  e.scroll.offset = 0px
+  window_of(e) === nothing || focus(e)   # a part of the last slide that had the keyboard doesn't show now
+  handled
+end
+
+"""
+In each frame while the slides show, before the page is laid out. The slides
+are read again from a page that changed, and the slide with the same number
+stays. The slides end when another file shows, or when the page has nothing
+left to show. The page has no caret, and its sidebar stays away.
+"""
+slide_tick!(e) = begin
+  s = slideshow(e)
+  s === nothing && return
+  b = e.buf
+  (b.path == s.path && b.view == :markdown) || return end_slides!(e)
+  if b.version != s.version
+    s.list = Slides.slides(b.lines, kinds(b))
+    s.version = b.version
+    isempty(s.list) && return end_slides!(e)
+    s.at = clamp(s.at, 1, length(s.list))
+  elseif b.caret != s.caret
+    # Something sent the caret to a line, like a link to a heading or two clicks on a card of a board. That line's slide shows.
+    go_slide!(e, Slides.number(s.list, b.caret[1]))
+  end
+  s.caret = b.anchor = b.caret
+  b.reading = true
+  e.panel = false
+  # The page doesn't scroll to its caret, or to the line that it showed before a change
+  e.reveal = false
+  delete!(e.nodes, :hold)
+  fit_slide!(e, s)
+  nothing
+end
+
+"""
+The page's own zoom while the slides show. When something else gave the editor
+a zoom since the slides last did, like the settings window, that's the page's
+zoom from then on.
+"""
+own_zoom!(e, s::SlideShow) = (e.zoom == s.set || (s.zoom = e.zoom; s.measured = nothing); s.zoom)
+
+"Give the editor the zoom `z` for a slide. Text of another size is laid out again, and a live block that reads the size runs again."
+zoom_to!(e, s::SlideShow, z) = begin
+  e.zoom == z || (e.zoom = z; empty!(e.flows); rerun!(e, :zoom))
+  s.set = z
+end
+
+"""
+Give the editor the page's own zoom, before the settings are kept and given to
+the other windows. The bigger text of a slide is no setting. The next frame
+makes the slide's text bigger again.
+"""
+usual_zoom!(e) = begin
+  s = slideshow(e)
+  s === nothing && return e
+  zoom_to!(e, s, own_zoom!(e, s))
+  s.fitted = nothing
+  e
+end
+
+"Which of `items` show the lines of `slide`, or nothing when none does"
+slide_span(items, slide::Slides.Slide) = begin
+  lo = findfirst(it -> it.last >= slide.first, items)
+  hi = findlast(it -> it.first <= slide.last, items)
+  lo === nothing || hi === nothing || hi < lo ? nothing : lo:hi
+end
+
+"How tall the items `span` of `items` are together"
+span_tall(items, span) = items[last(span)].top + items[last(span)].tall - items[first(span)].top
+
+"""
+The items of the page that the window shows. While the page shows as slides,
+they're the items of one slide's lines, in the middle of the room that the
+window has for them. A slide that's taller than that room starts at the top.
+"""
+slide_items(e, items) = begin
+  s = slideshow(e)
+  (s === nothing || s.measuring || e.buf.path != s.path || !(s.at in eachindex(s.list))) && return items
+  span = slide_span(items, s.list[s.at])
+  span === nothing && return items
+  s.tall = span_tall(items, span)
+  by = px(round(num(max(0px, (slide_room(e) - s.tall) / 2)))) - items[first(span)].top
+  [Item(it.first, it.last, it.top + by, it.tall, it.content) for it in items[span]]
+end
+
+"""
+Give the editor the zoom that suits the slide that shows: the page's own zoom,
+times the slide's scale. The scale is worked out once for each slide and the
+room it has. To work it out, the whole page is laid out at its own zoom, to
+learn how tall each slide is. Then the slide is laid out at the scales that
+`Slides.fit` tries. It's all done again when the page changes, or the window's
+width, or a setting that changes the text's size.
+"""
+fit_slide!(e, s::SlideShow) = begin
+  b = e.buf
+  zoom = own_zoom!(e, s)
+  # A picture that came from the web a moment later makes the slide taller than it was fitted for
+  if s.seen === nothing
+    s.seen = s.tall
+  elseif s.tall != s.seen
+    time() - s.fitted_at < 0.25 ? redraw_in!(e, 0.25) : (s.measured = nothing)
+  end
+  key = (b.version, window_size(e)[1], zoom, e.widest, e.font, e.weight, e.code_scale, e.code_font, e.code_weight)
+  if s.measured != key
+    zoom_to!(e, s, zoom)
+    s.measuring = true
+    items = try layout!(e) finally s.measuring = false end
+    s.talls = px[(span = slide_span(items, slide); span === nothing ? 0px : span_tall(items, span)) for slide in s.list]
+    s.measured = key
+    s.fitted = nothing
+    empty!(s.scales)
+  end
+  room = slide_room(e)
+  if s.fitted != (s.at, room)
+    s.scale = get!(s.scales, (s.at, room)) do
+      Slides.fit(num(s.talls[s.at]), num(room)) do scale
+        zoom_to!(e, s, zoom * scale)
+        layout!(e)
+        num(s.tall)
+      end
+    end
+    s.fitted, s.fitted_at, s.seen = (s.at, room), time(), nothing
+  end
+  zoom_to!(e, s, zoom * s.scale)
+end
+
+"""
+What a key does while the page shows as slides. It's `handled`, or nothing for
+a key that the page still takes: the key of a command in `SLIDE_COMMANDS`, and
+Esc while a part of a block has the keyboard, which gives the keyboard back.
+"""
+slide_key!(e, K, w, command) = begin
+  if K == Keys.escape
+    (w.focus === e || w.focus === nothing) || return nothing
+    return end_slides!(e)
+  end
+  command == :slides && return end_slides!(e)
+  command in SLIDE_COMMANDS && return nothing
+  # A sketch that fills the window has the keys that come this far
+  full_block(e) === nothing || return handled
+  (Keys.cmd in w.keys || Keys.ctrl in w.keys || Keys.opt in w.keys) && return handled
+  s = slideshow(e)
+  back = Keys.shft in w.keys
+  K in (Keys.right, Keys.down, Keys.pagedown, Keys.enter) || (K == Keys.space && !back) ? go_slide!(e, s.at + 1) :
+  K in (Keys.left, Keys.up, Keys.pageup) || (K == Keys.space && back) ? go_slide!(e, s.at - 1) :
+  K == Keys.home ? go_slide!(e, 1) :
+  K == Keys._end ? go_slide!(e, length(s.list)) : handled
+end
+
+"""
+True when the click that's happening now is for a part of a block, and not for
+the slide. The part took the keyboard, or it shows a hand while the mouse is
+over it, as a button does.
+"""
+takes_click(e) = begin
+  took(e) && return true
+  w = window_of(e)
+  node = w === nothing ? nothing : hittest(w)
+  while node !== nothing && !(node isa Union{Document,Page,Editor})
+    cursor(node) == :hand && return true
+    node = node.parent
+  end
+  false
+end
+
+"""
+A click on a slide. On a to-do item's box, it ticks the item. On a link, it
+opens the link. On the left half of the window it goes back a slide, and on
+the right half it goes on. A click that a part of a block took does nothing more.
+"""
+slide_press!(e, pos) = begin
+  e.clicked = (time(), (0, 0), 0)   # a drag from here selects nothing
+  box = todo_at(e, pos)
+  box === nothing || return (focus(e); tick!(e, box); handled)
+  takes_click(e) && return nothing
+  focus(e)
+  url = link_on(e, pos)
+  url === nothing || return (follow!(e, url); handled)
+  s = slideshow(e)
+  go_slide!(e, pos[1] < window_size(e)[1] / 2 ? s.at - 1 : s.at + 1)
+end
+
+"The mouse over a slide is a hand on a to-do item's box and on a link, and an arrow anywhere else"
+slide_cursor(e) = begin
+  w = window_of(e)
+  w !== nothing && (todo_at(e, w.mouse) !== nothing || link_on(e, w.mouse) !== nothing) ? :hand : :arrow
+end
+
+"""
+What shows over a slide: its number and how many slides there are, at the
+bottom right of the window, and a thin bar along the bottom edge. The bar is as
+long as the part of the slides that has shown.
+"""
+slides_over(e) = begin
+  s = slideshow(e)
+  (s === nothing || isempty(s.list)) && return ()
+  n = length(s.list)
+  (Column(width(grow=grow), height(grow=grow), Alignment.End, justify=Alignment.End,
+     Box(padding(0px, 18px, 10px, 0px), label("$(s.at) / $n", 12px, color=colours.faint)),
+     Row(width(grow=grow), height(3px), Alignment.Start,
+       Box(width(percent=s.at / n), height(3px), background(tint(colours.ink, 0.16))))),)
+end
+
 # --- the caret on a part of the page as a whole ------------------------------------------------
 #
 # In rich text the caret doesn't go into a part of the page that shows as one
@@ -15372,6 +17554,10 @@ enter_part!(e) = begin
   elseif maths_line(b, run[1])
     # The caret goes to the end of the TeX, before the $$ that closes it
     b.caret = b.anchor = (run[1], length(rstrip(b.lines[run[1]])) - 2)
+    touch!(e)
+  elseif carded(b, run[1])
+    # A link card shows as it's written, with the caret at the end of its line
+    b.caret = b.anchor = line_end(b, run[1])
     touch!(e)
   end
   e
@@ -15474,7 +17660,61 @@ end
 describe(l::EntryLabel) =
   Row(width(grow=grow), height(grow=grow), padding(0px, 8px, 0px, 0px), child_gap=4px, clip=true, name="Entry",
     mark(l, l.icon),
-    Box(width(grow=grow), Alignment.Start, label(l.title, 12px, color=l.line == 0 ? colours.faint : colours.dim)))
+    Box(width(grow=grow), Alignment.Start, label(l.title, 12px, color=l.line == 0 ? colours.faint : colours.dim)),
+    # A heading or a component whose lines have changes that aren't saved has a dot, as its file has
+    (edited(l) ? (Box(width(5px), height(5px), radius(2.5px), background(colours.dim)),) : ())...)
+
+# --- the parts of a page that have changes that aren't saved ----------------------------
+#
+# A file with changes that aren't saved has a dot beside its name in the
+# sidebar. Each heading and each component of that file whose own lines
+# changed has a dot too, so the sidebar shows where the changes are. A change
+# belongs to the nearest thing above it in the sidebar: a line in a component's
+# block belongs to the component, and any other line belongs to the heading
+# that it's under. A heading whose group is closed has a dot when anything in
+# the group changed. Lines that were taken away count for the line that's now
+# where they were. The dots go when the page is saved.
+
+"""
+The first lines of the headings and the components of `b` that have changes
+which aren't saved. It's worked out once for each version of the text.
+"""
+edited_entries(e, b::Buffer) = begin
+  key = (:edited, b.path)
+  kept = get(e.nodes, key, nothing)
+  kept !== nothing && kept[1] == (b.version, b.saved) && return kept[2]::Set{Int}
+  found = Set{Int}()
+  if dirty(b)
+    entries, ks, n = outline(b), kinds(b), length(b.lines)
+    starts = [x.line for x in entries]
+    # A component's lines end where its block closes. A heading's go on to the next thing in the sidebar.
+    ends = [x.level == 7 ? something(findnext(k -> k.kind == Kind.fence, ks, x.line + 1), n) : n for x in entries]
+    for (_, new) in changes(b.disk, b.lines)
+      for i in (isempty(new) ? (clamp(first(new), 1, n):clamp(first(new), 1, n)) : new)
+        at = searchsortedlast(starts, i)
+        # Past the end of a component, the line belongs to the heading above the component
+        while at > 0 && i > ends[at]
+          at = something(findprev(k -> entries[k].level < 7, 1:at-1, at - 1), 0)
+        end
+        at > 0 && push!(found, starts[at])
+      end
+    end
+  end
+  e.nodes[key] = ((b.version, b.saved), found)
+  found
+end
+
+"True when the lines of this heading or component have changes that aren't saved. A closed group answers for all that's in it."
+edited(l::EntryLabel) = begin
+  e = editor(l)
+  b = get(e.buffers, l.path, nothing)
+  (b === nothing || l.line == 0 || !dirty(b)) && return false
+  found = edited_entries(e, b)
+  isempty(found) && return false
+  l.line in found && return true
+  item = l.parent
+  item isa Tree.ItemGroup && item.collapsed && any(inner -> inner.firstchild.line in found, items(item, hidden=true))
+end
 
 # The name that the sidebar gives each component of UI.jl, and its icon
 const COMPONENTS = Dict(
@@ -16044,7 +18284,7 @@ onkey(b::Backdrop, ::KeyPress) = (e = editor(b); e.popup = :none; focus(e))
 # --- the menu of the page ------------------------------------------------------------------
 #
 # A right-click on the page opens a menu at the mouse: cut, copy, paste, select
-# all, find, export and Insert. On a word that's spelt wrong, the menu starts
+# all, find, export, Insert and Show as Slides. On a word that's spelt wrong, the menu starts
 # with the words it may have been meant to be. Insert opens a menu of the kinds of block that a page can
 # hold. A right-click on the selection keeps it. Anywhere else, it puts the
 # caret there first.
@@ -16064,6 +18304,7 @@ const INSERTS = [
   ("Numbered List", ["1. "],                        (1, 3)),
   ("To-do",         ["- [ ] "],                     (1, 6)),
   ("Quote",         ["> "],                         (1, 2)),
+  ("Callout",       ["> [!NOTE]", "> "],            (2, 2)),
   "-",
   ("Table",         ["|  |  |  |", "|---|---|---|", "|  |  |  |", "|  |  |  |"], (1, 2)),
   ("Sheet",         ["```$SHEET", " = ", "```"],    (2, 0)),
@@ -16078,9 +18319,15 @@ const INSERTS = [
   # An agent writes a question and a set of changes, so the menu has neither
   ("Chart",         ["```$CHART", "```", "", ""],   (4, 0)),
   ("Board",         ["```$BOARD", "```", "", ""],   (4, 0)),
+  ("Calendar",      ["```$CALENDAR", "```", "", ""], (4, 0)),
   ("Find",          ["```$FIND", "```", "", ""],    (4, 0)),
   ("Sketch",        ["```$SKETCH", "```", "", ""],  (4, 0)),
+  ("Signature",     ["```$SIGNATURE", "```", "", ""], (4, 0)),
+  ("Gallery",       ["```$GALLERY", "```", "", ""], (4, 0)),
+  ("Map",           ["```$MAP", "", "```"],         (2, 0)),
   ("Emails",        ["```$EMAIL", "with: ", "```"], (2, 6)),
+  ("Time Log",      ["```$TIMELOG", "```", "", ""], (4, 0)),
+  ("Link Card",     ["![](https://)"],              (1, 12)),
   # This one records from the microphone into a new file, and the line shows the recorder. The caret goes
   # to an empty line under it, so that you can type while it records.
   ("Recording",     ["![Recording]()", "", ""],     (3, 0)),
@@ -16093,7 +18340,7 @@ const INSERTS = [
 ]
 
 const PAGE_MENU = ["Cut", "Copy", "Paste", "-", "Select All", "-", "Find…", "Export as HTML…", "-",
-                   "Insert" => [x isa String ? x : x[1] for x in INSERTS]]
+                   "Insert" => [x isa String ? x : x[1] for x in INSERTS], "-", "Show as Slides"]
 
 cut!(e) = copy_selection!(e) === false || each_selection!(() -> type!(e, ""), e)
 select_all!(e) = begin
@@ -16178,6 +18425,8 @@ page_act!(e, i::Int, j::Int=0) = begin
   elseif name == "Export as HTML…"
     w = window_of(e)
     w === nothing || export_html!(e, w)
+  elseif name == "Show as Slides"
+    show_slides!(e)
   elseif name == "Insert" && j in eachindex(INSERTS) && INSERTS[j] isa Tuple
     block = INSERTS[j][1]
     block == "Front Matter" ? add_front_matter!(e) : block == "Recording" ? add_recording!(e) : add_block!(e, INSERTS[j][2], INSERTS[j][3])
@@ -16224,12 +18473,12 @@ page_menu!(e, w) = begin
   off = Any[]
   wrong !== nothing && isempty(fixes) && push!(off, 1)
   selecting(b) || push!(off, n + 1, n + 2)
-  front_matter(b.lines) == 0 || push!(off, (n + length(PAGE_MENU), length(INSERTS)))
+  front_matter(b.lines) == 0 || push!(off, (n + findfirst(x -> x isa Pair, PAGE_MENU), length(INSERTS)))
   # Each item that would change the text is grey for a file that's only shown
-  readonly(b) && append!(off, n .+ findall(x -> (x isa Pair ? first(x) : x) in ("Cut", "Paste", "Export as HTML…", "Insert"), PAGE_MENU))
+  readonly(b) && append!(off, n .+ findall(x -> (x isa Pair ? first(x) : x) in ("Cut", "Paste", "Export as HTML…", "Insert", "Show as Slides"), PAGE_MENU))
   b.fixed && append!(off, n .+ findall(x -> (x isa Pair ? first(x) : x) in ("Cut", "Paste", "Insert"), PAGE_MENU))
   # A file of code is no page, and has no place for a table or a recording
-  b.view == :code && append!(off, n .+ findall(x -> (x isa Pair ? first(x) : x) in ("Export as HTML…", "Insert"), PAGE_MENU))
+  b.view == :code && append!(off, n .+ findall(x -> (x isa Pair ? first(x) : x) in ("Export as HTML…", "Insert", "Show as Slides"), PAGE_MENU))
   items = Any[spell..., PAGE_MENU...]
   system_menu(w, items, act; off) || drawn_menu!(w, items, act; off)
   nothing
@@ -16514,11 +18763,14 @@ picture_item(e, i) = begin
   m === nothing && return nothing
   src = unescaped(String(m[2]))
   (note = media_note(e, i, src)) === nothing || return note   # a video or a sound that's on its way from the web
+  (made = table_item(e, i)) === nothing || return made        # a CSV file shows as a table
   # A sound file shows a player, and so does a video file
   sound = sound_file(docdir(e), e.buf.lines[i])
   sound === nothing || return sound_item(e, sound)
   video = video_item(e, src)
   video === nothing || return video
+  card = card_item(e, i)   # the address of a web page shows the page's card
+  card === nothing || return card
   path = startswith(src, r"https?://") ? fetched(e, src) : abspath(docdir(e), expanduser(src))
   key = path === nothing ? nothing : picture_key(path)
   key === nothing && return nothing
@@ -16532,6 +18784,167 @@ picture_item(e, i) = begin
   node.line, node.key, node.w, node.h = i, key, w, h
   own!(node!(Document, e, :document), node)
   Live(node, h + 2LIVE_GAP)
+end
+
+# --- a link card ---------------------------------------------------------------------------
+#
+# A line that's written as a picture is, with the address of a web page, like
+# ![Julia](https://julialang.org), shows as a card: the page's title, two
+# lines of its description, its picture, and the name of its site beside the
+# site's icon. The line's own text shows again while the caret is in it. A
+# click on the card with ⌘ held opens the address in the browser. In a page
+# that's never changed, a click opens it with no key held.
+#
+# Kaydown gets the page in the background, and reads what the page says of
+# itself. See linkcard.jl. It keeps that, and the picture, in a folder of the
+# Mac's caches, so the card shows at once the next time, and with no network.
+# Until the page has come, and when it can't be had, the card shows the words
+# of its line and the address. An address that turns out to be a picture
+# shows the picture, as it did before there were cards. An email shows no
+# cards, so that Kaydown asks a web site for nothing more than it did.
+
+push!(BLOCK_ICONS, "globe")
+
+"What opens the address of a card: the browser. A test puts its own function here."
+const BROWSER = Ref{Function}(open_url)
+
+"The folder that keeps what the cards read from the web, and their pictures"
+cards_dir() = isempty(MEDIA_CACHE[]) ? joinpath(homedir(), "Library", "Caches", "Kaydown", "cards") : joinpath(MEDIA_CACHE[], "cards")
+
+"True when line `i` asks for a card: it's written as a picture is, and its address is a web page's"
+carded(b::Buffer, i::Int) =
+  kinds(b)[i].kind == Kind.paragraph && occursin("![", b.lines[i]) && !Mail.isemail(b.path) && Cards.asked(b.lines[i]) !== nothing
+
+"A card that a line of the document shows for the web page whose address it holds"
+@def mutable struct LinkCard <: SemanticUI
+  line::Int = 0
+  words::String = ""     # the words of the line, which are the title while the page gives none
+  card::Cards.Card = Cards.Card("")
+  picture::String = ""   # the key of the page's picture, for an Image, or "" while there's none
+  icon::String = ""      # and the key of the site's icon
+  size::px = TEXT_SIZE   # of the page's text
+  wide::px = 0px         # how wide the page's text is
+end
+
+# The sizes of a card's title, of its description and of the name of its site, as parts of the size of the page's text
+const CARD_TITLE, CARD_WORDS, CARD_SOURCE = 0.92, 0.8, 0.74
+const CARD_LINE = 1.36   # how tall a line of a card is, as a part of the size of its text
+const CARD_PAD = 0.65    # the room inside a card's edge, as a part of the size of the page's text
+
+"How tall a card is in a page whose text is `s` tall. Every card is as tall as the next, so the page's text doesn't move when a card fills in."
+card_tall(s) = s * (2CARD_PAD + CARD_LINE * (CARD_TITLE + 2CARD_WORDS + CARD_SOURCE) + 0.45)
+
+"`words` cut short with … so that they're no wider than `room` in `face`"
+shortened(face::Face, words::AbstractString, room) = begin
+  (room <= 0px || measure(face, words) <= room) && return String(words)
+  cs = collect(words)
+  lo, hi = 0, length(cs)
+  while lo < hi
+    mid = (lo + hi + 1) ÷ 2
+    measure(face, rstrip(String(cs[1:mid])) * "…") <= room ? (lo = mid) : (hi = mid - 1)
+  end
+  rstrip(String(cs[1:lo])) * "…"
+end
+
+"The picture with the key `key` in a box `wide` by `tall`. The picture fills the box, and the box cuts off what doesn't fit."
+covered(key, wide, tall) = begin
+  aspect = image_aspect(key)
+  w, h = aspect > wide / tall ? (tall * aspect, tall) : (wide, wide / aspect)
+  Box(fixed(wide), height(tall), radius(6px), clip=true, Image(key, fixed(w), height(h)))
+end
+
+describe(c::LinkCard) = begin
+  s, card = c.size, c.card
+  pad = s * CARD_PAD
+  inside = card_tall(s) - 2pad - 2px
+  # The picture is at the right, and takes no more than a third of the card
+  across = isempty(c.picture) ? 0px : min(inside * 1.75, c.wide * 0.3)
+  room = c.wide - 2pad - 2px - (across > 0px ? across + pad : 0px)
+  # An address that stands in for the title isn't bold
+  heading = Cards.heading(card, c.words)
+  title = Face(SANS, heading == card.url ? "" : "Semibold", s * CARD_TITLE, colours.ink, false)
+  words = Face(SANS, "", s * CARD_WORDS, colours.dim, false)
+  source = Face(SANS, "", s * CARD_SOURCE, colours.faint, false)
+  line(face, text, room) = Box(width(grow=grow), height(face.size * CARD_LINE), Alignment.Start, justify=Alignment.Center,
+                               label(shortened(face, text, room), face.size, color=face.color, weight=face.style))
+  # The description has two lines at most, and the second ends in … when there's more
+  under = Cards.blurb(card, c.words)
+  told = isempty(under) ? String[] : wrapped(words, under, num(room))
+  length(told) > 2 && (told = [told[1], join(told[2:end], " ")])
+  mark = source.size * 1.15
+  # Many sites have a dark icon with nothing behind it, which a dark page would hide. There it has a light square behind it.
+  page = convert(RGBA{Float64}, colours.bg)
+  behind = page.r + page.g + page.b < 1.5 ? (background(RGBA(1, 1, 1, 0.85)),) : ()
+  Row(width(grow=grow), height(card_tall(s)), padding(pad), child_gap=pad, radius(8px), border(1px, :solid, colours.line),
+      background(ishovered(c) && opening(c) ? colours.hover : colours.block), name="Link card",
+    Column(width(grow=grow), height(inside), Alignment.Start,
+      line(title, heading, room),
+      (line(words, text, room) for text in told)...,
+      Box(width(grow=grow), height(grow=grow)),
+      Row(width(grow=grow), height(source.size * CARD_LINE), justify=Alignment.Start, child_gap=s * 0.35,
+        isempty(c.icon) ? Icon("globe", size=mark, color=colours.faint) : Image(c.icon, fixed(mark), height(mark), radius(3px), behind...),
+        Box(label(shortened(source, Cards.source(card), room - mark - s * 0.35), source.size, color=source.color)))),
+    (across > 0px ? (covered(c.picture, across, inside),) : ())...)
+end
+
+"True when a click on the card now opens its address: ⌘ is held, or the page is one that's never changed"
+opening(c::LinkCard) = held(c, Keys.cmd) || (editor(c).buf.fixed && !held(c, Keys.shft))
+
+cursor(c::LinkCard) = opening(c) ? :hand : :ibeam
+# A click with ⌘ held opens the address. Any other click puts the caret on the card's line, so the line shows as it's written.
+onkey(c::LinkCard, ::KeyPress{Keys.mouse_left}) = opening(c) ? (BROWSER[](c.card.url); handled) : edit_matter!(c, c.line)
+
+"""
+True when Kaydown can ask the web for what a card shows: the page's window is
+on the screen. A window that a test makes isn't, so a test asks the web for
+nothing, unless it put its own function in place of `curl`.
+"""
+online(e) = Cards.getter[] !== Cards.curl || (w = window_of(e); w !== nothing && !isempty(w.glfw))
+
+"The key, for an Image, of the picture at the web address `url`, or \"\" while Kaydown has none. It asks for the next frame while the picture is on its way."
+card_picture(e, url) = begin
+  file, coming = Cards.picture!(url, cards_dir(), ask=online(e))
+  coming && redraw_in!(e, 0.2)   # look again soon
+  file === nothing ? "" : something(picture_key(file), "")
+end
+
+"True when Kaydown has the picture at the web address `src` on the Mac, from a time when a line showed it"
+has_picture(src) = begin
+  file = get(fetches, src, :none)
+  file === :none && (file = joinpath(pictures_dir(), string(hash(src), base=16)))
+  file isa String && picture_key(file) !== nothing
+end
+
+"""
+What line `i` shows when it asks for a card: the card of the page at its
+address. It's nothing for any other line, and for an address that is a picture
+or turns out to be one, which the line shows as a picture.
+"""
+card_item(e, i) = begin
+  b = e.buf
+  Mail.isemail(b.path) && return nothing
+  found = Cards.asked(b.lines[i])
+  found === nothing && return nothing
+  words, url = found
+  has_picture(unescaped(url)) && return nothing
+  card, coming = Cards.lookup!(url, cards_dir(), ask=online(e))
+  Cards.pictured(card) && return nothing
+  coming && redraw_in!(e, 0.2)   # look again soon
+  node = node!(LinkCard, e, (:card, i))
+  # A picture that the card has already isn't looked for again on each frame
+  same = node.card == card
+  node.line, node.words, node.card, node.size, node.wide = i, words, card, body(e).size, e.width
+  same && !isempty(node.picture) || (node.picture = card_picture(e, card.image))
+  same && !isempty(node.icon) || (node.icon = card_picture(e, card.icon))
+  own!(node!(Document, e, :document), node)
+  Live(node, card_tall(node.size) + 2LIVE_GAP)
+end
+
+"The card of the page at the address `url` as HTML, with the `words` of its line. It's nothing in a page that shows no cards, and for an address that Kaydown shows as a picture."
+card_html(e, words, url) = begin
+  (Mail.isemail(e.buf.path) || has_picture(unescaped(url))) && return nothing
+  card = first(Cards.lookup!(url, cards_dir(), ask=online(e)))
+  Cards.pictured(card) ? nothing : Cards.markup(card, words)
 end
 
 # --- video and sound from the web --------------------------------------------------------
@@ -16649,6 +19062,278 @@ end
 cursor(::MediaNote) = :ibeam
 # A click on the note puts the caret on its line, so the line shows as it's written
 onkey(n::MediaNote, ::KeyPress{Keys.mouse_left}) = edit_matter!(n, n.line)
+
+# --- a table from a CSV file -------------------------------------------------------------
+#
+# A line that holds only a CSV file, written as a picture is, like
+# ![Prices](prices.csv), shows the file as a table. A .tsv file shows the same
+# way. The first row of the file has the names of the columns, and a column of
+# numbers has its text on the right. The table looks like a table of the page,
+# but you can't type in it: the numbers are the file's. A small line over the
+# table has the words of the link and the file's name.
+#
+# A long file shows its first `TABLE_ROWS` rows. A line under them says how
+# many more there are, and a click on it shows them all. A click on the table
+# puts the caret on its line, so the line shows as it's written.
+#
+# Kaydown reads the file once, and again when the file changes on the disk. A
+# file that isn't there, or that isn't a table, shows a line that says so. A
+# `chart` block draws the numbers of a line like this as it draws a table's.
+# csv.jl reads the file.
+
+const TABLE_ROWS = 30   # the rows under the names that a long file shows until you ask for the rest
+push!(BLOCK_ICONS, "exclamation-circle")
+
+"True when the file at `path` is one that holds a table: a CSV file or a TSV file"
+istable(path) = lowercase(splitext(path)[2]) in TABLES
+
+# What's known of each CSV file that a page shows: when the file last changed, how big it was then, and its table
+const table_files = Dict{String,Tuple{Float64,Int,Csvs.Table}}()
+# How many times a CSV file has been read. What's worked out from a file's table is worked out again when this changes.
+const table_reads = Ref(0)
+
+"The table in the CSV file at `path`. The file is read once, and again when it changes on the disk."
+file_table(path) = begin
+  s = stat(path)
+  at, size = Float64(s.mtime), Int(s.size)
+  kept = get(table_files, path, nothing)
+  kept !== nothing && kept[1] == at && kept[2] == size && return kept[3]
+  table_reads[] += 1
+  (table_files[path] = (at, size, Csvs.load(path)))[3]
+end
+
+"The CSV file that the line `text` holds, if it holds only that, and the words of its link. It's nothing for any other line. `dir` is the document's folder."
+table_file(dir, text) = begin
+  occursin("![", text) || return nothing
+  m = match(PICTURE_LINE, text)
+  m === nothing && return nothing
+  src = unescaped(String(m[2]))
+  (startswith(src, r"https?://") || !istable(src)) && return nothing
+  (abspath(dir, expanduser(src)), String(m[1]))
+end
+
+"A line of the document that holds only a CSV file, shown as a table"
+@def mutable struct TableLine <: SemanticUI
+  line::Int = 0
+  path::String = ""
+  words::String = ""                       # of the link
+  whole::Bool = false                      # every row shows, and not only the first `TABLE_ROWS`
+  laid::Any = nothing                      # the table laid out: a FileGrid
+  size::px = 13px                          # of the small text over and under the table
+  parts::Dict{Any,Any} = Dict{Any,Any}()   # the line under the table, kept between frames
+end
+
+"The line under a file's table that says how many rows don't show. A click shows them, or hides them again."
+@def mutable struct TableMore <: SemanticUI
+  of::Any = nothing
+end
+
+"The table of a CSV file laid out for the page, as a table of the page is"
+struct FileGrid
+  table::Csvs.Table
+  rows::Int                       # how many rows show, with the row of names
+  widths::Vector{px}
+  heights::Vector{px}
+  tops::Vector{px}                # how far the top of each row is under the top of the table
+  flows::Dict{Int,Vector{Flow}}   # the text of each row that has been laid out: a Flow for each column
+  base::Face                      # of a cell's text
+  head::Face                      # and of a name of a column
+  lh::px
+end
+
+tall(g::FileGrid) = isempty(g.heights) ? 0px : g.tops[end] + g.heights[end] + 1px
+
+"The text of a cell as the table shows it. A line break in a cell is a space."
+celltext(cell) = occursin('\n', cell) ? replace(cell, r"\s*\n\s*" => " ") : cell
+
+"""
+Lay out the table `t` of the file at `path` for the page of `e`, as `grid` lays
+out a table of the page: the same font, the same room in a cell, and columns
+that share the page's width. With `whole`, every row shows. When the columns
+don't all fit, text wraps before a number is cut short, as in a spreadsheet.
+Only the rows that the window shows are laid out as text.
+"""
+file_grid(e, path, t::Csvs.Table, whole::Bool) = get!(e.flows, (:file_grid, path, whole, table_reads[])) do
+  base = Face(body(e), size=body(e).size * 0.94)
+  head = emboldened(base)
+  lh = base.size * 1.5
+  n = whole ? length(t.rows) : min(length(t.rows), TABLE_ROWS + 1)
+  ncols = length(t.numbers)
+  face(r) = r == 1 ? head : base
+  wide(r, c) = measure(face(r), celltext(t.rows[r][c]))
+  natural = [clamp(maximum(r -> wide(r, c), 1:n) + 2CELL_X, 60px, e.width * 0.75) for c in 1:ncols]
+  space = e.width - 1px * (ncols + 1)
+  widths = if sum(natural) <= space
+    natural .* (num(space) / num(sum(natural)))
+  else
+    # Each column keeps the room that its longest word or number needs, and the columns share what's left
+    word(r, c) = maximum(w -> measure(face(r), w), split(t.rows[r][c]), init=0px)
+    least = [min(natural[c], max(maximum(r -> word(r, c), 1:n) + 2CELL_X, 36px)) for c in 1:ncols]
+    sum(least) >= space ? least .* (num(space) / num(sum(least))) :
+                          least .+ (natural .- least) .* (num(space - sum(least)) / num(sum(natural .- least)))
+  end
+  g = FileGrid(t, n, widths, px[], px[], Dict{Int,Vector{Flow}}(), base, head, lh)
+  top = 1px
+  for r in 1:n
+    # A row whose cells each fit on one line is as tall as that line. Any other row is laid out now, to learn how tall it is.
+    fits = all(c -> wide(r, c) + 2px <= widths[c] - 2CELL_X, 1:ncols)
+    h = (fits ? lh : maximum(tall, row_flows(g, r))) + 2CELL_Y
+    push!(g.heights, h)
+    push!(g.tops, top)
+    top += h + 1px
+  end
+  g
+end
+
+"The text of row `r` of `g` laid out: a Flow for each column. A column of numbers has its text on the right."
+row_flows(g::FileGrid, r::Int) = get!(g.flows, r) do
+  face = r == 1 ? g.head : g.base
+  [align(wrap(symbols!(Piece[], celltext(g.table.rows[r][c]), 0, face), w - CELL_X; lh=g.lh, size=g.base.size, left=CELL_X),
+         w - 2CELL_X, g.table.numbers[c] ? :right : :left) for (c, w) in enumerate(g.widths)]
+end
+
+"How tall the line over a file's table is, and the line under it"
+caption_high(t::TableLine) = t.size * 2.1
+
+"What the line under the table of `t` says, and what it says after that in fainter words. Both are \"\" when every row shows and there's nothing to say."
+more_words(t::TableLine) = begin
+  g = t.laid::FileGrid
+  rest = length(g.table.rows) - g.rows
+  cut = g.table.more ? "The file has more rows than Kaydown reads." : ""
+  rest > 0 && return ("and $(g.table.more ? "more than " : "")$(Charts.commas(string(rest))) more row$(rest == 1 ? "" : "s")", "")
+  t.whole && g.rows > TABLE_ROWS + 1 ? ("Show the first $TABLE_ROWS rows only", cut) : ("", cut)
+end
+
+"True when the table of `t` has a line under it"
+has_more(t::TableLine) = any(!isempty, more_words(t))
+
+tall(t::TableLine) = caption_high(t) + tall(t.laid) + (has_more(t) ? caption_high(t) : 0px)
+
+"What line `i` shows when it holds only a CSV file: the file as a table, or a line that says why it has no table. It's nothing for any other line."
+table_item(e, i) = begin
+  b = e.buf
+  found = table_file(docdir(e), b.lines[i])
+  found === nothing && return nothing
+  path, words = found
+  t = file_table(path)
+  size = body(e).size * 0.76
+  if !isempty(t.problem)
+    node = node!(MediaNote, e, (:media_note, i))
+    node.line, node.failed, node.size, node.words = i, true, size, t.problem
+    own!(node!(Document, e, :document), node)
+    # Lay it out once to learn how tall it is
+    concrete = describe(Column(fixed(e.width), Alignment.Start, geometry(node)), (e.width, 9999px))
+    return Live(node, concrete.height + 2LIVE_GAP)
+  end
+  # Each line has a table of its own, by its place among the lines that hold the file, so two lines can show one file
+  n = count(j -> (other = table_file(docdir(e), b.lines[j]); other !== nothing && other[1] == path), 1:i)
+  node = node!(TableLine, e, (:file_table, b.path, path, n))
+  node.line, node.path, node.words, node.size = i, path, words, size
+  node.laid = file_grid(e, path, t, node.whole)
+  own!(node!(Document, e, :document), node)
+  Live(node, tall(node) + 2LIVE_GAP)
+end
+
+"""
+The first and the last row of the table of `t` that the window shows, with a
+few each side. Only those are built, so a long file costs no more than a short
+one. On paper, every row is built.
+"""
+rows_shown(e, t::TableLine, g::FileGrid) = begin
+  k = e.buf.caret[1] < 1 ? nothing : findfirst(it -> it.first == t.line, e.layout)
+  k === nothing && return (1, g.rows)
+  _, h = window_size(e)
+  top = e.layout[k].top + LIVE_GAP + caption_high(t)   # of the table, from the top of the page's text
+  from, to = e.scroll.offset - PAGE_TOP - 200px - top, e.scroll.offset + h + 200px - top
+  lo = something(findfirst(r -> g.tops[r] + g.heights[r] >= from, 1:g.rows), g.rows)
+  (lo, max(lo, something(findlast(r -> g.tops[r] <= to, 1:g.rows), 1)))
+end
+
+describe(t::TableLine) = begin
+  e = editor(t)
+  g, s = t.laid::FileGrid, t.size
+  line = border(1px, :solid, colours.line; between=true)
+  lo, hi = rows_shown(e, t, g)
+  # The room of the rows from `a` to `b`, which aren't built
+  room(a, b) = spacer(g.tops[b] + g.heights[b] - g.tops[a])
+  row(r) = Row(width(grow=grow), height(g.heights[r]), Alignment.Start, line[:between],
+               background(r == 1 ? colours.head : iseven(r) ? colours.bg : colours.stripe),
+             [Column(fixed(w), height(grow=grow), Alignment.Start, justify=Alignment.Center, rows(row_flows(g, r)[c])...)
+              for (c, w) in enumerate(g.widths)]...)
+  table = Column(width(grow=grow), Alignment.Start, line, name="Table",
+    (lo > 1 ? (room(1, lo - 1),) : ())..., [row(r) for r in lo:hi]..., (hi < g.rows ? (room(hi + 1, g.rows),) : ())...)
+  # The words of the link, and the name of the file that the numbers come from
+  caption = Row(width(grow=grow), height(caption_high(t)), Alignment.Center, child_gap=s * 0.5, clip=true,
+    Icon("file-earmark-spreadsheet", size=s * 1.1, color=colours.dim),
+    (isempty(t.words) ? () : (Box(label(t.words, s, color=colours.dim, weight="Semibold")),))...,
+    Box(label(basename(t.path), s, color=colours.dim)))
+  Column(width(grow=grow), Alignment.Start, name="File table", caption, table,
+    (has_more(t) ? (block_part!(() -> TableMore(of=t), t, :more),) : ())...)
+end
+
+cursor(::TableLine) = :ibeam
+# A click on the table puts the caret on its line, so the line shows as it's written
+onkey(t::TableLine, ::KeyPress{Keys.mouse_left}) = edit_matter!(t, t.line)
+
+describe(m::TableMore) = begin
+  t = m.of
+  words, after = more_words(t)
+  Row(width(grow=grow), height(caption_high(t)), Alignment.Center, child_gap=t.size * 0.8, clip=true,
+    (isempty(words) ? () : (Box(label(words, t.size, color=ishovered(m) ? colours.accent : colours.dim)),))...,
+    (isempty(after) ? () : (Box(label(after, t.size, color=colours.faint)),))...)
+end
+
+cursor(m::TableMore) = isempty(more_words(m.of)[1]) ? :ibeam : :hand
+
+# A click on the line under the table shows every row, or only the first ones again
+onkey(m::TableMore, ::KeyPress{Keys.mouse_left}) = begin
+  t = m.of
+  isempty(more_words(t)[1]) && return edit_matter!(t, t.line)
+  e = editor(t)
+  before = tall(t)
+  t.whole = !t.whole
+  t.laid = file_grid(e, t.path, t.laid.table, t.whole)
+  # When rows go, the line stays under the mouse
+  t.whole || (e.scroll.offset = max(0px, e.scroll.offset - (before - tall(t))))
+  handled
+end
+
+"The rows of the table that line `i` shows when it holds only a CSV file, for a chart to draw. It's nothing for any other line, and for a file with no table."
+table_rows(e, i) = begin
+  found = table_file(docdir(e), e.buf.lines[i])
+  found === nothing && return nothing
+  t = file_table(found[1])
+  isempty(t.problem) ? t.rows : nothing
+end
+
+"The CSV file that the `from` of a chart names, or nothing when it names a heading"
+chart_path(e, c::Charts.Chart) = istable(c.from) ? abspath(docdir(e), expanduser(c.from)) : nothing
+
+"What the chart `c` draws when its `from` names a CSV file: the file's numbers, or why it has none. It's nothing when `from` names a heading."
+chart_file(e, c::Charts.Chart) = begin
+  path = chart_path(e, c)
+  path === nothing && return nothing
+  t = file_table(path)
+  isempty(t.problem) ? Charts.data(c, t.rows, headed=true) : Charts.nothing_to_draw(t.problem)
+end
+
+# A chart whose `from` names a CSV file looks at the file in each frame, so it draws the new numbers when the file changes
+block_tick!(v::ChartView) = (path = chart_path(editor(v), v.spec); path === nothing || file_table(path); v)
+
+"The line `text` as HTML when it holds only a CSV file: the file's table, or the words that say why it has none. It's nothing for any other line."
+table_html(e, text) = begin
+  found = table_file(docdir(e), text)
+  found === nothing && return nothing
+  path, words = found
+  t = file_table(path)
+  isempty(t.problem) || return "<p><em>$(escape(t.problem))</em></p>"
+  side(c) = t.numbers[c] ? " style=\"text-align: right\"" : ""
+  row(tag, cells) = "<tr>" * join("<$tag$(side(c))>$(replace(escape(cell), "\n" => "<br>"))</$tag>" for (c, cell) in enumerate(cells)) * "</tr>"
+  name = escape(basename(path))
+  "<table>\n<caption>$(isempty(words) ? name : "$(escape(words)) ($name)")</caption>\n<thead>" * row("th", t.rows[1]) * "</thead>\n<tbody>\n" *
+    join((row("td", cells) for cells in t.rows[2:end]), "\n") * "\n</tbody>\n</table>" *
+    (t.more ? "\n<p><em>The file has more rows than these.</em></p>" : "")
+end
 
 # --- video in the text -------------------------------------------------------------------
 #
@@ -17254,7 +19939,8 @@ misspellings(e, i) = begin
   b = e.buf
   text, line = b.lines[i], kinds(b)[i]
   # A page that's never changed is somebody's words as they wrote them, so its spelling isn't marked
-  (e.spelling && !b.fixed && line.kind in CHECKED) || return Tuple{Int,Int}[]
+  # ... and a slide is for someone to read, so nor is its spelling
+  (e.spelling && !b.fixed && slideshow(e) === nothing && line.kind in CHECKED) || return Tuple{Int,Int}[]
   get!(e.flows, (:spelling, text, line.prefix)) do
     out = Tuple{Int,Int}[]
     occursin(PICTURE_LINE, text) && return out
@@ -17510,7 +20196,9 @@ page_html(e) = begin
                              lang == SCHEDULE ? schedule_html(e, s, t) :
                              haskey(BLOCKS, lang) ? block_html(e, lang, s, t) :
                              lang == DIAGRAM ? diagram_html(e, s, t) : nothing,
-       value=code -> (made = get(e.nodes, (:inline, b.path, code, 1), nothing); made isa Tuple && !made[2] ? made[1] : nothing))
+       card=(words, url) -> card_html(e, words, url),
+       value=code -> (made = get(e.nodes, (:inline, b.path, code, 1), nothing); made isa Tuple && !made[2] ? made[1] : nothing),
+       file=text -> table_html(e, text))
 end
 
 "Ask where to save a file, with `name` to start with, in the document's folder. It gives the path, or nothing if you cancel."
@@ -17576,6 +20264,7 @@ end
 
 "Draw a bar in the margin beside each item on screen that shows a line that just changed. The text starts at `left`, and its first line is at `top`."
 draw_fresh(ctx, e, left, top) = begin
+  slideshow(e) === nothing || return   # a slide shows the new text, and no bar beside it
   # The button in the top bar keeps the bars of all the agent's changes on the page. They don't fade.
   kept = marking(e) ? theirs(e) : UnitRange{Int}[]
   runs = isempty(kept) ? fresh(e) : kept
@@ -20894,6 +23583,7 @@ describe(e::Editor) = begin
   update_tick!(e)
   mail_tick!(e)
   zoom_tick!(e)
+  slide_tick!(e)
   layout!(e)
   # A page whose long lines don't wrap scrolls sideways as far as its longest line goes, and no further when the window grows
   if !wraps(e)
@@ -20924,7 +23614,7 @@ describe(e::Editor) = begin
       node!(Page, e, :page)))
   popup = e.popup == :none ? () : (node!(Backdrop, e, :backdrop), finder(e))
   Stack(width(grow=grow), height(grow=grow), Alignment.Start, name="Editor",
-    body, panel_edge(e)..., tablebar(e)..., outcome_over(e)..., callbox(e)..., suggestbox(e)..., findbar(e)..., sound_over(e)..., fill_over(e)..., task_over(e)..., takeoff_over(e)..., zoom_over(e)..., node!(TopBar, e, :topbar), popup...)
+    body, panel_edge(e)..., tablebar(e)..., outcome_over(e)..., callbox(e)..., suggestbox(e)..., findbar(e)..., sound_over(e)..., fill_over(e)..., task_over(e)..., slides_over(e)..., takeoff_over(e)..., zoom_over(e)..., node!(TopBar, e, :topbar), popup...)
 end
 
 # --- windows ------------------------------------------------------------------------------
@@ -21076,6 +23766,7 @@ Give the other windows the settings of `e`, and write them to their file if
 this editor keeps them. An editor that's made for a test doesn't.
 """
 save_settings!(e) = begin
+  usual_zoom!(e)   # the bigger text of a slide is no setting
   share_settings!(e)
   e.remember || return
   try

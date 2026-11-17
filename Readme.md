@@ -9,14 +9,19 @@ A code block does more than show code. What it does depends on its language:
 - In any code, a bracket or a quote that you type comes with the one that closes it, and the caret stays between the two. With text selected, the pair goes round the text. The two brackets that the caret is between glow.
 - `sheet` works things out, a row at a time.
 - `spreadsheet` is a grid of cells with formulas.
-- `mermaid` shows a diagram, like a flowchart.
+- `mermaid` shows a diagram, like a flowchart, a mind map or a Gantt chart.
 - `takeoff` shows a building plan that you measure from, and makes a quote from what you measure.
 - `schedule` shows the page's to-do items as bars on a line of days, and you drag the bars to plan the work.
 - `chart` draws the numbers of a table as bars, as lines or as a pie.
 - `board` shows the page's to-do items as cards in columns, and you drag a card to move it.
+- `calendar` shows a month, with the page's tasks, its to-do items that have a day, and events of its own.
 - `sketch` is a drawing: lines by hand, arrows, boxes, ovals and words.
+- `signature` is a place to sign: a person draws their signature in a box, and the page says who signed and when.
+- `gallery` shows the pictures of a folder as a grid of small squares, and a click makes one fill the window.
+- `map` shows the map of a place, with a pin on the place.
 - `find` lists the to-do items that aren't ticked in every page of a folder. With words in it, it lists the lines that have those words. It can list another kind of line, or a kind of block, like every takeoff.
 - `email` lists the emails with a person.
+- `timelog` keeps the hours that you work on each task, with a button that starts and stops the clock.
 - `ask` is a question from an agent, with answers to click.
 - `changes` shows a diff from an agent, with a button on each change that accepts or rejects it.
 
@@ -24,11 +29,15 @@ A file can define a kind of block too. [Make a kind of block of your own](#make-
 
 A page shows more than text:
 
+- A quote whose first line is `> [!NOTE]` shows as a callout: a note that stands out, with an icon and a colour of its own. The other kinds are `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]` and `[!CAUTION]`. GitHub reads the same lines the same way. Words after the `]` are the callout's title.
 - A formula that's written in TeX between dollar signs shows as maths: `$x^2$` in a line of text, and on lines of its own between a line of `$$` and another.
+- A line that holds only a CSV file shows the file as a table. [Show a CSV file as a table](#show-a-csv-file-as-a-table) says more.
+- A line that's written as a picture is, with the address of a web page, shows a card: the page's title, its description and its picture.
 - A line that holds only a picture, a video or a sound file shows it, or a player for it. The page's Insert menu records a sound from the microphone, and a button under the player writes down what's said in it, on the Mac.
 - A button beside a diagram, a picture or a page of a PDF file makes it fill the window, where you zoom it with a pinch.
 - A diagram that fills the window can be changed there. Click a box or a line to select it, click it twice to type its words, drag the point on a box's edge onto another box to draw a line, and use the buttons under it to add a box, draw a line, change a shape or take a part away. Each change is written in the code of the block.
 - A Julia file opens as one block of code, which you change and run as you do a `julia` block. There, the box of a value that's a part of a window lists the value's fields and its children.
+- ⌃⌘⇧P shows the page as slides, one at a time, for when you show a plan to someone. [Show a page as slides](#show-a-page-as-slides) says how.
 
 "Kaydown" is a working name, after Alan Kay.
 
@@ -65,7 +74,7 @@ The `pages` folder has the pages that come with Kaydown:
 
 An agent like Claude Code can show you a page in Kaydown and read what you change in it. The agent writes a Markdown file, opens it in Kaydown and waits. You read the page, tick a box or type a note, and click the bell at the top right, or press ⌘Return. That button is called "Nudge Claude". The agent gets the lines that you changed. The agent can change the page while you read it, and Kaydown keeps what you're typing.
 
-Two kinds of block are for an agent to write. A code block in the language `ask` is a question: its first lines are the question, a line that starts with `( )` is an answer that you choose one of, and a line that starts with `[ ]` is an answer that you choose any number of. You click an answer, or type in the field under them, and Kaydown writes that into the block. A code block in the language `changes` holds a diff, and shows each change with an Accept and a Reject button. Kaydown writes `[accepted]` or `[rejected]` at the end of the change's `@@` line, and changes no other file. The lines of a change have the colours of code in the language of their file, which Kaydown knows from the end of the file's name. Where a line that comes is another version of a line that goes, a darker mark shows the words that are different. A line that's too long goes on under itself. Two buttons at the top of the block choose how the lines show: the new lines under the old lines, or the old lines at the left and the new lines at the right. That choice is a setting, so every block of changes in every window shows the same way. A block that's less than 600 px wide always shows the new lines under the old. A click on a line of a change opens a field under it, for what you say to the agent about that line. Kaydown writes your words at the end of the block as you type them, in two lines that start with `#`: the first says which change and which of its lines you mean, and the second has your words. `git apply` reads past those lines. Return closes the field, and Esc puts back what the comment said before. A comment shows under its line. A click on it opens it again, and the bin beside the field takes it away. Either way, the agent reads your answer in the lines that you changed. While an agent waits, a question has a Send button. `ask.jl` and `changes.jl` say how the blocks are written.
+Two kinds of block are for an agent to write. A code block in the language `ask` is a question: its first lines are the question, a line that starts with `( )` is an answer that you choose one of, and a line that starts with `[ ]` is an answer that you choose any number of. You click an answer, or type in the field under them, and Kaydown writes that into the block. A code block in the language `changes` holds a diff, and shows each change with an Accept and a Reject button. Kaydown writes `[accepted]` or `[rejected]` at the end of the change's `@@` line, and changes no other file. The lines of a change have the colours of code in the language of their file, which Kaydown knows from the end of the file's name. Where a line that comes is another version of a line that goes, a darker mark shows the words that are different. A line that's too long goes on under itself. Two buttons at the top of the block choose how the lines show: the new lines under the old lines, or the old lines at the left and the new lines at the right. That choice is a setting, so every block of changes in every window shows the same way. A block that's less than 600 px wide always shows the new lines under the old. A click on a line of a change opens a field under it, for what you say to the agent about that line. Kaydown writes your words at the end of the block as you type them, in two lines that start with `#`: the first says which change and which of its lines you mean, and the second has your words. `git apply` reads past those lines. Return closes the field, and Esc puts back what the comment said before. A comment shows under its line. A click on it opens it again, and the bin beside the field takes it away. Either way, the agent reads your answer in the lines that you changed. The bell in the top bar sends them, and so does ⌘Return. `ask.jl` and `changes.jl` say how the blocks are written.
 
 The `plugin` folder is a plugin for Claude Code. It has a skill that tells Claude when and how to show a page, and a command, `kaydown`, that the skill runs. To install it, type these in Claude Code:
 
@@ -82,6 +91,22 @@ kaydown wait plan.md    # waits until you press Nudge Claude, then prints the li
 ```
 
 The top of `agent.jl` says how the command and Kaydown talk to each other.
+
+## Draw a diagram
+
+A code block in the language `mermaid` shows the diagram that its lines describe, in the language of [Mermaid](https://mermaid.js.org). The first line says which kind it is. Kaydown draws nine kinds:
+
+- `flowchart` (or `graph`): boxes with arrows between them.
+- `sequenceDiagram`: the messages that people or programs send each other, in order.
+- `stateDiagram-v2`: the states of a thing, and what takes it from one to the next.
+- `classDiagram`: the classes of a program, and how they're related.
+- `pie`: a circle cut into slices.
+- `mindmap`: one idea in the middle, with the ideas that belong to it on its left and its right. A line that starts further in belongs to the line above it. An idea can have a shape: `[a box]`, `(a round box)`, `((a circle))`.
+- `erDiagram`: the tables of a database as boxes, each with rows like `string name PK "a comment"`, and lines between them. The signs at the ends of a line say how many there are, in the crow's-foot way: `||--o{` is from exactly one to none or more.
+- `gantt`: tasks as bars on a line of days, in sections. A task is `Name :done, id, 2024-03-04, 3d`. It can start `after` another task's id, and `excludes weekends` leaves Saturday and Sunday out.
+- `timeline`: periods from left to right, each with its events under it: `2024 : An event : Another one`.
+
+A diagram has the page's colours and font, and it's drawn smaller when the page is narrower than it. A kind that Kaydown can't draw, and code with a line that it can't read, shows as code. The page of HTML that ⌘⇧E saves has each diagram as a picture. A diagram of the first five kinds can be changed while it fills the window. The last four are changed in their code. `pages/welcome.md` has an example of each of the last four, and the file of each kind in UI.jl's `Interface/Semantic/Mermaid` folder says what its code can have.
 
 ## Measure from a plan
 
@@ -123,13 +148,175 @@ A line in the block can say more:
 
 A chart can hold its own rows too, with a `|` between the cells. `chart.jl` says how the block is written.
 
+## Show a CSV file as a table
+
+A line that holds only a link to a CSV file, written as a picture is, shows the file as a table:
+
+```
+![Prices](prices.csv)
+```
+
+- The path starts at the page's folder. A `.tsv` file works the same way.
+- The first row of the file has the names of the columns. A column of numbers has its text on the right.
+- The table looks like a table of the page, but you can't type in it. The numbers are the file's.
+- A small line over the table has the words of the link and the file's name.
+- A long file shows its first 30 rows. A line under them says how many more there are. Click it to see them all.
+- When the file changes on the disk, the table shows the new numbers.
+- A file that isn't there, or that isn't a table, shows a line that says so.
+- Click the table to see its line as it's written. The caret goes onto the table as a whole, as it does onto a picture.
+- A `chart` block draws the table that's nearest above it, and a line like this counts as a table.
+- `from: prices.csv` in a chart draws the file's numbers from anywhere in the page.
+- ⌘⇧E writes the file's rows into the page of HTML, as a table.
+- A CSV file that you drop on the page goes in as a line like this.
+
+Kaydown reads a comma, a tab or a semicolon as the mark between two cells. A cell in quotes can hold the mark, a quote written twice, and a line break. Kaydown reads the first 5,000 rows and the first 40 columns of a file. `csv.jl` reads the file, and `pages/welcome.md` has a table to try.
+
 ## Move the tasks of a page across a board
 
 A code block in the language `board` shows every to-do item of its page as a card, in the columns To do, Doing and Done. Drag a card to another column. The last column holds the items that are ticked: a card that you drop there ticks its item in the page, and a card that you drag out of it takes the tick away. Click a card twice to go to its item. The line `columns: Later, This week, Done` in the block names other columns. The block's lines hold the column of each card, and `board.jl` says how they're written.
 
+## See the days of a page on a month
+
+A code block in the language `calendar` shows one month as a grid of days, from Monday to Sunday. Each day shows the things of the page that are on it:
+
+- Each task of the page's `schedule`, on every working day that the task runs.
+- Each to-do item that has a day in its text, like `- [ ] Order the tiles 2026-11-25`. An item that's ticked is fainter and has a tick. Such an item shows on that day only, and not on the days that the schedule gives it.
+- Each event of the calendar's own. An event is a line of the block: a day, a `|`, and the event's words.
+
+````
+```calendar
+month: 2026-11
+
+2026-11-25 | Concrete pour
+2026-11-27 | Council inspection
+```
+````
+
+The arrows at the top go to the month before and the month after. Kaydown writes the month that shows into the block, as `month: 2026-11`, so the file keeps it. **Today** takes that line away, and a block without it shows the month of today. Today's number is in a circle, and Saturday and Sunday are a little fainter.
+
+- Click a thing to select it. Click it twice to go to its line of the page.
+- Click the box of a to-do item to tick the item in the page.
+- Drag a to-do item or an event to another day. Kaydown writes the new day into the item's text or the event's line. A task doesn't move here: the schedule says when it's done.
+- Click an empty part of a day twice to add an event there. Type its words and press Return. Esc leaves the event out.
+
+A day has room for three things. A day with more shows two of them and how many more there are. Click those words, and the week grows to show them all. `calendar.jl` says how the block is written.
+
+## Keep the hours of a job
+
+A code block in the language `timelog` keeps the hours that you work on each task. Each line of the block is one stretch of work: the day, the time it started, a `-`, the time it stopped, a `|`, and the task. A line with no stop time is the one that runs now.
+
+````
+```timelog
+rate: 85
+
+2026-11-17 07:30-12:00 | Framing
+2026-11-17 12:30-15:45 | Framing
+2026-11-18 08:10- | Roofing
+```
+````
+
+The block shows a row for each stretch, with its day, its times, its hours and its task. A day shows once, on the first of its rows. Under the rows are the total, and the hours of each task when the log has more than one.
+
+- Type a task in the field at the top, and click Start. Kaydown adds a line for now, with no stop time. An empty field starts the task of the last line.
+- While a line runs, its row counts up, and the button is lit and reads Stop. Click it, and Kaydown writes the time now into the line.
+- Only one line runs at a time. To change to another task, type it and click Start, or press Return. Kaydown stops the line that runs, and starts the new one.
+- The field lists the tasks that the log already has, and fewer of them as you type. Click one, or pick one with ↓ and press Return, to put it in the field.
+- Click a time or a task in a row to change it where it is. Return writes it into the line, and Esc leaves it as it was.
+
+Two lines at the top of the block can say more:
+
+- `rate: 85` is the dollars for each hour. The total and each task then show money too, like $1,105.00.
+- `round: 15` rounds each stretch to the nearest 15 minutes when the hours are added up. The lines keep the true times.
+
+Times are written with 24 hours, like `07:30`. Kaydown also reads `7:30am` and `3:45pm`, and writes them with 24 hours. A stop time that's earlier than the start time is on the next day, so `22:00-01:30` is 3 h 30 min. A line that Kaydown can't read shows in grey, as it's written, and counts for nothing. A `chart` block under a log draws the hours of each task. `timelog.jl` says how the block is written.
+
+## Show a web page as a card
+
+Write a web page as you write a picture, on a line of its own, and the line shows as a card: the page's title, two lines of its description, its picture, and the name of its site beside the site's icon.
+
+```
+![Julia](https://julialang.org)
+```
+
+The address starts with `https://` or `http://`. The words in the square brackets are the card's title until Kaydown has read the page's own title, and they stay the title when the page has none. Hold ⌘ and click the card to open the page in your browser. Click the card with no key held, and the line shows as it's written, so that you can change it.
+
+Only a line of that form is a card. A web address by itself stays text, and a link with words, like `[Julia](https://julialang.org)`, stays a link. A line with the address of a picture, a video or a sound file shows that file, as it always did. So does a line whose address has no such ending and turns out to be a picture. A video on YouTube is no card.
+
+Kaydown gets the page once, in the background. It reads only the start of the page, and only what the page says of itself: its `og:title`, `og:description`, `og:image` and `og:site_name`, or its title and its description where those are missing. It keeps those texts and the picture in `~/Library/Caches/Kaydown/cards`, so the card shows at once the next time, and with no network. Until the page comes, and when Kaydown can't get it, the card shows the words of its line and the address. An email shows no cards. `linkcard.jl` says how a page is read.
+
 ## Draw a sketch
 
 A code block in the language `sketch` is a drawing. In the page it shows only the drawing. Click it, pinch outwards on it, or click the button that shows beside its top right corner, and it fills the window with its tools at the top. The buttons at its top are the tools: one selects a shape, and the others draw by hand, a line, an arrow, a box, an oval and words. The dots choose a colour. Drag in the sketch to draw. For words, click where they go, type them there and press Return. Click words twice with the first tool to change them where they are. With the first tool, click a shape to select it, drag it to move it, and press Delete to take it away. The shape that's selected glows, and has a circle on each of its corners or ends. Drag a circle to move that corner. The numbers after the dots say how the shape is drawn: how thick its line is, how round the corners of a box are, and how big words are. The buttons each side of a number change it, or click the number, type another and press Return. With a tool that draws, they change the shapes that you draw next. Esc chooses the first tool, and Esc with that tool puts the sketch back in the page. So does the last button at the top. ⌘E, or a click on the ladder, while the sketch fills the window shows the lines of its block as text. While a sketch, a takeoff, a schedule, the lines of one, a picture or a diagram fills the window, the sidebar isn't there, and the top bar has none of the sidebar's buttons: not the one that shows it, the eye or the two arrows. The file's name is in the middle of the window then. Each shape is a line of the block, so ⌘Z takes back the last thing you drew. `sketch.jl` says how the lines are written.
+
+## Sign a page
+
+A code block in the language `signature` is a place where a person signs the page with the mouse or the trackpad. A builder shows a client a quote in a page, and the client signs it there.
+
+````
+```signature
+name: Sam Lee
+```
+````
+
+The block shows a box with a line to sign on, and the name under it. A block with no `name:` line has a field under the box. Type the name there, and the block writes it as its `name:` line.
+
+- Press in the box and drag to draw. Each stroke is a line of the block, so the file holds the signature, and ⌘Z takes back the last stroke.
+- The first stroke writes the day and the time, as `signed: 2026-11-18 09:14`. From then on the block says "Signed by Sam Lee on 18 November 2026" under the signature.
+- The first stroke must be a drag, so a click by mistake doesn't sign the page. After that, a click is a dot, like the one over an i.
+- A stroke that leaves the box goes on when the mouse comes back. The page's text doesn't select meanwhile, and the page doesn't scroll.
+- While the mouse is over a signed block, a Clear button shows under the box. It takes the strokes and the day away in one change, and ⌘Z brings them back.
+- A page that can't be changed, like an email or a file that's read-only, takes no strokes.
+
+The places of a stroke are in the box's own measure, 420 wide and 130 tall. So the signature keeps its shape when the text is bigger and when the window is narrow. The page of HTML and the printed page show the signature with who signed and when under it. `signature.jl` says how the lines are written.
+
+## Show the pictures of a folder
+
+A code block in the language `gallery` shows the pictures of a folder as a grid of small squares. Use it for the photos of a job site, in the job's page:
+
+````
+```gallery
+in: photos
+```
+````
+
+- `in: photos` names a folder beside the page. An empty block shows the pictures in the page's own folder.
+- Any other line is the path of one picture, so a block can list its pictures by hand. A block with such lines and no `in:` line shows only those pictures.
+- `sort: newest` puts the newest file first. Without it, the folder's pictures are in the order of their names, and photo 2 comes before photo 10.
+- `size: small` or `size: large` sets how big the squares are. Without it, they're medium.
+
+The grid has as many squares in a row as fit the page, with the same gap between them. Each square shows the middle of its picture, cut to fit. The top of the block says how many pictures there are and where they are. The button there changes the size of the squares, and writes the size into the block, so ⌘Z takes it back.
+
+Click a picture, and it fills the window, as a picture in the text does. There, ← and → go to the picture before it and the next one, and Esc puts the page back. The bar under the picture says where it is in the gallery, like “2 of 6”, and the name of its file. The button on each side of those words goes to the picture before and to the next one. While the mouse is near the left or the right edge of the window, a large arrow shows there that does the same. At the first picture and the last, the button that has nowhere to go is faint. In the page, the mouse over a picture shows the name of its file.
+
+Drop a picture on the gallery from the Finder, and Kaydown copies it into the gallery's folder. A gallery that only lists its pictures gets a line for the picture, and the file stays where it is.
+
+A big folder doesn't stop the window. macOS makes a small picture of each file, as it does for the Finder, and Kaydown asks for a few of them in each frame. It builds only the rows of the grid that are in the window. It reads the folder again every few seconds, so a new photo shows by itself. `gallery.jl` says how the block is written.
+
+## Show the map of a place
+
+A code block in the language `map` shows the map round a place, with a pin on the place and the address under it. The map is as wide as the page's text.
+
+````
+```map
+1 Macquarie Street, Sydney NSW 2000
+```
+````
+
+- The first line is the place: an address, or a latitude and a longitude like `-37.7701, 144.9610`.
+- The − and the + on the map show more and less of what's round the place. The block keeps that as a line like `zoom: 15`. Each step up shows half as much from side to side.
+- Drag the map to move it. When you let go, the block keeps the middle of what shows as a line like `centre: -33.86120, 151.21010`. The pin stays on the place. `center` is read as the same word.
+- Click the map to move the place. The pin goes where you clicked, and the block's first line becomes that point's latitude and longitude, like `-33.85930, 151.21320`. The map stays where it is.
+- ⌘Z takes back a drag or a click.
+- When the place isn't in the middle of the map, a third button beside the − puts it back there. It takes the `centre` line away.
+- **Open in Maps** opens the Mac's Maps app at the place.
+- The button that shows beside the map's top right corner makes the map fill the window, as a picture does. So does Return with the caret on the map.
+- A page that can't be changed, like a file that's read-only, takes no drag and no click.
+- The address under the map is the one that Apple has for the place. Check it: when Apple doesn't know an address, the pin can go on another address that's like it.
+- Write a street address. The name of a place alone, like "Sydney Opera House", isn't enough for Apple to find it.
+- Apple's maps make the picture, so the first picture of a place needs the network. Until the picture is there, the block is a grey box. Kaydown keeps each picture on the Mac, so the map shows at once the next time, with no network. When Kaydown can't get a picture, the block says so, and Kaydown tries again a minute later.
+- A dark page has a dark map. The page of HTML that ⌘⇧E saves has the picture in it, with the address under it as a link to Apple Maps.
+
+Kaydown never asks where the Mac is, so macOS asks you for nothing. `map.jl` says how the block is written, and `map.swift` makes the picture.
 
 ## List what's in the pages of a folder
 
@@ -147,7 +334,7 @@ The kinds are:
 
 - The kinds of line: to-do items, done items, headings, lines, paragraphs, bullet points, numbered items, quotes and table rows.
 - Links and pictures, which list the lines that have one.
-- The kinds of block: code blocks, sheets, spreadsheets, live blocks, diagrams, takeoffs, schedules, charts, boards, sketches, find lists, email lists, questions and changes.
+- The kinds of block: code blocks, sheets, spreadsheets, live blocks, diagrams, takeoffs, schedules, charts, boards, calendars, sketches, signatures, maps, find lists, email lists, time logs, questions and changes.
 
 A block shows in the list as the heading that it's under, with the icon of its kind. A block of code, and a block with no heading over it, shows as its own first line. The words in the first field are looked for in that heading and in the lines of the block. A kind of block that a file of your own defines is listed with the code blocks.
 
@@ -266,6 +453,21 @@ Each window keeps the files that it showed, in the order that it showed them. �
 
 Kaydown writes a page to its file when you press ⌘S, and at no other time. The settings page has a box that changes that: **Save a page when I leave its window**. With it on, a window writes each of its pages that has changes when it stops being the front window: when you click another window, or change to another app. A page that has no file yet stays as it is. Closing a window doesn't save its pages.
 
+## Show a page as slides
+
+⌃⌘⇧P shows the page one part at a time, for when you show a plan to a client or a crew. So does Show as Slides in the menu that a right-click on the page opens. It starts at the slide that the caret is in.
+
+- A slide starts at each heading of level 1 or 2, and at each line across the page, like `---`. That line doesn't show. What's before the first heading is the first slide. Front matter is in no slide, and a heading of level 3 or lower stays inside its slide.
+- The window shows one slide and nothing else of the app: no sidebar, and nothing in the top bar. The slide is in the middle of the window. Its text is up to twice as big as the page's, so that the slide suits the window's height. A slide that's too tall at the page's own size scrolls.
+- Everything in a slide shows as it does in the page: a diagram, a chart, a table, a picture, a sheet, a formula. A video plays, and stops when another slide shows. Nothing that you type changes the text, and there's no caret.
+- →, ↓, Space, Page Down and Return go to the next slide. ←, ↑, Page Up and ⇧Space go back. Home and End go to the first slide and the last.
+- A click on the right half of the window goes on, and a click on the left half goes back. A click on a to-do item's box still ticks it, and a click on a link opens it. A link to a heading of the page shows that heading's slide.
+- The number of the slide is at the bottom right, like "3 / 12". A thin bar along the bottom edge shows how far through the slides it is.
+- Esc, or ⌃⌘⇧P again, shows the page again. The caret is at the start of the slide that showed last. The page's text is the size it was.
+- When the file changes on the disk, as when an agent changes the page, the slides show the new text. The slide with the same number stays, or the last one when there are fewer.
+
+The slides belong to one window, so another window still shows the page as a page. The key is the same in every bundle of key bindings, and the key bindings page changes it. `slides.jl` says which lines each slide shows.
+
 ## Test it
 
 ```sh
@@ -274,6 +476,7 @@ julia -O0 --project=. test/centient_test.jl       # how Kaydown talks to Centien
 julia -O0 --project=. test/takeoff_view_test.jl   # the block itself, in a window that isn't on the screen
 julia -O0 --project=. test/zoom_test.jl           # a picture, a diagram or a page that fills the window
 julia -O0 --project=. test/diagram_edit_test.jl   # changing a diagram while it fills the window
+julia -O0 --project=. test/diagram_kinds_test.jl  # a mind map, an entity relationship diagram, a Gantt chart and a timeline in a page
 julia -O0 --project=. test/schedule_test.jl       # how a schedule is read, written and worked out
 julia -O0 --project=. test/schedule_view_test.jl  # the schedule's bars and links, in a window that isn't on the screen
 julia -O0 --project=. test/project_page_test.jl   # a video or a sound on the web, and the button that makes a job in Centient
@@ -295,6 +498,8 @@ julia -O0 --project=. test/selection_test.jl      # where the colour of the sele
 julia -O0 --project=. test/level_test.jl          # ⌘E, and a click on the ladder, while a schedule fills the window
 julia -O0 --project=. test/sketch_level_test.jl   # and while a sketch fills the window
 julia -O0 --project=. test/full_bar_test.jl       # the top bar has none of the sidebar's buttons while something fills the window
+julia -O0 --project=. test/slides_test.jl         # which lines of a page each slide shows, and how much bigger a slide's text is
+julia -O0 --project=. test/slides_view_test.jl    # a page as slides: the keys, the clicks, a tick, esc and a file that changes, in a window that isn't on the screen
 julia -O0 --project=. test/rich_test.jl           # rich text and plain text: where the caret stops, what ⌫ and Return do, and the snake and the ladder in the top bar
 julia -O0 --project=. test/spelling_test.jl       # the red dots under a word that's spelt wrong, and what the page's menu does with it
 julia -O0 --project=. test/sound_test.jl          # a line that holds only a sound file, and the Transcribe button under its player
@@ -306,6 +511,8 @@ julia -O0 --project=. test/examples_test.jl       # the page that lists every ex
 julia -O0 --project=. test/media_folder_test.jl   # the hidden folder for the files that a page makes, and the hidden files in the sidebar
 julia -O0 --project=. test/chart_test.jl          # how a chart is read and written, and where its bars, lines and slices go
 julia -O0 --project=. test/chart_view_test.jl     # the chart of a table, a spreadsheet and a sheet, in a window that isn't on the screen
+julia -O0 --project=. test/csv_test.jl            # how a CSV file is read: its rows, cells in quotes, and the columns of numbers
+julia -O0 --project=. test/csv_view_test.jl       # a CSV file as a table in the page: a long file, a file that changes, the chart of its numbers
 julia -O0 --project=. test/math_test.jl           # how the TeX of a formula is read, where its characters go, and its MathML
 julia -O0 --project=. test/math_view_test.jl      # a formula in a line of text and on lines of its own, in a window that isn't on the screen
 julia -O0 --project=. test/ask_test.jl            # how a question and its answers are read and written
@@ -314,15 +521,27 @@ julia -O0 --project=. test/changes_test.jl        # how a diff is read, how your
 julia -O0 --project=. test/changes_view_test.jl   # the changes of a diff in the page, the buttons that accept and reject them, the old lines beside the new, and a comment on a line
 julia -O0 --project=. test/board_test.jl          # how a board is read and written, and the column of each to-do item
 julia -O0 --project=. test/board_view_test.jl     # the cards of a board, and a drag from one column to another
+julia -O0 --project=. test/gallery_test.jl        # how a gallery is read and written, which pictures it shows, and its grid
+julia -O0 --project=. test/gallery_view_test.jl   # the squares of a gallery, a picture that fills the window, and a picture that's dropped on it
+julia -O0 --project=. test/calendar_test.jl       # how a calendar is read and written, the day in a to-do item's text, and the things of each day
+julia -O0 --project=. test/calendar_view_test.jl  # the month of a calendar: its arrows, a tick, a drag to another day and a new event
+julia -O0 --project=. test/linkcard_test.jl       # which lines are link cards, how the HTML of a web page is read into a card, and what the card keeps on the Mac
+julia -O0 --project=. test/linkcard_view_test.jl  # a link card in the page: while its page is on its way, the caret on it, and a click that opens it
 julia -O0 --project=. test/find_test.jl           # how a list of what's found is read and written, and which lines match
 julia -O0 --project=. test/find_view_test.jl      # the list in the page, and a tick that goes to another page's file
 julia -O0 --project=. test/sketch_test.jl         # how a sketch is read and written, what a click is on, and the places that change a shape
 julia -O0 --project=. test/sketch_view_test.jl    # a sketch in the page, and its tools while it fills the window: drawing, moving, changing and deleting shapes
+julia -O0 --project=. test/signature_test.jl      # how a signature is read and written: its strokes, its name and its day
+julia -O0 --project=. test/signature_view_test.jl # a signature in the page: strokes drawn with the mouse, ⌘Z, the Clear button and the name's field
+julia -O0 --project=. test/map_test.jl            # how a map is read and written, its link to Apple Maps, the pictures that are kept, and where a latitude and a longitude is in a picture
+julia -O0 --project=. test/map_view_test.jl       # a map in the page: its buttons, a drag that moves it, a click that moves its place, the grey box while its picture is made, and a place that isn't found
 julia -O0 --project=. test/file_block_test.jl     # a kind of block that a file defines: what it shows, and what goes back into its lines
 julia -O0 --project=. test/autosave_test.jl       # the setting that saves a page when you leave its window
 julia -O0 --project=. test/children_test.jl       # the parts of the page as the document's children, and a walk from one part to another
 julia -O0 --project=. test/emails_test.jl         # how a list of emails is read and written, and which emails it asks for
 julia -O0 --project=. test/emails_view_test.jl    # the list of the emails with a person, in a page
+julia -O0 --project=. test/timelog_test.jl        # how a time log is read and written, and how its hours and its money are added up
+julia -O0 --project=. test/timelog_view_test.jl   # the rows of a time log, the button that starts and stops the clock, and a time changed in its row
 julia -O0 --project=. test/mime_test.jl           # how an email becomes the page that a window shows, and a page an email
 julia -O0 --project=. test/mail_test.jl           # the folder of emails that's kept in step with an email server, and sending
 julia -O0 --project=. test/mail_view_test.jl      # the list of emails, the buttons of an email and of a draft, and the Email page of the settings
@@ -342,6 +561,8 @@ Kip.link("/path/to/UI.jl")
 ```
 
 To write down what's said in a recording, Kaydown runs `transcribe.swift`, which uses the speech recognition in macOS 26 and later. Run from the source, Kaydown compiles it the first time, so it needs Swift, which comes with Xcode's command line tools. The app has it compiled already.
+
+To make the picture of a map, Kaydown runs `map.swift`, which uses MapKit, the maps that are part of macOS. It needs macOS 26 or later. Run from the source, Kaydown compiles it the first time, as it does `transcribe.swift`. The app has it compiled already.
 
 UI.jl has a script that runs an app and reloads each file when you save it:
 

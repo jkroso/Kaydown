@@ -24,10 +24,14 @@ reason = "Kaydown opens the Markdown files in it, and saves a file when you pres
 @use "../transcribe" => Transcribe
 const transcriber = joinpath(mktempdir(), "transcribe")
 Transcribe.compile(transcriber)
+# The program that makes the picture of a map goes beside it. See map.jl.
+@use "../map" => Maps
+const mapper = joinpath(mktempdir(), "map")
+Maps.compile(mapper)
 # CFBundleDocumentTypes tells macOS that the app opens Markdown files, so the Finder lists it under Open With.
 # Its rank is Alternate, so it doesn't take Markdown files from another app until you ask it to on the settings page.
 const app = build_app(name="Kaydown", program="kaydown", id="com.jkroso.kaydown", version=version,
-          entry=joinpath(@__DIR__, "app.jl"), icon=joinpath(@__DIR__, "icon.png"), helpers=[transcriber], plist="""
+          entry=joinpath(@__DIR__, "app.jl"), icon=joinpath(@__DIR__, "icon.png"), helpers=[transcriber, mapper], plist="""
             <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
             <key>NSDesktopFolderUsageDescription</key><string>$reason</string>
             <key>NSDocumentsFolderUsageDescription</key><string>$reason</string>

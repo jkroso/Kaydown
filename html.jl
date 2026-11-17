@@ -8,11 +8,16 @@
 # a footnote's number is its place among the footnotes. `block(lang, first,
 # last)` gives the HTML of a code block that the editor shows as something
 # else, like a sheet, or nothing to show its code. `value(code)` gives the text
-# that a piece of inline code made, or nothing to show its code. A formula goes
-# in as MathML, which a browser sets itself.
+# that a piece of inline code made, or nothing to show its code. `file(text)`
+# gives the HTML of a line that the editor shows as something else, like the
+# table of a CSV file, or nothing for a line of text. `card(words, url)` gives
+# the HTML of the card of a line that's written as a picture is, with the
+# address of a web page, or nothing to write the line as a picture. A formula
+# goes in as MathML, which a browser sets itself.
 
-@use "./markdown" Kind Line Span classify spans tablecells isdivider front_matter isdone MATTER TOML_MATTER MATH
+@use "./markdown" Kind Line Span classify spans tablecells isdivider front_matter isdone MATTER TOML_MATTER MATH callout opens_callout
 @use "./math" mathml
+@use "./linkcard" => Cards
 
 "`s` with the characters that mean something in HTML written as their names"
 escape(s::AbstractString) = replace(s, '&' => "&amp;", '<' => "&lt;", '>' => "&gt;", '"' => "&quot;")
@@ -120,7 +125,15 @@ code { background: #f1ede2; border-radius: 4px; padding: 0.1em 0.35em; }
 pre { background: #f1ede2; border-radius: 6px; padding: 0.9em 1.1em; overflow-x: auto; }
 pre code { background: none; padding: 0; font-size: 1em; }
 blockquote { margin: 1em 0; padding-left: 1em; border-left: 3px solid #d8d0bd; color: #6b6259; font-style: italic; }
+blockquote.callout { --hue: #30628c; padding: 0.6em 1em; border-left-color: var(--hue); background: color-mix(in srgb, var(--hue) 8%, transparent); color: inherit; font-style: normal; }
+blockquote.callout p { margin: 0.3em 0; }
+blockquote.callout .callout-title { color: var(--hue); font-weight: bold; }
+blockquote.tip { --hue: #54742c; }
+blockquote.important { --hue: #963a6c; }
+blockquote.warning { --hue: #aa6214; }
+blockquote.caution { --hue: #ba3428; }
 table { border-collapse: collapse; margin: 1em 0; }
+caption { font-size: 0.85em; color: #6b6259; text-align: left; padding-bottom: 0.4em; }
 th, td { border: 1px solid #d8d0bd; padding: 0.35em 0.8em; text-align: left; }
 th { background: #f1ede2; }
 img, video { max-width: 100%; }
@@ -136,13 +149,14 @@ li.todo { list-style: none; margin-left: -1.4em; }
 The lines of a Markdown document as a page of HTML. `title` is what the
 browser's tab says.
 """
-html(lines::AbstractVector{<:AbstractString}; title="", block=(lang, first, last) -> nothing, value=code -> nothing) = begin
+html(lines::AbstractVector{<:AbstractString}; title="", block=(lang, first, last) -> nothing, value=code -> nothing, file=text -> nothing, card=(words, url) -> nothing) = begin
   kinds = classify(lines)
   d = Document(footnotes(lines), value)
   out = IOBuffer()
   lists = Tuple{Int,String}[]   # the lists that are open now: how far each is indented, and ul or ol
   notes = Tuple{String,String}[]
   quoted = false
+  cards = false   # true once the page has a link card, which needs its own rules in the page's style
   shut!(to=-1) = while !isempty(lists) && last(lists)[1] > to
     println(out, "</li></", pop!(lists)[2], ">")
   end
@@ -188,8 +202,12 @@ html(lines::AbstractVector{<:AbstractString}; title="", block=(lang, first, last
       k == Kind.todo ? print(out, "<li class=\"todo\"><input type=\"checkbox\" disabled", isdone(text) ? " checked" : "", "> ", body) :
                        print(out, "<li>", body)
     elseif k == Kind.blockquote
-      quoted || (println(out, "<blockquote>"); quoted = true)
-      println(out, "<p>", inline(d, chop(text, head=line.prefix, tail=0)), "</p>")
+      # A callout is a quote with a class for its kind. Its first line is its title, or its kind's name when it has none.
+      kind = callout(line)
+      quoted || (println(out, isempty(kind) ? "<blockquote>" : "<blockquote class=\"callout $kind\">"); quoted = true)
+      body = inline(d, chop(text, head=line.prefix, tail=0))
+      opens_callout(line) ? println(out, "<p class=\"callout-title\">", isempty(strip(body)) ? uppercasefirst(kind) : body, "</p>") :
+                            println(out, "<p>", body, "</p>")
     elseif k == Kind.table
       j = i
       while j < n && kinds[j+1].kind == Kind.table; j += 1 end
@@ -207,6 +225,13 @@ html(lines::AbstractVector{<:AbstractString}; title="", block=(lang, first, last
       continue
     elseif k == Kind.paragraph
       m = match(NOTE, text)
+      made = m === nothing ? file(text) : nothing   # a line that holds only a file can show as something else
+      made === nothing || (println(out, made); i += 1; continue)
+      # A line that's written as a picture is, with the address of a web page, is a link card
+      asked = Cards.asked(text)
+      box = asked === nothing ? nothing : card(asked...)
+      box === nothing || (cards = true)
+      box !== nothing ? println(out, box) :
       m === nothing ? println(out, "<p>", inline(d, text), "</p>") :
                       push!(notes, (String(m[1]), inline(d, chop(text, head=length(m.match), tail=0))))
     end
@@ -230,7 +255,7 @@ html(lines::AbstractVector{<:AbstractString}; title="", block=(lang, first, last
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>$(escape(title))</title>
   <style>
-  $(STYLE)</style>
+  $(STYLE)$(cards ? Cards.STYLE : "")</style>
   </head>
   <body>
   $(String(take!(out)))</body>

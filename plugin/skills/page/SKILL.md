@@ -63,26 +63,36 @@ Exit code 3 means that Kaydown is not installed, or that it is too old to send a
 | To show | Write |
 |---------|-------|
 | Headings, **bold**, *italic*, `code`, links, quotes, lists, a rule | Markdown, as usual. The headings are also the page's list of contents. |
+| A note, a tip or a warning that stands out | A callout: a quote whose first line is `> [!NOTE]`, `> [!TIP]`, `> [!IMPORTANT]`, `> [!WARNING]` or `> [!CAUTION]`. Its text is on the lines under that one, each after a `>`. |
 | A task | `- [ ] Text`. The user clicks the box. |
 | A question with answers to choose | An `ask` code block. See below. |
 | Changes to a file, to accept or reject | A `changes` code block. See below. |
 | Numbers as bars, lines or a pie | A `chart` code block. See below. |
 | The page's tasks as cards in columns | A `board` code block. See below. |
+| A place for a person to sign | A `signature` code block. See below. |
+| A month, with the things that have a day | A `calendar` code block. See below. |
+| The map of a place | A `map` code block. See below. |
+| The hours worked on each task | A `timelog` code block. See below. |
 | When each task is done, and what it waits for | A `schedule` code block. See below. |
 | A table | A Markdown table. The user can type in its cells and add rows. |
-| A flow, a sequence, states, classes, shares | A `mermaid` code block. See below. |
+| The rows of a CSV file | `![what it holds](prices.csv)` on a line of its own. The path starts at the page's folder. The user can't type in this table. See below. |
+| A flow, a sequence, states, classes, shares, a mind map, the tables of a database, tasks with dates, a timeline | A `mermaid` code block. See below. |
 | Code | A code block with its language. Kaydown colours it. |
 | Sums that the user can change | A `sheet` or a `spreadsheet` code block. See below. |
 | Maths | TeX between dollar signs: `$x^2$` in a line of text, and on lines of its own between a line of `$$` and another. A dollar sign before a number, like `$5`, stays a dollar sign. |
 | A picture | `![what it shows](picture.png)` on a line of its own. The path starts at the page's folder. A web address works too. |
+| Several pictures as a grid | A `gallery` code block. See below. |
+| A web page as a card, with its title, its description and its picture | `![words](https://julialang.org)` on a line of its own: a picture's form, with the page's address. Kaydown gets the page. The words are the title until it has the page's own. A bare address stays text. |
 | A footnote | `[^1]` in the text, and a line that starts with `[^1]:`. |
 | Another page | A link to another `.md` file. The user holds ⌘ and clicks it. |
 
 Kaydown does not draw HTML tags. Do not use them.
 
+The user can show a page as slides, one part at a time, with ⌃⌘⇧P. Each heading of level 1 or 2 starts a slide, and so does a line of `---`.
+
 ### Diagrams
 
-Kaydown draws five kinds of Mermaid diagram: `flowchart` (or `graph`), `sequenceDiagram`, `stateDiagram-v2`, `classDiagram` and `pie`. Any other kind, like `gantt`, `erDiagram` or `mindmap`, shows as code, so do not use it.
+Kaydown draws nine kinds of Mermaid diagram: `flowchart` (or `graph`), `sequenceDiagram`, `stateDiagram-v2`, `classDiagram`, `pie`, `mindmap`, `erDiagram`, `gantt` and `timeline`. Any other kind, like `journey`, `gitGraph` or `quadrantChart`, shows as code, so do not use it. A diagram with a line that Kaydown can't read shows as code too.
 
 ````
 ```mermaid
@@ -96,6 +106,74 @@ flowchart LR
 ````
 
 A flowchart can have `subgraph`, text on a line, and these shapes: `[box]`, `(round)`, `([pill])`, `{diamond}`, `((circle))`, `{{hexagon}}`, `[(drum)]`. A sequence diagram can have `participant`, `actor`, `Note over`, `loop`, `alt` with `else`, and `opt`.
+
+A mind map is one idea in the middle and the ideas that belong to it. The indent of a line says which idea it belongs to. Give the whole map one first idea: a second line that starts as far left as the first shows the map as code. An idea can be `[a box]`, `(a round box)`, `((a circle))` or plain words.
+
+````
+```mermaid
+mindmap
+  root((Price checker))
+    Shops
+      Each has its own page
+      Some block robots
+    Checks
+      [600 a day for each shop]
+    Alerts
+      (An email when a price drops)
+```
+````
+
+An entity relationship diagram shows tables and how they are related. A row of a table is a type, a name, then `PK`, `FK` or `UK`, then a comment in quotes. Each end of a line has a sign for how many: `||` exactly one, `|o` or `o|` none or one, `}|` or `|{` one or more, `}o` or `o{` none or more. Use `--` for a full line and `..` for a dashed one. Do not use `subgraph`: Kaydown does not draw its box.
+
+````
+```mermaid
+erDiagram
+  SHOP ||--o{ PRODUCT : sells
+  PRODUCT ||--o{ PRICE : "has had"
+  PRODUCT {
+    int id PK
+    int shop FK
+    string name
+  }
+  PRICE {
+    int product FK
+    date seen
+    float dollars "With GST"
+  }
+```
+````
+
+A Gantt chart shows tasks with dates as bars. A task is its name, a colon, then an id, a start and an end with commas between them. The start is a date or `after` another id. The end is a date or a length: `3d`, `2w`, `36h`. Put `done`, `active`, `crit` or `milestone` first to mark a task. `excludes weekends` leaves Saturday and Sunday out of each length. For the tasks of the page itself, use a `schedule` block: the user can drag its bars.
+
+````
+```mermaid
+gantt
+  title Price checker
+  dateFormat YYYY-MM-DD
+  excludes weekends
+  section Build
+    Read one shop       :done, one, 2026-11-02, 3d
+    Read every shop     :active, all, after one, 5d
+  section Ship
+    Fix what breaks     :crit, fix, after all, 3d
+    Turn the alerts on  :milestone, after fix, 0d
+```
+````
+
+A timeline shows periods from left to right. A line is a period, then ` : ` before each event. A line that starts with a colon adds events to the period above it. `section` puts a name over a group of periods.
+
+````
+```mermaid
+timeline
+  title Price checker
+  section This year
+    October : The idea : A page of notes
+    November : One shop works
+  section Next year
+    January : Every shop
+            : Alerts by email
+```
+````
 
 ### Sums
 
@@ -202,6 +280,16 @@ title: Sales and costs
 
 `kind` is `bars`, `lines` or `pie`. `show: Sales` draws only that column. `by: Month` names the column whose words name the bars. `from: Budget` draws the first table under the heading "Budget". To draw numbers that are in no table, put the rows in the block, under an empty line, with a `|` between the cells and the names of the columns in the first row. Do not draw two measures with different units in one chart.
 
+### A table from a CSV file
+
+A line that holds only a link to a `.csv` or a `.tsv` file, written as a picture is, shows the file as a table:
+
+```
+![Prices](prices.csv)
+```
+
+The first row of the file has the names of the columns. The table shows the first 30 rows, and the user clicks a line under them to see the rest. The table changes when the file changes, so you can write the file again while the user reads the page. A `chart` block under the line draws the file's numbers. `from: prices.csv` in a chart draws them from anywhere in the page. Use this for numbers that a program wrote. Use a Markdown table for rows that the user should change.
+
 ### A board
 
 A `board` code block shows every `- [ ]` item of the page as a card, in the columns To do, Doing and Done. The user drags a card to another column. A ticked item is in the last column. Kaydown writes a line in the block for each card that is between the first column and the last: the item's text, a `|`, and the column.
@@ -216,6 +304,87 @@ Add the queue table | Doing
 ````
 
 The line `columns: Later, This week, Done` at the top of the block names other columns.
+
+### A signature
+
+A `signature` code block shows a box that a person signs in with the mouse or the trackpad. Write the name of who signs in a `name:` line. Without that line, a field under the box takes the name.
+
+````
+```signature
+name: Sam Lee
+```
+````
+
+Kaydown writes the rest. The first stroke adds the line `signed: 2026-11-18 09:14`, and each stroke adds a line that starts with `pen`. A block with a `pen` line is signed. Do not write `signed:` or `pen` lines yourself, and do not change them.
+
+### A gallery
+
+A `gallery` code block shows pictures as a grid of small squares. The user clicks one to see it big. There, ← and →, or the arrows under the picture, go to the others. The bar under it says which picture shows, like “2 of 6”.
+
+````
+```gallery
+in: screenshots
+```
+````
+
+`in: screenshots` names a folder beside the page, and the block shows every picture in it, in the order of their names. To show only some pictures, leave `in:` out. Write the path of each picture on a line of its own. The paths start at the page's folder. `sort: newest` puts the newest file first. `size: small` or `size: large` sets how big the squares are.
+
+### A calendar
+
+A `calendar` code block shows one month as a grid of days, from Monday to Sunday. It shows three kinds of thing on their days:
+
+- A `- [ ]` item of the page that has a day in its text, written like `2026-11-25`. The user ticks it in the calendar, and drags it to another day.
+- A line of the block that has a day, a `|` and some words. This is an event.
+- Each task of the page's `schedule` block, on the working days that it runs.
+
+````
+- [ ] Order the tiles 2026-11-20
+
+```calendar
+month: 2026-11
+
+2026-11-25 | Concrete pour
+2026-11-27 | Council inspection
+```
+````
+
+`month` is the month that shows. Leave it out to show the month of today. Write every day as year-month-day. When the user drags a thing, Kaydown writes the new day into the item's text or the event's line.
+
+### A map
+
+A `map` code block shows the map round a place, with a pin on the place. Its first line is a street address, or a latitude and a longitude. Kaydown doesn't find a place by its name alone, so write the address. `zoom` says how much the map shows, from 3 for a continent to 19 for one building. Without it, the zoom is 15, which shows a few streets.
+
+````
+```map
+1 Macquarie Street, Sydney NSW 2000
+zoom: 16
+```
+````
+
+`centre: -33.86120, 151.21010` puts that latitude and longitude in the middle of the map. Without it, the place is in the middle. The pin is always on the place.
+
+The user can change each line on the map itself, so read the block again after they send:
+
+- Two buttons change the zoom, and Kaydown writes the `zoom` line.
+- A drag moves the map, and Kaydown writes the `centre` line.
+- A click moves the pin, and Kaydown writes the point's latitude and longitude as the first line, like `-33.85930, 151.21320`.
+
+The first picture of a place needs the network.
+
+### A time log
+
+A `timelog` code block keeps the hours that the user works on each task. Each line is one stretch of work: the day, the start time, a `-`, the stop time, a `|`, and the task. Write times with 24 hours. The block shows the rows, the total and the hours of each task. The user starts and stops the clock with a button, and Kaydown writes the line.
+
+````
+```timelog
+rate: 85
+
+2026-11-17 07:30-12:00 | Framing
+2026-11-17 12:30-15:45 | Framing
+```
+````
+
+A line with no stop time, like `2026-11-18 08:10- | Roofing`, is the one that runs now. Write no more than one. `rate: 85` is the dollars for each hour, and makes the totals show money. `round: 15` rounds each stretch to the nearest 15 minutes in the totals. A `chart` block under the log draws the hours of each task.
 
 ### Code that runs
 

@@ -12,11 +12,14 @@ The block at the top of this page is front matter: lines at the very top of a fi
 ## Writing
 
 - [Bold, italic, code, links and quotes](welcome.md#text)
+- [Callouts: a note, a tip or a warning that stands out](welcome.md#text)
 - [Spelling, and finding text in the page](welcome.md#text)
 - [Footnotes](welcome.md#text)
+- [A link card: a web page as a card, with its title and its picture](welcome.md#link-cards)
 - [Maths: formulas written in TeX](welcome.md#maths)
 - [Lists and to-do items](welcome.md#lists)
 - [Tables, and the keys that Kaydown uses](welcome.md#tables)
+- [A table from a CSV file](welcome.md#tables-from-a-file)
 - [Code in a block, with a colour for each part](welcome.md#code)
 - [The markup of a line, and how to show it](welcome.md)
 - Front matter is at the top of this page.
@@ -47,11 +50,17 @@ The block at the top of this page is front matter: lines at the very top of a fi
 ## Blocks that draw and plan
 
 - [A diagram: a flowchart, a sequence and three more kinds](welcome.md#diagrams)
+- [A mind map, an entity relationship diagram, a Gantt chart and a timeline](welcome.md#diagrams)
 - [A sketch that you draw](welcome.md#sketches)
+- [A signature: a box that a person signs in](welcome.md#signatures)
+- [The map of a place](welcome.md#maps)
 - [A takeoff: measures from a building plan, and a quote from them](welcome.md#takeoffs)
 - [A schedule: a page's to-do items as bars on a line of days](welcome.md#schedules)
 - [A schedule to try](schedule.md)
 - [A board of a page's to-do items](welcome.md#boards)
+- [A gallery of a folder's pictures](welcome.md#galleries)
+- [A calendar: a month with a page's tasks, its to-do items that have a day, and events](welcome.md#calendars)
+- [A log of the hours on each task, with a clock to start and stop](welcome.md#time-logs)
 - [A list of what's found in every page of a folder](welcome.md#find)
 
 ## Work with an agent
@@ -68,6 +77,7 @@ The block at the top of this page is front matter: lines at the very top of a fi
 ## The window and its settings
 
 - [The list of files, the files that aren't pages, the menus, printing and the app's updates](welcome.md#files-menus-and-settings)
+- [A page as slides, one part at a time](welcome.md#slides)
 - [The colours, the font, the size of the text, the width of the page, and saving a page when you leave its window](settings/settings.md)
 - [How code shows](settings/code-editor.md)
 - [The keys of each command](settings/key-bindings.md)

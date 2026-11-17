@@ -16,7 +16,9 @@
 #
 # The numbers come from a table of the page: a table, a spreadsheet or a
 # sheet. `from` names the heading that the table is under. Without it, the
-# chart draws the table that's nearest above it.
+# chart draws the table that's nearest above it. A line that shows a CSV file
+# as a table counts as a table, and `from` can name a CSV file, like
+# `from: prices.csv`. The chart then draws the file's numbers.
 #
 # A chart can hold its own rows too. They go under the settings, with a |
 # between the cells, and the first row has the names of the columns:
@@ -43,7 +45,7 @@ mutable struct Chart
   title::String
   by::String                     # the column whose words name each bar, or "" for the first column that isn't numbers
   show::Vector{String}           # the columns to draw, or none for every column of numbers
-  from::String                   # the heading that the table is under, or "" for the table above the chart
+  from::String                   # the heading that the table is under, or a CSV file, or "" for the table above the chart
   rows::Vector{Vector{String}}   # the chart's own rows
   other::Vector{String}          # the settings that this file doesn't know, kept as they are
 end

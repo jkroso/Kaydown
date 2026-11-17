@@ -11,6 +11,12 @@ You can write in **bold**, in *italic* or in ***both***. Use backticks for `code
 > A line that starts with > is a quote.
 > It can run over several lines.
 
+> [!NOTE]
+> A quote whose first line is `> [!NOTE]` is a callout. GitHub shows these lines the same way.
+
+> [!WARNING] Wet paint
+> The other kinds are `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]` and `[!CAUTION]`. Words after the kind are the callout's title.
+
 A word that the Mac's dictionary doesn't have, like teh, gets a line of red dots under it. Right-click the word to choose the word you meant. Press ⌘F to find text in the page.
 
 A line can point to a footnote[^note]. The footnote is a line of its own, anywhere in the file, and the page gives each footnote a number. Hold ⌘ and click the number to go to the footnote.
@@ -57,6 +63,21 @@ To play a video or a sound faster or slower, move the mouse over its player, and
 | ⌘+ and ⌘- | Make the text bigger and smaller. ⌘0 puts it back to the size it started at. |
 
 Click a cell and type. Tab goes to the next cell and Return goes down a row. Both add a row when they reach the end of the table.
+
+## Tables from a file
+
+A line that holds only a CSV file, written as a picture is, shows the file as a table. The line under this one is `![What the job costs](costs.csv)`.
+
+![What the job costs](costs.csv)
+
+A `chart` block under the line draws the file's numbers. This one draws the Price column:
+
+```chart
+show: Price
+title: The price of each item
+```
+
+The numbers are the file's, so you can't type in this table. Change the file in another app, and the table shows the new numbers. A long file shows its first 30 rows, and a click on the line under them shows the rest. Click the table to see its line as it's written. A `chart` block under the line draws the file's numbers. So does a chart with the line `from: costs.csv`. Drop a CSV file on the page to add a line like this one.
 
 ## Code
 
@@ -173,11 +194,73 @@ flowchart LR
   Edit --> Clear
 ```
 
-Kaydown draws five kinds of diagram: `flowchart`, `sequenceDiagram`, `stateDiagram-v2`, `classDiagram` and `pie`. They're written in the language of [Mermaid](https://mermaid.js.org), so a diagram from another app shows here too. A kind that Kaydown can't draw yet shows as its code. To see the code of a diagram, hold ⌥ and click it.
+Kaydown draws nine kinds of diagram: `flowchart`, `sequenceDiagram`, `stateDiagram-v2`, `classDiagram`, `pie`, `mindmap`, `erDiagram`, `gantt` and `timeline`. They're written in the language of [Mermaid](https://mermaid.js.org), so a diagram from another app shows here too. A kind that Kaydown can't draw yet shows as its code. To see the code of a diagram, hold ⌥ and click it.
 
 A diagram that's too small to read can fill the window. Move the mouse over it, and click the button that shows beside its top right corner, or pinch outwards on it. Then pinch, or scroll with ⌘ held, to make it bigger, and drag it to see the rest. Esc puts the page back. A picture and a page of a PDF file do the same, and a model and a video fill the window too.
 
 You can change a diagram while it fills the window. Click a box, a line or another part to select it. Click it again, or press Return, to type its words where they are. The first buttons under the diagram are the tools for the part that's selected. For a box of a flowchart they add a box after it, draw a line from it to the box that you click next, change its shape and take it away. With nothing selected, they are the tools for the whole diagram, like the one that adds a box. While the mouse is over a box, a point shows on its edge. Drag the point onto another box to draw a line to it. ⌫ takes the selected part away, and ⌘Z takes back the last change. Kaydown writes each change in the code of the block and draws the diagram again. It chooses where each box goes, so you can't drag a box to another place. With a part selected, Esc selects nothing, and Esc again puts the page back.
+
+The first five kinds can be changed that way. The four kinds below fill the window too, and you change them in their code.
+
+A mind map has one idea in the middle. Each line under it is an idea that belongs to the nearest line above it that starts further left. Words in `[ ]`, `( )` or `(( ))` are in a box, a round box or a circle.
+
+```mermaid
+mindmap
+  root((A page))
+    Words
+      Headings
+      Lists
+    Blocks
+      [A diagram]
+      (A table)
+    Sharing
+      A page of HTML
+```
+
+An entity relationship diagram shows what a database keeps. Each box is a table, with a row for each thing that it knows. The signs at the two ends of a line say how many there are: `||` is exactly one, `o{` is none or more and `|{` is one or more.
+
+```mermaid
+erDiagram
+  CUSTOMER ||--o{ ORDER : places
+  ORDER ||--|{ LINE-ITEM : contains
+  CUSTOMER {
+    int id PK
+    string name
+    string email UK "Where the bill goes"
+  }
+  ORDER {
+    int id PK
+    date placed
+  }
+```
+
+A Gantt chart shows tasks as bars on a line of days. A task starts on a date, or `after` the task with that id, and it's as long as its length says. With `excludes weekends`, a task that goes over a weekend ends two days later. A `schedule` block does the same for the to-do items of the page, and you can drag its bars.
+
+```mermaid
+gantt
+  title A new page
+  dateFormat YYYY-MM-DD
+  excludes weekends
+  section Write
+    A first draft    :done, draft, 2024-03-04, 3d
+    Read it aloud    :active, read, after draft, 2d
+  section Share
+    Fix what's wrong :crit, fix, after read, 4d
+    Send it          :milestone, after fix, 0d
+```
+
+A timeline shows periods from left to right, each with what happened in it. A line is a period, then a colon before each event.
+
+```mermaid
+timeline
+  title How a page grows
+  section The first day
+    Morning : Notes : A list of tasks
+    Afternoon : A first draft
+  section Later
+    Next week : Diagrams and tables
+              : A page of HTML to share
+```
 
 ## Maths
 
@@ -211,6 +294,14 @@ A = \begin{pmatrix} a & b \\ c & d \end{pmatrix}
 $$
 
 To change a formula in a line of text, put the caret in the line and press ⌘E: the line shows its TeX. To change a formula on lines of its own, hold ⌥ and click it, or move the caret onto it and press Return. A command that Kaydown doesn't know shows as its name, in colour. In a page of HTML, each formula is MathML, which a browser shows as maths.
+
+## Link cards
+
+Write a web page as you write a picture, on a line of its own, like `![Julia](https://julialang.org)`. The line shows as a card, with the page's title, its description and its picture:
+
+![Julia](https://julialang.org)
+
+Hold ⌘ and click the card to open the page in your browser. Click the card with no key held, and the line shows as it's written, so that you can change it. The words in the square brackets are the card's title until Kaydown has read the page's own title. Kaydown gets the page once and keeps what the card shows, so the card is there the next time with no network. A web address by itself, like https://julialang.org, stays text, and [a link with words](https://julialang.org) stays a link.
 
 ## Takeoffs
 
@@ -283,6 +374,30 @@ Click the box of an item like this one to tick it. | Doing
 
 The block's lines hold the column of each card. A line like `columns: Later, This week, Done` at their top names other columns.
 
+## Galleries
+
+A code block in the language `gallery` shows the pictures of a folder as a grid of small squares. This one shows the folder `photos` beside this page. Click a picture, and it fills the window. Press ← and → there to see the others, or click the arrows in the bar under it. The bar says which picture shows, like “2 of 6”. Press Esc to come back. The button at the top right of the gallery changes the size of the squares.
+
+```gallery
+in: photos
+```
+
+An empty block shows the pictures in the page's own folder. `sort: newest` puts the newest file first, and `size: small` or `size: large` sets the size. Any other line is the path of one picture, so a block can list its pictures by hand. Drop a picture on the gallery from the Finder, and Kaydown copies it into the folder.
+
+## Calendars
+
+A code block in the language `calendar` shows a month, with the things of this page that have a day. Each line of the block like `2026-11-25 | Concrete pour` is an event. A to-do item with a day in its text, like `- [ ] Order the tiles 2026-11-25`, shows on that day with its box. On a page with a schedule, each task shows on the days that it runs.
+
+```calendar
+month: 2026-11
+
+2026-11-18 | Drag this to another day
+2026-11-25 | Concrete pour
+2026-11-27 | Council inspection
+```
+
+The arrows go to the month before and the month after, and **Today** goes back to the month of today. Drag an event or a to-do item to another day, and Kaydown writes the new day into its line. Click an empty part of a day twice to add an event: type its words and press Return. Click a thing twice to go to its line.
+
 ## Sketches
 
 A code block in the language `sketch` is a drawing. In the page it shows only the drawing. Click it, and it fills the window with its tools at the top. Choose a tool there, and drag in the sketch to draw with it: by hand, a line, an arrow, a box or an oval. For words, click where they go, type them there and press Return. Click words twice with the first tool to change them. The dots choose a colour. With the first tool, click a shape to select it, drag it to move it, and press Delete to take it away. The shape that's selected glows. Drag one of its circles to move a corner, and use the numbers at the top to make its line thicker, its corners rounder or its words bigger: click a number to type another, or use the buttons beside it. Esc chooses the first tool, and Esc with that tool puts the sketch back in the page. So does the last button at the top. To see the lines that make the drawing, press ⌘E or click the ladder while the sketch fills the window. Those lines then fill the window as text. ⌘E again makes the drawing fill the window again, and Esc puts the lines back in the page.
@@ -299,6 +414,30 @@ text red 458,84 The door opens in
 ```
 
 Each shape is a line of the block, so ⌘Z takes back the last thing you drew.
+
+## Signatures
+
+A code block in the language `signature` is a place to sign the page. Press in the box and drag, with the mouse or the trackpad, to draw your signature. Each stroke is a line of the block, so ⌘Z takes back the last one. The first stroke writes the day and the time, and the block then says who signed and when. While the mouse is over a signed block, a Clear button under the box takes the signature away.
+
+```signature
+name: Sam Lee
+```
+
+Without the `name:` line, a field under the box takes the name.
+
+## Maps
+
+A code block in the language `map` shows the map of a place, with a pin on the place. Write an address in it, or a latitude and a longitude like `-33.8593, 151.2132`.
+
+```map
+1 Macquarie Street, Sydney NSW 2000
+```
+
+The − and the + on the map show more and less of what's round the place. Drag the map to move it. Click the map to put the pin where you clicked. ⌘Z takes back a drag or a click. **Open in Maps** opens the Maps app at the place. The address under the map is the one that Apple has for the place. Check that the pin is where you mean.
+
+The block keeps what you do as lines. A drag writes the middle of the map, like `centre: -33.86120, 151.21010`. A click writes the latitude and the longitude of the pin as the place. After a drag, a third button beside the − puts the place back in the middle.
+
+Apple's maps make the picture, so the first one needs the network. Kaydown keeps it on your Mac, and the map shows at once the next time. To see the block's lines, hold ⌥ and click the map.
 
 ## Find
 
@@ -333,6 +472,20 @@ Once Kaydown has your email account, a code block in the language `email` lists 
 ```email
 with: sam@example.com
 ```
+
+## Time logs
+
+A code block in the language `timelog` keeps the hours that you work on each task. Type a task in the field at its top and click Start. The block adds a line for now, and the row counts up. Click Stop when you stop. With an empty field, Start goes on with the task of the last line.
+
+```timelog
+rate: 85
+
+2026-11-17 07:30-12:00 | Framing
+2026-11-17 12:30-15:45 | Framing
+2026-11-18 08:10-11:40 | Roofing
+```
+
+Under the rows are the total, and the hours of each task. The line `rate: 85` is the dollars for each hour, so the totals show money too. A line like `round: 15` rounds each stretch to the nearest 15 minutes when the hours are added up. Click a time or a task in a row to change it there, and press Return. A `chart` block under a log draws the hours of each task. To see the block's lines, hold ⌥ and click the log.
 
 ## Recordings
 
@@ -381,6 +534,12 @@ Click a line of a change to say something about it. A field opens under the line
 
 The agent can change the page while you read it. What you're typing stays, and the agent's changes show around it. A bar shows for a few seconds beside each line that the agent changed. If you missed them, click the button with an eye at the top right: it shows a bar beside every line that the agent changed since you last sent the page, until you click it again. In the list of files, a dot marks a page that an agent waits for. While the list is hidden, the dot shows beside the button that opens it. [Kaydown's page on GitHub](https://github.com/jkroso/Kaydown#use-it-with-an-agent) says how to set up an agent.
 
+## Slides
+
+Press ⌃⌘⇧P to show this page as slides, for when you show a plan to someone. The window shows one part of the page at a time, with bigger text and nothing else of the app. A slide starts at each heading of level 1 or 2. A line across the page, which you write as `---`, starts one too. A right-click on the page has Show as Slides in its menu too.
+
+Press → or Space to go to the next slide, and ← to go back. A click on the right half of the window goes on, and a click on the left half goes back. A click still ticks a to-do item and opens a link. Press esc to see the page again.
+
 ## Files, menus and settings
 
 The button at the top left shows the files in this folder. Under the file that shows, the list has the file's headings and its components, such as a slider, a sheet or a spreadsheet. When another file shows, the list closes the old file and opens the new one. Click the icon beside a file to open or close it. Click a heading or a component to go to it. Press ⌘⇧\ to use the list with the keyboard: ↑ and ↓ move through it, → and ← show and hide what's under an item, and Return opens a file or goes to a heading.
@@ -393,7 +552,7 @@ A Markdown page or a file of code that your Mac marks as read-only shows as it a
 
 Right-click a file in the list to rename it, copy its path, show it in the Finder or move it to the Trash. Right-click the file's name at the top of the window for the same menu.
 
-Right-click the page to cut, copy or paste. The menu's Insert item adds a new block where you clicked: a heading, a list, a to-do item, a table, a sheet, a spreadsheet, a diagram, a takeoff, a schedule, a chart, a board, a sketch, a live block and more.
+Right-click the page to cut, copy or paste. The menu's Insert item adds a new block where you clicked: a heading, a list, a to-do item, a table, a sheet, a spreadsheet, a diagram, a takeoff, a schedule, a chart, a board, a calendar, a sketch, a live block and more.
 
 A file can start with front matter: lines like `title: Notes` between two lines of `---`. Kaydown shows it as a block of its own, and leaves it out of the word count.
 

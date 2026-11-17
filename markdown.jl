@@ -7,6 +7,11 @@
 # Maths is written as TeX between dollar signs: $x^2$ in a line of text, and
 # on lines of its own between a line of $$ and another. Those lines are read
 # as a code block in the language `math`, and so is a ```math code block.
+#
+# A callout is a quote whose first line names a kind of note, as GitHub writes
+# one: `> [!NOTE]`, with the lines of the note under it, each after a `>`. The
+# kinds are note, tip, important, warning and caution, in any case. Words after
+# the `]` are the callout's title. Without them, its title is its kind's name.
 
 @use "github.com/jkroso/Prospects.jl" ["Enum" @Enum]
 
@@ -15,9 +20,9 @@
 "What one line of a document is"
 struct Line
   kind::Kind
-  level::Int   # a heading's level, how many spaces indent the line, or 1 on the line that closes a code block
+  level::Int   # a heading's level, how many spaces indent the line, or 1 on the line that closes a code block or opens a callout
   prefix::Int  # how many characters of indent and markup start the line
-  lang::String # the language of the code block that a line of code is in
+  lang::String # the language of the code block that a line of code is in, or the kind of callout that a line of a quote is in
 end
 
 Line(kind::Kind, level::Int, prefix::Int) = Line(kind, level, prefix, "")
@@ -27,6 +32,8 @@ const BULLET  = r"^(\s*)[-*+]\s+"
 const TODO    = r"^(\s*)[-*+]\s+\[([ xX])\]\s+"   # a list item with a box: - [ ] to do, or - [x] done
 const ORDERED = r"^(\s*)\d+[.)]\s+"
 const QUOTE   = r"^\s*>\s?"
+const CALLOUTS = ("note", "tip", "important", "warning", "caution")   # the kinds of callout
+const CALLOUT = Regex("^\\s*>\\s?\\[!(" * join(CALLOUTS, '|') * ")\\][ \\t]*", "i")   # what starts the first line of one
 const FENCE   = r"^\s*(```|~~~)\s*([^\s`]*)"
 const RULE    = r"^\s*([-*_])(\s*\1){2,}\s*$"
 const DIVIDER = r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$"
@@ -52,6 +59,12 @@ Line(text::AbstractString, lang::Union{Nothing,AbstractString}=nothing) = begin
   indent = length(text) - length(lstrip(text))
   Line(Kind.paragraph, indent, indent)
 end
+
+"The kind of callout that `line` is a line of, like \"note\", or \"\" for any other line"
+callout(line::Line) = line.kind == Kind.blockquote ? line.lang : ""
+
+"True when `line` is the first line of a callout: the line that names its kind"
+opens_callout(line::Line) = line.kind == Kind.blockquote && line.level == 1
 
 "True when `text` is a to-do item that's done: its box has an x in it"
 isdone(text::AbstractString) = (m = match(TODO, text); m !== nothing && m[2] != " ")
@@ -113,6 +126,7 @@ matter_lang(lines) = rstrip(lines[1]) == "+++" ? TOML_MATTER : MATTER
 classify(lines) = begin
   lang = nothing
   dollars = 0   # the line of $$ that closes the formula whose lines are being read, or 0 outside one
+  noted, quoted = "", -1   # the kind of callout that the quote being read is, and the last line of a quote that was read
   matter = front_matter(lines)
   map(enumerate(lines)) do (i, text)
     # Front matter is a block of its own, like a code block: its first and last lines open and close it
@@ -131,6 +145,15 @@ classify(lines) = begin
       end
     end
     line = Line(text, lang)
+    if line.kind == Kind.blockquote
+      # The first line of a quote can make it a callout. Each line of the quote is then a line of that callout.
+      opens = quoted != i - 1
+      quoted = i
+      m = opens ? match(CALLOUT, text) : nothing
+      opens && (noted = m === nothing ? "" : lowercase(m[1]))
+      isempty(noted) && return line
+      return m === nothing ? Line(Kind.blockquote, 0, line.prefix, noted) : Line(Kind.blockquote, 1, length(m.match), noted)
+    end
     # The line that opens a code block names its language
     line.kind == Kind.fence || return line
     closes = lang !== nothing
@@ -351,4 +374,4 @@ end
 "How many words are in a document"
 words(lines) = sum(text -> count(_ -> true, eachmatch(r"[\p{L}\p{N}][\p{L}\p{N}'’-]*", text)), lines, init=0)
 
-export Kind, Line, Span, Cell, classify, spans, tablecells, isdivider, words, isdone, front_matter, MATTER, TOML_MATTER, MATH
+export Kind, Line, Span, Cell, classify, spans, tablecells, isdivider, words, isdone, front_matter, MATTER, TOML_MATTER, MATH, CALLOUTS, callout, opens_callout

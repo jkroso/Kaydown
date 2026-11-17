@@ -20,8 +20,8 @@
 #
 # - `code blocks`: the blocks of code that Kaydown shows as code
 # - `sheets`, `spreadsheets`, `live blocks`, `diagrams`, `takeoffs`,
-#   `schedules`, `charts`, `boards`, `sketches`, `find lists`, `email lists`,
-#   `questions`, `changes`: the blocks that Kaydown shows as that component
+#   `schedules`, `charts`, `boards`, `calendars`, `sketches`, `signatures`, `maps`, `find lists`, `email lists`,
+#   `time logs`, `questions`, `changes`: the blocks that Kaydown shows as that component
 #
 # A block is listed by the heading that it's under. A block of code, and a
 # block with no heading over it, is listed by its own first line.
@@ -71,9 +71,14 @@ const WHATS = (todo=what_is("to-do items", "to-dos", "todos", "todo", "to-do", "
                schedule=what_is("schedules", "schedule", one="schedule", langs=("schedule",)),
                chart=what_is("charts", "chart", "graphs", one="chart", langs=("chart",)),
                board=what_is("boards", "board", "kanban", one="board", langs=("board",)),
+               calendar=what_is("calendars", "calendar", one="calendar", langs=("calendar",)),
                sketch=what_is("sketches", "sketch", "drawings", one="sketch", langs=("sketch",)),
+               signature=what_is("signatures", "signature", one="signature", langs=("signature",)),
+               gallery=what_is("galleries", "gallery", one="gallery", langs=("gallery",)),
+               map=what_is("maps", "map", one="map", langs=("map",)),
                find=what_is("find lists", "find list", "finds", one="find list", langs=(FIND,)),
                email=what_is("email lists", "email list", "emails", one="email list", langs=("email",)),
+               timelog=what_is("time logs", "time log", "timelogs", "timesheets", one="time log", langs=("timelog",)),
                question=what_is("questions", "question", one="question", langs=("ask",)),
                changes=what_is("changes", one="set of changes", many="sets of changes", langs=("changes",)))
 

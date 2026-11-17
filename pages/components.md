@@ -114,7 +114,7 @@ Mermaid("""
   """)
 ```
 
-It draws five kinds: `flowchart`, `sequenceDiagram`, `stateDiagram-v2`, `classDiagram` and `pie`. A diagram takes the page's font and colours. A page needs no `ui` block for a diagram, because a code block in the language `mermaid` shows one too. The page [welcome.md](welcome.md) has an example.
+It draws nine kinds: `flowchart`, `sequenceDiagram`, `stateDiagram-v2`, `classDiagram`, `pie`, `mindmap`, `erDiagram`, `gantt` and `timeline`. A diagram takes the page's font and colours. A page needs no `ui` block for a diagram, because a code block in the language `mermaid` shows one too. The page [welcome.md](welcome.md) has an example.
 
 ## Shadows
 

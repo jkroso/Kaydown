@@ -47,8 +47,9 @@
 #     question with answers to click, and one in the language `changes` to
 #     show you a diff, with a button on each change that accepts or rejects it.
 #   - Type in a line and it keeps its look: that's rich text. Press ⌘E, or
-#     click Plain in the top bar, to see the markup of the part that the
-#     caret is in. ⌘E again, or Rich, hides it.
+#     click the ladder in the top bar, to go down a level: the part that the
+#     caret is in shows its markup, and a snake takes the ladder's place. ⌘E
+#     again, or a click on the snake, goes back up.
 #   - Move the caret down the page onto a form, a diagram or a picture. A
 #     line goes round it. Return gives it the keyboard, ⌫ takes it away, and
 #     ↑ and ↓ go on to the lines beside it.
@@ -160,7 +161,8 @@
 @use "github.com/jkroso/UI.jl/Interface/image" image_aspect image_source has_image
 @use "github.com/jkroso/UI.jl/Interface/inspector" toggle_inspector!
 @use "github.com/jkroso/UI.jl/Interface/window" hide_titlebar! place_window_buttons! drag_window! set_dark! nswindow system_menu
-@use "github.com/jkroso/UI.jl/Interface/Semantic/Icon" Icon
+@use "github.com/jkroso/UI.jl/Interface/Semantic/Icon" Icon icon_cache
+@use "github.com/jkroso/UI.jl/Interface/Semantic/SVG" SVGPath
 @use "github.com/jkroso/UI.jl/Interface/Semantic/TextInput" TextInput
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Link" Link
 @use "github.com/jkroso/UI.jl/Interface/Semantic/ListTree" => Tree
@@ -923,9 +925,8 @@ end
   action::Symbol = :none
   label::String = ""
 end
-"One half of the switch in the top bar that chooses rich text or plain text"
-@def mutable struct ModeTab <: SemanticUI
-  plain::Bool = false                         # true for the half that chooses plain text
+"The picture in the top bar of the level that the page shows at: a ladder for rich text and a snake for plain text. A click goes to the other level."
+@def mutable struct Mode <: SemanticUI
   rect::NTuple{4,px} = (0px, 0px, 0px, 0px)
   quiet::Bool = false
 end
@@ -1483,8 +1484,10 @@ end
 
 # --- rich text and plain text ----------------------------------------------------------------
 #
-# A page is written in one of two ways. A switch in the top bar changes from
-# one to the other, and so does ⌘E. You can change the text in both.
+# A page is written in one of two ways. A click on the snake or the ladder in the
+# top bar changes from one to the other, and so does ⌘E. You can change the text in both.
+# The two are levels of abstraction. Plain text is the low level: the page's
+# symbols. Rich text is the high level: the graphics that the symbols make.
 #
 # As rich text, a line shows the way it reads: bold words are bold, and the
 # characters that make them bold don't show. A diagram shows as a diagram. A
@@ -12262,7 +12265,7 @@ const COMMAND_GROUPS = [
     Command(:settings, "Show or hide the settings", :window, "cmd+comma", (e, w, _) -> toggle_settings!(e)),
     Command(:sidebar, "Show or hide the sidebar", :window, "cmd+backslash", (e, w, _) -> toggle_panel!(e)),
     Command(:sidebar_keys, "Give the sidebar the keyboard", :window, "cmd+shift+backslash", (e, w, _) -> focus_panel!(e)),
-    Command(:plain, "Show the markup at the caret, or hide it again", :window, "cmd+e", (e, w, _) -> plain!(e, !e.plain)),
+    Command(:plain, "Go down a level, to the symbols at the caret, or up again", :window, "cmd+e", (e, w, _) -> plain!(e, !e.plain)),
     Command(:hidden_files, "Show or hide the hidden files in the sidebar", :window, "cmd+shift+period", (e, w, _) -> hidden!(e, !e.hidden)),
     Command(:bigger, "Make the text bigger", :window, "cmd+equal", (e, w, _) -> zoom!(e, zoom_for(text_size(e) + 1))),
     Command(:smaller, "Make the text smaller", :window, "cmd+minus", (e, w, _) -> zoom!(e, zoom_for(text_size(e) - 1))),
@@ -12906,7 +12909,7 @@ end
 # Each button in the top bar says what it does while the mouse is over it. A
 # click hides what it says until the mouse leaves the button.
 
-const Tipped = Union{ToolButton,Count,SendButton,ModeTab}
+const Tipped = Union{ToolButton,Count,SendButton,Mode}
 const TIP_INK = colorant"rgb(240,240,240)"   # on the dark grey that every tooltip has
 
 "What a tooltip shows: `words`, with room around them"
@@ -13282,36 +13285,57 @@ describe(t::TopBar) = begin
                                                       node!(Count, e, :count)))...))
 end
 
-# --- the switch between rich text and plain text ---------------------------------------------
+# --- the snake and the ladder in the top bar ---------------------------------------------------
 #
-# The top bar of a document has a switch with two halves, Rich and Plain. The
-# half that's lit says how the page is written now, and a click on the other
-# half changes it. ⌘E changes it too. See "rich text and plain text" above for
-# what each one does.
+# A page shows at one of two levels of abstraction. The low level is its
+# symbols: the markup that the file holds. The high level is its graphics: what
+# the symbols make, like bold words, a table or a chart. The top bar of a
+# document has one picture that says which level the page is at now, from the
+# game of snakes and ladders. A ladder takes you up, so at the high level it's
+# a ladder. A snake takes you down, so at the low level it's a snake. A click
+# on it goes to the other level, and ⌘E does too. See "rich text and plain
+# text" above for what each level does.
 
-const MODE_W = 104px   # the room that the switch takes in the top bar
+const MODE_W = 30px   # the room that the picture takes in the top bar
 const TITLE_ROOM = 160px   # the least room that the file's name keeps in the top bar of a narrow window
 
-describe(t::ModeTab) = begin
-  e = editor(t)
-  ishovered(t) || (t.quiet = false)
-  on = e.plain == t.plain
-  Box(height(grow=grow), padding(9px, 0px), radius(5px), Alignment.Center, name=t.plain ? "Plain text" : "Rich text",
-      background(on ? colours.bg : clear),
-    label(t.plain ? "Plain" : "Rich", 12px, color=on || ishovered(t) ? colours.ink : colours.dim))
+# UI.jl has a ladder among its icons and no snake. This is the snake's shape, in
+# a square 16 wide: its body, which gets thin towards the tail, its head, the
+# eye that's a hole in the head, and the three lines of its tongue.
+const SNAKE = "M10.4 3.5Q10.06 4.6 9.13 4.26Q8.21 3.92 7.58 3.97Q6.95 4.02 6.42 4.31Q5.89 4.59 5.98 4.99Q6.06 5.38 6.49 5.64Q6.92 5.89 7.94 6.29Q8.96 6.69 9.89 7.31Q10.82 7.94 11.46 9.09Q12.11 10.24 11.6 11.36Q11.1 12.48 10.06 13.07Q9.02 13.67 8.01 13.91Q7 14.16 5.99 14.32Q4.98 14.49 4.01 14.62Q3.05 14.74 3 14.5Q2.95 14.26 3.89 14.01Q4.84 13.77 5.79 13.5Q6.75 13.23 7.69 12.88Q8.62 12.54 9.31 12.06Q9.99 11.59 10.22 10.9Q10.45 10.21 10.09 9.84Q9.73 9.47 8.86 9.02Q8 8.58 7.11 8.33Q6.22 8.08 5.14 7.3Q4.06 6.52 3.99 4.97Q3.91 3.41 5.06 2.63Q6.2 1.85 7.49 1.77Q8.78 1.69 9.76 2.05Q10.74 2.4 10.4 3.5Z" *
+              "M8.99 2.9A2.7 2 15 1 1 14.21 4.3A2.7 2 15 1 1 8.99 2.9Z" *
+              "M11.9 3A0.6 0.6 0 1 0 13.1 3A0.6 0.6 0 1 0 11.9 3Z" *
+              "M13.99 4.01L14.79 4.26A0.3 0.3 0 0 1 14.61 4.84L13.81 4.59A0.3 0.3 0 0 1 13.99 4.01Z" *
+              "M14.58 4.28L15.48 3.88A0.3 0.3 0 0 1 15.72 4.42L14.82 4.82A0.3 0.3 0 0 1 14.58 4.28Z" *
+              "M14.94 4.37L15.54 5.17A0.3 0.3 0 0 1 15.06 5.53L14.46 4.73A0.3 0.3 0 0 1 14.94 4.37Z"
+
+"""
+The name of the snake's icon. Its shape goes among UI.jl's icons the first time
+that it's asked for. It goes there again when the shape there isn't this one:
+an app that loads this file again keeps UI.jl's icons, and with them the shape
+that the file had before.
+"""
+snake() = begin
+  kept = get(icon_cache, "snake", nothing)
+  (kept === nothing || first(kept.paths).d != SNAKE) && (icon_cache["snake"] = (paths=[SVGPath(d=SNAKE)], viewbox=(0f0, 0f0, 16f0, 16f0)))
+  "snake"
 end
 
-cursor(::ModeTab) = :hand
-onkey(t::ModeTab, ::KeyPress{Keys.mouse_left}) = (e = editor(t); plain!(e, t.plain); hush!(t); focus(e); handled)
-tip(t::ModeTab) = (t.plain ? "Show the markup of the part with the caret" : "Show every part as it reads") * hint(editor(t), :plain)
-
-"The switch for the top bar, with a little room after it. Only a document has one: a file of code is always plain, and the settings are always rich."
-mode_part(e) = begin
-  (e.buf.view == :markdown && !issettings(e)) || return ()
-  (Row(height(24px), padding(2px), radius(7px), background(colours.hover),
-     node!(() -> ModeTab(plain=false), e, (:mode, false)), node!(() -> ModeTab(plain=true), e, (:mode, true))),
-   Box(width(6px)))
+describe(m::Mode) = begin
+  e = editor(m)
+  ishovered(m) || (m.quiet = false)
+  Box(width(MODE_W), height(28px), radius(6px), Alignment.Center, name=e.plain ? "Plain text" : "Rich text",
+      background(ishovered(m) ? colours.hover : clear),
+    Icon(e.plain ? snake() : "ladder", size=15px, color=colours.dim))
 end
+
+cursor(::Mode) = :hand
+onkey(m::Mode, ::KeyPress{Keys.mouse_left}) = (e = editor(m); plain!(e, !e.plain); hush!(m); focus(e); handled)
+# The tip says what a click does, as the count's tip does
+tip(m::Mode) = (e = editor(m); (e.plain ? "Go up a level, to the graphics that the symbols make" : "Go down a level, to the symbols of the part with the caret") * hint(e, :plain))
+
+"The snake or the ladder for the top bar. Only a document has one: a file of code is always plain, and the settings are always rich."
+mode_part(e) = (e.buf.view == :markdown && !issettings(e)) ? (node!(Mode, e, :mode),) : ()
 
 """
 Write the page as plain text, or with `on` false as rich text. Only the part

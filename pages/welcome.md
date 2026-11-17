@@ -1,6 +1,6 @@
 # Kaydown
 
-Kaydown is a Markdown editor made with UI.jl. This page is a Markdown file. Each line is drawn the way it will read, and the markup characters stay out of sight. A line keeps that look while you type in it. To change its markup, **click the line and press ⌘E**, or click Plain at the top right: the part of the page with the caret shows its markup. ⌘E again, or Rich, hides it. Press ⌘S to write your changes to the file.
+Kaydown is a Markdown editor made with UI.jl. This page is a Markdown file. Each line is drawn the way it will read, and the markup characters stay out of sight. A line keeps that look while you type in it. To change its markup, **click the line and press ⌘E**, or click the ladder at the top right. As in the game of snakes and ladders, a ladder means that you are up and a snake means that you are down. The click takes you down a level: the part of the page with the caret shows its markup, and a snake takes the ladder's place. ⌘E again, or a click on the snake, takes you back up. Press ⌘S to write your changes to the file.
 
 The page [examples.md](examples.md) lists everything that Kaydown does, with a link to an example of each.
 

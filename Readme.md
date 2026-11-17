@@ -1,6 +1,6 @@
 # Kaydown
 
-A Markdown editor for the Mac, made with [UI.jl](https://github.com/jkroso/UI.jl). It draws each line the way it will read, and you type in it. A line keeps that look while you type. ⌘E, or the switch at the top right, shows the markup of the part of the page that the caret is in.
+A Markdown editor for the Mac, made with [UI.jl](https://github.com/jkroso/UI.jl). It draws each line the way it will read, and you type in it. A line keeps that look while you type. ⌘E, or a click on the ladder at the top right, goes down a level: the part of the page that the caret is in shows its markup. A snake takes the ladder's place, and a click on it goes back up.
 
 A code block does more than show code. What it does depends on its language:
 
@@ -262,7 +262,7 @@ julia -O0 --project=. test/update_test.jl         # the app's own updates: a new
 julia -O0 --project=. test/window_test.jl         # the settings window, ⌘W, and the settings that every window shares
 julia -O0 --project=. test/title_test.jl          # the menu of the file's name in the top bar
 julia -O0 --project=. test/selection_test.jl      # where the colour of the selection goes
-julia -O0 --project=. test/rich_test.jl           # rich text and plain text: where the caret stops, what ⌫ and Return do, and the switch in the top bar
+julia -O0 --project=. test/rich_test.jl           # rich text and plain text: where the caret stops, what ⌫ and Return do, and the snake and the ladder in the top bar
 julia -O0 --project=. test/spelling_test.jl       # the red dots under a word that's spelt wrong, and what the page's menu does with it
 julia -O0 --project=. test/sound_test.jl          # a line that holds only a sound file, and the Transcribe button under its player
 julia -O0 --project=. test/video_test.jl          # a line that holds only a video file. It needs ffmpeg to make the video.

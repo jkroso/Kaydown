@@ -465,7 +465,7 @@ end
   @test !raw(e, 3)
 end
 
-@testset "the switch in the top bar, and ⌘E" begin
+@testset "the snake and the ladder in the top bar, and ⌘E" begin
   e, w = window(PAGE)
   caret!(e, w, 3, 8)
   press(w, Keys.e, cmd)
@@ -475,16 +475,29 @@ end
   press(w, Keys.e, cmd)
   @test !e.plain
   frame(w)
-  click(w, e.nodes[(:mode, true)])
+  # The bar shows one picture, of the level that the page is at now: a ladder while it's up. Its tip says what a click does.
+  # An icon is in the button as the box that it draws in, and the box knows the icon that it came from
+  icons(node, out=String[]) = begin
+    (node isa K.GeometricUI && !(node isa K.Text)) || return out
+    hasproperty(node, :from) && node.from isa K.Icon && push!(out, node.from.name)
+    foreach(n -> icons(n, out), node.children)
+    out
+  end
+  icon() = only(icons(K.describe(e.nodes[:mode])))
+  @test icon() == "ladder"
+  @test K.tip(e.nodes[:mode]) == "Go down a level, to the symbols of the part with the caret  ⌘E"
+  click(w, e.nodes[:mode])
   @test e.plain
-  click(w, e.nodes[(:mode, true)])
-  @test e.plain   # the half that's lit changes nothing
-  click(w, e.nodes[(:mode, false)])
+  frame(w)
+  # A snake while it's down
+  @test icon() == "snake"
+  @test !isempty(K.icon_cache["snake"].paths)   # UI.jl has no snake among its icons, so Kaydown gives it the shape
+  @test K.tip(e.nodes[:mode]) == "Go up a level, to the graphics that the symbols make  ⌘E"
+  click(w, e.nodes[:mode])
   @test !e.plain
-  @test K.tip(e.nodes[(:mode, true)]) == "Show the markup of the part with the caret  ⌘E"
-  # A file of code has no switch
+  # A file of code has no snake and no ladder
   e2, w2 = window("x = 1\n", name="code.jl")
-  @test !haskey(e2.nodes, (:mode, true))
+  @test !haskey(e2.nodes, :mode)
   @test isempty(K.mode_part(e2))
 end
 

@@ -278,8 +278,10 @@ Click an item's words to go to it in its own page. Click its box to tick it ther
 The top of the list changes what it lists:
 
 - Type words in the field, and the list keeps only the lines that have every one of them.
-- Click the button beside the field to choose the kind of line: to-do items, done items, headings or all lines.
-- If the page has folders beside it, a second button chooses the folder to look in.
+- Click the button beside the field to choose the kind of thing to list. A list of the kinds opens under the button. Type in its field to make that list shorter, then click a kind, or pick one with the arrow keys and press Return.
+- If the page has folders beside it, a second button chooses the folder to look in, in the same way.
+
+The kinds are the kinds of line, like to-do items, headings, bullet points, links and pictures, and the kinds of block, like takeoffs, schedules, sketches and code blocks. A block shows in the list as the heading that it's under.
 
 Each change goes into the block's lines, so the page's file keeps it. The next block lists each heading that has the word email. Its lines are `what: headings` and `with: email`. To see them, hold ⌥ and click the list.
 

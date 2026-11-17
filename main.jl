@@ -6156,19 +6156,51 @@ unit!(v::TakeoffView, i::Int, unit::AbstractString) = begin
   tool!(v, m.kind)
 end
 
+# The list of units and the lists at the top of a `find` block are one kind of
+# list. These three draw it: the box with the field at its top, a row of it, and
+# the words that take the place of its rows when nothing matches.
+
+const FLOAT_ROW = 28px   # how tall a row of such a list is
+
+"""
+A list that floats beside what it's for, with a field at its top that searches
+it. `input` is the field, and `body` is the rows under it.
+"""
+float_list(input, body; name="List") = begin
+  c = found_colours()
+  Box(width(grow=grow), padding(6px), radius(8px), background(c.frame), border(1px, :solid, c.line),
+      shadow(0, 6, 16, RGBA(60 / 255, 45 / 255, 20 / 255, 0.2)), name=name,
+    Column(width(grow=grow), Alignment.Start, child_gap=4px,
+      Box(width(grow=grow), padding(2px, 2px),
+        Box(width(grow=grow), height(28px), padding(8px, 0px), radius(6px), border(1px, :solid, c.line), background(c.frame), input)),
+      body))
+end
+
+"""
+A row of such a list. `picked` is the row that Return takes, and `on` is the
+one that's chosen now, which is in bold. `short` is a word at its right.
+"""
+float_row(name, short=""; picked=false, on=false) = begin
+  c = found_colours()
+  Row(width(grow=grow), height(FLOAT_ROW), padding(8px, 0px), radius(6px), child_gap=8px, Alignment.Center,
+      background(picked ? c.pick : c.frame),
+    Row(width(grow=grow), height(grow=grow), Alignment.Center, clip=true, label(name, 13px, color=c.ink, weight=on ? "Semibold" : "")),
+    (isempty(short) ? () : (Box(label(short, 12px, color=c.dim)),))...)
+end
+
+"What such a list says in place of its rows when nothing in it matches"
+float_none(words) = Row(width(grow=grow), height(FLOAT_ROW), padding(8px, 0px), Alignment.Center, label(words, 12px, color=found_colours().dim))
+
 describe(r::UnitRow) = begin
-  v, c = r.of, found_colours()
+  v = r.of
   r.k <= length(v.rows) || return Box(height(0px))
   unit = v.rows[r.k]
   a = v.asking
   on = a !== nothing && a[1] == :unit && a[2] <= length(v.data.measures) && Plans.unit(v.data.measures[a[2]]) == unit
   short = Plans.unit_short(unit)
   name = Plans.UNIT_WORDS[unit]
-  Row(width(grow=grow), height(28px), padding(8px, 0px), radius(6px), child_gap=8px, Alignment.Center,
-      background(v.pick == r.k ? c.pick : c.frame),
-    Row(width(grow=grow), height(grow=grow), Alignment.Center, clip=true, label(name, 13px, color=c.ink, weight=on ? "Semibold" : "")),
-    # The short form shows when it isn't the name again
-    (lowercase(short) == lowercase(name) ? () : (Box(label(short, 12px, color=c.dim)),))...)
+  # The short form shows when it isn't the name again
+  float_row(name, lowercase(short) == lowercase(name) ? "" : short, picked=v.pick == r.k, on=on)
 end
 
 cursor(::UnitRow) = :hand
@@ -6186,23 +6218,18 @@ onmouse(r::UnitRow, ::MouseMove) = begin
 end
 
 describe(m::UnitMenu) = begin
-  v, c = m.of, found_colours()
-  n, high = length(v.rows), 28px
+  v = m.of
+  n, high = length(v.rows), FLOAT_ROW
   scroll = get!(() -> Scroll(width(grow=grow)), v.parts, :unit_scroll)
   body = if n == 0
-    Row(width(grow=grow), height(high), padding(8px, 0px), Alignment.Center, label("No unit has that name", 12px, color=c.dim))
+    float_none("No unit has that name")
   else
     # Half a row at the bottom says that the list goes on
     scroll.height = height(n <= MOST_UNITS ? n * high : MOST_UNITS * high - high / 2)
     m.pick == v.pick || (m.pick = v.pick; scroll_into_view!(scroll, high * (v.pick - 1), high * v.pick))
     reuse!(scroll, Column(width(grow=grow), Alignment.Start, [part!(() -> UnitRow(of=v, k=k), v, (:unit_row, k)) for k in 1:n]...))
   end
-  Box(width(grow=grow), padding(6px), radius(8px), background(c.frame), border(1px, :solid, c.line),
-      shadow(0, 6, 16, RGBA(60 / 255, 45 / 255, 20 / 255, 0.2)), name="Units",
-    Column(width(grow=grow), Alignment.Start, child_gap=4px,
-      Box(width(grow=grow), padding(2px, 2px),
-        Box(width(grow=grow), height(28px), padding(8px, 0px), radius(6px), border(1px, :solid, c.line), background(c.frame), plan_input(v))),
-      body))
+  float_list(plan_input(v), body, name="Units")
 end
 
 placed!(m::UnitMenu, side) = (m.side = side; nothing)
@@ -9168,8 +9195,12 @@ BLOCKS[BOARD] = BlockKind("Board", "kanban", BoardView, board_html)
 #
 # The top of the list changes what it asks for, so the block's lines needn't
 # be seen: a field for the words that a line must have, a button that opens a
-# menu of the kinds of line, and one that opens a menu of the folders when the
-# page has folders beside it. Each change goes into the block's lines. Under them, a line says
+# list of the kinds of thing to list, and one that opens a list of the folders
+# when the page has folders beside it. Each of the two lists floats under its
+# button, as the takeoff's list of units does, with a field at its top that
+# searches it. The kinds are those of find.jl: the kinds of line, and each
+# kind of block, which is listed by the heading that it's under. Each change
+# goes into the block's lines. Under them, a line says
 # what the list is of and where it looked. It counts only the lines that
 # match, not the items that were ticked here.
 
@@ -9179,10 +9210,9 @@ const FIND_PAGES = 3000   # the most pages that a list reads
 const FIND_EVERY = 3      # seconds between two looks at the folder, while the window is drawn
 const FIND_BUDGET = 0.3   # seconds that one look at the folder can take
 const FIND_BAR = 440px     # the room that the top of a list needs to show its field and its buttons in one row
-push!(BLOCK_ICONS, "search", "file-earmark-text", "folder")
-
-# The kinds of line that a list can be of, and the name of each one in the list's menu
-const FIND_KINDS = ((:todo, "To-do items"), (:done, "Done items"), (:heading, "Headings"), (:line, "Lines"))
+const FIND_MENU = :find_choices   # the key of the list that a button at the top opens
+const MOST_CHOICES = 8     # the rows that such a list shows before it scrolls
+push!(BLOCK_ICONS, "search", "file-earmark-text", "folder", "code-slash")
 
 "What a `find` block shows: the lines of a folder's pages that match"
 @def mutable struct SearchView <: SemanticUI
@@ -9195,16 +9225,33 @@ const FIND_KINDS = ((:todo, "To-do items"), (:done, "Done items"), (:heading, "H
   kept::Vector{Searches.Match} = Searches.Match[]   # the items whose box was clicked here. They stay in the list.
   pages::Dict{String,Any} = Dict{String,Any}()      # what was found in each page, and the mark of the page's text then
   parts::Dict{Any,Any} = Dict{Any,Any}()   # its rows, kept between frames
+  asking::Any = nothing                    # what the list that floats under a button chooses: :kind or :folder, or nothing when none shows
+  rows::Vector{Any} = Any[]                # the rows of that list that have the words in its field
+  pick::Int = 1                            # the row of them that Return takes
+  typed::String = ""                       # the words in its field when the rows were last worked out
+  back::Bool = false                       # the field for the words to find had the keyboard when it opened, and gets it back
 end
 
 """
 A button at the top of a list that shows what the list asks for now. A click
-opens a menu of the others. One chooses the kind of line that the list is of,
-and one chooses the folder that it looks in.
+opens a list of the others. One chooses the kind of thing that the list is
+of, and one chooses the folder that it looks in.
 """
 @def mutable struct SearchChoice <: SemanticUI
   of::Any = nothing     # the list
   what::Symbol = :kind  # :kind or :folder
+end
+"The list that floats under such a button, with a field that searches it. It's the takeoff's list of units, with other rows."
+@def mutable struct ChoiceMenu <: SemanticUI
+  of::Any = nothing        # the list that it changes
+  button::Any = nothing    # the button that it's under
+  side::Symbol = :bottom   # the side of the button that it's on
+  pick::Int = 0            # the row that was picked when it was last drawn. A row that the keys pick is brought in sight.
+end
+"A row of that list: a kind of thing to list, or a folder"
+@def mutable struct ChoiceRow <: SemanticUI
+  of::Any = nothing
+  k::Int = 0
 end
 
 "The name of a page, over the lines of that page in the list"
@@ -9255,6 +9302,7 @@ that were typed in its field are written into its block. The words make the
 list shorter. They don't change the kind of line that it lists.
 """
 block_tick!(v::SearchView) = begin
+  choosing_tick!(v)
   words = String.(split(search_input(v).text))
   q = v.data
   words == q.with && return v
@@ -9275,41 +9323,155 @@ end
 "Look in the folder `name` beside the page, or in the page's own folder when `name` is empty"
 look_in!(v::SearchView, name) = (v.data.folder = String(name); ask!(v))
 
-"List lines of the kind `kind`: :todo, :done, :heading or :line"
+"List things of the kind `kind`, one of the kinds of find.jl, like :todo or :takeoff"
 list_kind!(v::SearchView, kind) = (v.data.what = kind; ask!(v))
 
-"What the button `c` says: the kind of line that its list is of now, or the folder that the list looks in"
+"What the button `c` says: the kind of thing that its list is of now, or the folder that the list looks in"
 choice_words(c::SearchChoice) = begin
   q = c.of.data
-  c.what == :folder && return isempty(q.folder) ? "This folder" : q.folder
-  FIND_KINDS[findfirst(k -> k[1] == Searches.kind(q), FIND_KINDS)][2]
-end
-
-"The items of the menu of the button `c`, and what a click on the `i`th one does"
-choices(c::SearchChoice) = begin
-  v = c.of
-  c.what == :kind && return [name for (_, name) in FIND_KINDS], i -> (i in eachindex(FIND_KINDS) && list_kind!(v, FIND_KINDS[i][1]); nothing)
-  folders = search_folders(v)
-  ["This folder"; "-"; folders], i -> (i == 1 ? look_in!(v, "") : i - 2 in eachindex(folders) && look_in!(v, folders[i-2]); nothing)
+  c.what == :folder ? (isempty(q.folder) ? "This folder" : q.folder) : Searches.title(Searches.kind(q))
 end
 
 describe(c::SearchChoice) =
   Row(height(26px), padding(9px, 0px), child_gap=6px, radius(6px), Alignment.Center, name="Menu",
-      border(1px, :solid, colours.line), background(ishovered(c) ? colours.hover : colours.bg),
+      border(1px, :solid, c.of.asking == c.what ? colours.accent : colours.line), background(ishovered(c) ? colours.hover : colours.bg),
     (c.what == :folder ? (Icon("folder", size=13px, color=colours.dim),) : ())...,
     Box(label(choice_words(c), 12px)), Icon("chevron-down", size=9px, color=colours.dim))
 
 cursor(::SearchChoice) = :hand
+onkey(c::SearchChoice, ev::KeyPress{Keys.mouse_left}) = open_choices!(c, ev.window)
 
-# A click opens the button's menu under it
-onkey(c::SearchChoice, ev::KeyPress{Keys.mouse_left}) = begin
-  w = ev.window
-  items, act = choices(c)
-  r = rect(c)
-  at = r === nothing ? (w.mouse[1], w.mouse[2]) : (r.left, r.top + r.height + 4px)
-  system_menu(w, items, act; at) || drawn_menu!(w, items, act; at)
+# --- the list that a button at the top opens -----------------------------------------------
+#
+# A click on a button shows its list under it: every kind of thing that a
+# `find` block can list, or the page's own folder and the folders beside it.
+# The keyboard goes to the field at the top of the list, and the list keeps
+# the rows that have every word typed there. A kind is found by any of the
+# names that a block can give it, so "tasks" finds To-do items. The up and
+# down arrows pick a row, and so does the mouse. Return or a click takes it.
+# Esc, or a click somewhere else, closes the list and changes nothing.
+
+"The field at the top of the list that a button opens"
+choice_input(v::SearchView) = block_part!(v, :filter) do
+  TextInput(placeholder="Filter…", font_family=SANS, font_size=13px,
+            look=(_, text) -> Row(width(grow=grow), height(grow=grow), clip=true, text))
+end
+
+"""
+Every row of the list that the button for `what` opens. A row has its `key`,
+which is the kind or the folder that goes into the block, the `name` that it
+shows, and the `words` that find it.
+"""
+choice_rows(v::SearchView, what::Symbol) = begin
+  what == :kind && return Any[(key=k, name=Searches.title(k), words=[Searches.WHATS[k].names..., Searches.WHATS[k].langs...]) for k in keys(Searches.WHATS)]
+  Any[(key="", name="This folder", words=["this folder"]); [(key=f, name=f, words=[f]) for f in search_folders(v)]]
+end
+
+"True when the row `r` has every one of the words in `typed`"
+choice_matches(r, typed::AbstractString) = all(w -> any(h -> occursin(w, lowercase(h)), r.words), split(lowercase(typed)))
+
+"True when the row `r` is what the list of `v` asks for now"
+chosen(v::SearchView, r) = r.key isa Symbol ? r.key == Searches.kind(v.data) : r.key == v.data.folder
+
+"Show the list of the button `c` under it, with the keyboard in its field"
+open_choices!(c::SearchChoice, window) = begin
+  v = c.of
+  stop_choosing!(v)
+  input = choice_input(v)
+  input.color = colours.ink
+  input.text = ""
+  input.anchor = input.cursor = 0
+  v.back = window.focus === search_input(v)
+  v.asking, v.typed = c.what, ""
+  v.rows = choice_rows(v, c.what)
+  v.pick = something(findfirst(r -> chosen(v, r), v.rows), 1)
+  focus(input)
+  menu = ChoiceMenu(of=v, button=c)
+  v.parts[:menu] = menu
+  popup!(window, menu, anchor=c, placement=:bottom, gap=9px, width=230px, key=FIND_MENU,
+         onclose=() -> stop_choosing!(v), theme=component_theme(editor(v).zoom))
   handled
 end
+
+"Take the list of a button away. The keyboard goes back to the field that had it, or to the page."
+stop_choosing!(v::SearchView) = begin
+  v.asking === nothing && return handled
+  v.asking = nothing
+  v.rows = Any[]
+  w = window_of(v)
+  w === nothing && return handled
+  close_popup!(w, FIND_MENU)
+  w.focus === choice_input(v) && focus(v.back ? search_input(v) : editor(v))
+  handled
+end
+
+"Take row `k` of the list that shows: the list of `v` is of that kind, or it looks in that folder"
+choose!(v::SearchView, k::Int) = begin
+  (v.asking !== nothing && k in eachindex(v.rows)) || return stop_choosing!(v)
+  what, key = v.asking, v.rows[k].key
+  stop_choosing!(v)
+  what == :kind ? list_kind!(v, key) : look_in!(v, key)
+  handled
+end
+
+"""
+What happens in each frame to the list that a button opened: it closes when a
+click somewhere else took the keyboard from its field, and it keeps the rows
+that have the words in the field. New words pick the row whose name starts
+with them, or the first row.
+"""
+choosing_tick!(v::SearchView) = begin
+  v.asking === nothing && return
+  w = window_of(v)
+  (w === nothing || w.focus !== choice_input(v)) && return stop_choosing!(v)
+  typed = String(strip(choice_input(v).text))
+  typed == v.typed && return
+  v.typed = typed
+  v.rows = filter!(r -> choice_matches(r, typed), choice_rows(v, v.asking))
+  v.pick = something(findfirst(r -> startswith(lowercase(r.name), lowercase(typed)), v.rows), 1)
+end
+
+describe(r::ChoiceRow) = begin
+  v = r.of
+  r.k <= length(v.rows) || return Box(height(0px))
+  row = v.rows[r.k]
+  float_row(row.name, picked=v.pick == r.k, on=chosen(v, row))
+end
+
+cursor(::ChoiceRow) = :hand
+onkey(r::ChoiceRow, ::KeyPress{Keys.mouse_left}) = choose!(r.of, r.k)
+# The mouse picks the row that it's over, as the arrow keys do
+onmouse(r::ChoiceRow, ::MouseMove) = begin
+  v = r.of
+  v.pick = r.k
+  menu = get(v.parts, :menu, nothing)
+  menu === nothing || (menu.pick = r.k)   # it's in sight already, so the list doesn't scroll to it
+  handled
+end
+
+describe(m::ChoiceMenu) = begin
+  v = m.of
+  n, high = length(v.rows), FLOAT_ROW
+  scroll = get!(() -> Scroll(width(grow=grow)), v.parts, :choice_scroll)
+  body = if n == 0
+    float_none(v.asking == :folder ? "No folder has that name" : "Nothing has that name")
+  else
+    # Half a row at the bottom says that the list goes on
+    scroll.height = height(n <= MOST_CHOICES ? n * high : MOST_CHOICES * high - high / 2)
+    m.pick == v.pick || (m.pick = v.pick; scroll_into_view!(scroll, high * (v.pick - 1), high * v.pick))
+    reuse!(scroll, Column(width(grow=grow), Alignment.Start, [block_part!(() -> ChoiceRow(of=v, k=k), v, (:choice_row, k)) for k in 1:n]...))
+  end
+  float_list(choice_input(v), body, name="Choices")
+end
+
+placed!(m::ChoiceMenu, side) = (m.side = side; nothing)
+draw(ctx, size, ui::ConcreteRect, m::ChoiceMenu) = caret(ctx, ui, m.side, rect(m.button))
+
+# The list sees a key before its field does. The arrows pick a row, Return takes it, and Esc closes the list.
+onkey(m::ChoiceMenu, ::KeyPress{Keys.enter}) = choose!(m.of, m.of.pick)
+onkey(m::ChoiceMenu, ::KeyPress{Keys.escape}) = stop_choosing!(m.of)
+onkey(m::ChoiceMenu, ::KeyPress{Keys.down}) = (v = m.of; v.pick = min(v.pick + 1, max(1, length(v.rows))); handled)
+onkey(m::ChoiceMenu, ::KeyPress{Keys.up}) = (v = m.of; v.pick = max(v.pick - 1, 1); handled)
 
 # Return in the field gives the keyboard back to the page
 onkey(v::SearchView, ::KeyPress{Keys.enter}) = (focus(editor(v)); handled)
@@ -9430,6 +9592,8 @@ describe(r::SearchRow) = begin
   boxed = m.kind in (:todo, :done)
   Row(width(grow=grow), padding(4px, 12px, 4px, 31px), child_gap=9px, Alignment.Start, name="Found", background(ishovered(r) ? colours.hover : clear),
     (boxed ? (Box(padding(0px, 1px, 0px, 0px), r.box),) : ())...,
+    # A block has the icon of its kind, as it has in the sidebar
+    (Searches.isblock(m.kind) ? (Box(padding(0px, 2px, 0px, 0px), Icon(block_icon(m.kind), size=13px, color=colours.dim)),) : ())...,
     Box(width(grow=grow), Text(m.text, size=13.5px, family=SANS, subfamily=m.kind == :heading ? "Semibold" : "",
                                color=m.kind == :done ? colours.dim : colours.ink, wrap=WrapMode.words)))
 end
@@ -9437,13 +9601,29 @@ end
 cursor(::Union{SearchPage,SearchRow,SearchTick}) = :hand
 cursor(::SearchView) = :arrow
 
-"Show the page at `path`, with the caret at the end of the line that `m` is on now"
+"The icon of the kind of block `kind`, one of the kinds of find.jl. It's the one that the sidebar shows beside such a block."
+block_icon(kind::Symbol) = begin
+  kind == :code && return "code-slash"
+  lang = first(Searches.WHATS[kind].langs)
+  lang == TAKEOFF ? "rulers" : lang == SCHEDULE ? "bar-chart-steps" : lang == SHEET ? "calculator" : lang == SPREADSHEET ? "grid-3x3" :
+  lang == DIAGRAM ? "diagram-3" : haskey(BLOCKS, lang) ? BLOCKS[lang].icon : "puzzle"
+end
+
+"""
+Show the page at `path`, with the caret at the end of the line that `m` is on
+now. For a block that shows as a component, the caret goes to the line under
+it: in the block, it would show the block's lines.
+"""
 visit!(e, path, m=nothing) = begin
   path == e.buf.path || open!(e, path)
   focus(e)
   m === nothing && return handled
-  i = Searches.locate(m, e.buf.lines, kinds(e.buf))
-  i === nothing ? handled : show_line!(e, i)
+  b = e.buf
+  i = Searches.locate(m, b.lines, kinds(b))
+  i === nothing && return handled
+  Searches.isblock(m.kind) || return show_line!(e, i)
+  under = last(Searches.block_span(kinds(b), i)) + 2
+  show_line!(e, m.kind == :code ? min(i + 1, length(b.lines)) : min(under, length(b.lines)))
 end
 
 onkey(p::SearchPage, ::KeyPress{Keys.mouse_left}) = visit!(editor(p.of), p.path)
@@ -9508,7 +9688,7 @@ matches, so it isn't counted.
 """
 search_words(v::SearchView) = begin
   q = v.data
-  own = [m for m in found!(v).matches if Searches.kind(q) in (m.kind, :line)]
+  own = [m for m in found!(v).matches if Searches.counted(q, m)]
   Searches.summary(q, length(own), length(unique(m.path for m in own)))
 end
 

@@ -14,7 +14,7 @@ A code block does more than show code. What it does depends on its language:
 - `chart` draws the numbers of a table as bars, as lines or as a pie.
 - `board` shows the page's to-do items as cards in columns, and you drag a card to move it.
 - `sketch` is a drawing: lines by hand, arrows, boxes, ovals and words.
-- `find` lists the to-do items that aren't ticked in every page of a folder. With words in it, it lists the lines that have those words.
+- `find` lists the to-do items that aren't ticked in every page of a folder. With words in it, it lists the lines that have those words. It can list another kind of line, or a kind of block, like every takeoff.
 - `email` lists the emails with a person.
 - `ask` is a question from an agent, with answers to click.
 - `changes` shows a diff from an agent, with a button on each change that accepts or rejects it.
@@ -135,18 +135,28 @@ A code block in the language `find` looks through every page of its page's folde
 The top of the list changes what the block asks for, so you needn't see its lines:
 
 - A field holds the words that a line must have. Type in it, and the list keeps only the lines that have every word. Return gives the keyboard back to the page.
-- A button shows the kind of line that the list is of. Click it for a menu of the kinds: to-do items, done items, headings and lines.
-- If the page has folders beside it, a second button shows the folder that the list looks in. Click it for a menu of those folders.
+- A button shows the kind of thing that the list is of. Click it, and a list of every kind floats under it. This is the list that a takeoff shows for the units of a measure.
+- If the page has folders beside it, a second button shows the folder that the list looks in. Click it for the same kind of list, with those folders in it.
+
+The list under a button has a field at its top, and the keyboard is in that field when the list opens. Type there, and the list keeps the rows that have what you typed. A kind is found by its other names too: "tasks" finds To-do items, and "images" finds Pictures. The up and down arrows pick a row, and so does the mouse. Return or a click takes the row. Esc, or a click somewhere else, closes the list and changes nothing.
+
+The kinds are:
+
+- The kinds of line: to-do items, done items, headings, lines, paragraphs, bullet points, numbered items, quotes and table rows.
+- Links and pictures, which list the lines that have one.
+- The kinds of block: code blocks, sheets, spreadsheets, live blocks, diagrams, takeoffs, schedules, charts, boards, sketches, find lists, email lists, questions and changes.
+
+A block shows in the list as the heading that it's under, with the icon of its kind. A block of code, and a block with no heading over it, shows as its own first line. The words in the first field are looked for in that heading and in the lines of the block. A kind of block that a file of your own defines is listed with the code blocks.
 
 Each change goes into the block's lines, and ⌘Z takes it back. The lines can be written by hand too:
 
 - An empty block lists each to-do item that isn't ticked.
-- `what: headings` lists headings, `what: done items` lists the to-do items that are ticked, and `what: lines` lists every line of text.
+- `what: headings` lists headings, `what: done items` lists the to-do items that are ticked, and `what: lines` lists every line of text. `what:` takes the name of any kind in the button's list, like `what: takeoffs`.
 - `with: plumber sam` keeps only the lines that have every one of those words.
 - `in: jobs` looks only in the folder `jobs` beside the page.
 - Words by themselves, with no `what:` line, list the lines of any kind that have those words.
 
-Click a line of the list to open its page at that line. Click the box of a to-do item to tick it in its own page. The item stays in the list, ticked, until another page shows, and the top of the list no longer counts it. A second click on its box takes the tick away. If that page isn't open in Kaydown, or is open with nothing to save, Kaydown writes the tick to the page's file at once. That's the one time that Kaydown writes to a file without ⌘S. `find.jl` says how the block is written.
+Click a line of the list to open its page at that line. A click on a block opens its page with the caret under the block. Click the box of a to-do item to tick it in its own page. The item stays in the list, ticked, until another page shows, and the top of the list no longer counts it. A second click on its box takes the tick away. If that page isn't open in Kaydown, or is open with nothing to save, Kaydown writes the tick to the page's file at once. That's the one time that Kaydown writes to a file without ⌘S. `find.jl` says how the block is written.
 
 ## Read and write email
 

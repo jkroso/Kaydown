@@ -112,6 +112,12 @@
 #     Kaydown the app that opens Markdown files. The tabs at the top of that
 #     window show two more pages: Code editor, for how code shows, and Key
 #     bindings, for the keys of each command. ⌘, again closes that window.
+#   - ⌘, then Email takes your email account. Kaydown then keeps a folder
+#     with every email in it, as a Markdown page, in the folders that the
+#     email server has. ⌘⇧I shows the inbox: the sidebar lists the emails,
+#     and the top bar of an email has buttons that answer it, archive it and
+#     delete it. ⌘⇧N starts a new email, which is a page like any other, and
+#     ⌘⇧Return sends it. mail.jl says how it works.
 #   - The Kaydown app updates itself. It gets a newer version while you work,
 #     and the new version takes its place when you quit. A box in the settings
 #     turns that off. update.jl says how it works.
@@ -147,6 +153,8 @@
 @use "github.com/jkroso/UI.jl/Interface/window" hide_titlebar! place_window_buttons! drag_window! set_dark! nswindow system_menu
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Icon" Icon
 @use "github.com/jkroso/UI.jl/Interface/Semantic/TextInput" TextInput
+@use "github.com/jkroso/UI.jl/Interface/Semantic/Button" Button
+@use "github.com/jkroso/UI.jl/Interface/Semantic/Link" Link
 @use "github.com/jkroso/UI.jl/Interface/Semantic/ListTree" => Tree
 @use "github.com/jkroso/UI.jl/Interface/Semantic/STLViewer" STLViewer Mesh load!
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Player" AudioPlayer VideoPlayer pause! card_bottom
@@ -175,6 +183,7 @@
 @use "./sketch" => Sketches
 @use "./centient" => Centient
 @use "./update" => Update
+@use "./mail" => Mail
 @use "github.com/jkroso/UI.jl/Interface/draw" Bubble
 @use "github.com/jkroso/URI.jl/FSPath" FSPath
 @use Colors: @colorant_str, RGBA, Colorant
@@ -2856,6 +2865,20 @@ sandbox(e) = get!(e.nodes, :sandbox) do
   Core.eval(m, :(const update_news = $(() -> update_news(e))))
   Core.eval(m, :(const update_offer = $(() -> (reads!(e, :updates); reads!(e, :update); Update.label(Update.own())))))
   Core.eval(m, :(const update! = $(() -> update_act!(e))))
+  # ... and the email. `email_form()` shows the fields of the account, with a button that keeps them. `email_news()`
+  # says how far the look for new email has got. `email_check!()` looks now, and `email_show!()` shows the inbox.
+  # `email_every()` is how many minutes go by between two looks. `email_back()` is how many months back the emails
+  # that Kaydown gets go, with 0 for every email. `email_rest()` is whether it gets the other folders after the inbox.
+  Core.eval(m, :(const email_form = $(() -> node!(MailForm, e, :mail_form))))
+  Core.eval(m, :(const email_news = $(() -> mail_news(e))))
+  Core.eval(m, :(const email_check! = $(() -> mail_check!(e))))
+  Core.eval(m, :(const email_show! = $(() -> mail_show!(e))))
+  Core.eval(m, :(const email_every = $(() -> mail_every(e))))
+  Core.eval(m, :(const email_every! = $(minutes -> mail_every!(e, minutes))))
+  Core.eval(m, :(const email_back = $(() -> mail_back(e))))
+  Core.eval(m, :(const email_back! = $(months -> mail_back!(e, months))))
+  Core.eval(m, :(const email_rest = $(() -> mail_rest(e))))
+  Core.eval(m, :(const email_rest! = $(on -> mail_rest!(e, on))))
   # The units that a sheet has, from Units.jl, so that code can work with lengths, times and so on: 12m * 2.4m.
   # They come in with `using`, so a name that a block makes or loads for itself wins over a unit with that name.
   Core.eval(m, :(const SheetUnits = $(units())))
@@ -3126,6 +3149,8 @@ end
   text::Any = nothing    # what `kept!` keeps of the file at `at`, like its text, or false if it has none
   read::Any = nothing    # what `text` is: its kind, the path of its file and when the file last changed
   inline::Bool = false   # in a line of text, so its list floats under it and takes no room on the page
+  folders::Bool = false  # only a folder can be the path, as when you choose where something is kept. The folder needn't be made yet.
+  room::Union{Nothing,px} = nothing   # how wide it can be, when it has less room than the page is wide
 end
 
 "The list or the preview under a breadcrumb that's in a line of text. It floats over the page."
@@ -3179,7 +3204,7 @@ describe(l::Breadcrumb) = begin
   # The first name and as many of the last names as fit. An … stands for the names left out.
   # An open breadcrumb that isn't in a line of text is in a panel with what's under it, so it has less room
   panel = l.open && !l.inline
-  n = fitting(map(wide, names), editor(l).width - (panel ? 2PANEL_PAD : 0px))
+  n = fitting(map(wide, names), something(l.room, editor(l).width) - (panel ? 2PANEL_PAD : 0px))
   kept = n < length(names) - 1 ? Any[names[1], Box(width(DOTS_W), label("…", color=colours.dim)), names[end-n+1:end]...] : names
   parts = Iterators.flatten(i == 1 ? (c,) : (arrow(), c) for (i, c) in enumerate(kept))
   l.inline && return Row(height(24px), child_gap=CRUMB_GAP, clip=true, parts...)
@@ -3194,10 +3219,13 @@ const PANEL_PAD = 6px
 
 "What shows under an open breadcrumb: the lines of a folder, or the preview of a file"
 contents(l::Breadcrumb) = begin
+  l.folders && !isdir(l.at) &&
+    return (Row(width(grow=grow), height(26px), padding(10px, 0px), label("This folder isn't made yet", 12px, color=colours.dim)),)
   isdir(l.at) || return (preview(l, l.at),)
   hush!(l)
   l.viewer = l.text = nothing
   names = listing(l.at)
+  l.folders && filter!(n -> isdir(joinpath(l.at, n)), names)
   shown = first(names, MOST_FILES)
   isempty(names) && return (Row(width(grow=grow), height(26px), padding(10px, 0px), label("This folder is empty", 12px, color=colours.dim)),)
   ((entry(l, joinpath(l.at, n)) for n in shown)...,
@@ -3239,7 +3267,7 @@ describe(c::Crumb) = begin
   last = c.path == l.at
   Row(height(24px), padding(6px, 0px), radius(5px), child_gap=6px,
       background(last && l.open ? colours.active : ishovered(c) ? colours.hover : clear),
-    (last ? (Icon(isdir(c.path) ? "folder" : file_icon(c.path), size=13px, color=colours.dim),) : ())...,
+    (last ? (Icon(l.folders || isdir(c.path) ? "folder" : file_icon(c.path), size=13px, color=colours.dim),) : ())...,
     Box(label(short(c.name), color=last ? colours.ink : colours.dim, weight=last ? "Semibold" : "")))
 end
 
@@ -10413,11 +10441,11 @@ took(e) = begin
   holds(f, under) || holds(under, f)
 end
 
-"Open a link: a Markdown file in this editor, and anything else in the app the system picks for it"
+"Open a link: a file on the Mac in this editor, like a page, or a file that came with an email, and anything else in the app the system picks for it"
 follow!(e, url) = begin
   startswith(url, '^') && return follow_note!(e, url[2:end])
   path = abspath(docdir(e), unescaped(url))
-  ismarkdown(path) && isfile(path) ? open!(e, path) : open_url(url)
+  isfile(path) ? open!(e, path) : open_url(url)
 end
 
 drag!(e, pos) = begin
@@ -11396,6 +11424,19 @@ const COMMAND_GROUPS = [
     Command(:smaller, "Make the text smaller", :window, "cmd+minus", (e, w, _) -> zoom!(e, zoom_for(text_size(e) - 1))),
     Command(:usual_size, "Put the text back to its usual size", :window, "cmd+0", (e, w, _) -> zoom!(e, 1.0)),
     Command(:inspector, "Show or hide the layout inspector", :window, "cmd+opt+i", (e, w, _) -> toggle_inspector!(w))],
+  "Email" => [
+    Command(:mail_inbox, "Show the inbox", :window, "cmd+shift+i", (e, w, _) -> mail_inbox!(e)),
+    Command(:mail_check, "Look for new email", :window, "cmd+shift+m", (e, w, _) -> mail_check!(e)),
+    Command(:mail_new, "Write a new email", :window, "cmd+shift+n", (e, w, _) -> mail_new!(e)),
+    Command(:mail_reply, "Reply to the email", :window, "cmd+r", (e, w, _) -> mail_reply!(e)),
+    Command(:mail_reply_all, "Reply to everyone", :window, "cmd+shift+r", (e, w, _) -> mail_reply!(e, all=true)),
+    Command(:mail_forward, "Forward the email", :window, "cmd+shift+f", (e, w, _) -> mail_forward!(e)),
+    Command(:mail_send, "Send the email", :window, "cmd+shift+enter", (e, w, _) -> mail_send!(e)),
+    Command(:mail_archive, "Archive the email", :window, "ctrl+cmd+a", (e, w, _) -> mail_archive!(e)),
+    Command(:mail_delete, "Delete the email", :window, "ctrl+cmd+backspace", (e, w, _) -> mail_delete!(e)),
+    Command(:mail_unread, "Mark the email as not read", :window, "cmd+shift+u", (e, w, _) -> mail_unread!(e)),
+    Command(:mail_next, "Show the next email", :window, "cmd+right_bracket", (e, w, _) -> mail_step!(e, 1)),
+    Command(:mail_last, "Show the email before", :window, "cmd+left_bracket", (e, w, _) -> mail_step!(e, -1))],
   "The text" => [
     Command(:undo, "Undo", :edit, "cmd+z", (e, w, _) -> (undo!(e.buf); touch!(e))),
     Command(:redo, "Redo", :edit, "cmd+shift+z", (e, w, _) -> (redo!(e.buf); touch!(e))),
@@ -11756,12 +11797,17 @@ onkey(e::Editor, ev::KeyPress{K}) where K = begin
       # While the sidebar has the keyboard, its two commands give the keyboard back to the text, and the first hides it too
       command == :sidebar && toggle_panel!(e)
       focus(e)
+    elseif K == Keys.enter && mail_typing(e, w.focus)
+      # Return in a field of the email account does what the Connect button does
+      mail_keep!(e, node!(MailForm, e, :mail_form))
     elseif kind == :window
       run!(e, w, command)
     end
-    return
+    # Tab goes from one field of a live block to the next. In the field that finds text, and the one
+    # that renames a file, it stays where it is.
+    return K == Keys.tab && (w.focus === find_input(e) || w.focus === renamer(e)) ? handled : nothing
   end
-  e.popup == :finder && return finder_key!(e, K)
+  e.popup == :finder && return (finder_key!(e, K); K == Keys.tab ? handled : nothing)
   # The list of names under a sheet's expression takes ↑, ↓, Return, Tab and esc
   !cmd && !opt && !shift && suggest_key!(e, K) && return nothing
   # While the page is read, there's no caret to move, so the keys that would move it scroll the
@@ -11991,7 +12037,7 @@ describe(b::ToolButton) = begin
   on = (b.action == :panel && e.panel) || (b.action == :marks && marking(e)) || (b.action == :hidden && e.hidden)
   box = Box(width(30px), height(28px), radius(6px), Alignment.Center, name="Button",
             background(on ? colours.active : ishovered(b) && !off(b) ? colours.hover : clear),
-          Icon(b.icon, size=15px, color=off(b) ? colours.faint : colours.dim))
+          Icon(b.icon, size=15px, color=off(b) ? colours.faint : b.action == :mail_send ? colours.accent : colours.dim))
   # While the sidebar is closed, a dot beside its button says that an agent waits for a page that isn't showing
   (b.action == :panel && !e.panel && !isempty(elsewhere(e))) || return box
   Row(child_gap=4px, box, Box(width(7px), height(7px), radius(3.5px), background(colours.accent)))
@@ -12006,6 +12052,7 @@ onkey(b::ToolButton, ::KeyPress{Keys.mouse_left}) = begin
   b.action == :marks && toggle_marks!(e)
   b.action == :hidden && hidden!(e, !e.hidden)
   b.action == :job && make_job!(e)
+  b.action in MAIL_ACTIONS && mail_act!(e, b.action)
   hush!(b)
   focus(e)
 end
@@ -12032,6 +12079,7 @@ tip(b::ToolButton) = begin
   b.action == :marks && return marking(e) ? "Hide $(whose(e)) changes" : "Show $(whose(e)) changes"
   b.action == :hidden && return (e.hidden ? "Leave out hidden files" : "Show hidden files") * hint(e, :hidden_files)
   b.action == :job && return job_tip(e)
+  b.action in MAIL_ACTIONS && return mail_tip(e, b.action)
   b.action == :outside || return ""
   app = opener(e.buf.path)
   isempty(app) ? "Show in Finder" : "Open in $(app_name(app))"
@@ -12272,7 +12320,9 @@ job(e) = (j = get(e.nodes, :job_ask, nothing); j !== nothing && j.path == e.buf.
 making(e) = (j = get(e.nodes, :job_ask, nothing); j !== nothing && j.request !== nothing)
 
 "True for a button of the top bar that does nothing now: the one that makes the job, when the Mac has no Centient or Centient makes a job"
-off(b::ToolButton) = b.action == :job && (!Centient.available() || making(editor(b)))
+off(b::ToolButton) = (b.action == :job && (!Centient.available() || making(editor(b)))) ||
+                     # A draft that's on its way can't be sent again
+                     (b.action == :mail_send && (m = mailer(editor(b)); m !== nothing && Mail.sending(m, editor(b).buf.path)))
 
 "What the top bar shows for a project page: the button that makes the page's job in Centient"
 job_part(e) = progress_address(e) === nothing ? () : (button(e, :job, "hammer"), Box(width(4px)))
@@ -12342,10 +12392,11 @@ end
 The button beside the one that shows the sidebar. A click makes the sidebar
 list the hidden files and folders too, the ones whose names start with a dot,
 and another click leaves them out. Its eye has a line through it while they're
-left out. It shows only while the sidebar does.
+left out. It shows only while the sidebar lists files: a closed sidebar and a
+list of emails have none to show.
 """
 hidden_button(e) = begin
-  e.panel || return ()
+  (e.panel && mail_rows(e) === nothing) || return ()
   b = button(e, :hidden, "eye-slash")
   b.icon = e.hidden ? "eye" : "eye-slash"
   (b,)
@@ -12354,9 +12405,10 @@ end
 describe(t::TopBar) = begin
   e = editor(t)
   b = e.buf
-  # The settings window is narrow, and its tabs need the room between the two ends of the bar
+  mail = mail_part(e)
+  # The settings window is narrow, and its tabs need the room between the two ends of the bar. An email has more buttons.
   mode = mode_part(e)
-  side = issettings(e) ? 130px : 250px + (isempty(mode) ? 0px : MODE_W)
+  side = issettings(e) ? 130px : (isempty(mail) ? 250px : 330px) + (isempty(mode) ? 0px : MODE_W)
   ended_rename!(e)
   # The top bar lies over the top of the sidebar. The file's name is in the
   # middle of the space beside the sidebar, so it moves as the sidebar slides.
@@ -12371,7 +12423,7 @@ describe(t::TopBar) = begin
                       # The app that the Mac uses for the file can change it, so a button opens the file there
                       button(e, :outside, "box-arrow-up-right")) :
                      # The pages of the settings are for choosing, not for writing, so they show no count
-                     issettings(e) ? () : (job_part(e)..., agent_part(e)..., mode..., node!(Count, e, :count)))...))
+                     issettings(e) ? () : (mail..., job_part(e)..., agent_part(e)..., mode..., node!(Count, e, :count)))...))
 end
 
 # --- the switch between rich text and plain text ---------------------------------------------
@@ -12448,7 +12500,7 @@ describe(t::Title) = begin
                border(1px, :solid, colours.accent), renamer(e))
   end
   Row(child_gap=6px,
-    label(name(b), 13px, color=colours.dim),
+    label(something(mail_title(e), name(b)), 13px, color=colours.dim),
     (dirty(b) ? (label("— edited", 13px, color=colours.faint),) : ())...)
 end
 
@@ -12531,6 +12583,7 @@ describe(l::FileLabel) = begin
   Row(width(grow=grow), height(grow=grow), padding(0px, 8px, 0px, 0px), child_gap=4px, clip=true, name="File",
     mark(l, isdir(l.path) ? "folder" : ismarkdown(l.path) ? "file-earmark-text" : file_icon(l.path)),
     name,
+    (isdir(l.path) ? mail_count(e, l.path) : ())...,   # how many emails of a folder of emails aren't read
     (awaited ? (Box(width(6px), height(6px), radius(3px), background(colours.accent)),) : ())...,
     (changed ? (Box(width(6px), height(6px), radius(3px), background(colours.dim)),) : ())...)
 end
@@ -12954,15 +13007,18 @@ describe(s::Sidebar) = begin
   e = editor(s)
   wide = panel_w(e)
   shows = wide * opened(e)
-  tree = with_theme(() -> describe!(fill_tree!(e, file_tree(e))), panel_theme())
+  # A folder of emails shows as a list of its emails. Any other folder shows as a tree of its files.
+  rows = mail_rows(e)
+  list = rows === nothing ? Column(width(grow=grow), Alignment.Start, padding(0px, 8px, 12px, 8px),
+                                   with_theme(() -> describe!(fill_tree!(e, file_tree(e))), panel_theme())) : mail_list(e, rows)
   Row(fixed(shows), height(grow=grow), Alignment.Start, clip=true,
     Column(fixed(wide), height(grow=grow), Alignment.Start, background(colours.panel), name="Files",
            border(1px, :solid, colours.line)[:right], offset_x=shows - wide,
       Box(width(grow=grow), height(TOPBAR_H)),   # under the top bar
       Row(width(grow=grow), height(30px), padding(16px, 0px), Alignment.Center, clip=true, name="Folder",
         folder_trail(e, wide - 32px)...),
-      reuse!(e.files_scroll,
-        Column(width(grow=grow), Alignment.Start, padding(0px, 8px, 12px, 8px), tree))))
+      (mail_place(e, e.folder * "/") ? (mail_bar(e),) : ())...,
+      reuse!(e.files_scroll, list)))
 end
 
 # --- the edge of the sidebar ----------------------------------------------------------
@@ -15724,6 +15780,800 @@ code_offered(e) = begin
   (i, start, [name for (_, _, _, name) in first(sort!(found), NAMES_SHOWN)])
 end
 
+# --- email --------------------------------------------------------------------------------
+#
+# Kaydown keeps a folder that holds every email of an account, as Markdown
+# pages, in step with the email server. mail.jl does that work, and says how.
+# This part is what the window shows of it:
+#
+#   - In a folder of emails, the sidebar lists the emails, newest first: who
+#     each is from, its subject and when it came. An email that isn't read has
+#     a dot. A click shows the email's page, and marks it as read.
+#   - The top bar of an email has buttons that answer it, send it on, archive
+#     it and delete it. Each changes the folder at once, and the server soon.
+#   - A draft is a page whose front matter names who it's to, with no date.
+#     The top bar of a draft has a button that sends it. A new draft, and an
+#     answer, open in a window of their own.
+#   - The Email page of the settings has the account, and says how far the
+#     look for new email has got.
+
+"How tall the row of an email is in the sidebar"
+const MAIL_ROW_H = 46px
+const MAIL_BAR_H = 30px     # the line over the list, with what the email is doing and two buttons
+const MAIL_SHOWS = 7.0      # seconds that words about an email show under the top bar
+const MAIL_ICONS = ["reply", "reply-all", "forward", "archive", "trash", "send", "pencil-square", "arrow-repeat", "folder"]
+const MAIL_ACTIONS = (:mail_send, :mail_reply, :mail_reply_all, :mail_forward, :mail_archive, :mail_delete, :mail_check, :mail_new)
+
+"""
+The mailer that this window's email comes from, or nothing. A window of the
+app has the app's own. A window that a test makes has the one that the test
+gave it.
+"""
+mailer(e) = get(() -> e.remember ? Mail.own() : nothing, e.nodes, :mailer)
+
+"True when `path` is in the folder of the account's emails"
+mail_place(e, path) = begin
+  m = mailer(e)
+  m !== nothing && Mail.ready(m.account) && startswith(path, Mail.root(m.account) * "/")
+end
+
+"The rows of the sidebar's folder when it's a folder of emails, newest first, or nothing"
+mail_rows(e) = isempty(e.folder) ? nothing : Mail.rows(e.folder)
+
+"Show `words` for a few seconds under the top bar's email buttons"
+mail_say!(e, words) = (e.nodes[:mail_words] = (String(words), time()); nothing)
+
+"""
+What happens to the email in each frame: the look for new email gets its turn,
+an email that shows is marked as read, and a draft that went shows as the email
+that was sent.
+"""
+mail_tick!(e) = begin
+  m = mailer(e)
+  m === nothing && return
+  wait = Mail.tick!(m)
+  path = e.buf.path
+  # The blocks of the settings page that show the email run again, no more than twice a second
+  if get(e.nodes, :mail_changed, -1) != m.changed && time() - get(e.nodes, :mail_ran, 0.0) > 0.5
+    e.nodes[:mail_changed] = m.changed
+    e.nodes[:mail_ran] = time()
+    rerun!(e, :mail)
+  end
+  # An email that shows is read
+  if get(e.nodes, :mail_marked, "") != path
+    e.nodes[:mail_marked] = path
+    Mail.seen!(m, path)
+  end
+  going = get(e.nodes, :mail_going, "")
+  if !isempty(going)
+    to = get(m.moved, going, nothing)
+    if to !== nothing
+      # The draft went. Its page is in the folder of sent email now.
+      delete!(e.nodes, :mail_going)
+      if e.buf.path == going
+        open!(e, to)
+        delete!(e.buffers, going)
+        e.nodes[:mail_marked] = to
+      end
+      mail_say!(e, "Sent")
+    elseif !Mail.sending(m, going)
+      delete!(e.nodes, :mail_going)
+      isempty(m.problem) || mail_say!(e, m.problem)
+    elseif !isempty(m.problem) && get(e.nodes, :mail_told, "") != m.problem
+      # It waits for a server that can't be reached
+      e.nodes[:mail_told] = m.problem
+      mail_say!(e, m.problem)
+    end
+  end
+  mail_words!(e)
+  isfinite(wait) && redraw_in!(e, wait)
+  nothing
+end
+
+"Show the words about an email under the first of the top bar's email buttons, and take them away when their time is up"
+mail_words!(e) = begin
+  said = get(e.nodes, :mail_words, nothing)
+  win = window_of(e)
+  (said === nothing || win === nothing) && return
+  b = get(e.nodes, Mail.isdraft(e.buf.lines) ? :mail_send : :mail_reply, nothing)
+  left = MAIL_SHOWS - (time() - said[2])
+  if left <= 0
+    close_popup!(win, :mail)
+    delete!(e.nodes, :mail_words)
+  elseif b === nothing || b.rect[3] == 0px || isempty(mail_part(e))
+    # The button that the words go under isn't drawn yet: a page that just opened shows its buttons in the next frame
+    close_popup!(win, :mail)
+    redraw_in!(e, 0.05)
+  else
+    # The words look as a tooltip does. They stay while the mouse moves, which a tooltip doesn't.
+    popup!(win, Bubble(content=Box(padding(8px, 5px), label(said[1], 12px, color=TIP_INK)), target=b.rect),
+           anchor=b.rect, placement=:bottom, gap=6px, key=:mail, input=false)
+    redraw_in!(e, left)
+  end
+  nothing
+end
+
+"The buttons that the top bar has for an email, or for a draft"
+mail_part(e) = begin
+  b = e.buf
+  (mailer(e) === nothing || isempty(b.path) || b.view != :markdown) && return ()
+  if mail_place(e, b.path) && Mail.isdraft(b.lines)
+    return (button(e, :mail_send, "send"), Box(width(4px)))
+  end
+  Mail.locate(b.path) === nothing && return ()
+  (button(e, :mail_reply, "reply"), button(e, :mail_reply_all, "reply-all"), button(e, :mail_forward, "forward"),
+   button(e, :mail_archive, "archive"), button(e, :mail_delete, "trash"), Box(width(4px)))
+end
+
+"What the tooltip of an email button says"
+mail_tip(e, action) = begin
+  m = mailer(e)
+  action == :mail_send ? (m !== nothing && Mail.sending(m, e.buf.path) ? "Sending" : "Send" * hint(e, :mail_send)) :
+  action == :mail_reply ? "Reply" * hint(e, :mail_reply) :
+  action == :mail_reply_all ? "Reply to everyone" * hint(e, :mail_reply_all) :
+  action == :mail_forward ? "Forward" * hint(e, :mail_forward) :
+  action == :mail_archive ? "Archive" * hint(e, :mail_archive) :
+  action == :mail_delete ? "Delete" * hint(e, :mail_delete) :
+  action == :mail_new ? "Write a new email" * hint(e, :mail_new) :
+  m === nothing || isempty(m.problem) ? "Look for new email" * hint(e, :mail_check) : m.problem * "  ·  Look again"
+end
+
+"Do what the email button `action` does"
+mail_act!(e, action) =
+  action == :mail_send ? mail_send!(e) : action == :mail_reply ? mail_reply!(e) : action == :mail_reply_all ? mail_reply!(e, all=true) :
+  action == :mail_forward ? mail_forward!(e) : action == :mail_archive ? mail_archive!(e) : action == :mail_delete ? mail_delete!(e) :
+  action == :mail_check ? mail_check!(e) : action == :mail_new ? mail_new!(e) : nothing
+
+"What the top bar calls a page that's an email or a draft: its subject. It's nothing for any other page, which has its file's name."
+mail_title(e) = begin
+  b = e.buf
+  (isempty(b.path) || b.view != :markdown || !mail_place(e, b.path) || front_matter(b.lines) == 0) && return nothing
+  said, _ = Mail.fields(b.lines)
+  (haskey(said, "to") && haskey(said, "subject")) || return nothing
+  isempty(said["subject"]) ? (haskey(said, "date") ? "No subject" : "New email") : said["subject"]
+end
+
+"The mailer, when it has an account. Without one, the Email page of the settings opens, and this gives nothing."
+mail_ready(e) = begin
+  m = mailer(e)
+  (m !== nothing && Mail.ready(m.account)) && return m
+  mail_settings!(e)
+  nothing
+end
+
+"Show the Email page of the settings, in the settings window"
+mail_settings!(e) = begin
+  settings_editor() === nothing && !issettings(e) && toggle_settings!(e)
+  s = settings_editor()
+  s === nothing || open!(s, settings_page("email.md"))
+  e
+end
+
+"Look for new email now"
+mail_check!(e) = (m = mail_ready(e); m === nothing || Mail.check!(m); nothing)
+
+"Show the inbox in the sidebar"
+mail_inbox!(e) = begin
+  m = mail_ready(e)
+  m === nothing && return
+  inbox = Mail.folder(m, :inbox)
+  dir = inbox === nothing ? Mail.root(m.account) : inbox.path
+  mkpath(dir)
+  go_folder!(e, dir)
+  e.panel || toggle_panel!(e)
+  nothing
+end
+
+"""
+Open the draft at `path` in a window of its own, with no sidebar, and put the
+caret at the end of line `line`. It returns the new window's editor.
+"""
+mail_window!(e, path, line) = begin
+  d = build_editor(path)
+  foreach(name -> setfield!(d, name, getfield(e, name)), SHARED)
+  d.remember = e.remember
+  haskey(e.nodes, :mailer) && (d.nodes[:mailer] = e.nodes[:mailer])
+  d.panel = false
+  d.size = (min(e.size[1], 820px), min(e.size[2], 720px))
+  line = clamp(line, 1, length(d.buf.lines))
+  d.buf.caret = d.buf.anchor = (line, length(d.buf.lines[line]))
+  # As rich text, a page that just opened moves its caret out of the front matter. This caret is where
+  # the address goes, so the page is told that the caret has stood there already.
+  :stood in fieldnames(Buffer) && (d.buf.stood = d.buf.caret)
+  show_window!(window!(d, title="Email", size=d.size), window_of(e))
+  d
+end
+
+"Write a new email: a draft opens, with the caret where the address goes"
+mail_new!(e) = (m = mail_ready(e); m === nothing ? nothing : mail_window!(e, Mail.draft!(m), 2))
+
+"True when the page that shows is an email: one that the folder's index knows, or a page with the front matter of one"
+mail_shows(e) = begin
+  b = e.buf
+  (isempty(b.path) || b.view != :markdown) && return false
+  Mail.locate(b.path) !== nothing && return true
+  said, _ = Mail.fields(b.lines)
+  haskey(said, "from") && haskey(said, "date")
+end
+
+"Answer the email that shows: a draft opens, with the caret over the email's text. With `all`, it goes to everyone."
+mail_reply!(e; all=false) = begin
+  m = mail_ready(e)
+  (m === nothing || !mail_shows(e)) && return
+  dirty(e.buf) && save!(e.buf)
+  draft = Mail.reply!(m, e.buf.path; all)
+  mail_window!(e, draft, front_matter(String.(split(read(draft, String), '\n'))) + 2)
+end
+
+"Send the email that shows on to someone else: a draft opens, with the caret where the address goes"
+mail_forward!(e) = begin
+  m = mail_ready(e)
+  (m === nothing || !mail_shows(e)) && return
+  dirty(e.buf) && save!(e.buf)
+  mail_window!(e, Mail.forward!(m, e.buf.path), 2)
+end
+
+"Send the draft that shows. Its file gets what the page shows first."
+mail_send!(e) = begin
+  m = mail_ready(e)
+  b = e.buf
+  (m === nothing || !Mail.isdraft(b.lines) || Mail.sending(m, b.path)) && return
+  save!(b)
+  why = Mail.send!(m, b.path)
+  isempty(why) || return mail_say!(e, why)
+  e.nodes[:mail_going] = b.path
+  delete!(e.nodes, :mail_told)
+  nothing
+end
+
+"The email that the list has after the one at `path`, or before it when it's the last, or nothing"
+mail_beside(path) = begin
+  rows = Mail.rows(dirname(path))
+  rows === nothing && return nothing
+  i = findfirst(r -> r.path == path, rows)
+  i === nothing ? nothing : i < length(rows) ? rows[i+1].path : i > 1 ? rows[i-1].path : nothing
+end
+
+"Show the page at `next` in place of the email at `path`, which has gone from its folder"
+mail_gone!(e, path, next) = begin
+  delete!(e.buffers, path)
+  delete!(READ, path)
+  if e.buf.path == path
+    next === nothing ? (e.buf = Buffer(); e.scroll.offset = 0px) : open!(e, next)
+  end
+  focus(e)
+  nothing
+end
+
+"Move the email that shows to the archive, and show the next one"
+mail_archive!(e) = begin
+  m = mail_ready(e)
+  path = e.buf.path
+  (m === nothing || Mail.locate(path) === nothing) && return
+  dirty(e.buf) && save!(e.buf)
+  next = mail_beside(path)
+  Mail.archive!(m, path) === nothing || mail_gone!(e, path, next)
+end
+
+"""
+Move the email that shows to the server's Trash, and show the next one. An
+email that's in the Trash already is deleted for good. A draft, which the
+server doesn't have, goes to the Mac's Trash.
+"""
+mail_delete!(e) = begin
+  m = mail_ready(e)
+  path = e.buf.path
+  (m === nothing || isempty(path) || !mail_place(e, path)) && return
+  next = mail_beside(path)
+  Mail.locate(path) === nothing && return trash!(e, path)
+  dirty(e.buf) && save!(e.buf)
+  Mail.trash!(m, path) ? mail_gone!(e, path, next) : trash!(e, path)
+end
+
+"Mark the email that shows as not read"
+mail_unread!(e) = begin
+  m = mailer(e)
+  m === nothing || Mail.seen!(m, e.buf.path, false)
+  nothing
+end
+
+"Show the email that the list has `by` rows after the one that shows"
+mail_step!(e, by) = begin
+  rows = mail_rows(e)
+  (rows === nothing || isempty(rows)) && return
+  i = findfirst(r -> r.path == e.buf.path, rows)
+  i = i === nothing ? 1 : clamp(i + by, 1, length(rows))
+  open!(e, rows[i].path)
+  # Keep its row in sight
+  top = mail_folders_h(e) + MAIL_ROW_H * (i - 1)
+  scroll_into_view!(e.files_scroll, top, top + MAIL_ROW_H)
+  nothing
+end
+
+# --- the list of emails in the sidebar ----------------------------------------------------
+#
+# A folder can hold thousands of emails, so the list builds only the rows that
+# are in the window. The space above and below them is two empty boxes.
+
+"An email's row in the sidebar. The rows are kept by their place in the window, and each frame gives each one its email."
+@def mutable struct MailRow <: SemanticUI
+  row::Any = nothing   # the Mail.Row that it shows
+end
+"A folder that's in a folder of emails, over the list of the emails"
+@def mutable struct MailFolder <: SemanticUI
+  path::String = ""
+end
+
+"The folders in the sidebar's folder, without the one that holds what was attached to its emails"
+mail_folders(e) = [p for p in Iterators.takewhile(isdir, e.listed) if basename(p) != Mail.FILES && !ishidden(p)]   # the sidebar lists the folders first
+mail_folders_h(e) = 28px * length(mail_folders(e))
+
+"How many emails of the folder at `path` aren't read, as the sidebar writes it beside the folder's name, or nothing for none"
+mail_count(e, path) = begin
+  mail_place(e, path * "/") || return ()
+  n = Mail.unread(path)
+  n == 0 ? () : (Box(label(commas(n), 11px, color=colours.dim, weight="Semibold")),)
+end
+
+describe(f::MailFolder) = begin
+  e = editor(f)
+  Row(width(grow=grow), height(28px), padding(0px, 8px, 0px, 0px), radius(6px), child_gap=4px, clip=true, name="Folder",
+      background(ishovered(f) ? colours.hover : clear),
+    Box(width(18px), height(grow=grow), Alignment.Center, Icon("folder", size=13px, color=colours.dim)),
+    Box(width(grow=grow), Alignment.Start, label(basename(f.path))),
+    mail_count(e, f.path)...)
+end
+
+cursor(::MailFolder) = :hand
+onkey(f::MailFolder, ::KeyPress{Keys.mouse_left}) = (go_folder!(editor(f), f.path); handled)
+
+describe(r::MailRow) = begin
+  e = editor(r)
+  x = r.row::Mail.Row
+  here = x.path == e.buf.path
+  subject = isempty(x.subject) ? "No subject" : x.subject
+  Row(width(grow=grow), height(MAIL_ROW_H), padding(0px, 8px, 0px, 4px), radius(6px), child_gap=4px, clip=true, name="Email",
+      background(here ? colours.active : ishovered(r) ? colours.hover : clear),
+    # An email that isn't read has a dot
+    Box(width(10px), height(grow=grow), Alignment.Center,
+      (x.unread ? (Box(width(7px), height(7px), radius(3.5px), background(colours.accent)),) : ())...),
+    Column(width(grow=grow), Alignment.Start, child_gap=4px,
+      Row(width(grow=grow), child_gap=6px,
+        Box(width(grow=grow), Alignment.Start, clip=true, label(x.who, 13px, weight=x.unread ? "Semibold" : "")),
+        Box(label(Mail.shortdate(x.at), 11px, color=colours.faint))),
+      Box(width(grow=grow), Alignment.Start, clip=true,
+        label(x.draft ? "Draft  ·  " * subject : subject, 12px, color=x.draft ? colours.accent : x.unread ? colours.ink : colours.dim))))
+end
+
+cursor(::MailRow) = :hand
+
+onkey(r::MailRow, ::KeyPress{Keys.mouse_left}) = begin
+  e = editor(r)
+  open!(e, r.row.path)
+  focus(e)
+  handled
+end
+
+const MAIL_MENU = ["Reply", "Forward", "-", "Mark as Not Read", "Archive", "Delete", "-", "Copy Path", "Show in Finder"]
+
+# A right-click on an email shows a menu of what its buttons do
+onkey(r::MailRow, ::KeyPress{Keys.mouse_right}) = begin
+  e = editor(r)
+  w = window_of(r)
+  path = r.row.path
+  act(i) = begin
+    name = get(MAIL_MENU, i, "")
+    name == "Copy Path" && return clipboard(path)
+    name == "Show in Finder" && return show_in_finder(path)
+    e.buf.path == path || open!(e, path)
+    name == "Reply" ? mail_reply!(e) : name == "Forward" ? mail_forward!(e) : name == "Mark as Not Read" ? mail_unread!(e) :
+    name == "Archive" ? mail_archive!(e) : name == "Delete" ? mail_delete!(e) : nothing
+  end
+  # A draft has nothing to answer, and the server has no copy of it to archive
+  off = Mail.locate(path) === nothing ? Tuple(findall(in(("Reply", "Forward", "Mark as Not Read", "Archive")), MAIL_MENU)) : ()
+  system_menu(w, MAIL_MENU, act; off) || drawn_menu!(w, MAIL_MENU, act; off)
+  handled
+end
+
+"What the line over the list says of the email: what the look for it is doing, or how many emails aren't read"
+mail_brief(e) = begin
+  m = mailer(e)
+  m === nothing && return ("", colours.dim)
+  isempty(m.problem) || return ("Email has a problem", colours.accent)
+  p = Mail.progress(m)
+  p === nothing || return ("$(commas(p.come)) of $(commas(p.total)) emails have come", colours.dim)
+  Mail.busy(m) || m.held == 0 || return ("$(commas(m.held)) emails come later", colours.dim)
+  Mail.busy(m) && !isempty(m.doing) && return ("Looking for email", colours.dim)
+  n = Mail.unread(e.folder)
+  (n == 0 ? "" : "$(commas(n)) not read", colours.dim)
+end
+
+"The line over the list of emails: what the email is doing, a button that looks for new email and one that starts a new one"
+mail_bar(e) = begin
+  words, colour = mail_brief(e)
+  Row(width(grow=grow), height(MAIL_BAR_H), padding(0px, 8px, 0px, 16px), child_gap=2px, name="Email bar",
+    Box(width(grow=grow), Alignment.Start, clip=true, label(words, 11px, color=colour)),
+    button(e, :mail_check, "arrow-repeat"), button(e, :mail_new, "pencil-square"))
+end
+
+"The sidebar's list of the emails `rows`, under the folders that are in their folder"
+mail_list(e, rows) = begin
+  folders = mail_folders(e)
+  head = num(mail_folders_h(e))
+  high = num(MAIL_ROW_H)
+  room = num(window_size(e)[2]) - num(TOPBAR_H) - 30 - num(MAIL_BAR_H)
+  first = clamp(floor(Int, (num(e.files_scroll.offset) - head) / high), 0, max(0, length(rows) - 1)) + 1
+  last = min(length(rows), first + ceil(Int, room / high) + 1)
+  shown = map(enumerate(first:last)) do (k, i)
+    r = node!(MailRow, e, (:mail_row, k))
+    r.row = rows[i]
+    r
+  end
+  Column(width(grow=grow), Alignment.Start, padding(0px, 8px, 12px, 8px), name="Emails",
+    map(p -> (f = node!(MailFolder, e, (:mail_folder, p)); f.path = p; f), folders)...,
+    Box(width(grow=grow), height(MAIL_ROW_H * (first - 1))),
+    shown...,
+    Box(width(grow=grow), height(MAIL_ROW_H * (length(rows) - last))))
+end
+
+# --- the account, on the Email page of the settings ---------------------------------------
+
+# The form asks for as little as it can. An address at a company that Kaydown
+# knows, like Gmail, needs only a name and a password, and the form says which
+# password that company takes, with a button that opens the page where you make
+# one. For an address at a domain of its own, Kaydown asks which company takes
+# the domain's email (see `lookup!` in mail.jl). The servers and the folder are
+# under a line that shows them, and show by themselves when Kaydown can't tell
+# the servers.
+
+"The fields of the account on the Email page of the settings, and the button that connects it"
+@def mutable struct MailForm <: SemanticUI
+  note::String = ""                       # what it says under the button, after a click
+  kept::Union{Nothing,Bool} = nothing     # true when the Keychain has the account's password. Nothing until it's asked.
+  more::Bool = false                      # the servers and the folder show
+  typed::Tuple{String,Float64} = ("", 0.0)   # the address as the form last saw it, and when it changed
+  waits::Bool = false                     # Connect was clicked, and waits until Kaydown knows who takes the domain's email
+  filled::Union{Nothing,Tuple{String,String}} = nothing   # the two servers that the form last put in its fields by itself
+end
+"The line of the form that shows and hides the servers"
+@def mutable struct MailMore <: SemanticUI end
+"The word beside the folder's path that asks for a folder with the Mac's own panel"
+@def mutable struct MailChoose <: SemanticUI end
+"The button of the form that connects the account"
+@def mutable struct MailConnect <: SemanticUI end
+
+const MAIL_FIELDS = (:address => "Email address", :name => "Your name", :password => "Password")
+const MAIL_MORE = (:incoming => "Incoming mail server", :outgoing => "Outgoing mail server")
+const MAIL_ADDRESS = r"^[^@\s]+@[^@\s]+\.[^@\s.]{2,}$"
+const MAIL_LABEL_W = 170px   # how wide the names of the fields are
+const MAIL_FIELD_W = 340px   # and the fields
+const MAIL_PAUSE = 0.8       # seconds after the last letter of an address until Kaydown asks who takes its domain's email
+
+"The text field of the form for `key`. It's made with `text` in it."
+mail_field(e, key, text="") =
+  node!(() -> TextInput(text=text, placeholder="", font_family=SANS, font_size=14px, hidden=key == :password), e, (:mail_field, key))
+
+"True when `node` is one of the form's text fields"
+mail_typing(e, node) = any(key -> get(e.nodes, (:mail_field, first(key)), nothing) === node, (MAIL_FIELDS..., MAIL_MORE...))
+
+"""
+The path of the folder that keeps the email, as the form shows it: the names
+of the folders on the way to it. A click on a name goes to that folder, and a
+click on the last name lists the folders in it. The email goes in a folder of
+its own in that folder, named for the address. `after` is how wide the words
+after the path are.
+"""
+mail_place!(e, a, after) = begin
+  crumb = node!(() -> Breadcrumb(inline=true, folders=true), e, :mail_place)
+  isempty(crumb.at) && (crumb.at = Mail.base(a))
+  # The names have the room that's left of the page after the words before them and the words after them
+  crumb.room = max(120px, e.width - MAIL_LABEL_W - 110px - after)
+  crumb
+end
+
+"Words of the form that can go over several lines, under the fields"
+mail_words(words; color=colours.dim) =
+  Row(width(grow=grow), Alignment.Start, padding(4px, 2px, 6px, MAIL_LABEL_W + 12px),
+    Box(width(MAIL_FIELD_W + 150px), Alignment.Start, Text(words, size=13px, family=SANS, color=color)))
+
+"""
+What the form knows of the address that's typed: the address, whether it's a
+whole address, the company that holds its email or nothing, and whether Kaydown
+is still asking who takes its domain's email.
+"""
+mail_typed(e, f::MailForm, account) = begin
+  typed = String(strip(mail_field(e, :address, account.address).text))
+  f.typed[1] == typed || (f.typed = (typed, time()))
+  whole = occursin(MAIL_ADDRESS, typed)
+  company = whole ? Mail.provider(typed) : nothing
+  asking = false
+  if whole && company === nothing
+    # A domain of its own. Once you stop typing, Kaydown asks who takes its email.
+    wait = f.waits ? 0.0 : MAIL_PAUSE - (time() - f.typed[2])
+    if wait > 0
+      redraw_in!(e, wait)
+    else
+      asking = !Mail.lookup!(Mail.domain(typed))
+      asking ? redraw_in!(e, 0.1) : (company = Mail.provider(typed))
+    end
+  end
+  (typed, whole, company, asking)
+end
+
+describe(f::MailForm) = begin
+  e = editor(f)
+  m = mailer(e)
+  a = m === nothing ? Mail.Account() : m.account
+  f.kept === nothing && (f.kept = !isempty(Mail.secret(a.address)))
+  typed, whole, company, asking = mail_typed(e, f, a)
+  # A click on Connect that came before Kaydown knew the servers goes on now that it does
+  f.waits && !asking && (f.waits = false; mail_keep!(e, f))
+  guess = whole ? Mail.servers(typed) : ("", "")
+  # The two servers follow the address, unless you typed servers of your own. They wait until Kaydown
+  # knows the address's company, or knows that it can't tell.
+  f.filled === nothing && (f.filled = Mail.servers(a.address))
+  if whole && !asking && (company !== nothing || haskey(Mail.exchanges, Mail.domain(typed)))
+    for (i, key) in enumerate((:incoming, :outgoing))
+      field = mail_field(e, key, getfield(a, key))
+      (isempty(field.text) || field.text == f.filled[i]) && (field.text = guess[i]; field.cursor = field.anchor = 0)
+    end
+    f.filled = guess
+  end
+  hints = Dict(:address => "you@example.com", :name => "The name that people see on your emails",
+               :password => f.kept && typed == a.address ? "Kept in your Keychain" :
+                            company !== nothing && company.secret === :app ? "An app password from $(company.name)" : "Your password",
+               :incoming => isempty(guess[1]) ? "imap.example.com:993" : guess[1], :outgoing => isempty(guess[2]) ? "smtp.example.com:465" : guess[2])
+  row((key, title)) = begin
+    field = mail_field(e, key, key == :password ? "" : getfield(a, key))
+    field.placeholder = hints[key]
+    Row(width(grow=grow), height(38px), child_gap=12px,
+      Box(width(MAIL_LABEL_W), Alignment.Start, label(title, 14px)),
+      Box(width(MAIL_FIELD_W), field))
+  end
+  # The folder is a path whose names you click, with a word beside it that asks for a folder with the Mac's own panel.
+  # The email goes in a folder of its own there, named for the address. Its name is after the path, and no click changes it.
+  own = whole ? (Row(height(24px), child_gap=CRUMB_GAP + 6px, Icon("chevron-right", size=9px, color=colours.faint),
+                     Box(label(short(typed), color=colours.dim))),) : ()
+  after = whole ? measure(Face(SANS, "", 13px, colours.ink, false), short(typed)) + 30px : 0px
+  folder = Row(width(grow=grow), height(38px),
+    Box(width(MAIL_LABEL_W + 12px), Alignment.Start, label("Keep your email in", 14px)),
+    mail_place!(e, a, after), own...,
+    Box(width(14px)), node!(MailChoose, e, :mail_choose))
+  # What the form says of the address: the password that its company takes, or that it can't tell the servers
+  unknown = whole && company === nothing && !asking
+  help = !whole ? () :
+         asking ? (mail_words("Kaydown is finding the servers of $(Mail.domain(typed))."),) :
+         company !== nothing ? (mail_words(company.how, color=company.secret === :none ? colours.ink : colours.dim),) :
+         (mail_words("Kaydown doesn't know who holds the email of $(Mail.domain(typed)). Check the two servers below. Your email company's help pages name them."),)
+  # A link opens the page where that company makes an app password. It has a line under it while the mouse is over it.
+  page = if company === nothing || isempty(company.page)
+    ()
+  else
+    link = node!(e, :mail_page) do
+      Link("") do hovered
+        Box(border(1px, :solid, hovered ? colours.accent : clear)[:bottom], label("Make an app password", 13px, color=colours.accent))
+      end
+    end
+    link.url = company.page
+    (Row(height(26px), padding(0px, 0px, 0px, MAIL_LABEL_W + 12px), link),)
+  end
+  more = f.more || unknown
+  Column(width(grow=grow), Alignment.Start, child_gap=2px, name="Email account",
+    map(row, MAIL_FIELDS)...,
+    help..., page...,
+    folder,
+    # A company that Kaydown can't sign in to has no button: the words above say why
+    (company !== nothing && company.secret === :none ? () :
+      (Row(height(56px), padding(0px, 0px, 0px, MAIL_LABEL_W + 12px), node!(MailConnect, e, :mail_keep)),
+       (isempty(mail_status(e, f, typed)) ? () : (mail_words(mail_status(e, f, typed), color=colours.ink),))...,
+       mail_progress(e, f, typed)...))...,
+    node!(MailMore, e, :mail_more),
+    (more ? map(row, MAIL_MORE) : ())...)
+end
+
+"""
+What the form says under its button: what the last click came to, then how the
+connection of the account goes. While the address `typed` isn't the account's,
+it says nothing of the account.
+"""
+mail_status(e, f::MailForm, typed) = begin
+  isempty(f.note) || return f.note
+  m = mailer(e)
+  (m === nothing || !Mail.ready(m.account) || typed != m.account.address) && return ""
+  isempty(m.problem) || return m.problem
+  Mail.busy(m) && return isempty(m.doing) ? "Kaydown is connecting." : m.doing
+  # The account got all that its company allows in a day, and the rest of its emails wait
+  m.held > 0 ? Mail.waiting(m) : m.checked > 0 ? "Connected." : ""
+end
+
+"""
+What the form shows under its words while emails come: a bar that fills, how
+many emails have come, and how long the rest take. Nothing when no emails are
+coming, or when the form's words aren't about the account that gets them.
+"""
+mail_progress(e, f::MailForm, typed) = begin
+  m = mailer(e)
+  (m === nothing || !isempty(f.note) || typed != m.account.address || !isempty(m.problem)) && return ()
+  p = Mail.progress(m)
+  p === nothing && return ()
+  full = MAIL_FIELD_W * (p.come / p.total)
+  (Row(height(14px), padding(0px, 0px, 0px, MAIL_LABEL_W + 12px), name="Email progress",
+     Row(width(MAIL_FIELD_W), height(6px), radius(3px), background(colours.line), clip=true, Alignment.Start,
+       Box(width(full), height(6px), radius(3px), background(colours.accent)))),
+   mail_words(Mail.counted(p)))
+end
+
+describe(l::MailMore) = begin
+  e = editor(l)
+  shows = node!(MailForm, e, :mail_form).more
+  Row(height(34px), Alignment.Start, child_gap=6px, name="More",
+    Box(width(12px), height(grow=grow), Icon(shows ? "chevron-down" : "chevron-right", size=10px, color=colours.dim)),
+    Box(height(grow=grow), label("Servers", 13px, color=ishovered(l) ? colours.ink : colours.dim)))
+end
+
+cursor(::MailMore) = :hand
+onkey(l::MailMore, ::KeyPress{Keys.mouse_left}) = (f = node!(MailForm, editor(l), :mail_form); f.more = !f.more; handled)
+
+# The button is the one thing in the form that's filled with the accent colour, so it reads as what to do next.
+# It's as high as a text field. While the mouse button is down on it, it's darker.
+describe(b::MailConnect) = begin
+  e = editor(b)
+  f = node!(MailForm, e, :mail_form)
+  m = mailer(e)
+  # Kaydown is on its way to the server. Once it's signed in, the words under the button say what it does.
+  going = f.waits || (m !== nothing && Mail.ready(m.account) && Mail.busy(m) && isempty(m.doing) && m.checked == 0 && isempty(m.problem) && isempty(f.note))
+  down = ishovered(b) && held(b, Keys.mouse_left)
+  fill = darker(colours.accent, down ? 0.2 : ishovered(b) ? 0.09 : 0.0)
+  Row(height(30px), padding(18px, 0px), radius(7px), background(fill), name="Connect",
+    Box(label(going ? "Connecting…" : "Connect", 13.5px, color=colours.bg, weight="Semibold")))
+end
+
+"The colour `c` with `part` of its light taken away"
+darker(c, part) = RGBA(Float64(c.r) * (1 - part), Float64(c.g) * (1 - part), Float64(c.b) * (1 - part), 1.0)
+
+cursor(::MailConnect) = :hand
+onkey(b::MailConnect, ::KeyPress{Keys.mouse_left}) = (e = editor(b); mail_keep!(e, node!(MailForm, e, :mail_form)); handled)
+
+describe(c::MailChoose) =
+  Box(border(1px, :solid, ishovered(c) ? colours.accent : clear)[:bottom], label("Choose…", 13px, color=colours.accent))
+
+cursor(::MailChoose) = :hand
+
+"`path` as the form writes a folder: with ~ for your home folder"
+mail_short(path) = path == homedir() ? "~" : startswith(path, homedir() * "/") ? "~" * chopprefix(path, homedir()) : String(path)
+
+"Make `path` the folder that the form keeps your email in"
+mail_folder!(e, path) = (e.nodes[:mail_place].at = String(rstrip(abspath(expanduser(path)), '/')); nothing)
+
+# A click asks which folder keeps your email, with macOS's own panel. The panel can make a new folder.
+onkey(c::MailChoose, ev::KeyPress{Keys.mouse_left}) = begin
+  e, w = editor(c), ev.window
+  # A window that isn't on the screen, like one a test makes, has no panel to ask with
+  (Sys.isapple() && !isempty(w.glfw)) || return handled
+  start = e.nodes[:mail_place].at
+  while !isdir(start) && start != dirname(start)
+    start = dirname(start)   # the folder may not be made yet, so the panel opens on the nearest one that is
+  end
+  path = with_pool() do
+    panel = msg(cls("NSOpenPanel"), "openPanel")
+    ccall((:objc_msgSend, libobjc), Cvoid, (Ptr{Cvoid}, Ptr{Cvoid}, Bool), panel, sel("setCanChooseDirectories:"), true)
+    ccall((:objc_msgSend, libobjc), Cvoid, (Ptr{Cvoid}, Ptr{Cvoid}, Bool), panel, sel("setCanChooseFiles:"), false)
+    ccall((:objc_msgSend, libobjc), Cvoid, (Ptr{Cvoid}, Ptr{Cvoid}, Bool), panel, sel("setCanCreateDirectories:"), true)
+    msg(panel, "setMessage:", nsstring("Choose the folder that keeps your email. Kaydown makes a folder in it that's named for your address."))
+    msg(panel, "setPrompt:", nsstring("Choose"))
+    msg(panel, "setDirectoryURL:", msg(cls("NSURL"), "fileURLWithPath:", nsstring(start)))
+    # 1 is the panel's Choose button
+    ccall((:objc_msgSend, libobjc), Int, (Ptr{Cvoid}, Ptr{Cvoid}), panel, sel("runModal")) == 1 || return nothing
+    jstring(msg(msg(panel, "URL"), "path"))
+  end
+  # The panel took the mouse, so the window never heard its button come up
+  Keys.mouse_left in w.keys && (w.keys ⊻= Keys.mouse_left)
+  path === nothing || mail_folder!(e, path)
+  handled
+end
+
+"""
+Connect the account that the form's fields hold, and look for its email. A
+server that's left empty is the one that the address's company has. The
+password goes to the Keychain, and the field is emptied.
+"""
+mail_keep!(e, f::MailForm) = begin
+  say(words) = (f.note = words; nothing)
+  m = mailer(e)
+  m === nothing && return say("This window has no email.")
+  text(key) = String(strip(mail_field(e, key).text))
+  place = get(e.nodes, :mail_place, nothing)
+  # The usual folder, Mail in your home folder, isn't written down
+  folder = place === nothing || place.at == joinpath(homedir(), "Mail") ? "" : mail_short(place.at)
+  a = Mail.Account(address=text(:address), name=text(:name), incoming=text(:incoming), outgoing=text(:outgoing), folder=folder,
+                   user=m.account.user, every=m.account.every, safe=m.account.safe, back=m.account.back, rest=m.account.rest)
+  occursin(MAIL_ADDRESS, a.address) || return say("Type your email address first.")
+  f.waits = false
+  company = Mail.provider(a.address)
+  company !== nothing && company.secret === :none && return say(company.how)
+  # A server that's empty, or that the form put in its field by itself, is the form's to choose
+  own(i, server) = !isempty(server) && (f.filled === nothing || server != f.filled[i])
+  # An address at a domain of its own, with a server still to choose: Kaydown asks who takes the domain's
+  # email, and the form connects by itself when the answer is in
+  if company === nothing && !(own(1, a.incoming) && own(2, a.outgoing)) && !Mail.lookup!(Mail.domain(a.address))
+    f.waits = true
+    return say("Kaydown is finding the servers of $(Mail.domain(a.address)).")
+  end
+  company = Mail.provider(a.address)
+  company !== nothing && company.secret === :none && return say(company.how)
+  new = Mail.servers(a.address)
+  own(1, a.incoming) || (a.incoming = new[1])
+  own(2, a.outgoing) || (a.outgoing = new[2])
+  mail_field(e, :incoming).text, mail_field(e, :outgoing).text = a.incoming, a.outgoing
+  f.filled = new
+  password = mail_field(e, :password)
+  if !isempty(password.text)
+    # An app password is shown in groups of four letters, with spaces that aren't part of it
+    secret = company !== nothing && company.secret === :app ? replace(password.text, r"\s" => "") : password.text
+    Mail.secret!(a.address, secret) || return say("The Keychain didn't take the password.")
+    password.text, password.cursor, password.anchor = "", 0, 0
+  end
+  f.kept = !isempty(Mail.secret(a.address))
+  Mail.keep(a)
+  Mail.account!(m, a)
+  f.note = f.kept ? "" : "Type the password, then click Connect."
+  rerun!(e, :mail)
+  nothing
+end
+
+"A sentence or two on the email, for the settings page"
+mail_news(e) = begin
+  reads!(e, :mail)
+  m = mailer(e)
+  m === nothing ? "This window has no email." : Mail.says(m)
+end
+
+"How many minutes go by from one look for new email to the next, and a way to change that"
+mail_every(e) = (reads!(e, :mail); m = mailer(e); m === nothing ? 5 : m.account.every)
+mail_every!(e, minutes) = begin
+  m = mailer(e)
+  m === nothing && return
+  m.account.every = Int(minutes)
+  Mail.ready(m.account) && Mail.keep(m.account)
+  m.next = min(m.next, m.checked + 60 * m.account.every)
+  rerun!(e, :mail)
+  nothing
+end
+
+"How many months back the emails that Kaydown gets go, with 0 for every email, and a way to change that"
+mail_back(e) = (reads!(e, :mail); m = mailer(e); m === nothing ? 12 : m.account.back)
+mail_back!(e, months) = begin
+  m = mailer(e)
+  (m === nothing || m.account.back == Int(months)) && return
+  m.account.back = Int(months)
+  mail_again!(e, m)
+end
+
+"Whether Kaydown gets the other folders once the inbox has come, and a way to change that"
+mail_rest(e) = (reads!(e, :mail); m = mailer(e); m === nothing || m.account.rest)
+mail_rest!(e, on) = begin
+  m = mailer(e)
+  (m === nothing || m.account.rest == on) && return
+  m.account.rest = on
+  mail_again!(e, m)
+end
+
+"What Kaydown gets has changed: keep the account, and start the look for email again so that it gets that"
+mail_again!(e, m) = begin
+  Mail.ready(m.account) && (Mail.keep(m.account); Mail.account!(m, m.account))
+  rerun!(e, :mail)
+  nothing
+end
+
+"Show the inbox, for the button on the settings page: in the window that was last used for pages, or in a new one"
+mail_show!(e) = begin
+  i = findlast(o -> !issettings(o) && window_of(o) !== nothing, editors)
+  i === nothing && return mail_inbox!(e)
+  mail_inbox!(editors[i])
+  mail_ready(editors[i]) === nothing || front!(window_of(editors[i]))
+  nothing
+end
+
 # --- the whole window ---------------------------------------------------------------------
 
 describe(e::Editor) = begin
@@ -15747,6 +16597,7 @@ describe(e::Editor) = begin
   blocks_tick!(e)
   job_tick!(e)
   update_tick!(e)
+  mail_tick!(e)
   zoom_tick!(e)
   layout!(e)
   # A page whose long lines don't wrap scrolls sideways as far as its longest line goes, and no further when the window grows
@@ -15841,7 +16692,7 @@ const pages_dir = Ref(joinpath(@__DIR__, "pages"))
 const SHARED = (:theme, :font, :weight, :zoom, :widest, :stat, :plain, :spelling, :updates, :wrap, :numbers, :shade, :indent, :code_scale, :code_font, :code_weight, :guide, :bundle, :rebound, :side, :hidden)
 
 "The pages of the settings, in the order of their tabs: the name of each page's file, and what its tab says"
-const SETTINGS_PAGES = ("settings.md" => "General", "code-editor.md" => "Code editor", "key-bindings.md" => "Key bindings")
+const SETTINGS_PAGES = ("settings.md" => "General", "code-editor.md" => "Code editor", "key-bindings.md" => "Key bindings", "email.md" => "Email")
 
 "Where the page of the settings is whose file is called `name`"
 settings_page(name=first(first(SETTINGS_PAGES))) = joinpath(pages_dir[], name)
@@ -16079,6 +16930,8 @@ open_editor(args) = begin
   e.size = paper_window(screen_room(), e.side)
   # This returns when the last window has closed
   display(window!(e, title="Kaydown", size=e.size))
+  # The look for email stops, and each folder's list of its emails is kept
+  Mail.mine[] === nothing || Mail.quit!(Mail.mine[])
   # A newer version of the app that's ready takes the app's place once Kaydown has quit
   Update.quit!(Update.own())
 end

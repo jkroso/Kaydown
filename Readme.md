@@ -51,7 +51,7 @@ The `pages` folder has the pages that come with Kaydown:
 - `components.md` has a live block for each of UI.jl's components.
 - `julia.md` has code to run with ⌘Return.
 - `schedule.md` has a schedule to try.
-- `settings.md`, `code-editor.md` and `key-bindings.md` are the three pages of the settings window.
+- `settings.md`, `code-editor.md`, `key-bindings.md` and `email.md` are the four pages of the settings window.
 
 ## Use it with an agent
 
@@ -134,6 +134,37 @@ A code block in the language `find` lists the lines that match in every page of 
 
 Click a line of the list to open its page at that line. Click the box of a to-do item to tick it in its own page. If that page isn't open in Kaydown, or is open with nothing to save, Kaydown writes the tick to the page's file at once. That's the one time that Kaydown writes to a file without ⌘S. `find.jl` says how the block is written.
 
+## Read and write email
+
+Kaydown can keep a folder on your Mac that holds every email of an account. Each email is a Markdown page, and the folder has the same folders in it as your email server has:
+
+```
+~/Mail/you@example.com/
+  Inbox/
+    2026-11-14 0932 Sam Lee - Roof quote.md
+    files/2026-11-14 0932 Sam Lee - Roof quote/Roof quote.pdf
+  Sent/
+  Drafts/
+```
+
+A page starts with front matter that says who sent the email, to whom, when, and its subject. The email's text follows, as Markdown. What was attached to the email is in `files`.
+
+1. Press ⌘, and click the Email tab.
+2. Type your email address, your name and your password, and click Connect.
+3. Press ⌘⇧I to show the inbox.
+
+Kaydown knows Gmail, iCloud, Yahoo, AOL, Fastmail and Telstra by the address, and needs no servers for them. It also knows an address at a domain of your own whose email one of them holds, like a business address at Google. The form says which password the company takes. Gmail, iCloud, Yahoo, AOL and Fastmail take an app password: a password that you make for one app. A button opens the page that makes one. For any other address, the form shows the two servers to check. Kaydown keeps the password in the Mac's Keychain. Your email goes in a folder named for your address. Kaydown makes that folder in `~/Mail`, unless you choose another folder in the form.
+
+Kaydown gets your inbox first, then the other folders. The Email page has two settings for this: how far back the emails go, from a month to every email, and whether the other folders come. While emails come, the page shows a bar, how many emails have come and how long the rest take. Gmail lets an app get 2,500 MB of email in a day, so Kaydown stops before that and goes on a day later.
+
+In a folder of emails, the sidebar lists the emails, newest first. A click shows an email, and marks it as read. The top bar of an email has buttons that answer it, send it on, archive it and delete it. A right-click on an email in the list has the same, and marks it as not read.
+
+An email that you write is a page too. ⌘⇧N starts one in a window of its own, with `to` and `subject` at its top. Write it as you write any page. A line that holds only a link to a file sends the file with the email. ⌘⇧Return sends it, and the page moves to the folder of sent email.
+
+The server is the one that's right. An email that another app deletes goes from the folder, and a page that the Finder moves or deletes comes back. A page that you changed stays when its email goes from the server. `mail.jl` says how it works, and `mime.jl` how an email becomes a page.
+
+It works with one account, and with a server that takes a password. Outlook.com and Microsoft 365 only let an app sign in through Microsoft's own sign-in page, and Proton Mail needs its Bridge app. Kaydown works with neither yet, and the form says so.
+
 ## Test it
 
 ```sh
@@ -176,9 +207,12 @@ julia -O0 --project=. test/find_view_test.jl      # the list in the page, and a 
 julia -O0 --project=. test/sketch_test.jl         # how a sketch is read and written, and what a click is on
 julia -O0 --project=. test/sketch_view_test.jl    # the tools of a sketch: drawing, moving and deleting shapes
 julia -O0 --project=. test/media_folder_test.jl   # the hidden folder for the files that a page makes, and the hidden files in the sidebar
+julia -O0 --project=. test/mime_test.jl           # how an email becomes a Markdown page, and a page an email
+julia -O0 --project=. test/mail_test.jl           # the folder of emails that's kept in step with an email server, and sending
+julia -O0 --project=. test/mail_view_test.jl      # the list of emails, the buttons of an email and of a draft, and the Email page of the settings
 ```
 
-The tests are in the `test` folder. Run them from Kaydown's folder, as above. The first three need no Centient. `test/centient_fake.jl` answers in its place.
+The tests are in the `test` folder. Run them from Kaydown's folder, as above. The first three need no Centient. `test/centient_fake.jl` answers in its place. The last two use no network and no email account. `test/mail_fake.jl` is a pretend email server that runs in the test.
 
 `-O0` tells Julia not to optimise the code that it compiles while a test runs, so a test starts in about half the time. The compiled files that Kip keeps are still made with full optimisation, so the app runs at its usual speed.
 

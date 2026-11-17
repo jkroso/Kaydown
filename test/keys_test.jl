@@ -537,7 +537,7 @@ end
   frame(sw); frame(sw)
   @test s.buf.path == K.settings_page("settings.md")
   tab(page) = s.nodes[(:settings_tab, page)]
-  @test [tab(first(p)).label for p in K.SETTINGS_PAGES] == ["General", "Code editor", "Key bindings"]
+  @test [tab(first(p)).label for p in K.SETTINGS_PAGES] == ["General", "Code editor", "Key bindings", "Email"]
   # The settings for code are on a page of their own now
   @test !any(line -> occursin("code_wrap", line), s.buf.lines)
   click(sw, tab("code-editor.md"))

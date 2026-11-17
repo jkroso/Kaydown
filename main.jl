@@ -15619,6 +15619,24 @@ here(e, tree) = begin
   at === nothing ? group : items(group)[at]
 end
 
+"""
+Open the group of the file that shows, so the sidebar lists its headings, and
+close the group of the file that showed before. It's done once each time
+another file shows, and the first time the sidebar lists the file. Between
+those times, a click on a file's icon opens or closes its group, and the group
+stays as the click left it.
+"""
+show_open_file!(e, tree) = begin
+  listed = collect(tree.children)
+  i = findfirst(item -> item.firstchild.path == e.buf.path, listed)
+  shown = i === nothing ? nothing : listed[i]
+  before = get(e.nodes, :open_file, nothing)
+  shown === before && return
+  before isa Tree.ItemGroup && (before.collapsed = true)
+  shown isa Tree.ItemGroup && (shown.collapsed = false)
+  e.nodes[:open_file] = shown
+end
+
 "Make the sidebar's tree show the folder's files and the headings of each file that's open in it"
 fill_tree!(e, tree) = begin
   tree.guides = SIDEBAR_GUIDES
@@ -15633,6 +15651,7 @@ fill_tree!(e, tree) = begin
       end)
     end
   end
+  show_open_file!(e, tree)
   for group in tree.children
     group isa Tree.ItemGroup && !group.collapsed && outline!(e, group)
   end

@@ -383,7 +383,7 @@ The agent can change the page while you read it. What you're typing stays, and t
 
 ## Files, menus and settings
 
-The button at the top left shows the files in this folder. Click the icon beside a file to see its headings and its components, such as a slider, a sheet or a spreadsheet. Click one to go to it. Press ⌘⇧\ to use the list with the keyboard: ↑ and ↓ move through it, → and ← show and hide what's under an item, and Return opens a file or goes to a heading.
+The button at the top left shows the files in this folder. Under the file that shows, the list has the file's headings and its components, such as a slider, a sheet or a spreadsheet. When another file shows, the list closes the old file and opens the new one. Click the icon beside a file to open or close it. Click a heading or a component to go to it. Press ⌘⇧\ to use the list with the keyboard: ↑ and ↓ move through it, → and ← show and hide what's under an item, and Return opens a file or goes to a heading.
 
 The list leaves out hidden files and folders, the ones whose names start with a dot, like `.media`. To list them too, click the eye beside the button at the top left, or press ⌘⇧. as you do in the Finder. Click the eye again to leave them out.
 

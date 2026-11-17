@@ -45,9 +45,9 @@ const page = read(WELCOME, String)
 # when it opens, and tells Kip which module goes with each one.
 
 const PAGES = dirname(WELCOME)
-"The text of each of the app's own pages, by file name. The model, the video, the recording and the plan that the pages show are here too, as the bytes of their files."
+"The text of each of the app's own pages, by the file's place in the folder of pages. The model, the video, the recording and the plan that the pages show are here too, as the bytes of their files."
 const pages = Dict(name => read(joinpath(PAGES, name), String)
-                   for name in ("welcome.md", "examples.md", "components.md", "julia.md", "settings.md", "code-editor.md", "key-bindings.md", "email.md", "schedule.md", "counter.md", "widgets.jl", "progress.jl", "knot.stl", "knot.mp4", "hello.m4a", "plan.pdf"))
+                   for name in ("welcome.md", "examples.md", "components.md", "julia.md", "settings/settings.md", "settings/code-editor.md", "settings/key-bindings.md", "settings/email.md", "schedule.md", "counter.md", "widgets.jl", "progress.jl", "knot.stl", "knot.mp4", "hello.m4a", "plan.pdf"))
 
 "The `user/repo/file` that a file Kip got from GitHub has there, or nothing for any other file"
 place(path) = begin
@@ -83,7 +83,9 @@ put(file, text) = (isfile(file) && read(file, String) == text) || (mkpath(dirnam
 """
 Write the pages and the source files into `dir`, and tell Kip to look there.
 Returns the path of the welcome page. A page you changed is kept until a newer
-version of the app has a page that's different from the one it wrote.
+version of the app has a page that's different from the one it wrote. A page
+that an older version wrote, and this version doesn't have, is deleted unless
+you changed it.
 """
 unpack(dir) = begin
   repos = joinpath(dir, "source")
@@ -112,6 +114,14 @@ unpack(dir) = begin
     put(file, text)
     put(was, text)
   end
+  # A page that moved, like a page of the settings, leaves the place that an older version wrote it to
+  for (folder, _, names) in walkdir(joinpath(dir, "written")), n in names
+    was = joinpath(folder, n)
+    name = relpath(was, joinpath(dir, "written"))
+    haskey(pages, name) && continue
+    file = joinpath(welcome, name)
+    (!isfile(file) || read(file) == read(was)) && (rm(file, force=true); rm(was))
+  end
   for (name, file) in code_files
     Kip.modules[realpath(joinpath(welcome, name))] = Kip.modules[file]
   end
@@ -125,7 +135,7 @@ error. An editor only runs the blocks that are on screen, so this scrolls down
 each page a screen at a time.
 """
 check_pages(dir) =
-  for name in ("welcome.md", "examples.md", "components.md", "julia.md", "settings.md", "code-editor.md", "key-bindings.md", "email.md", "schedule.md", "counter.md")
+  for name in ("welcome.md", "examples.md", "components.md", "julia.md", "settings/settings.md", "settings/code-editor.md", "settings/key-bindings.md", "settings/email.md", "schedule.md", "counter.md")
     empty!(problems)
     e = build_editor(joinpath(dir, name))
     w = Window(e, title="check", size=(1100px, 800px))

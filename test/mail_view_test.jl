@@ -266,7 +266,7 @@ end
   @test K.mailer(e) === m
 
   # The Email page of the settings has the accounts in a row. A click on one shows it in the form.
-  s, sw = window(joinpath(K.pages_dir[], "email.md"), size=(720px, 1100px))
+  s, sw = window(K.settings_page("email.md"), size=(720px, 1100px))
   s.nodes[:mailer] = both
   frames(sw, 3)
   field(key) = s.nodes[(:mail_field, key)].text
@@ -304,7 +304,7 @@ end
 end
 
 @testset "the Email page of the settings" begin
-  s, sw = window(joinpath(K.pages_dir[], "email.md"), size=(720px, 1100px))
+  s, sw = window(K.settings_page("email.md"), size=(720px, 1100px))
   empty!(K.problems)
   frames(sw, 3)
   @test isempty(K.problems)
@@ -348,7 +348,7 @@ end
   @test (Mail.account().back, Mail.account().rest) == (0, true) && isempty(m.problem)
   # The page's own settings are under the form. A high window shows them, for a picture.
   if !isempty(shots)
-    t, tw = window(joinpath(K.pages_dir[], "email.md"), size=(720px, 2300px))
+    t, tw = window(K.settings_page("email.md"), size=(720px, 2300px))
     frames(tw, 3)
     shot("7-what-it-gets", tw)
     close(tw)

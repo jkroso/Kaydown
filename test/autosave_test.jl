@@ -83,7 +83,7 @@ end
     e.remember = false
   end
   # The settings page has a box for it
-  @test occursin("page_autosave!", read(joinpath(K.pages_dir[], "settings.md"), String))
+  @test occursin("page_autosave!", read(K.settings_page(), String))
 end
 
 close(w)

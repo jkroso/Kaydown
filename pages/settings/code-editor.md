@@ -2,6 +2,8 @@
 
 These settings say how code shows, in a file of code and in a code block on a page. Each one changes every window as you choose it.
 
+The other settings are on the [Settings](settings.md) page.
+
 ## Files of code
 
 These three are for a file of code or of text, like a `.jl` file.

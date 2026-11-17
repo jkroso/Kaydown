@@ -2,6 +2,8 @@
 
 Kaydown can keep a copy of your email in a folder on this Mac. The folder has the same folders in it as your email server has. Each email is one `.eml` file: the email as the server sent it, with what was attached to it inside. Kaydown shows it as a page. You read it there, and you can't change it: Kaydown marks each email file as read-only on your Mac, so no other app changes one by mistake. Click a link in an email to open it. An email that you write is a Markdown page until you send it.
 
+The other settings are on the [Settings](settings.md) page.
+
 ## Your accounts
 
 ```ui

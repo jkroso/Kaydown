@@ -1,5 +1,5 @@
 # Tests for the key bindings: the commands, the bundles of shortcuts, the key
-# bindings page that changes them, and the tabs of the settings window. See
+# bindings page that changes them, and the links between the pages of the settings. See
 # "key bindings" in main.jl. Run them with `julia -O0 --project=. test/keys_test.jl`.
 # They use windows that aren't on the screen.
 
@@ -445,7 +445,6 @@ end
 @testset "the key bindings page changes the keys of a command" begin
   empty!(K.problems)
   e = K.build_editor(K.settings_page("key-bindings.md"))
-  e.settings = true
   w = Window(e, size=(720px, 2600px))
   frame(w); frame(w); frame(w)
   @test isempty(K.problems)
@@ -527,7 +526,7 @@ end
   rm(kept, force=true)
 end
 
-@testset "the settings window has a tab for each page of the settings" begin
+@testset "the main page of the settings has a link to each of the other pages" begin
   e = K.build_editor(joinpath(dir, "page.md"))
   w = K.window!(e, size=(1100px, 800px))
   frame(w)
@@ -536,15 +535,35 @@ end
   sw = K.window_of(s)
   frame(sw); frame(sw)
   @test s.buf.path == K.settings_page("settings.md")
-  tab(page) = s.nodes[(:settings_tab, page)]
-  @test [tab(first(p)).label for p in K.SETTINGS_PAGES] == ["General", "Code editor", "Key bindings", "Email"]
-  # The settings for code are on a page of their own now
+  # The top bar has the file's name, as any window's does, and no tabs
+  @test s.nodes[:title] isa K.Title && !any(key -> key isa Tuple && first(key) == :settings_tab, keys(s.nodes))
+  # Each other page of the settings' folder has a link on the main page, and a link back to it
+  others = filter(name -> endswith(name, ".md") && name != "settings.md", readdir(K.settings_dir()))
+  @test sort(others) == ["code-editor.md", "email.md", "key-bindings.md"]
+  for name in others
+    @test any(line -> occursin("]($name)", line), s.buf.lines)
+    @test occursin("](settings.md)", read(K.settings_page(name), String))
+  end
+  # A click with ⌘ held on a link shows its page, in the same window
+  link(name) = begin
+    frame(sw); frame(sw)
+    line = findfirst(l -> occursin("]($name)", l), s.buf.lines)
+    it = K.item(s, line)
+    (K.num(s.origin[1] + 40px), K.num(s.origin[2] + it.top + it.tall / 2))
+  end
   @test !any(line -> occursin("code_wrap", line), s.buf.lines)
-  click(sw, tab("code-editor.md"))
+  @test K.link_at(s, px.(link("code-editor.md"))) == "code-editor.md"
+  sw.keys |= cmd
+  click(sw, link("code-editor.md")...)
+  sw.keys ⊻= cmd
   @test s.buf.path == K.settings_page("code-editor.md")
   @test any(line -> occursin("code_wrap", line), s.buf.lines)
   @test K.issettings(s) && K.settings_editor() === s
-  click(sw, tab("key-bindings.md"))
+  # The link at the top of that page goes back to the main page, and so does ⌘⌥←
+  K.follow!(s, "settings.md")
+  @test s.buf.path == K.settings_page("settings.md")
+  @test K.go_back!(s) && s.buf.path == K.settings_page("code-editor.md")
+  K.follow!(s, "settings.md"); K.follow!(s, "key-bindings.md")
   @test s.buf.path == K.settings_page("key-bindings.md")
   @test K.issettings(s)
   # A choice on that page changes the keys of the other window

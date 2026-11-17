@@ -194,7 +194,6 @@ end
   text = read(page, String)
   code = String(only(m[1] for m in eachmatch(r"## Font weight\n\n```ui\n(.*?)```"s, text)))
   s = K.build_editor(page)
-  s.settings = true
   K.font!(s, "Helvetica Neue"); K.weight!(s, 300)
   sw = Window(s, size=(720px, 2600px))
   empty!(K.problems)
@@ -310,7 +309,6 @@ end
   page = K.settings_page("code-editor.md")
   code = String(only(m[1] for m in eachmatch(r"## Code weight\n\n```ui\n(.*?)```"s, read(page, String))))
   s = K.build_editor(page)
-  s.settings = true
   sw = Window(s, size=(720px, 2600px))
   empty!(K.problems)
   foreach(_ -> frame(sw), 1:3)

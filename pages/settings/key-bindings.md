@@ -2,6 +2,8 @@
 
 A key binding is the keys that you press to do something, like ⌘S to save. These are the same in every window, on a page and in a file of code. Kaydown keeps them, and uses them the next time it opens.
 
+The other settings are on the [Settings](settings.md) page.
+
 ## Bundle
 
 ```ui

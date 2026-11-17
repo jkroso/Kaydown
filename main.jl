@@ -125,9 +125,10 @@
 #   - ⌘, opens the settings in a window of their own, where you choose the
 #     colours, the font and its weight, the text size, the width of the page
 #     and what the count at the top right counts. A button there makes
-#     Kaydown the app that opens Markdown files. The tabs at the top of that
-#     window show two more pages: Code editor, for how code shows, and Key
-#     bindings, for the keys of each command. ⌘, again closes that window.
+#     Kaydown the app that opens Markdown files. Links at the top of that
+#     page go to the other pages of the settings: Code editor, for how code
+#     shows, Key bindings, for the keys of each command, and Email. ⌘, again
+#     closes that window.
 #   - ⌘, then Email takes your email accounts. Kaydown then keeps a folder
 #     for each account with every email in it, as an .eml file, in the
 #     folders that the email server has. ⌘⇧I shows the inbox: the sidebar lists the emails,
@@ -948,11 +949,6 @@ end
 end
 "The file's name in the middle of the top bar. A right-click on it shows the file's menu."
 @def mutable struct Title <: SemanticUI end
-"A tab in the top bar of the settings window. A click on it shows its page of the settings."
-@def mutable struct SettingsTab <: SemanticUI
-  page::String = ""    # the name of the page's file
-  label::String = ""
-end
 @def mutable struct Count <: SemanticUI       # the word count in the top bar
   rect::NTuple{4,px} = (0px, 0px, 0px, 0px)
   quiet::Bool = false
@@ -11743,9 +11739,9 @@ end
 layout!(e, width=text_width(e)) = begin
   b = e.buf
   unlist!(node!(Document, e, :document))   # the document's children are the parts that this layout gives it
-  # The page is written as rich text or as plain text, as the switch in the top bar says. The pages of
-  # the settings are always rich text. After a change, the caret's place is looked at afresh.
-  shows = e.plain && b.view == :markdown && !issettings(e)
+  # The page is written as rich text or as plain text, as the switch in the top bar says. After a
+  # change, the caret's place is looked at afresh.
+  shows = e.plain && b.view == :markdown
   b.plain == shows || (b.plain = shows; b.stood = nothing)
   stand!(b)
   ks = kinds(b)
@@ -14893,9 +14889,9 @@ describe(t::TopBar) = begin
   e = editor(t)
   b = e.buf
   mail = mail_part(e)
-  # The settings window is narrow, and its tabs need the room between the two ends of the bar. An email has more buttons.
+  # An email has more buttons
   mode = mode_part(e)
-  side = issettings(e) ? 130px : (isempty(mail) ? 250px : 330px) + (isempty(mode) ? 0px : MODE_W)
+  side = (isempty(mail) ? 250px : 330px) + (isempty(mode) ? 0px : MODE_W)
   ended_rename!(e)
   # The two ends of the bar are as wide as each other, so the file's name is in the middle of the space beside
   # the sidebar. A window can be too narrow for that, with a wide sidebar or the buttons of an email. Then the
@@ -14928,11 +14924,10 @@ describe(t::TopBar) = begin
       (readonly(b) ? (Box(height(28px), padding(8px, 0px), label(isempty(b.about) ? "Read only" : b.about * "  ·  Read only", 12px, color=colours.dim)),
                       # The app that the Mac uses for the file can change it, so a button opens the file there
                       button(e, :outside, "box-arrow-up-right")) :
-                     # The pages of the settings are for choosing, not for writing, so they show no count
-                     issettings(e) ? () : (mail..., job_part(e)..., agent_part(e)..., mode...,
-                                            # A page that's never changed says so where the count of its words would be
-                                            b.fixed ? Box(height(28px), padding(8px, 0px), label("Read only", 12px, color=colours.dim)) :
-                                                      node!(Count, e, :count)))...))
+                     (mail..., job_part(e)..., agent_part(e)..., mode...,
+                      # A page that's never changed says so where the count of its words would be
+                      b.fixed ? Box(height(28px), padding(8px, 0px), label("Read only", 12px, color=colours.dim)) :
+                                node!(Count, e, :count)))...))
 end
 
 # --- the snake and the ladder in the top bar ---------------------------------------------------
@@ -14993,8 +14988,8 @@ tip(m::Mode) = begin
   words * hint(e, :plain)
 end
 
-"The snake or the ladder for the top bar. Only a document has one: a file of code is always plain, and the settings are always rich."
-mode_part(e) = (e.buf.view == :markdown && !issettings(e)) ? (node!(Mode, e, :mode),) : ()
+"The snake or the ladder for the top bar. Only a document has one: a file of code is always plain."
+mode_part(e) = e.buf.view == :markdown ? (node!(Mode, e, :mode),) : ()
 
 """
 Write the page as plain text, or with `on` false as rich text. Only the part
@@ -15220,9 +15215,6 @@ onkey(t::TopBar, ::KeyPress{Keys.mouse_left}) = drag_window!(window_of(t))
 describe(t::Title) = begin
   e = editor(t)
   b = e.buf
-  # The settings window has a tab for each page of the settings where another window has its file's name
-  issettings(e) && return Row(child_gap=2px, name="Settings tabs",
-    [node!(() -> SettingsTab(page=page, label=says), e, (:settings_tab, page)) for (page, says) in SETTINGS_PAGES]...)
   if !isempty(b.path) && renaming(e, :title) == b.path
     # The field grows as the name gets longer
     wide = clamp(measure(Face(SANS, "", 13px, colours.ink, false), renamer(e).text) + 24px, 160px, 420px)
@@ -15238,22 +15230,9 @@ end
 
 onkey(t::Title, ::KeyPress{Keys.mouse_right}) = begin
   e = editor(t)
-  # A page of the settings is Kaydown's own, so it has no menu to rename it or move it to the Trash
-  issettings(e) || isempty(e.buf.path) || file_menu!(e, window_of(t), e.buf.path; at=:title)
+  isempty(e.buf.path) || file_menu!(e, window_of(t), e.buf.path; at=:title)
   handled
 end
-
-describe(t::SettingsTab) = begin
-  e = editor(t)
-  here = e.buf.path == settings_page(t.page)
-  Box(height(26px), padding(11px, 0px), radius(6px), background(here ? colours.active : ishovered(t) ? colours.hover : clear),
-    label(t.label, 13px, color=here ? colours.ink : colours.dim, weight=here ? "Medium" : ""))
-end
-
-cursor(::SettingsTab) = :hand
-
-# A click on a tab shows its page in the settings window. Each page keeps the place it was scrolled to.
-onkey(t::SettingsTab, ::KeyPress{Keys.mouse_left}) = (open!(editor(t), settings_page(t.page)); handled)
 
 # --- the sidebar --------------------------------------------------------------------------
 
@@ -20805,10 +20784,12 @@ end
 # of its text, its width, what the count at the top right counts, how code
 # shows, the key bindings and how wide the sidebar is. ⌘, opens the settings in
 # a window of their own.
-# They're on three pages, each a Markdown file whose live blocks change them:
-# General, Code editor and Key bindings. The top bar of the settings window has
-# a tab for each page. A setting that changes in one window changes in every
-# window. They are kept in a file, so the next window opens with them.
+# They're on the pages of one folder, each a Markdown file whose live blocks
+# change them. ⌘, shows the folder's main page, and that page has a link to
+# each of the others. These are pages like any other: the settings window
+# shows them as any window shows a page, and any window can show them. A
+# setting that changes in one window changes in every window. They are kept in
+# a file, so the next window opens with them.
 
 "The folder of Kaydown's own pages. The built app changes it to the copies it writes out."
 const pages_dir = Ref(joinpath(@__DIR__, "pages"))
@@ -20816,17 +20797,22 @@ const pages_dir = Ref(joinpath(@__DIR__, "pages"))
 "The settings that every window has the same: each is a field of the editor"
 const SHARED = (:theme, :font, :weight, :zoom, :widest, :stat, :plain, :spelling, :updates, :autosave, :wrap, :numbers, :shade, :beside, :indent, :code_scale, :code_font, :code_weight, :guide, :bundle, :rebound, :side, :hidden)
 
-"The pages of the settings, in the order of their tabs: the name of each page's file, and what its tab says"
-const SETTINGS_PAGES = ("settings.md" => "General", "code-editor.md" => "Code editor", "key-bindings.md" => "Key bindings", "email.md" => "Email")
+"The folder of the pages that have the settings"
+settings_dir() = joinpath(pages_dir[], "settings")
 
-"Where the page of the settings is whose file is called `name`"
-settings_page(name=first(first(SETTINGS_PAGES))) = joinpath(pages_dir[], name)
+"Where the page of the settings is whose file is called `name`. Without a name, it's the main page, which ⌘, shows."
+settings_page(name="settings.md") = joinpath(settings_dir(), name)
 
 const SETTINGS_SIZE = (720px, 820px)   # of the settings window, when the window that asked for it is big enough
 const SETTINGS_DROP = 48px             # how far the settings window's top is below the top of the window that asked for it
 
-"True when `e` is the editor of the settings window. That window can go to a page that isn't one of the settings, and then it's a window like any other."
-issettings(e) = e.settings && any(page -> e.buf.path == settings_page(first(page)), SETTINGS_PAGES)
+"""
+True when `e` is the editor of the settings window: the one that ⌘, opened,
+while it shows a page of the settings' folder. ⌘, closes that window, and a
+file that macOS asks for goes to another window. In every other way it's a
+window like any other.
+"""
+issettings(e) = e.settings && dirname(e.buf.path) == settings_dir()
 
 "The editor of the settings window, or nothing while that window isn't open"
 settings_editor() = (i = findfirst(issettings, editors); i === nothing ? nothing : editors[i])
@@ -21081,11 +21067,10 @@ autosave!(e, on::Bool) = (e.autosave = on; save_settings!(e); rerun!(e, :autosav
 
 """
 The window of `e` stopped being the front window. With the setting on, each
-page of the window that has changes is written to its file. The settings
-window has no page of yours.
+page of the window that has changes is written to its file.
 """
 left!(e) = begin
-  (e.autosave && !issettings(e)) || return e
+  e.autosave || return e
   write_blocks!(e)   # a block's own changes count as changes to the page
   dirty(e.buf) && save_page!(e)
   foreach(b -> b === e.buf || !dirty(b) || save!(b), values(e.buffers))

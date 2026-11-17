@@ -58,7 +58,7 @@ The `pages` folder has the pages that come with Kaydown:
 - `julia.md` has code to run with ⌘Return.
 - `schedule.md` has a schedule to try.
 - `counter.md` defines a kind of block, and shows it.
-- `settings.md`, `code-editor.md`, `key-bindings.md` and `email.md` are the four pages of the settings window.
+- The `settings` folder has the pages of the settings. ⌘, shows `settings.md`, which has a link to each of the others: `code-editor.md`, `key-bindings.md` and `email.md`.
 
 ## Use it with an agent
 
@@ -175,7 +175,7 @@ Kaydown can keep a folder on your Mac that holds every email of an account. It c
 
 An `.eml` file holds the email exactly as the server sent it, with what was attached to it inside. Mail, Quick Look and Spotlight read it too. Kaydown shows it as a page: the subject and who sent it at the top, then the email's text as Markdown, then a link to each attached file. You read that page, and you can't change it. Kaydown marks each email file as read-only on your Mac, so no other app changes one by mistake. A click on a link in an email opens it, with no key held. Because the file is the whole email, a later Kaydown can show it better with no new download.
 
-1. Press ⌘, and click the Email tab.
+1. Press ⌘, and click the Email link.
 2. Type your email address, your name and your password, and click Connect.
 3. Press ⌘⇧I to show the inbox.
 

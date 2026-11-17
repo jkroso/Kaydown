@@ -62,11 +62,11 @@ The block at the top of this page is front matter: lines at the very top of a fi
 ## Email
 
 - [The emails with a person, in a page](welcome.md#emails)
-- [Your email account, and how Kaydown keeps your email](email.md)
+- [Your email account, and how Kaydown keeps your email](settings/email.md)
 
 ## The window and its settings
 
 - [The list of files, the files that aren't pages, the menus, printing and the app's updates](welcome.md#files-menus-and-settings)
-- [The colours, the font, the size of the text, the width of the page, and saving a page when you leave its window](settings.md)
-- [How code shows](code-editor.md)
-- [The keys of each command](key-bindings.md)
+- [The colours, the font, the size of the text, the width of the page, and saving a page when you leave its window](settings/settings.md)
+- [How code shows](settings/code-editor.md)
+- [The keys of each command](settings/key-bindings.md)

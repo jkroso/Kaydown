@@ -14,7 +14,7 @@ const dir = mktempdir()
 const page = joinpath(dir, "notes.md")
 write(page, "# Notes\n\n" * join(("Line $i of the notes." for i in 1:200), "\n\n") * "\n")
 write(joinpath(dir, "other.md"), "# Other\n\nAnother page.\n")
-const settings_page = joinpath(K.pages_dir[], "settings.md")
+const settings_page = K.settings_page()
 
 "Press `key` in window `w` with `mods` held down, then draw the window"
 press(w, key, mods...) = begin

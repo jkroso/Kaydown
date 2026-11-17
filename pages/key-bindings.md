@@ -12,8 +12,8 @@ RadioGroup(labels=bundles, selected=something(findfirst(==(key_bundle()), bundle
 
 A bundle gives every command its keys. Kaydown has the keys that this app started with. The others have the keys of another editor, for the commands that Kaydown has too.
 
-- **VS Code**: ⌘P finds a file, ⌥↑ and ⌥↓ move a line, and ⇧⌥↓ copies it. Printing moves to ⌘⌥P.
-- **Sublime Text**: ⌘P finds a file, ⌃⌘↑ and ⌃⌘↓ move a line, ⌘⇧D copies it, ⌃⇧K deletes it, and ⌘K then ⌘B shows the sidebar. Printing moves to ⌘⌥P.
+- **VS Code**: ⌘P finds a file, ⌃- goes back to the file that showed before, ⌥↑ and ⌥↓ move a line, and ⇧⌥↓ copies it. Printing moves to ⌘⌥P.
+- **Sublime Text**: ⌘P finds a file, ⌃- goes back to the file that showed before, ⌃⌘↑ and ⌃⌘↓ move a line, ⌘⇧D copies it, ⌃⇧K deletes it, and ⌘K then ⌘B shows the sidebar. Printing moves to ⌘⌥P.
 - **Emacs**: ⌃A, ⌃E, ⌃F, ⌃B, ⌃N and ⌃P move the caret, ⌃D and ⌃K delete, ⌃W cuts, ⌥W copies, ⌃Y pastes, ⌃S finds, ⌃/ undoes, and ⌃X then ⌃S saves. The Mac's own keys, like ⌘S, still work.
 
 When you choose a bundle, every command gets that bundle's keys. The keys that you changed yourself go back too.

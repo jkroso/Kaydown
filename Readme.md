@@ -236,6 +236,10 @@ Kaydown asks before it runs the code of a GitHub repository for the first time. 
 
 `pages/progress.jl` is a kind of block to copy, `pages/counter.md` is one that a page defines, and `pages/welcome.md` shows the first. The comment over `FileBlock` in `main.jl` says how it works.
 
+## Go back to the file that showed before
+
+Each window keeps the files that it showed, in the order that it showed them. ⌘⌥← goes back to the file that showed before the one that shows now, at the place that it was scrolled to. ⌘⌥→ goes forward again. While the sidebar is open, two arrows at its top right go back and forward too. An arrow is faint when it has no file to go to. It works after a link, a click in the list of files, the file finder, and any other way of showing a file. The key bindings page changes the keys. ⌘[ and ⌘] already show the email before and the next email.
+
 ## Save a page when you leave its window
 
 Kaydown writes a page to its file when you press ⌘S, and at no other time. The settings page has a box that changes that: **Save a page when I leave its window**. With it on, a window writes each of its pages that has changes when it stops being the front window: when you click another window, or change to another app. A page that has no file yet stays as it is. Closing a window doesn't save its pages.
@@ -261,6 +265,7 @@ julia -O0 --project=. test/detail_test.jl         # what the box of a function a
 julia -O0 --project=. test/update_test.jl         # the app's own updates: a newer version comes, is checked and takes the app's place
 julia -O0 --project=. test/window_test.jl         # the settings window, ⌘W, and the settings that every window shares
 julia -O0 --project=. test/title_test.jl          # the menu of the file's name in the top bar
+julia -O0 --project=. test/back_test.jl           # going back to the file that showed before, and forward again
 julia -O0 --project=. test/selection_test.jl      # where the colour of the selection goes
 julia -O0 --project=. test/rich_test.jl           # rich text and plain text: where the caret stops, what ⌫ and Return do, and the snake and the ladder in the top bar
 julia -O0 --project=. test/spelling_test.jl       # the red dots under a word that's spelt wrong, and what the page's menu does with it

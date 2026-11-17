@@ -65,6 +65,8 @@
 #   - The button at the top left, or ⌘\, shows the other files in the folder.
 #     Drag the right edge of that list to make it wider or narrower.
 #     ⌘O finds a Markdown file by name.
+#   - ⌘⌥← goes back to the file that showed before, and ⌘⌥→ goes forward
+#     again. The two arrows at the top right of that list do the same.
 #   - Click a file in that list that isn't Markdown to see it. Kaydown shows it
 #     and doesn't change it: the text of a file of code, a picture, a model, a
 #     sound, a video, a PDF file, a table. A file that it has no way to show is
@@ -859,6 +861,8 @@ isspread(g::Grid) = g.head > 0px
 @def mutable struct Editor <: SemanticUI
   buf::Buffer = Buffer()
   buffers::Dict{String,Buffer} = Dict{String,Buffer}()
+  back::Vector{String} = String[]       # the files that showed before this one, with the one just before it last. See `go_back!`.
+  ahead::Vector{String} = String[]      # the files that going back left, with the one that was left last at the end
   folder::String = ""
   files::Vector{String} = String[]      # the Markdown files in the folder
   listed::Vector{String} = String[]     # the folders and files in the folder, as the sidebar lists them
@@ -1086,12 +1090,18 @@ list_files!(e) = begin
   e.files = filter(ismarkdown, files)
 end
 
-"Show the file at `path`. A file that's already open keeps its changes."
-open!(e, path) = begin
+"""
+Show the file at `path`. A file that's already open keeps its changes. The
+file that leaves goes on the list that `go_back!` reads, unless `record` is false.
+"""
+open!(e, path; record=true) = begin
   # A sound that the last page was playing stops. A new window has no last page, and another window's sound plays on.
   isempty(e.buffers) || silence!()
   write_blocks!(e)   # the page that leaves keeps what its blocks hold
   e.buf.offset = e.scroll.offset
+  from = e.buf.path
+  # A new file ends the list of files to go forward to, as a new address does in a web browser
+  record && !isempty(from) && from != path && (push!(e.back, from); empty!(e.ahead))
   e.buf = get!(e.buffers, path) do
     isfile(path) ? load(path) : Buffer(path=path)
   end
@@ -1106,6 +1116,52 @@ open!(e, path) = begin
   w === nothing || focus(e)
   e
 end
+
+# --- the files that showed before --------------------------------------------------------
+#
+# Each window keeps the files that it showed, in the order that it showed them.
+# ⌘⌥← goes back to the file that showed before the one that shows now, as the
+# back button of a web browser does. ⌘⌥→ goes forward again, to the file that
+# going back left. While the sidebar is open, two arrows at its top do the
+# same. They are in the top bar, at the right of the part that's over the
+# sidebar, and they aren't there while the sidebar is closed. An arrow is
+# faint when it has no file to go to, and its tooltip names the file that it
+# goes to. Any way of showing a file adds to the list: a link, the
+# list of files, the file finder, a line of a `find` block. A file shows from
+# the place that it was scrolled to, because its buffer keeps that. A link to
+# a heading of the page that shows adds nothing, because the file is the same.
+
+"True when the window can show the file at `path` again: it's on the disk, or it's a new page that has no file yet"
+showable(e, path) = haskey(e.buffers, path) || isfile(path)
+
+"""
+The file that `go_back!` would show, or nothing when no file showed before the
+one that shows now. With `e.ahead` as the `list`, it's the file that
+`go_forward!` would show.
+"""
+last_shown(e, list=e.back) = (i = findlast(p -> p != e.buf.path && showable(e, p), list); i === nothing ? nothing : list[i])
+
+"""
+Show the last file of `from` that's still there, and put the file that leaves
+on `to`. A file that was renamed is there under its new name. One that went to
+the Trash is passed over. It's true when there was a file to show.
+"""
+step_back!(e, from, to) = begin
+  while !isempty(from)
+    path = pop!(from)
+    (path == e.buf.path || !showable(e, path)) && continue
+    isempty(e.buf.path) || push!(to, e.buf.path)
+    open!(e, path, record=false)
+    return true
+  end
+  false
+end
+
+"Show the file that showed before the one that shows now. It's false when no file showed before."
+go_back!(e) = step_back!(e, e.back, e.ahead)
+
+"Show the file that `go_back!` left. It's false when there is none, or when another file was opened since."
+go_forward!(e) = step_back!(e, e.ahead, e.back)
 
 window_size(e) = something(viewport(e), e.size)
 
@@ -12297,6 +12353,8 @@ const COMMAND_GROUPS = [
   "Files and windows" => [
     Command(:save, "Save the file", :window, "cmd+s", (e, w, _) -> save_page!(e)),
     Command(:open, "Find a file by name", :window, "cmd+o", (e, w, _) -> open_finder!(e)),
+    Command(:back, "Go back to the file that showed before", :window, "cmd+opt+left", (e, w, _) -> go_back!(e)),
+    Command(:forward, "Go forward again, to the file that you went back from", :window, "cmd+opt+right", (e, w, _) -> go_forward!(e)),
     Command(:print, "Print the page", :window, "cmd+p", (e, w, _) -> print!(e, w)),
     Command(:export, "Export the page as HTML", :window, "cmd+shift+e", (e, w, _) -> export_html!(e, w)),
     Command(:close, "Close the window", :window, "cmd+w", (e, w, _) -> close(w)),
@@ -12383,10 +12441,11 @@ const BUNDLES = [
   "Kaydown" => Pair{Symbol,String}[],
   # ⌘P finds a file, as Quick Open does, so printing has another key
   "VS Code" => [
-    :open => "cmd+p, cmd+o", :print => "cmd+opt+p",
+    :open => "cmd+p, cmd+o", :print => "cmd+opt+p", :back => "ctrl+minus", :forward => "ctrl+shift+minus",
     :line_up => "opt+up", :line_down => "opt+down", :duplicate_line => "opt+shift+down, opt+shift+up"],
   "Sublime Text" => [
-    :open => "cmd+p, cmd+o", :print => "cmd+opt+p", :sidebar => "cmd+k cmd+b, cmd+backslash", :redo => "cmd+shift+z, cmd+y",
+    :open => "cmd+p, cmd+o", :print => "cmd+opt+p", :back => "ctrl+minus", :forward => "ctrl+shift+minus",
+    :sidebar => "cmd+k cmd+b, cmd+backslash", :redo => "cmd+shift+z, cmd+y",
     :line_up => "ctrl+cmd+up", :line_down => "ctrl+cmd+down", :delete_line => "ctrl+shift+k",
     :erase_line_start => "cmd+backspace, cmd+k cmd+backspace", :erase_line_end => "ctrl+k, cmd+k cmd+k"],
   # Emacs's own keys come first, and the Mac's keys still work where Emacs has no other use for them
@@ -12938,6 +12997,8 @@ onkey(b::ToolButton, ::KeyPress{Keys.mouse_left}) = begin
   b.action == :outside && open_outside!(e)
   b.action == :marks && toggle_marks!(e)
   b.action == :hidden && hidden!(e, !e.hidden)
+  b.action == :back && go_back!(e)
+  b.action == :forward && go_forward!(e)
   b.action == :job && make_job!(e)
   b.action in MAIL_ACTIONS && mail_act!(e, b.action)
   hush!(b)
@@ -12965,6 +13026,13 @@ tip(b::ToolButton) = begin
   end
   b.action == :marks && return marking(e) ? "Hide $(whose(e)) changes" : "Show $(whose(e)) changes"
   b.action == :hidden && return (e.hidden ? "Leave out hidden files" : "Show hidden files") * hint(e, :hidden_files)
+  if b.action == :back
+    to = last_shown(e)
+    return to === nothing ? "No file to go back to" : "Back to $(basename(to))" * hint(e, :back)
+  elseif b.action == :forward
+    to = last_shown(e, e.ahead)
+    return to === nothing ? "No file to go forward to" : "Forward to $(basename(to))" * hint(e, :forward)
+  end
   b.action == :job && return job_tip(e)
   b.action in MAIL_ACTIONS && return mail_tip(e, b.action)
   b.action == :outside || return ""
@@ -13206,8 +13274,14 @@ job(e) = (j = get(e.nodes, :job_ask, nothing); j !== nothing && j.path == e.buf.
 "True while Centient makes a job"
 making(e) = (j = get(e.nodes, :job_ask, nothing); j !== nothing && j.request !== nothing)
 
-"True for a button of the top bar that does nothing now: the one that makes the job, when the Mac has no Centient or Centient makes a job"
+"""
+True for a button of the top bar that does nothing now: the one that makes the
+job, when the Mac has no Centient or Centient makes a job, and the ones that
+go back and forward, when they have no file to go to
+"""
 off(b::ToolButton) = (b.action == :job && (!Centient.available() || making(editor(b)))) ||
+                     (b.action == :back && last_shown(editor(b)) === nothing) ||
+                     (b.action == :forward && last_shown(editor(b), editor(b).ahead) === nothing) ||
                      # A draft that's on its way can't be sent again
                      (b.action == :mail_send && (m = mail_owner(editor(b), editor(b).buf.path); m !== nothing && Mail.sending(m, editor(b).buf.path)))
 
@@ -13289,6 +13363,13 @@ hidden_button(e) = begin
   (b,)
 end
 
+"""
+The buttons that go back to the file that showed before, and forward again.
+They show only while the sidebar is open, at the right of the part of the top
+bar that's over the sidebar.
+"""
+history_buttons(e) = e.panel ? (button(e, :back, "arrow-left"), button(e, :forward, "arrow-right")) : ()
+
 describe(t::TopBar) = begin
   e = editor(t)
   b = e.buf
@@ -13300,16 +13381,24 @@ describe(t::TopBar) = begin
   # The two ends of the bar are as wide as each other, so the file's name is in the middle of the space beside
   # the sidebar. A window can be too narrow for that, with a wide sidebar or the buttons of an email. Then the
   # left end gives up its room, so the right end stays in the window and the name keeps some room. With the
-  # sidebar hidden, the left end keeps the room of its own two buttons.
+  # sidebar hidden, the left end keeps the room of its own two buttons. It always keeps the room that its
+  # buttons need past the sidebar: a sidebar that's dragged narrow is narrower than its buttons.
   wide, _ = window_size(e)
-  left = max(150px * (1 - opened(e)), min(side, wide - panel_w(e) * opened(e) - side - TITLE_ROOM))
+  buttons = (button(e, :panel, "layout-sidebar"), hidden_button(e)...)
+  # The two arrows are at the sidebar's right edge, as far in as the right end of a row of its list. They
+  # ride on that edge while the sidebar slides open, once it has passed the other buttons.
+  arrows = history_buttons(e)
+  need = 84px + 32px * length(buttons) - 2px + (isempty(arrows) ? 0px : 74px)
+  over = max(need, panel_w(e) * opened(e))
+  left = max(150px * (1 - opened(e)), need - panel_w(e) * opened(e), min(side, wide - panel_w(e) * opened(e) - side - TITLE_ROOM))
   e.nodes[:title_room] = wide - panel_w(e) * opened(e) - left - side   # the name is cut short to fit in it
   # The top bar lies over the top of the sidebar. The file's name is in the
   # middle of the space beside the sidebar, so it moves as the sidebar slides.
   Row(width(grow=grow), height(TOPBAR_H), name="TopBar",
-    # The close, minimise and zoom buttons sit over the first 84px
-    Row(fixed(left + panel_w(e) * opened(e)), height(grow=grow), padding(0px, 0px, 0px, 84px), child_gap=2px,
-      button(e, :panel, "layout-sidebar"), hidden_button(e)...),
+    Row(fixed(left + panel_w(e) * opened(e)), height(grow=grow),
+      # The close, minimise and zoom buttons sit over the first 84px
+      Row(fixed(over), height(grow=grow), padding(0px, 8px, 0px, 84px), child_gap=2px,
+        buttons..., Box(width(grow=grow)), arrows...)),
     Box(width(grow=grow), height(grow=grow), clip=true, node!(Title, e, :title)),
     Row(fixed(side), height(grow=grow), justify=Alignment.End, padding(0px, 10px, 0px, 0px),
       # A file that's only shown has no words to count. The bar says that it's only shown.
@@ -13953,6 +14042,9 @@ move!(e, old, new) = begin
     b = e.buffers[new] = pop!(e.buffers, old)
     b.path = new
   end
+  # Going back to the file still finds it
+  replace!(e.back, old => new)
+  replace!(e.ahead, old => new)
   haskey(READ, old) && (READ[new] = pop!(READ, old))
   for kind in (:read, :outline)
     haskey(e.nodes, (kind, old)) && (e.nodes[(kind, new)] = pop!(e.nodes, (kind, old)))

@@ -5,7 +5,7 @@ about: Everything that Kaydown does, with a link to an example of each
 
 # Examples
 
-This page lists everything that Kaydown does. Each line links to the place that shows it. Hold ⌘ and click a link to go there. To come back, press ⌘O and type `examples`, or click this page in the list of files.
+This page lists everything that Kaydown does. Each line links to the place that shows it. Hold ⌘ and click a link to go there. To come back, press ⌘⌥←.
 
 The block at the top of this page is front matter: lines at the very top of a file that say things about it.
 

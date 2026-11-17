@@ -177,6 +177,8 @@ Kaydown draws five kinds of diagram: `flowchart`, `sequenceDiagram`, `stateDiagr
 
 A diagram that's too small to read can fill the window. Move the mouse over it, and click the button that shows beside its top right corner, or pinch outwards on it. Then pinch, or scroll with ⌘ held, to make it bigger, and drag it to see the rest. Esc puts the page back. A picture and a page of a PDF file do the same, and a model and a video fill the window too.
 
+You can change a diagram while it fills the window. Click a box, a line or another part to select it. Click it again, or press Return, to type its words where they are. The first buttons under the diagram are the tools for the part that's selected. For a box of a flowchart they add a box after it, draw a line from it to the box that you click next, change its shape and take it away. With nothing selected, they are the tools for the whole diagram, like the one that adds a box. ⌫ takes the selected part away, and ⌘Z takes back the last change. Kaydown writes each change in the code of the block and draws the diagram again. It chooses where each box goes, so you can't drag a box to another place. With a part selected, Esc selects nothing, and Esc again puts the page back.
+
 ## Takeoffs
 
 A code block in the language `takeoff` shows a plan that you measure from: a page of a PDF file, or a picture. Drop the file on the block, or click the block to choose it. This one has the plan of a small house, with its power points and lights counted, a run of cable measured and the kitchen floor measured.

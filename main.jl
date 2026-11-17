@@ -176,6 +176,7 @@
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Player" AudioPlayer VideoPlayer pause! card_bottom
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Recorder" AudioRecorder record! stop! plays
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Mermaid" Mermaid problem
+@use "github.com/jkroso/UI.jl/Interface/Semantic/Mermaid" => Diagrams
 @use "github.com/jkroso/UI.jl/Interface/media" silence! recording picture_size
 @use "github.com/jkroso/UI.jl/Interface/Semantic/ThreeMF" => ThreeMF
 @use "./pictures" picture natural thumbnail pdf_pages pdf_page pdf_size pdf_part pdf_lines
@@ -4308,6 +4309,8 @@ end
 # describes: a flowchart, a sequence diagram, a state diagram, a class diagram
 # or a pie chart. UI.jl's Mermaid component reads the code and draws it. Click
 # it with ⌥ held to see its code, or as plain text put the caret in the block.
+# A diagram that fills the window can be changed there: see "a picture, a
+# diagram or a page that fills the window".
 
 const DIAGRAM = "mermaid"
 
@@ -7788,6 +7791,15 @@ end
 #     that shows in the document goes on from the page you looked at.
 #   - A model and a video only fill the window. A model turns and zooms there
 #     as it does in the page, and a video plays on.
+#   - A diagram of a `mermaid` block can be changed while it fills the window.
+#     A click selects a box, a line or another part of it, and two clicks let
+#     you type its words where they are. A drag moves the diagram, as before.
+#     The first buttons under it are the tools for the part that's selected,
+#     or for the whole diagram: add a box, draw a line to the box that's
+#     clicked next, change a shape, take the part away. ⌫ takes it away too.
+#     Each change is written in the lines of the block, and ⌘Z takes it back.
+#     With a part selected, Esc selects nothing, and the next Esc puts the
+#     page back.
 #
 # A diagram is drawn again at each size, so it's sharp however big it is, and so
 # is a page of a PDF file once it stops moving. A picture is as sharp as its pixels.
@@ -7817,6 +7829,8 @@ const PAGE_COMMANDS = (:save, :open, :print, :close, :settings, :sidebar, :sideb
   home::Any = nothing                       # how tall a model or a video was in the page
   held::px = 0px                            # the room that a model or a video took in the page, which the page keeps for it
   pinned::px = 0px                          # how far the page was scrolled
+  block::Int = 0                            # which `mermaid` block of the page its diagram is, so that it can be changed. 0 for a diagram that can't.
+  tool::Any = nothing                       # the tool of its diagram that waits for a click, whose button is lit
   parts::Dict{Any,Any} = Dict{Any,Any}()    # its buttons and its area, kept between frames
 end
 
@@ -8010,7 +8024,12 @@ zoom_in!(e, what, from=nothing) = begin
   zoom_out!(v, false)
   v.what, v.path, v.from, v.pinned = what, e.buf.path, from, e.scroll.offset
   v.zoom, v.fits, v.grab, v.drawn = 0.0, true, nothing, nothing
-  if what[1] == :pdf
+  v.block, v.tool = 0, nothing
+  delete!(v.parts, :diagram)
+  if what[1] == :diagram
+    # The diagram of a `mermaid` block can be changed here. One that the code of a live block made has no lines of its own.
+    from !== nothing && get(e.nodes, (:diagram, what[2]), nothing) === from && !readonly(e.buf) && (v.block = diagram_block(e.buf, what[2]))
+  elseif what[1] == :pdf
     v.page, v.pages = what[3], max(1, pdf_pages(what[2]))
   elseif what[1] == :node
     r = rect(what[2])
@@ -8025,6 +8044,9 @@ end
 zoom_out!(v::ZoomView, refocus=true) = begin
   what = v.what
   what === nothing && return handled
+  # Words that were being typed into a diagram are taken
+  m = changing(v)
+  m === nothing || Diagrams.settle!(m)
   v.what = nothing
   what[1] == :node && v.home !== nothing && (what[2].height = v.home)
   v.from isa Pages && (v.from.page = v.page)   # the page in the document goes on from the page you looked at
@@ -8041,7 +8063,65 @@ zoom_tick!(e) = begin
   v === nothing && return
   v.path == e.buf.path || return zoom_out!(v, false)
   e.scroll.offset = v.pinned
+  # The mouse button that started a drag has come up
+  w = window_of(e)
+  v.grab === nothing || w === nothing || Keys.mouse_left in w.keys || let_go!(v, w)
+  v.what === nothing && return
+  if v.what[1] == :diagram && v.block > 0
+    # The diagram is what the lines of its block say now. They change under it when ⌘Z takes a change back.
+    code = diagram_code(e.buf, v.block)
+    (code === nothing || !isdiagram(code)) && return zoom_out!(v, false)
+    code == v.what[2] || (v.what = (:diagram, code); refit!(v))
+  end
   nothing
+end
+
+"The code of the `n`th `mermaid` block of `b`, or nothing when it has no such block"
+diagram_code(b::Buffer, n::Int) = begin
+  span = block_lines(b, DIAGRAM, n)
+  span === nothing ? nothing : join(b.lines[span[1]+1:span[2]-1], "\n")
+end
+
+"Which `mermaid` block of `b` has the code `code`: the first one that does, or 0"
+diagram_block(b::Buffer, code) = begin
+  n = 1
+  while (found = diagram_code(b, n)) !== nothing
+    found == code && return n
+    n += 1
+  end
+  0
+end
+
+"The diagram of `v` as the component that changes it, or nothing when `v` shows something else or a diagram that can't be changed"
+changing(v::ZoomView) = begin
+  (v.what !== nothing && v.what[1] == :diagram && v.block > 0) || return nothing
+  m = get(v.parts, :diagram, nothing)
+  m !== nothing && m.editing ? m : nothing
+end
+
+"A diagram that fitted the window fits it again after a change, which gives it another size"
+refit!(v::ZoomView) = (v.fits && (v.zoom = 0.0); v)
+
+"""
+Write the code of the diagram that fills the window as the lines of its block.
+The caret stays where it was in the text, and ⌘Z takes the change back.
+"""
+write_diagram!(v::ZoomView, code::String) = begin
+  e = editor(v)
+  b = e.buf
+  span = block_lines(b, DIAGRAM, v.block)
+  (span === nothing || readonly(b)) && return v
+  i, t = span
+  new, old = String.(split(code, '\n')), b.lines[i+1:t-1]
+  if new != old
+    caret, anchor = b.caret, b.anchor
+    edit!(b, line_end(b, i), line_end(b, t - 1), "\n" * join(new, "\n"))
+    by = length(new) - length(old)
+    moved(p) = p[1] >= t ? (p[1] + by, p[2]) : p[1] > i ? (i, 0) : p
+    b.caret, b.anchor = moved(caret), moved(anchor)
+  end
+  v.what = (:diagram, code)
+  refit!(v)
 end
 
 "What fills the window, over the page and the sidebar and under the top bar"
@@ -8058,6 +8138,7 @@ end
 "Do what a button of a ZoomView does"
 act!(v::ZoomView, action, w) = begin
   a = action isa Tuple ? action[1] : action
+  a == :tool && return use_tool!(v, action[2], w)
   a == :zoom && return zoom_by!(v, action[2], view_middle(v)...)
   a == :fit && return fit_now!(v)
   a == :page && return turn!(v, action[2])
@@ -8086,7 +8167,7 @@ describe(v::ZoomView) = begin
   # The view is the whole window under the top bar, so it's fitted here, and the bar says how big the picture is in this frame
   w, h = window_size(e)
   reframe!(v, (0.0, num(TOPBAR_H), num(w), num(h) - num(TOPBAR_H)))
-  buttons = Any[button!(v, :smaller, (:zoom, 1 / ZOOM_STEP), icon="zoom-out", tip="Smaller  pinch, or ⌘ and scroll"),
+  buttons = Any[diagram_buttons(v)..., button!(v, :smaller, (:zoom, 1 / ZOOM_STEP), icon="zoom-out", tip="Smaller  pinch, or ⌘ and scroll"),
                 Box(width(46px), Alignment.Center, justify=Alignment.Center,
                     label(v.zoom > 0 ? "$(round(Int, 100v.zoom))%" : "", 12px, color=colours.dim)),
                 button!(v, :bigger, (:zoom, ZOOM_STEP), icon="zoom-in", tip="Bigger  pinch, or ⌘ and scroll"),
@@ -8101,7 +8182,41 @@ describe(v::ZoomView) = begin
 end
 
 describe(::ZoomArea) = Box(width(grow=grow), height(grow=grow))
-cursor(::ZoomArea) = :arrow
+# While a tool of the diagram waits for a click on a part, the mouse is a cross
+cursor(a::ZoomArea) = a.of.tool === nothing ? :arrow : :crosshair
+
+"""
+The buttons of the tools of the diagram that fills the window, with a line
+after them: the tools for the part that's selected, or for the whole diagram
+while nothing is. A diagram that can't be changed has none.
+"""
+diagram_buttons(v::ZoomView) = begin
+  m = changing(v)
+  m === nothing && return ()
+  # The caret in the words that are typed into the diagram blinks
+  m.typing === nothing || redraw_in!(v, 0.5)
+  v.tool = m.waiting
+  tools = Diagrams.tools(m)
+  isempty(tools) && return ()
+  (Any[button!(v, (:tool, t.name), (:tool, t.name), icon=t.icon, tip=t.tip) for t in tools]...,
+   Box(width(9px), height(18px), Alignment.Center, justify=Alignment.Center, Box(width(1px), height(18px), background(colours.line))))
+end
+
+"Use the tool `name` of the diagram that fills the window. A tool with choices shows them in a menu over its button first."
+use_tool!(v::ZoomView, name, w) = begin
+  m = changing(v)
+  m === nothing && return handled
+  i = findfirst(t -> t.name == name, Diagrams.tools(m))
+  i === nothing && return handled
+  tool = Diagrams.tools(m)[i]
+  isempty(tool.choices) && return (Diagrams.use!(m, name); handled)
+  b = get(v.parts, (:button, (:tool, name)), nothing)
+  left, top = b === nothing ? (w.mouse[1], w.mouse[2]) : (b.rect[1], b.rect[2])
+  tall = 28px * length(tool.choices) + 10px
+  show_menu!(w, [first(c) for c in tool.choices], left, top - tall - 6px, 200px, theme=menu_theme(), item_height=28px, lift=3.0,
+             onselect=k -> k in eachindex(tool.choices) && Diagrams.use!(m, name, last(tool.choices[k])))
+  handled
+end
 
 """
 Lay the diagram of `v` out at its own size, in the page's font and colours, to
@@ -8110,9 +8225,14 @@ draw at any size. It's laid out again when the font or the colours change.
 lay_diagram!(v::ZoomView) = begin
   e = editor(v)
   code = v.what[2]
+  # One component shows the diagram for as long as it fills the window, so it keeps what's selected in it
+  m = part!(() -> Mermaid(code, bar=false), v, :diagram)
+  m.code = code
+  m.editing = v.block > 0 && !readonly(e.buf)
+  m.keys = part!(() -> ZoomArea(of=v), v, :area)
+  m.onchange = m -> write_diagram!(v, m.code)
   key = (code, e.theme, e.font, e.zoom)
   v.drawn !== nothing && v.drawn[1] == key && return v.drawn[2]
-  m = own!(v, Mermaid(code))
   root = with_theme(component_theme(e.zoom)) do
     inner = geometry(m)
     made = m.made === nothing ? nothing : m.made[2]
@@ -8268,11 +8388,27 @@ onkey(a::ZoomArea, ev::KeyPress{Keys.mouse_left}) = begin
   handled
 end
 
+"""
+The mouse button came up. On a diagram that can be changed, a click that
+didn't drag the diagram selects the part that it was on, or nothing. A drag
+only moves the diagram, so the part that's selected stays selected.
+"""
+let_go!(v::ZoomView, w) = begin
+  g, v.grab = v.grab, nothing
+  m = changing(v)
+  (g === nothing || m === nothing || v.zoom <= 0) && return v
+  x, y = g[1]
+  hypot(num(w.mouse[1]) - x, num(w.mouse[2]) - y) < 4 || return v
+  # A line is clicked when the mouse is within 5px of it on the screen, however small the diagram is drawn
+  Diagrams.pick_at!(m, v.at[1] + (x - v.box[1]) / v.zoom, v.at[2] + (y - v.box[2]) / v.zoom, near=5 / v.zoom)
+  v
+end
+
 onmouse(a::ZoomArea, ev::MouseMove) = begin
   v = a.of
   g = v.grab
   g === nothing && return handled
-  Keys.mouse_left in ev.window.keys || (v.grab = nothing; return handled)
+  Keys.mouse_left in ev.window.keys || (let_go!(v, ev.window); return handled)
   s = subject_size(v)
   (s === nothing || v.zoom <= 0) && return handled
   (x0, y0), at = g
@@ -8306,6 +8442,17 @@ the key of a command that the page still takes, like the one that saves. The
 keys that change the size of the page's text change the size of the picture.
 """
 zoom_key!(v::ZoomView, K, w, command) = begin
+  m = changing(v)
+  if m !== nothing
+    # ⌘Z takes back the last change to the diagram, which is a change to the lines of its block
+    if command in (:undo, :redo)
+      Diagrams.cancel!(m)
+      command == :redo ? redo!(editor(v).buf) : undo!(editor(v).buf)
+      return handled
+    end
+    # Return types the words of the part that's selected, ⌫ takes it away and Esc selects nothing
+    Keys.cmd in w.keys || !Diagrams.key!(m, K) || return handled
+  end
   K == Keys.escape && return zoom_out!(v)
   command in PAGE_COMMANDS && return nothing
   v.what[1] == :node && return handled

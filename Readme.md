@@ -25,6 +25,7 @@ A page shows more than text:
 
 - A line that holds only a picture, a video or a sound file shows it, or a player for it. The page's Insert menu records a sound from the microphone, and a button under the player writes down what's said in it, on the Mac.
 - A button beside a diagram, a picture or a page of a PDF file makes it fill the window, where you zoom it with a pinch.
+- A diagram that fills the window can be changed there. Click a box or a line to select it, click it twice to type its words, and use the buttons under it to add a box, draw a line, change a shape or take a part away. Each change is written in the code of the block.
 - A Julia file opens as one block of code, which you change and run as you do a `julia` block. There, the box of a value that's a part of a window lists the value's fields and its children.
 
 "Kaydown" is a working name, after Alan Kay.
@@ -270,6 +271,7 @@ julia -O0 --project=. test/takeoff_test.jl        # how a takeoff is read, writt
 julia -O0 --project=. test/centient_test.jl       # how Kaydown talks to Centient's server
 julia -O0 --project=. test/takeoff_view_test.jl   # the block itself, in a window that isn't on the screen
 julia -O0 --project=. test/zoom_test.jl           # a picture, a diagram or a page that fills the window
+julia -O0 --project=. test/diagram_edit_test.jl   # changing a diagram while it fills the window
 julia -O0 --project=. test/schedule_test.jl       # how a schedule is read, written and worked out
 julia -O0 --project=. test/schedule_view_test.jl  # the schedule's bars and links, in a window that isn't on the screen
 julia -O0 --project=. test/project_page_test.jl   # a video or a sound on the web, and the button that makes a job in Centient

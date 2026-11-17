@@ -15,7 +15,7 @@ A line can point to a footnote[^note]. The footnote is a line of its own, anywhe
 
 [^note]: This is the footnote. Its line starts with the same name in square brackets, and a colon.
 
-A line that holds only a picture, like `![plan](plan.png)`, shows the picture. Drop a picture on the page from the Finder to add one. Any other file that you drop goes in as a path that you can click. ⌘V does the same with files that you copied in the Finder: a picture, a video, a sound, a PDF or any other file. It also pastes a picture that you copied as itself, like a screenshot, and keeps it as a file beside the page.
+A line that holds only a picture, like `![plan](plan.png)`, shows the picture. Drop a picture on the page from the Finder to add one. Any other file that you drop goes in as a path that you can click. ⌘V does the same with files that you copied in the Finder: a picture, a video, a sound, a PDF or any other file. It also pastes a picture that you copied as itself, like a screenshot. Kaydown keeps the picture as a file in a hidden folder called `.media`, beside the page.
 
 A line that holds only a video file shows a player for it, like `![The kitchen](walk.mov)`. To play only part of the video, add the seconds where the part starts and stops to the end of the file's name. `![The kitchen](walk.mov#t=61,86)` starts at 1:01 and stops at 1:26. Leave out the second number to play on to the end. To read what was said in the video, move the mouse over it, and click the button under the one that makes it fill the window. The first time, macOS writes down what's said in the file. A line that plays part of a file shows what was said in that part. A button in the drop-down copies the words.
 
@@ -45,6 +45,7 @@ A line that holds only a video file shows a player for it, like `![The kitchen](
 | ⌘W | Closes the window |
 | ⌘\ | Shows and hides the list of files |
 | ⌘⇧\ | Gives the list of files the keyboard. Press esc to go back to the text. |
+| ⌘⇧. | Shows the hidden files in the list of files, or leaves them out again |
 | ⌘Z and ⌘⇧Z | Undo and redo |
 | ⌥← and ⌥→ | Move the caret a word at a time |
 | ⌘+ and ⌘- | Make the text bigger and smaller. ⌘0 puts it back to the size it started at. |
@@ -192,7 +193,7 @@ A code block in the language `schedule` plans the page's to-do items. Each item 
 
 ## Recordings
 
-To record from your Mac's microphone, right-click the page and choose Insert › Recording. Kaydown starts to record at once, into a new file beside this one. Bars show how loud the sound is, and you can type while it records. Click the red button to stop. The first time, macOS asks whether Kaydown may use the microphone.
+To record from your Mac's microphone, right-click the page and choose Insert › Recording. Kaydown starts to record at once, into a new file in the hidden folder `.media` beside this page. Bars show how loud the sound is, and you can type while it records. Click the red button to stop. The first time, macOS asks whether Kaydown may use the microphone.
 
 A line that holds only a sound file shows a player for it. The line is written as a picture is, like `![A recording](hello.m4a)`. Move the mouse over the player and click Transcribe under it, and macOS writes down what's said in the file. The words go into a paragraph under the player, and you can change them as you would any text. macOS does this on your Mac, so the sound stays there. It needs macOS 26 or later.
 
@@ -207,6 +208,8 @@ The agent can change the page while you read it. What you're typing stays, and t
 ---
 
 The button at the top left shows the files in this folder. Click the icon beside a file to see its headings and its components, such as a slider, a sheet or a spreadsheet. Click one to go to it. Press ⌘⇧\ to use the list with the keyboard: ↑ and ↓ move through it, → and ← show and hide what's under an item, and Return opens a file or goes to a heading.
+
+The list leaves out hidden files and folders, the ones whose names start with a dot, like `.media`. To list them too, click the eye beside the button at the top left, or press ⌘⇧. as you do in the Finder. Click the eye again to leave them out.
 
 Click a file in the list that isn't Markdown to see it in the page. Kaydown shows such a file and never changes it, so the top bar says "Read only". A file of code shows its text, which you can select, copy and search. A picture, a model, a sound, a video, a PDF and a CSV file each show as what they are. Any other file is a binary file, and a button shows its bytes in hexadecimal. The button at the top right opens the file in the app that your Mac uses for it.
 

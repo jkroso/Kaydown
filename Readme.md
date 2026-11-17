@@ -111,6 +111,7 @@ julia -O0 --project=. test/video_test.jl          # a line that holds only a vid
 julia -O0 --project=. test/html_test.jl           # the page of HTML that ⌘⇧E saves
 julia -O0 --project=. test/merge_test.jl          # your changes and an agent's changes to one page put together, and how the two talk
 julia -O0 --project=. test/pasteboard_test.jl     # what the Mac's clipboard holds: text, files and pictures
+julia -O0 --project=. test/media_folder_test.jl   # the hidden folder for the files that a page makes, and the hidden files in the sidebar
 ```
 
 The tests are in the `test` folder. Run them from Kaydown's folder, as above. The first three need no Centient. `test/centient_fake.jl` answers in its place.

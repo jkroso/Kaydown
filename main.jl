@@ -53,6 +53,8 @@
 #     components, and click one to go to it. ⌘⇧\ gives that list the keyboard: ↑ and ↓
 #     move through it, → and ← show and hide what's under an item, Return
 #     opens the item and esc goes back to the text.
+#   - Click the eye beside the button that shows that list, or press ⌘⇧., to
+#     list the hidden files and folders too: the ones whose names start with a dot.
 #   - Right-click a file in that list, or the file's name in the top bar, to
 #     rename it, copy its path, show it in the Finder or move it to the Trash.
 #   - Right-click the page to cut, copy and paste, and to insert a new block
@@ -61,6 +63,8 @@
 #   - A line that holds only a sound file, like ![Recording](memo.m4a), shows
 #     a player. Insert › Recording records one from the microphone. A button
 #     under the player writes down what's said, in a paragraph under it.
+#   - A file that a page makes, like a recording or a picture that's pasted,
+#     goes in a hidden folder called .media beside the page.
 #   - Start a list item with `- [ ]` to make a to-do item. Click its box to
 #     tick it.
 #   - Write a code block in the language `julia`, put the caret in a line of
@@ -778,6 +782,7 @@ isspread(g::Grid) = g.head > 0px
   slid::Float64 = 0.0                   # when the sidebar last started to slide in or out
   slid_from::Float64 = 0.0              # how far open it was then, from 0 to 1
   side::px = PANEL_W                    # how wide the sidebar is. Drag its right edge to change it.
+  hidden::Bool = false                  # the sidebar lists the hidden files and folders too: the ones whose names start with a dot
   theme::Symbol = :sepia
   applied::Symbol = :none               # the theme the window was last told about
   font::String = SERIF                  # of the page's text
@@ -948,7 +953,9 @@ end
 
 list_files!(e) = begin
   names = isdir(e.folder) ? readdir(e.folder) : String[]
-  paths = [joinpath(e.folder, n) for n in sort!(names, by=lowercase) if !startswith(n, '.')]
+  # A name that starts with a dot is hidden, as it is in the Finder. .DS_Store is the Finder's own file, and never shows.
+  shows(n) = e.hidden ? n != ".DS_Store" : !ishidden(n)
+  paths = [joinpath(e.folder, n) for n in sort!(names, by=lowercase) if shows(n)]
   # The sidebar lists the folders, then each file. The file finder lists the Markdown files.
   files = filter(isfile, paths)
   e.listed = [filter(isdir, paths); files]
@@ -979,6 +986,12 @@ window_size(e) = something(viewport(e), e.size)
 
 "The folder of the document that's showing. The sidebar can show another folder."
 docdir(e) = isempty(e.buf.path) ? e.folder : dirname(e.buf.path)
+
+"True when the file or folder at `path` is a hidden one: its name starts with a dot"
+ishidden(path) = startswith(basename(path), '.')
+
+"Make the sidebar list the hidden files and folders too, or leave them out again"
+hidden!(e, on::Bool) = (e.hidden = on; list_files!(e); save_settings!(e); e)
 
 "Show the folders and files of `folder` in the sidebar. The document that's showing stays."
 go_folder!(e, folder) = begin
@@ -8937,10 +8950,10 @@ Put what the clipboard holds into the text at the caret. Files that were
 copied in the Finder go in the way a dropped file does: a picture shows as a
 picture, and a video, a sound, a PDF or any other file as a path that shows
 what's in the file. A picture that was copied as itself, like a screenshot, is
-written to a file in the document's folder first. So is a PDF, a sound or a
-video that was copied as itself. Anything else is pasted as text.
+written to a file in the media folder beside the document first. So is a PDF,
+a sound or a video that was copied as itself. Anything else is pasted as text.
 
-A file in a folder for temporary files is copied to the document's folder,
+A file in a folder for temporary files is copied to that media folder,
 and the copy is what goes in. An app that takes screenshots puts its picture
 on the clipboard as a file like that, and macOS removes the file later.
 """
@@ -8960,17 +8973,32 @@ paste!(e) = begin
   put_files!(e, paths, settle(b, b.caret))
 end
 
+# A file that a page makes goes in a folder called .media beside the page: a
+# picture that's pasted, a recording, a copy of a temporary file. Only the page
+# that made it has a use for it, so it stays out of the list of the page's
+# folder. The Finder and the sidebar leave out a name that starts with a dot
+# until you ask for the hidden files.
+const PAGE_MEDIA = ".media"
+
+"The folder for the files that the pages of the folder `dir` make. It's made if it isn't there."
+page_media(dir) = begin
+  media = joinpath(dir, PAGE_MEDIA)
+  # A folder that can't be made leaves the file's own write to say what went wrong
+  try mkpath(media) catch end
+  media
+end
+
 """
-Write `bytes` that were pasted to a new file in the document's folder, and
-return its path. `ext` is the end of the file's name, like "png". Nothing if
-the document has no folder yet.
+Write `bytes` that were pasted to a new file in the media folder of the
+document's folder, and return its path. `ext` is the end of the file's name,
+like "png". Nothing if the document has no folder yet.
 """
 keep_pasted(e, ext, bytes) = begin
   dir = docdir(e)
   isdir(dir) || return nothing
-  path = unused(dir, "pasted-" * Libc.strftime("%Y%m%d-%H%M%S", time()), ".$ext")
+  path = unused(page_media(dir), "pasted-" * Libc.strftime("%Y%m%d-%H%M%S", time()), ".$ext")
   write(path, bytes)
-  dir == e.folder && list_files!(e)   # the sidebar lists the new file
+  list_files!(e)   # a sidebar that shows hidden files lists the media folder, or the new file in it
   path
 end
 
@@ -8991,15 +9019,16 @@ const PASSING = ("/private/var/folders/", "/var/folders/", "/private/tmp/", "/tm
 passing(e, path) = isfile(path) && dirname(path) != docdir(e) && any(p -> startswith(path, p), PASSING)
 
 """
-Copy the file at `path` to the document's folder, under its own name, and
-return the copy's path. Nothing if the document has no folder yet.
+Copy the file at `path` to the media folder of the document's folder, under
+its own name, and return the copy's path. Nothing if the document has no
+folder yet.
 """
 keep_copy(e, path) = begin
   dir = docdir(e)
   isdir(dir) || return nothing
-  copy = unused(dir, splitext(basename(path))...)
+  copy = unused(page_media(dir), splitext(basename(path))...)
   cp(path, copy)
-  dir == e.folder && list_files!(e)
+  list_files!(e)
   copy
 end
 
@@ -9410,6 +9439,7 @@ const COMMAND_GROUPS = [
     Command(:settings, "Show or hide the settings", :window, "cmd+comma", (e, w, _) -> toggle_settings!(e)),
     Command(:sidebar, "Show or hide the sidebar", :window, "cmd+backslash", (e, w, _) -> toggle_panel!(e)),
     Command(:sidebar_keys, "Give the sidebar the keyboard", :window, "cmd+shift+backslash", (e, w, _) -> focus_panel!(e)),
+    Command(:hidden_files, "Show or hide the hidden files in the sidebar", :window, "cmd+shift+period", (e, w, _) -> hidden!(e, !e.hidden)),
     Command(:bigger, "Make the text bigger", :window, "cmd+equal", (e, w, _) -> zoom!(e, zoom_for(text_size(e) + 1))),
     Command(:smaller, "Make the text smaller", :window, "cmd+minus", (e, w, _) -> zoom!(e, zoom_for(text_size(e) - 1))),
     Command(:usual_size, "Put the text back to its usual size", :window, "cmd+0", (e, w, _) -> zoom!(e, 1.0)),
@@ -10006,7 +10036,7 @@ end
 describe(b::ToolButton) = begin
   e = editor(b)
   ishovered(b) || (b.quiet = false)
-  on = (b.action == :panel && e.panel) || (b.action == :marks && marking(e))
+  on = (b.action == :panel && e.panel) || (b.action == :marks && marking(e)) || (b.action == :hidden && e.hidden)
   box = Box(width(30px), height(28px), radius(6px), Alignment.Center, name="Button",
             background(on ? colours.active : ishovered(b) && !off(b) ? colours.hover : clear),
           Icon(b.icon, size=15px, color=off(b) ? colours.faint : colours.dim))
@@ -10022,6 +10052,7 @@ onkey(b::ToolButton, ::KeyPress{Keys.mouse_left}) = begin
   b.action == :panel && toggle_panel!(e)
   b.action == :outside && open_outside!(e)
   b.action == :marks && toggle_marks!(e)
+  b.action == :hidden && hidden!(e, !e.hidden)
   b.action == :job && make_job!(e)
   hush!(b)
   focus(e)
@@ -10047,6 +10078,7 @@ tip(b::ToolButton) = begin
     return "$(uppercasefirst(first(ws).name)) waits for $(basename(first(ws).page))  ·  Show sidebar" * hint(e, :sidebar)
   end
   b.action == :marks && return marking(e) ? "Hide $(whose(e)) changes" : "Show $(whose(e)) changes"
+  b.action == :hidden && return (e.hidden ? "Leave out hidden files" : "Show hidden files") * hint(e, :hidden_files)
   b.action == :job && return job_tip(e)
   b.action == :outside || return ""
   app = opener(e.buf.path)
@@ -10354,6 +10386,19 @@ job_tick!(e) = begin
   nothing
 end
 
+"""
+The button beside the one that shows the sidebar. A click makes the sidebar
+list the hidden files and folders too, the ones whose names start with a dot,
+and another click leaves them out. Its eye has a line through it while they're
+left out. It shows only while the sidebar does.
+"""
+hidden_button(e) = begin
+  e.panel || return ()
+  b = button(e, :hidden, "eye-slash")
+  b.icon = e.hidden ? "eye" : "eye-slash"
+  (b,)
+end
+
 describe(t::TopBar) = begin
   e = editor(t)
   b = e.buf
@@ -10364,8 +10409,8 @@ describe(t::TopBar) = begin
   # middle of the space beside the sidebar, so it moves as the sidebar slides.
   Row(width(grow=grow), height(TOPBAR_H), name="TopBar",
     # The close, minimise and zoom buttons sit over the first 84px
-    Row(fixed(side + panel_w(e) * opened(e)), height(grow=grow), padding(0px, 0px, 0px, 84px),
-      button(e, :panel, "layout-sidebar")),
+    Row(fixed(side + panel_w(e) * opened(e)), height(grow=grow), padding(0px, 0px, 0px, 84px), child_gap=2px,
+      button(e, :panel, "layout-sidebar"), hidden_button(e)...),
     Box(width(grow=grow), height(grow=grow), clip=true, node!(Title, e, :title)),
     Row(fixed(side), height(grow=grow), justify=Alignment.End, padding(0px, 10px, 0px, 0px),
       # A file that's only shown has no words to count. The bar says that it's only shown.
@@ -10466,9 +10511,11 @@ describe(l::FileLabel) = begin
   name = renaming(e, :sidebar) == l.path ?
     Box(width(grow=grow), height(22px), padding(5px, 0px), radius(4px), Alignment.Start, background(colours.bg),
         border(1px, :solid, colours.accent), renamer(e)) :
-    isdir(l.path) ? Box(width(grow=grow), Alignment.Start, label(basename(l.path))) :
+    # A hidden folder or page is fainter than the others, as it is in the Finder
+    isdir(l.path) ? Box(width(grow=grow), Alignment.Start, label(basename(l.path), color=ishidden(l.path) ? colours.dim : colours.ink)) :
     ismarkdown(l.path) ?
-    Box(width(grow=grow), Alignment.Start, label(title(l.path), weight=l.path == e.buf.path ? "Semibold" : "")) :
+    Box(width(grow=grow), Alignment.Start, label(title(l.path), color=ishidden(l.path) && l.path != e.buf.path ? colours.dim : colours.ink,
+                                                 weight=l.path == e.buf.path ? "Semibold" : "")) :
     # A file that Kaydown only shows has its whole name, and it's fainter until it's the file that shows
     Box(width(grow=grow), Alignment.Start, label(basename(l.path), color=l.path == e.buf.path ? colours.ink : colours.dim,
                                                  weight=l.path == e.buf.path ? "Semibold" : ""))
@@ -10499,7 +10546,7 @@ const COMPONENTS = Dict(
   "Mermaid" => ("Diagram", "diagram-3"))
 const LAYOUTS = ("Box", "Row", "Column", "Stack", "Scroll", "Text", "Image")
 "Every icon that the sidebar can show. The built app reads them all when it's made."
-const SIDEBAR_ICONS = unique(["file-earmark-text", "chevron-right", "chevron-down", "calculator", "grid-3x3", "puzzle", "bounding-box", "rulers", "bar-chart-steps",
+const SIDEBAR_ICONS = unique(["eye", "eye-slash", "file-earmark-text", "chevron-right", "chevron-down", "calculator", "grid-3x3", "puzzle", "bounding-box", "rulers", "bar-chart-steps",
                               ("type-h$n" for n in 1:6)..., (icon for (_, icon) in values(COMPONENTS))...])
 
 """
@@ -11836,11 +11883,11 @@ end
 # --- sound in the text -------------------------------------------------------------------
 #
 # A line that holds only a sound file, written as a picture is, like
-# ![Recording](recording-2026-11-14-1642.m4a), shows a player for the file. The
+# ![Recording](.media/recording-2026-11-14-1642.m4a), shows a player for the file. The
 # line's own text shows again while the caret is on it.
 #
-# Insert › Recording records from the microphone into a new file beside the
-# document, and adds a line for the file. The line shows a recorder until you
+# Insert › Recording records from the microphone into a new file in the media
+# folder beside the document, and adds a line for the file. The line shows a recorder until you
 # click its button to stop. The recording goes on while another file shows. If
 # the line goes from the document, as it does when you undo the Insert, the
 # recording stops.
@@ -11971,21 +12018,28 @@ onkey(b::TranscribeButton, ::KeyPress{Keys.mouse_left}) = begin
   handled
 end
 
-"Record from the microphone into a new file beside the document, and add a line for the file under the caret"
+"Record from the microphone into a new file in the media folder beside the document, and add a line for the file under the caret"
 add_recording!(e) = begin
+  path = new_recording(e)
+  record!(recorder(path))
+  list_files!(e)
+  # A document that has no file of its own names the recording by its whole path
+  src = isempty(e.buf.path) ? replace(path, ' ' => "%20") : "$PAGE_MEDIA/$(basename(path))"
+  add_block!(e, ["![Recording]($src)", "", ""], (3, 0))
+end
+
+"The path for a new recording: a file that isn't there yet, named by the time, in the media folder beside the document"
+new_recording(e) = begin
   dir = docdir(e)
   isempty(dir) && (dir = joinpath(homedir(), "Documents"))
+  dir = page_media(dir)
   when = Libc.strftime("%Y-%m-%d-%H%M", time())
   name(n) = "recording-$when$(n == 1 ? "" : "-$n").m4a"
   n = 1
   while ispath(joinpath(dir, name(n))) || haskey(recorders, joinpath(dir, name(n)))
     n += 1
   end
-  path = joinpath(dir, name(n))
-  record!(recorder(path))
-  # A document that has no file of its own names the recording by its whole path
-  src = isempty(e.buf.path) ? replace(path, ' ' => "%20") : name(n)
-  add_block!(e, ["![Recording]($src)", "", ""], (3, 0))
+  joinpath(dir, name(n))
 end
 
 "Put `words` in a paragraph under line `i`, with an empty line on each side of it. The caret stays where it was in the text."
@@ -13765,7 +13819,7 @@ end
 const pages_dir = Ref(joinpath(@__DIR__, "pages"))
 
 "The settings that every window has the same: each is a field of the editor"
-const SHARED = (:theme, :font, :weight, :zoom, :widest, :stat, :spelling, :updates, :wrap, :numbers, :shade, :indent, :code_scale, :code_font, :code_weight, :guide, :bundle, :rebound, :side)
+const SHARED = (:theme, :font, :weight, :zoom, :widest, :stat, :spelling, :updates, :wrap, :numbers, :shade, :indent, :code_scale, :code_font, :code_weight, :guide, :bundle, :rebound, :side, :hidden)
 
 "The pages of the settings, in the order of their tabs: the name of each page's file, and what its tab says"
 const SETTINGS_PAGES = ("settings.md" => "General", "code-editor.md" => "Code editor", "key-bindings.md" => "Key bindings")
@@ -13825,6 +13879,11 @@ adopt_settings!(o, e) = begin
     setfield!(o, name, getfield(e, name))
     rerun!(o, name)   # a live block that reads the setting shows the new one
   end
+  if :hidden in changed
+    list_files!(o)
+    # When the list of files is all that changed, the page's lines stay where they are
+    changed == (:hidden,) && return (w = window_of(o); w === nothing || stale!(w); o)
+  end
   # The width of a sidebar that's hidden changes nothing that the window shows
   o.panel || changed != (:side,) || return o
   # Text of another size or width wraps again, and that moves the lines
@@ -13850,7 +13909,7 @@ save_settings!(e) = begin
     mkpath(dirname(settings_file()))
     # After the bundle of key bindings comes a line for each command that has other keys than the bundle's, like key.save=ctrl+s
     changed = join(["key.$name=$(e.rebound[name])\n" for name in sort!(collect(keys(e.rebound)))])
-    write(settings_file(), "theme=$(e.theme)\nfont=$(e.font)\nweight=$(e.weight)\nzoom=$(e.zoom)\nwidth=$(e.widest.value)\ncount=$(e.stat)\nspelling=$(e.spelling)\nupdates=$(e.updates)\nwrap=$(e.wrap)\nnumbers=$(e.numbers)\nshade=$(e.shade)\nindent=$(e.indent)\ncode=$(e.code_scale)\ncodefont=$(e.code_font)\ncodeweight=$(e.code_weight)\nguide=$(e.guide)\nsidebar=$(e.side.value)\nkeys=$(e.bundle)\n$changed")
+    write(settings_file(), "theme=$(e.theme)\nfont=$(e.font)\nweight=$(e.weight)\nzoom=$(e.zoom)\nwidth=$(e.widest.value)\ncount=$(e.stat)\nspelling=$(e.spelling)\nupdates=$(e.updates)\nwrap=$(e.wrap)\nnumbers=$(e.numbers)\nshade=$(e.shade)\nindent=$(e.indent)\ncode=$(e.code_scale)\ncodefont=$(e.code_font)\ncodeweight=$(e.code_weight)\nguide=$(e.guide)\nsidebar=$(e.side.value)\nhidden=$(e.hidden)\nkeys=$(e.bundle)\n$changed")
   catch
     # A file that can't be written only means the settings last as long as the window
   end
@@ -13969,6 +14028,9 @@ load_settings!(e) = begin
     elseif name == "sidebar"
       w = tryparse(Float64, value)
       w === nothing || (e.side = px(round(clamp(w, num(PANEL_MIN), num(PANEL_MAX)))))
+    elseif name == "hidden"
+      # The sidebar listed its folder before the settings were read
+      (value == "true") == e.hidden || (e.hidden = !e.hidden; list_files!(e))
     elseif name == "keys"
       any(b -> first(b) == value, BUNDLES) && (e.bundle = String(value))
     elseif startswith(name, "key.")

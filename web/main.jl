@@ -50,6 +50,7 @@
 # the page out again after a script changes it.
 
 @use Skia
+@use "github.com/jkroso/MiniFB.jl/skia" srgb
 @use Base64: base64decode
 @use "./dom" document Document
 @use "./css" resolve
@@ -98,7 +99,9 @@ decode(bytes::Vector{UInt8}) = begin
   (w > 0 && h > 0) || (Skia.sk_image_unref(file); return nothing)
   k = min(1.0, MOST / max(w, h))
   tw, th = max(1, round(Int, w * k)), max(1, round(Int, h * k))
-  info = Ref(Skia.sk_image_info_t(C_NULL, Skia.SK_COLOR_TYPE_RGBA_8888, Skia.SK_ALPHA_TYPE_PREMUL, tw, th))
+  # The pixels are sRGB, so Skia converts a picture with a colour profile of its own, such as a Display P3 photo,
+  # as it draws it here. Without a colour space Skia would keep the picture's numbers, and the photo would look dull.
+  info = Ref(Skia.sk_image_info_t(srgb[], Skia.SK_COLOR_TYPE_RGBA_8888, Skia.SK_ALPHA_TYPE_PREMUL, tw, th))
   image = GC.@preserve info begin
     surface = Skia.sk_surface_make_raster_n32_premul(pointer_from_objref(info), C_NULL)
     # With no room for the pixels, the picture stays as the bytes of its file

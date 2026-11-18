@@ -9,6 +9,7 @@
 
 @use Test: @test, @testset
 @use Skia
+@use Base64: base64decode
 @use "../web/dom" => Dom
 @use "../web/css" => Css
 @use "../web/style" => Styles
@@ -268,6 +269,13 @@ end
   p = Web.page("""<!DOCTYPE html><body style="margin:0"><img src="$dot" style="display:block"><img src="https://example.com/x.png" width="20" height="10" style="display:block"></body>""";
                wide=100, load=src -> (push!(asked, src); nothing))
   @test p.tall == 13 && asked == ["https://example.com/x.png"]
+  # A photo with the Display P3 colour profile, as an iPhone saves one, is read as sRGB: 2×2 pixels of #F38020.
+  # Its own numbers are (228,134,59), and they'd look dull if they were kept as they are.
+  _, _, made = Web.decode(base64decode("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAABY2lDQ1BrQ0dDb2xvclNwYWNlRGlzcGxheVAzAAAokX2QsUvDUBDGv1aloHUQHRwcMolDlJIKuji0FURxCFXB6pS+pqmQxkeSIgU3/4GC/4EKzm4Whzo6OAiik+jm5KTgouV5L4mkInqP435877vjOCA5bnBu9wOoO75bXMorm6UtJfWMBL0gDObxnK6vSv6uP+P9PvTeTstZv///jcGK6TGqn5QZxl0fSKjE+p7PJe8Tj7m0FHFLshXyieRyyOeBZ71YIL4mVljNqBC/EKvlHt3q4brdYNEOcvu06WysyTmUE1jEDjxw2DDQhAId2T/8s4G/gF1yN+FSn4UafOrJkSInmMTLcMAwA5VYQ4ZSk3eO7ncX3U+NtYMnYKEjhLiItZUOcDZHJ2vH2tQ8MDIEXLW54RqB1EeZrFaB11NguASM3lDPtlfNauH26Tww8CjE2ySQOgS6LSE+joToHlPzA3DpfAEDp2ITpJYOWwAAAARjSUNQDA0AAW4D4+8AAAA4ZVhJZk1NACoAAAAIAAGHaQAEAAAAAQAAABoAAAAAAAKgAgAEAAAAAQAAAAKgAwAEAAAAAQAAAAIAAAAAztCekAAAABNJREFUCB1jfNJmzcDAwATEQAAAFI8Bqa3DfC0AAAAASUVORK5CYII="))
+  info = Ref(Skia.sk_image_info_t(C_NULL, Skia.SK_COLOR_TYPE_RGBA_8888, Skia.SK_ALPHA_TYPE_UNPREMUL, 1, 1))
+  rgba = zeros(UInt8, 4)
+  GC.@preserve info rgba Skia.sk_image_read_pixels(made, pointer_from_objref(info), pointer(rgba), Csize_t(4), Cint(0), Cint(0), Skia.sk_image_caching_hint_t(0))
+  @test all(abs.(Int.(rgba[1:3]) .- [243, 128, 32]) .<= 1)
   # A page that's wider than its window is made to fit, when that's asked for
   wide = """<!DOCTYPE html><body style="margin:0"><table width="900" cellspacing="0" cellpadding="0"><td><img width="900" height="300" style="display:block"></td></table></body>"""
   @test Web.page(wide; wide=300).tall == 300 && Web.page(wide; wide=300, fit=true).tall == 100 && Web.page(wide; wide=300, fit=true).wide == 300

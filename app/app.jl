@@ -11,7 +11,7 @@
 
 include("start.jl")
 
-@use ".." build_editor open_editor move_old_folders! WELCOME restyle! problems pages_dir SIDEBAR_ICONS FILE_ICONS todo_at inbox Agent INSERTS PLAN_ICONS SCHEDULE_ICONS BLOCK_ICONS window! editors settings_editor theme! Update
+@use ".." build_editor open_editor move_old_folders! run_startup! startup_page HOME STARTUP WELCOME restyle! problems pages_dir SIDEBAR_ICONS FILE_ICONS todo_at inbox Agent INSERTS PLAN_ICONS SCHEDULE_ICONS BLOCK_ICONS window! editors settings_editor theme! Update
 @use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse Typed ontype
 @use "github.com/jkroso/Font.jl/units" px
 @use "github.com/jkroso/UI.jl/Interface/abstract" focus window_of
@@ -24,6 +24,9 @@ include("start.jl")
 @use "github.com/jkroso/UI.jl/Interface/Semantic/ListTree" => ListTree
 @use "../pages/widgets" => widgets
 @use "../pages/progress" => progress_block
+# Julia's own libraries that code from the startup page is likely to use, like the one that talks to a
+# server. The app has no source of them, so a library that isn't loaded now can't be loaded later.
+import LibCURL, NetworkOptions, Sockets, Dates, Base64, Random, Libdl
 
 building && start_packages()
 
@@ -103,10 +106,18 @@ unpack(dir) = begin
   # source. Kip compiles such a file with a Julia that the app doesn't have, so it's told not to try.
   ENV["KIP_FROZEN"] = "1"
   # Kip gives the file's module `using Kip`, which looks for a package called Kip. This folder says
-  # that it's the Kip that's in the app already.
+  # that it's the Kip that's in the app already. It says the same of every other package that the
+  # app has, so code that the startup page loads can use each of them by its name.
   env = joinpath(dir, "env")
-  put(joinpath(env, "Project.toml"), "[deps]\nKip = \"$(Base.PkgId(Kip).uuid)\"\n")
+  deps = sort!(unique!(["$(id.name) = \"$(id.uuid)\"" for id in keys(Base.loaded_modules) if id.uuid !== nothing]))
+  put(joinpath(env, "Project.toml"), "[deps]\n" * join(deps, "\n") * "\n")
   env in LOAD_PATH || push!(LOAD_PATH, env)
+  # Julia looks for a package's name in the active project first. That was Ladder's own project on
+  # the Mac that built the app, and its file isn't on this Mac. So the app's own list is the active one.
+  Base.set_active_project(joinpath(env, "Project.toml"))
+  # For a line like `@use Dates`, Kip looks first in the folder that the app was started in, which can
+  # be any folder, and one that the app may not read. The app's own list is the place to look.
+  setglobal!(Kip, :initial_pwd, env)
   welcome = joinpath(dir, "Welcome")
   for (name, text) in pages
     file, was = joinpath(welcome, name), joinpath(dir, "written", name)
@@ -310,10 +321,29 @@ if building
   check_pages(PAGES)
 end
 
-"The app's self-test: the pages as the app writes them out, then some typing"
+"""
+Run the code of a startup page that the app has never seen, and fail if it
+fails. The code loads a file from its source, uses two of Julia's libraries
+by their names, and reads Ladder itself, as code that adds to Ladder does.
+"""
+check_startup(dir) = begin
+  was = HOME[]
+  HOME[] = joinpath(dir, "Home")
+  mkpath(HOME[])
+  write(joinpath(HOME[], "more.jl"), "@use Dates: Date\nday() = Date(2026, 11, 18)\n")
+  write(startup_page(), "# Home\n\n```julia\n@use \"./more\" day\n@use LibCURL: curl_version\n" *
+                        "const said = (string(day()), unsafe_string(curl_version()), Ladder.startup_page())\n```\n")
+  m = run_startup!()
+  HOME[] = was
+  isempty(STARTUP[][1]) || error("The code of a startup page failed: ", STARTUP[][1])
+  Base.invokelatest(getglobal, m, :said)[1] == "2026-11-18" || error("The code of a startup page gave the wrong day")
+end
+
+"The app's self-test: the pages as the app writes them out, the code of a startup page, then some typing"
 self_test() = begin
   dir = mktempdir()
   check_pages(dirname(unpack(dir)))
+  check_startup(dir)
   warm_up()
   rm(dir, recursive=true)
 end

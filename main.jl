@@ -4037,6 +4037,8 @@ end
 #     block has. You can select the text, copy it and find words in it.
 #   - A picture, a model, a sound, a video, a PDF file, a CSV file, a Word file
 #     and a font show as they do under a file path, as big as the page has room for.
+#   - A CSV file shows as a table as wide as the window, which you can sort and
+#     filter by its headings. "a CSV file in the page" says more.
 #   - A JSON file shows as a tree of its values. "a JSON file as a tree"
 #     says more.
 #   - A zip shows the list of the files in it.
@@ -4494,7 +4496,7 @@ describe(t::JSONTree) = begin
   n = length(t.rows)
   _, high = window_size(e)
   # Only the rows that are in the window are made, and a few more above and below
-  lo = clamp(floor(Int, (e.scroll.offset - PAGE_TOP) / h) - 6, 0, n)
+  lo = clamp(floor(Int, (e.scroll.offset - page_top(e) - LIVE_GAP) / h) - 6, 0, n)
   hi = min(n, lo + ceil(Int, high / h) + 12)
   over = json_under(t)
   w = window_of(t)
@@ -4745,7 +4747,7 @@ end
 @def mutable struct FileView <: SemanticUI
   path::String = ""
   viewer::Any = nothing   # the STLViewer, the player or the Pages of the file, kept from one frame to the next
-  table::Any = nothing    # the rows of a CSV file, with when the file had last changed when they were read
+  table::Any = nothing    # the FileSheet of a CSV file: its table, and what's chosen for it
   button::Any = nothing   # the HexButton of a binary file
 end
 
@@ -4819,17 +4821,7 @@ viewer(v::FileView, e, note) = begin
     json_holder(root) && note(json_count(root))
     return t
   elseif ext in TABLES
-    at = mtime(path)
-    (v.table === nothing || v.table[1] != at) && (v.table = (at, tabled(path)))
-    t = v.table[2]
-    t === nothing && return nothing
-    n = length(t.rows)
-    note(t.more ? "the first $(commas(n - 1)) rows" : "$(commas(n - 1)) row$(n == 2 ? "" : "s")")
-    # Only the rows that are in the window are made, so a long table costs no more than a short one
-    lo = clamp(floor(Int, (e.scroll.offset - PAGE_TOP) / ROW_H) - 4, 0, n)
-    hi = min(n, lo + ceil(Int, h / ROW_H) + 8)
-    return Column(width(grow=grow), Alignment.Start, clip=true,
-      spacer(ROW_H * lo), [tablerow(t, r) for r in lo+1:hi]..., spacer(ROW_H * (n - hi)))
+    return sheet_view(v, e, note)
   end
   # The picture that the Finder shows: the first page of a Word file, the letters of a font,
   # and what it has for many kinds of file that have no viewer here
@@ -4859,10 +4851,422 @@ describe(v::FileView) = begin
       return words((Icon("file-earmark-binary", size=34px, color=colours.faint), label("$(basename(v.path)) is a binary file", 15px),
                     line, Box(height(4px)), v.button))
     end
-    # A table and a tree can be long, so the line about one is over it. Anything else has the line under it.
-    lowercase(splitext(v.path)[2]) in (TABLES..., JSONS...) ? Column(width(grow=grow), Alignment.Start, child_gap=10px, line, content) :
-                                               Column(width(grow=grow), child_gap=10px, content, Box(line))
+    # A table and the tree of a JSON file can be long, so what's said about them is in the top bar, where it
+    # stays in sight while they scroll. Anything else has the line about it under it.
+    if lowercase(splitext(v.path)[2]) in (TABLES..., JSONS...)
+      e.buf.path == v.path && (e.buf.about = about)
+      return Box(width(grow=grow), Alignment.Start, content)
+    end
+    Column(width(grow=grow), child_gap=10px, content, Box(line))
   end
+end
+
+# --- a CSV file in the page -------------------------------------------------------------------
+#
+# A CSV file that the sidebar opens shows as a table as wide as the window has
+# room for. Each column is as wide as its first rows need, up to `WIDEST_CELL`,
+# and a table that's narrower than the window shares the rest of the room
+# among its columns. A table that's wider than the window scrolls sideways: two
+# fingers that move sideways on the trackpad, or the wheel with ⇧ held. Text
+# that's too long for its column stops with an …. The row of headings stays at
+# the top of the window while the rows scroll under it. A thin line with round
+# corners goes round the table.
+#
+# A click on a heading opens a menu. Its first part puts the rows in the order
+# of that column, A to Z or Z to A, and a click on the order that the rows have
+# now puts them back in the file's order. A column of numbers goes in the order
+# of its numbers. Empty cells go last in both orders.
+#
+# The menu's second part shows fewer rows. A column with no more than
+# `FEW_VALUES` different values lists them, each with how many rows have it. A
+# click on a value ticks it, and only the rows with a ticked value show. Any
+# other column has a field, and only the rows with its words in that column
+# show. Return keeps what the field holds, and esc puts back what it held
+# before. The heading of a column that shows fewer rows is in the accent
+# colour, with a funnel beside it. The top bar says how big the file is, when
+# it last changed, and how many rows show. It's there and not over the table,
+# so the words stay in sight while the table scrolls. The table starts nearer
+# the top bar than the text of a page does, so the window shows more rows.
+#
+# Ladder reads `FILE_ROWS` rows of the file at most. When the file changes on
+# the disk and its headings stay the same, the table keeps its order and what
+# it shows.
+
+const FILE_ROWS = 100_000       # the most rows of a CSV file that the page reads
+const FILE_BYTES = 40_000_000   # and the most of the file that it reads
+const HEAD_H = 30px             # how tall the row of headings is
+const CELL_PAD = 10px           # on each side of a cell's text
+const SHEET_LINE = 1px          # the line round the table
+const SHEET_ROUND = 6px         # how round the corners of that line are
+const SHEET_ABOVE = 4px         # the room over the table. With LIVE_GAP, the table is 12px under the top bar.
+const WIDEST_CELL = 360px       # the widest a column is before the columns share the room that's left
+const FEW_VALUES = 20           # a column with no more different values than this lists them in its menu
+const SHEET_MENU_W = 240px
+const SHEET_KEY = :sheet_column
+
+"The table of a CSV file that the page shows, and what's chosen for it"
+mutable struct FileSheet
+  table::Csvs.Table
+  at::Float64                      # when the file last changed, when it was read
+  natural::Vector{px}              # how wide each column needs to be, up to WIDEST_CELL
+  widths::Vector{px}               # how wide each column is in the page
+  wide::px                         # how wide the page was when the widths were worked out
+  sort::Any                        # the column that the rows are in the order of and :asc or :desc, or nothing for the file's order
+  filters::Dict{Int,String}        # the words that a column's cells must have, for each column that has some
+  picks::Dict{Int,Set{String}}     # the values that show, for each column whose menu lists its values and has some ticked
+  sought::Any                      # what the rows were last found for: the order, and what each column keeps
+  found::Vector{Int}               # the rows that show, in the order that they show in. Row 1 is the headings.
+  values::Dict{Int,Any}            # each column's values with how many rows have each, or nothing when it has more than FEW_VALUES
+  asking::Int                      # the column whose menu is open, or 0
+  was::Any                         # what that column kept when its menu opened, which esc puts back
+  field::Any                       # the text field of the menu
+  parts::Dict{Any,Any}             # the headings and the lines of the menu, kept between frames
+  across::px                       # how far the table is scrolled to the right
+  cut::Dict{Tuple{Int,Int},Tuple{px,String}}   # the text of a cell as it shows, with the width that it was cut short for
+end
+
+"The font of a cell, or of a heading with `bold`"
+cell_face(bold=false) = Face(SANS, bold ? "Semibold" : "", 12px, colours.ink, false)
+
+"""
+The table in the CSV file at `path`, read for the page. When `old` is the
+table that the file had before and the headings are the same, the new one
+keeps its order, what it shows, and how far it's scrolled.
+"""
+file_sheet(path, old) = begin
+  t = Csvs.load(path, most=FILE_ROWS, upto=FILE_BYTES)
+  rows = t.rows
+  head, plain = cell_face(true), cell_face()
+  # A heading has room for the arrow of its order beside it
+  need(r, c) = measure(r == 1 ? head : plain, first(celltext(rows[r][c]), 300)) + (r == 1 ? 14px : 0px)
+  natural = [clamp(maximum(r -> need(r, c), 1:min(length(rows), 200)), 24px, WIDEST_CELL) + 2CELL_PAD for c in eachindex(t.numbers)]
+  s = FileSheet(t, mtime(path), natural, copy(natural), 0px, nothing, Dict{Int,String}(), Dict{Int,Set{String}}(), nothing, Int[],
+                Dict{Int,Any}(), 0, nothing, nothing, Dict{Any,Any}(), 0px, Dict{Tuple{Int,Int},Tuple{px,String}}())
+  if old isa FileSheet && !isempty(rows) && !isempty(old.table.rows) && old.table.rows[1] == rows[1]
+    s.sort, s.filters, s.picks, s.across = old.sort, old.filters, old.picks, old.across
+    s.asking, s.was, s.field, s.parts = old.asking, old.was, old.field, old.parts
+  end
+  s
+end
+
+"Share the page's width `wide` among the columns of `s`. A table that's narrower than the page grows, each column by its share."
+spread!(s::FileSheet, wide) = begin
+  s.wide == wide && return s
+  total = sum(s.natural, init=0px)
+  s.widths = total < wide ? s.natural .* (num(wide) / num(total)) : copy(s.natural)
+  s.wide = wide
+  empty!(s.cut)
+  s
+end
+
+"True when column `c` of `s` shows only some rows"
+narrowed(s::FileSheet, c::Int) = haskey(s.filters, c) || haskey(s.picks, c)
+"True when some column of `s` shows only some rows"
+narrowed(s::FileSheet) = !isempty(s.filters) || !isempty(s.picks)
+
+"Keep only the rows that have `words` in column `column`. No words takes that away."
+keep!(s::FileSheet, column::Int, words) = begin
+  words = String(strip(words))
+  isempty(words) ? delete!(s.filters, column) : (s.filters[column] = words)
+  s
+end
+
+"""
+The values of column `c` of `s`, each with how many rows have it, in the order
+that the column puts them in. It's nothing when the column has more than
+`FEW_VALUES` different values.
+"""
+values_of(s::FileSheet, c::Int) = get!(s.values, c) do
+  counts = Dict{String,Int}()
+  for r in 2:length(s.table.rows)
+    value = s.table.rows[r][c]
+    counts[value] = get(counts, value, 0) + 1
+    length(counts) > FEW_VALUES && return nothing
+  end
+  [(value, counts[value]) for value in in_order(s.table, collect(keys(counts)), c, :asc, value -> value)]
+end
+
+"""
+`items` in the order of column `c` of `t`, A to Z with `way` :asc and Z to A
+with :desc. `cell(item)` is the text of the item's cell. In a column of
+numbers, the cells that are numbers go in the order of their numbers, and come
+before the rest. Empty cells go last whichever way.
+"""
+in_order(t::Csvs.Table, items, c, way, cell) = begin
+  rev = way == :desc
+  blank = [x for x in items if isempty(cell(x))]
+  full = [(x, lowercase(cell(x))) for x in items if !isempty(cell(x))]
+  if t.numbers[c]
+    found = [(x, Charts.number(cell(x))) for (x, _) in full]
+    numbers = sort!([(x, n[1]) for (x, n) in found if n !== nothing], by=last, rev=rev)
+    words = sort!([(x, lowercase(cell(x))) for (x, n) in found if n === nothing], by=last, rev=rev)
+    return [first.(numbers); first.(words); blank]
+  end
+  [first.(sort!(full, by=last, rev=rev)); blank]
+end
+
+"""
+The rows of `s` that show, in the order that they show in: the rows that have
+each column's words in that column and one of its ticked values, in the order
+of the column that's chosen. When they change, a page that was scrolled down
+the table goes back to the top of the table.
+"""
+sheet_rows!(e, s::FileSheet) = begin
+  key = (s.sort, copy(s.filters), Dict(c => copy(p) for (c, p) in s.picks))
+  key == s.sought && return s.found
+  rows = s.table.rows
+  words = [(c, lowercase(w)) for (c, w) in s.filters]
+  keep = [r for r in 2:length(rows) if all(((c, w),) -> occursin(w, lowercase(rows[r][c])), words) &&
+                                       all(((c, p),) -> rows[r][c] in p, s.picks)]
+  s.sort === nothing || (keep = in_order(s.table, keep, s.sort[1], s.sort[2], r -> rows[r][s.sort[1]]))
+  s.sought === nothing || (e.scroll.offset = min(e.scroll.offset, sheet_top()))
+  s.sought, s.found = key, keep
+  keep
+end
+
+"How far the top of the table of a CSV file is under the top of the page"
+sheet_top() = SHEET_ABOVE + LIVE_GAP + SHEET_LINE
+
+"The text of row `r`, column `c` of `s`, as it shows in a column that's `room` wide: on one line, and cut short with an … when it's too long"
+shown_cell(s::FileSheet, r, c, room, face=cell_face(r == 1)) = begin
+  kept = get(s.cut, (r, c), nothing)
+  kept !== nothing && kept[1] == room && return kept[2]
+  length(s.cut) > 50_000 && empty!(s.cut)
+  text = first(celltext(s.table.rows[r][c]), 300)
+  while measure(face, text) > room && length(text) > 1
+    text = first(text, max(1, floor(Int, (length(text) - 1) * num(room) / num(measure(face, text))) - 1)) * "…"
+  end
+  s.cut[(r, c)] = (room, text)
+  text
+end
+
+"A node of the headings or of the menu of the table of `v`, kept between frames"
+sheet_part!(make, v, key) = get!(() -> own!(v, make()), (v.table::FileSheet).parts, key)
+
+"""
+The table of the CSV file that `v` shows, or nothing when the file has no
+table. It's as wide as the page and as tall as all the rows that show, but only
+the rows in the window are made. The headings stay at the top of the window
+while the page is scrolled down the table. `note(words)` adds to what the top
+bar says of the file.
+"""
+sheet_view(v, e, note) = begin
+  at = mtime(v.path)
+  (v.table isa FileSheet && v.table.at == at) || (v.table = file_sheet(v.path, v.table))
+  s = v.table::FileSheet
+  isempty(s.table.problem) || return nothing
+  # What the field of a heading's menu holds is what its column keeps, as it's typed
+  s.asking > 0 && s.field !== nothing && values_of(s, s.asking) === nothing && keep!(s, s.asking, s.field.text)
+  found = sheet_rows!(e, s)
+  n, total = length(found), length(s.table.rows) - 1
+  held = s.table.more ? "the first $(commas(total)) rows" : "$(commas(total)) row$(total == 1 ? "" : "s")"
+  note(n < total || narrowed(s) ? "$(commas(n)) of $held" : held)
+  wide = e.width - 2SHEET_LINE   # the room inside the line round the table
+  spread!(s, wide)
+  room = sum(s.widths, init=0px)
+  s.across = clamp(s.across, 0px, max(0px, room - wide))
+  _, h = window_size(e)
+  into = e.scroll.offset - sheet_top()   # how far the top of the window is past the top of the table
+  lo = clamp(floor(Int, (into - HEAD_H) / ROW_H) - 4, 0, n)
+  hi = min(n, lo + ceil(Int, h / ROW_H) + 8)
+  plain = cell_face()
+  row(k) = (r = found[k];
+    Row(fixed(room), height(ROW_H), Alignment.Start, background(iseven(k) ? colours.stripe : clear),
+      [Row(fixed(w), height(ROW_H), padding(CELL_PAD, 0px), Alignment.Center, clip=true, label(shown_cell(s, r, c, w - 2CELL_PAD, plain), 12px))
+       for (c, w) in enumerate(s.widths)]...))
+  none = n == 0 ? (Box(fixed(min(room, wide)), height(2ROW_H), label("No row has what the headings keep.", 12px, color=colours.dim)),) : ()
+  rows = Column(fixed(room), Alignment.Start, spacer(HEAD_H + ROW_H * lo), [row(k) for k in lo+1:hi]..., spacer(ROW_H * (n - hi)), none...)
+  heads = Row(fixed(room), height(HEAD_H), Alignment.Start, background(colours.head),
+    [sheet_part!(() -> SheetHead(of=v, column=c), v, (:head, c)) for c in eachindex(s.widths)]...)
+  # The headings are over the rows, and move down with the window until the rows end
+  stick = clamp(into, 0px, ROW_H * max(n - 1, 0))
+  table = Stack(fixed(room), Alignment.Start, rows, Box(Alignment.Start, offset_y=stick, heads))
+  frame = sheet_part!(() -> SheetFrame(of=v), v, :frame)
+  frame.wide, frame.inside = e.width, Box(Alignment.Start, offset_x=-s.across, table)
+  frame
+end
+
+"The line round a CSV file's table, which has round corners. The table scrolls sideways inside it."
+@def mutable struct SheetFrame <: SemanticUI
+  of::Any = nothing       # the FileView
+  wide::px = 0px          # how wide it is, with its line
+  inside::Any = nothing   # what's in it in this frame: the table, as far to the left as it's scrolled
+end
+
+describe(f::SheetFrame) = Row(fixed(f.wide), Alignment.Start, padding(SHEET_LINE), clip_x=true, name="Table frame", detach!(f.inside))
+cursor(::SheetFrame) = :arrow
+
+# The rows of the table have square ends, so the page's colour goes over what of them is outside the
+# round corners. The line goes round on top of that.
+draw(ctx, size, ui::ConcreteRect, f::SheetFrame) = begin
+  x, y, w, h, r = num(ui.left), num(ui.top), num(ui.width), num(ui.height), num(SHEET_ROUND)
+  shape = Skia.sk_path_new()
+  rect = Ref(Skia.sk_rect_t(Float32(x), Float32(y), Float32(x + w), Float32(y + h)))
+  Skia.sk_path_add_rounded_rect(shape, rect, Float32(r), Float32(r), Skia.SK_PATH_DIRECTION_CW)
+  Skia.sk_canvas_save(ctx)
+  Skia.sk_canvas_clip_path_with_operation(ctx, shape, Skia.SK_CLIP_OP_DIFFERENCE, true)
+  foreach(((cx, cy),) -> round_box(ctx, cx, cy, r, r, 0; fill=colours.bg), ((x, y), (x + w - r, y), (x, y + h - r), (x + w - r, y + h - r)))
+  Skia.sk_canvas_restore(ctx)
+  Skia.sk_path_delete(shape)
+  line = num(SHEET_LINE)
+  round_box(ctx, x + line / 2, y + line / 2, w - line, h - line, r - line / 2; line=colours.line, wide=line)
+  nothing
+end
+
+# Two fingers that move sideways, or the wheel with ⇧ held, scroll a wide table sideways. Their move up or down scrolls the page.
+onscroll(v::FileView, ev::MouseScroll) = begin
+  s = v.table
+  (s isa FileSheet && ev.delta[1] != 0px) || return nothing
+  s.across = clamp(s.across - 30ev.delta[1], 0px, max(0px, sum(s.widths, init=0px) - s.wide))
+  ev.delta[2] == 0px ? handled : nothing
+end
+
+"The heading of a column of a CSV file's table. A click on it opens the column's menu."
+@def mutable struct SheetHead <: SemanticUI
+  of::Any = nothing   # the FileView
+  column::Int = 1
+end
+"The menu of a column of a CSV file's table: its two orders, and what shows fewer rows"
+@def mutable struct SheetMenu <: SemanticUI
+  of::Any = nothing
+  column::Int = 1
+end
+"One of the two orders in the menu of a column of a CSV file's table"
+@def mutable struct SheetOrder <: SemanticUI
+  of::Any = nothing
+  way::Symbol = :asc
+end
+"A value in the menu of a column of a CSV file's table. A click ticks it, or takes the tick away."
+@def mutable struct SheetValue <: SemanticUI
+  of::Any = nothing
+  value::String = ""
+  count::Int = 0
+end
+
+describe(h::SheetHead) = begin
+  s = h.of.table::FileSheet
+  c = h.column
+  w = s.widths[c]
+  way = s.sort !== nothing && s.sort[1] == c ? s.sort[2] : nothing
+  lit = ishovered(h) || s.asking == c
+  fewer = narrowed(s, c)
+  colour = fewer ? colours.accent : colours.ink
+  # The funnel of a column that shows fewer rows, and the arrow of its order. With neither, the mouse over the heading shows that it opens.
+  marks = ((fewer ? (Icon("funnel-fill", size=9px, color=colours.accent),) : ())...,
+           (way !== nothing ? (Icon(way == :asc ? "chevron-up" : "chevron-down", size=9px, color=colours.ink),) :
+            lit && !fewer ? (Icon("chevron-down", size=9px, color=colours.faint),) : ())...)
+  room = w - 2CELL_PAD - 13px * length(marks)
+  Row(fixed(w), height(HEAD_H), padding(CELL_PAD, 0px), child_gap=4px, Alignment.Center, clip=true,
+      background(lit ? colours.hover : clear),
+    Box(label(shown_cell(s, 1, c, max(room, 12px)), 12px, color=colour, weight="Semibold")), marks...)
+end
+
+cursor(::SheetHead) = :hand
+onmouse(::SheetHead, ::MouseMove) = handled
+
+onkey(h::SheetHead, ev::KeyPress{Keys.mouse_left}) = begin
+  v = h.of
+  s = v.table::FileSheet
+  c = h.column
+  listed = values_of(s, c) !== nothing
+  s.asking = c
+  s.was = listed ? (haskey(s.picks, c) ? copy(s.picks[c]) : nothing) : get(s.filters, c, "")
+  # The menu's field starts with what the column keeps, which esc puts back
+  if !listed
+    s.field === nothing && (s.field = own!(v, TextInput(placeholder="Contains…", font_family=SANS, font_size=13px,
+                                                        look=(_, text) -> Row(width(grow=grow), height(grow=grow), clip=true, text))))
+    s.field.text = s.was
+    s.field.cursor = s.field.anchor = length(s.was)
+  end
+  menu = sheet_part!(() -> SheetMenu(of=v), v, :menu)
+  menu.column = c
+  e = editor(v)
+  # A click outside the menu closes it and keeps what's chosen
+  popup!(ev.window, menu, anchor=h, placement=:below, gap=4px, width=SHEET_MENU_W, key=SHEET_KEY,
+         onclose=() -> (v.table isa FileSheet && (v.table.asking = 0); focus(e)), theme=component_theme(e.zoom))
+  listed || focus(s.field)
+  handled
+end
+
+"Close the menu of the table of `v`, and give the keyboard back to the page"
+close_sheet_menu!(v) = begin
+  v.table isa FileSheet && (v.table.asking = 0)
+  w = window_of(v)
+  w === nothing || close_popup!(w, SHEET_KEY)
+  focus(editor(v))
+  handled
+end
+
+describe(m::SheetMenu) = begin
+  v, c = m.of, found_colours()
+  s = v.table::FileSheet
+  section(words) = Row(width(grow=grow), height(22px), padding(8px, 0px), Alignment.Center, label(words, 10px, color=c.dim, weight="Semibold"))
+  order(way) = sheet_part!(() -> SheetOrder(of=v, way=way), v, (:sort, way))
+  values = values_of(s, m.column)
+  value(text, count) = (r = sheet_part!(() -> SheetValue(of=v, value=text), v, (:value, m.column, text)); r.count = count; r)
+  fewer = values === nothing ?
+    (section("FILTER FOR"),
+     Box(width(grow=grow), padding(4px, 2px),
+       Box(width(grow=grow), height(28px), padding(8px, 0px), radius(6px), border(1px, :solid, c.line), background(c.frame), s.field))) :
+    (section("SHOW"), [value(text, count) for (text, count) in values]...)
+  Box(width(grow=grow), padding(6px), radius(8px), background(c.frame), border(1px, :solid, c.line),
+      shadow(0, 6, 16, RGBA(60 / 255, 45 / 255, 20 / 255, 0.2)), name="Column menu",
+    Column(width(grow=grow), Alignment.Start,
+      section("SORT"), order(:asc), order(:desc),
+      Box(width(grow=grow), height(13px), Alignment.Center, Box(width(grow=grow), height(1px), background(c.rule))),
+      fewer...))
+end
+
+# The menu sees a key before its text field does. Return keeps what's chosen, and esc puts back what the column kept before.
+onkey(m::SheetMenu, ::KeyPress{Keys.enter}) = close_sheet_menu!(m.of)
+onkey(m::SheetMenu, ::KeyPress{Keys.escape}) = begin
+  s = m.of.table::FileSheet
+  if values_of(s, m.column) === nothing
+    keep!(s, m.column, s.was)
+  else
+    s.was === nothing ? delete!(s.picks, m.column) : (s.picks[m.column] = s.was)
+  end
+  close_sheet_menu!(m.of)
+end
+
+describe(r::SheetOrder) = begin
+  s, c = r.of.table::FileSheet, found_colours()
+  on = s.sort == (s.asking, r.way)
+  numbers = s.asking > 0 && s.table.numbers[s.asking]
+  words = numbers ? (r.way == :asc ? "Smallest first" : "Largest first") : (r.way == :asc ? "A–Z" : "Z–A")
+  Row(width(grow=grow), height(28px), padding(8px, 0px), radius(6px), child_gap=8px, Alignment.Center,
+      background(on || ishovered(r) ? c.pick : c.frame),
+    Icon(r.way == :asc ? "chevron-up" : "chevron-down", size=10px, color=on ? c.ink : c.dim),
+    label(words, 13px, color=on ? c.ink : c.dim, weight=on ? "Semibold" : ""))
+end
+
+cursor(::SheetOrder) = :hand
+onmouse(::SheetOrder, ::MouseMove) = handled
+# A click on the order that the rows have puts them back in the file's order
+onkey(r::SheetOrder, ::KeyPress{Keys.mouse_left}) = (s = r.of.table::FileSheet; s.sort = s.sort == (s.asking, r.way) ? nothing : (s.asking, r.way); handled)
+
+describe(r::SheetValue) = begin
+  s, c = r.of.table::FileSheet, found_colours()
+  ticked = get(s.picks, s.asking, nothing)
+  on = ticked !== nothing && r.value in ticked
+  Row(width(grow=grow), height(26px), padding(8px, 0px), radius(6px), child_gap=8px, Alignment.Center,
+      background(ishovered(r) ? c.pick : c.frame),
+    Box(fixed(10px), (on ? (Icon("check", size=10px, color=c.ink),) : ())...),
+    Box(width(grow=grow), Alignment.Start, clip_x=true,
+      label(isempty(r.value) ? "Empty" : r.value, 13px, color=isempty(r.value) || !(on || ticked === nothing) ? c.dim : c.ink, weight=on ? "Semibold" : "")),
+    Box(label(commas(r.count), 11px, color=c.dim)))
+end
+
+cursor(::SheetValue) = :hand
+onmouse(::SheetValue, ::MouseMove) = handled
+# A click ticks the value, or takes the tick away. With every value ticked, or none, every row shows.
+onkey(r::SheetValue, ::KeyPress{Keys.mouse_left}) = begin
+  s = r.of.table::FileSheet
+  c = s.asking
+  ticked = get!(Set{String}, s.picks, c)
+  r.value in ticked ? delete!(ticked, r.value) : push!(ticked, r.value)
+  (isempty(ticked) || length(ticked) == length(values_of(s, c))) && delete!(s.picks, c)
+  handled
 end
 
 "What the live block with this code shows"
@@ -15369,6 +15773,12 @@ onkey(c::MatterCard, ::KeyPress{Keys.mouse_left}) = edit_matter!(c, isempty(c.ro
 geometry(node::SemanticUI) = Base.invokelatest(convert, GeometricUI, node)
 geometry(node::GeometricUI) = detach!(node)
 
+"True when the page shows a CSV file as a table"
+sheet_page(b::Buffer) = b.view == :file && lowercase(splitext(b.path)[2]) in TABLES
+
+"How far under the top bar the page starts. A CSV file's table and a JSON file's tree start nearer than the text of a page does."
+page_top(e) = sheet_page(e.buf) || (e.buf.view == :file && json_page(e.buf)) ? SHEET_ABOVE : PAGE_TOP
+
 "How wide the page's text is in the window"
 text_width(e) = begin
   w, _ = window_size(e)
@@ -15378,9 +15788,9 @@ text_width(e) = begin
   # The lines of a block that fill the window have no sidebar beside them
   alone = lowered(e) !== nothing
   room = w - ((e.panel || sliding(e)) && !alone ? panel_w(e) : 0px) - 2PAGE_X - gutter(e)
-  # A file of code or of text takes all the room that the window has, and so do the lines of a block
-  # that fill the window. A page is no wider than the settings say.
-  numbered(e.buf) || alone || json_page(e.buf) ? max(room, 240px) : clamp(room, 240px, e.widest * e.zoom)
+  # A file of code or of text takes all the room that the window has, and so do a CSV file's table and
+  # the lines of a block that fill the window. A page is no wider than the settings say.
+  numbered(e.buf) || alone || json_page(e.buf) || sheet_page(e.buf) ? max(room, 240px) : clamp(room, 240px, e.widest * e.zoom)
 end
 
 """
@@ -15770,9 +16180,9 @@ describe(p::Page) = begin
   # scrolls sideways. None of it shows past the edges of the page, and the numbers of the lines go over it.
   page = wraps(e) ?
     Row(width(grow=grow), Alignment.Start, justify=numbered(e.buf) ? Alignment.Start : Alignment.Center,
-        padding(PAGE_TOP, PAGE_X, page_bottom(e), PAGE_X + gutter(e)),
+        padding(page_top(e), PAGE_X, page_bottom(e), PAGE_X + gutter(e)),
       node!(Document, e, :document)) :
-    Row(width(grow=grow), Alignment.Start, padding(PAGE_TOP, 0px, page_bottom(e), PAGE_X + gutter(e)), clip_x=true,
+    Row(width(grow=grow), Alignment.Start, padding(page_top(e), 0px, page_bottom(e), PAGE_X + gutter(e)), clip_x=true,
       Box(Alignment.Start, offset_x=-sideways(e), node!(Document, e, :document)))
   reuse!(e.scroll, guide_under(e, page))
 end
@@ -18623,7 +19033,9 @@ describe(t::TopBar) = begin
   # The buttons that code from the startup page adds for the page that shows, like the ones that answer an email
   more = bar_parts(e)
   mode = mode_part(e)
-  side = (isempty(more) ? 250px : 330px) + (isempty(mode) ? 0px : MODE_W)
+  # What a file that's only shown says of itself, like how many rows a CSV file has, can need more room than that
+  said = readonly(b) && !isempty(b.about) ? measure(Face(SANS, "", 12px, colours.dim, false), b.about * "  ·  Read only") + 70px : 0px
+  side = max(isempty(more) ? 250px : 330px, said) + (isempty(mode) ? 0px : MODE_W)
   ended_rename!(e)
   # The two ends of the bar are as wide as each other, so the file's name is in the middle of the space beside
   # the sidebar. A window can be too narrow for that, with a wide sidebar or more buttons at its right end. Then the

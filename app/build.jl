@@ -9,7 +9,8 @@
 # Leave APP_TRIM at no. A sheet and a live block run Julia code that the app
 # has never seen, and a trimmed app can't compile new code.
 #
-# icon.jl draws the app's icon, icon.png.
+# icon.png is the app's icon. It follows Apple's grid for Mac app icons: the
+# canvas is 1024 pixels square, and the page is 824 pixels wide in the middle.
 
 # release.jl includes bundle.jl itself, to check a few things before the build
 @isdefined(build_app) || include("bundle.jl")

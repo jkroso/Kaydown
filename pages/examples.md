@@ -72,10 +72,6 @@ The block at the top of this page is front matter: lines at the very top of a fi
 - [A question from an agent, with answers to click](welcome.md#work-with-an-agent)
 - [Changes from an agent, to accept or reject](welcome.md#work-with-an-agent)
 
-## Email
-
-- [The emails with a person, in a page](welcome.md#emails)
-- [Your email account, and how Ladder keeps your email](settings/email.md)
 
 ## The window and its settings
 

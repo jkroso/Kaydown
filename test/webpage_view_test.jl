@@ -22,7 +22,7 @@ W.HELPER[] = Fake.helper
 W.OPENER[] = Fake.opener
 empty!(Fake.calls)   # what a test before this one asked for, when the tests share a process
 K.MEDIA_CACHE[] = mktempdir()                          # the pictures are kept here, and not in the Mac's caches
-K.Mail.place[] = joinpath(mktempdir(), "settings")     # and the files that came with an email here
+K.Eml.CACHE[] = mktempdir()                            # and the files that came with an email here
 
 const dir = mktempdir()
 "Write an email file whose body is `body`, of the kind `type`, and give its path. With `file`, a PDF comes with it."
@@ -92,7 +92,7 @@ texts() = [e.buf.lines[it.first] for it in e.layout if it.content isa K.Flow]
   it = item()
   # The pictures stand for the email's words, and for nothing else of the page
   t = K.front_matter(e.buf.lines)
-  @test it.first == t + 1 && e.buf.lines[it.last+1] == "[Roof quote.pdf]($(K.Mail.attachments(quote_email))/Roof%20quote.pdf)"
+  @test it.first == t + 1 && e.buf.lines[it.last+1] == "[Roof quote.pdf]($(K.Eml.attachments(quote_email))/Roof%20quote.pdf)"
   @test !any(l -> occursin("quote", l) && occursin("Hi Jake", l), texts()) && any(l -> occursin("Roof quote.pdf", l), texts())
   # They're as wide as the page's text, and as tall as the program made them
   r = page()
@@ -147,7 +147,7 @@ end
 
 @testset "an email asks the web for nothing until you click Load pictures" begin
   show(logo_email)
-  html = K.Mail.webpage(logo_email)
+  html = K.Eml.webpage(logo_email)
   @test shows() && sent().remote && !sent().pictures && Fake.calls[end] == asked(html) && colour(spot(300, 200)) == Fake.colour(false)
   @test !isfile(K.sent_mark(logo_email))
   button = sent().parts[(:button, :pictures)]

@@ -528,14 +528,6 @@ what: headings
 with: email
 ```
 
-## Emails
-
-Once Ladder has your email account, a code block in the language `email` lists the emails with a person, newest first. Write a name or an address in it. A click opens an email, and the block's buttons start an answer or a new email. To give Ladder your account, press ⌘, and choose Email.
-
-```email
-with: sam@example.com
-```
-
 ## Time logs
 
 A code block in the language `timelog` keeps the hours that you work on each task. Type a task in the field at its top and click Start. The block adds a line for now, and the row counts up. Click Stop when you stop. With an empty field, Start goes on with the task of the last line.

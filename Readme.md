@@ -22,7 +22,6 @@ A code block does more than show code. What it does depends on its language:
 - `gallery` shows the pictures of a folder as a grid of small squares, and a click makes one fill the window.
 - `map` shows the map of a place, with a pin on the place.
 - `find` lists the to-do items that aren't ticked in every page of a folder. With words in it, it lists the lines that have those words. It can list another kind of line, or a kind of block, like every takeoff.
-- `email` lists the emails with a person.
 - `timelog` keeps the hours that you work on each task, with a button that starts and stops the clock.
 - `ask` is a question from an agent, with answers to click.
 - `changes` shows a diff from an agent, with a button on each change that accepts or rejects it.
@@ -68,7 +67,7 @@ The `pages` folder has the pages that come with Ladder:
 - `julia.md` has code to run with ⌘Return.
 - `schedule.md` has a schedule to try.
 - `counter.md` defines a kind of block, and shows it.
-- The `settings` folder has the pages of the settings. ⌘, shows `settings.md`, which has a link to each of the others: `code-editor.md`, `key-bindings.md` and `email.md`.
+- The `settings` folder has the pages of the settings. ⌘, shows `settings.md`, which has a link to each of the others: `code-editor.md` and `key-bindings.md`.
 
 ## Use it with an agent
 
@@ -442,55 +441,15 @@ Each change goes into the block's lines, and ⌘Z takes it back. The lines can b
 
 Click a line of the list to open its page at that line. A click on a block opens its page with the caret under the block. Click the box of a to-do item to tick it in its own page. The item stays in the list, ticked, until another page shows, and the top of the list no longer counts it. A second click on its box takes the tick away. If that page isn't open in Ladder, or is open with nothing to save, Ladder writes the tick to the page's file at once. That's the one time that Ladder writes to a file without ⌘S. `find.jl` says how the block is written.
 
-## Read and write email
+## Read an email file
 
-Ladder can keep a folder on your Mac that holds every email of an account. It can do that for more than one account, each in a folder of its own. The folder has the same folders in it as your email server has, and each email is one `.eml` file:
-
-```
-~/Mail/you@example.com/
-  Inbox/
-    2026-11-14 0932 Sam Lee - Roof quote.eml
-  Sent/
-  Drafts/
-    Re Roof quote.md
-```
-
-An `.eml` file holds the email exactly as the server sent it, with what was attached to it inside. Mail, Quick Look and Spotlight read it too. Ladder shows it as a page: the subject and who sent it at the top, then the email's text as Markdown, then a link to each attached file. You read that page, and you can't change it. Ladder marks each email file as read-only on your Mac, so no other app changes one by mistake. A click on a link in an email opens it, with no key held. Because the file is the whole email, a later Ladder can show it better with no new download.
+An `.eml` file holds the email exactly as the server sent it, with what was attached to it inside. Mail, Quick Look and Spotlight read it too. Ladder shows it as a page: the subject and who sent it at the top, then the email's text as Markdown, then a link to each attached file. You read that page, and you can't change it. A click on a link in an email opens it, with no key held. Because the file is the whole email, a later Ladder can show it better with no new download.
 
 An email that was written as HTML shows as its sender made it, with its colours, its layout and its buttons. ⌘E, or a click on the ladder in the top bar, goes down a level: the email then shows its text as Markdown. The same key goes up again. While the find bar is open, the email shows its text, with a mark on each place that the bar found.
 
 Ladder asks the web for nothing to show an email, so its sender can't tell when you open it. A picture that the email has from a web site is an empty box. Click Load pictures, over the email, to get those pictures. That email shows its pictures from then on. The mouse over a link of an email says where the link goes.
 
-1. Press ⌘, and click the Email link.
-2. Type your email address, your name and your password, and click Connect.
-3. Press ⌘⇧I to show the inbox.
-
-Ladder knows Gmail, iCloud, Yahoo, AOL, Fastmail and Telstra by the address, and needs no servers for them. It also knows an address at a domain of your own whose email one of them holds, like a business address at Google. The form says which password the company takes. Gmail, iCloud, Yahoo, AOL and Fastmail take an app password: a password that you make for one app. A button opens the page that makes one. For any other address, the form shows the two servers to check. Ladder keeps the password in the Mac's Keychain. Your email goes in a folder named for your address. Ladder makes that folder in `~/Mail`, unless you choose another folder in the form.
-
-Ladder gets your inbox first, then the other folders. The Email page has two settings for this: how far back the emails go, from a month to every email, and whether the other folders come. While emails come, the page shows a bar, how many emails have come and how long the rest take. Gmail lets an app get 2,500 MB of email in a day, so Ladder stops before that and goes on a day later.
-
-In a folder of emails, the sidebar lists the emails, newest first. A click shows an email, and marks it as read. The top bar of an email has buttons that answer it, send it on, archive it and delete it. A right-click on an email in the list has the same, and marks it as not read.
-
-An email that you write is a Markdown page. ⌘⇧N starts one in a window of its own, with `to` and `subject` at its top. Write it as you write any page. A line that holds only a link to a file sends the file with the email. ⌘⇧Return sends it. The email that went is then kept as an `.eml` file in the folder of sent email, and the draft goes.
-
-The server is the one that's right. An email that another app deletes goes from the folder, and an email file that the Finder moves or deletes comes back. Each folder has a hidden list of its emails, which is only a copy: if it's lost, Ladder makes it again from the files and the server, with no new download. `mail.jl` says how it works, and `mime.jl` how an email becomes a page.
-
-To add another account, click Add an account on the Email page, type its address and its password, and click Connect. The row over the form has each account's address, and a click on one shows that account. A new email goes from the account whose folder the sidebar shows, and an answer goes from the account that got the email. Remove this account takes an account away from Ladder, and leaves its emails in their folder.
-
-It works with a server that takes a password. Outlook.com and Microsoft 365 only let an app sign in through Microsoft's own sign-in page, and Proton Mail needs its Bridge app. Ladder works with neither yet, and the form says so.
-
-### The emails with someone, in a page
-
-A code block in the language `email` lists the emails with a person, newest first, from every folder but the drafts, the junk and the trash. Write a name or an address in it:
-
-````
-```email
-with: sam@example.com
-about: roof
-```
-````
-
-`with` can name several people, with a comma between two of them. `about` lists only the emails whose subject has those words. A click opens an email. The Reply button starts an answer to the newest one, and New email starts one to the block's address. `emails.jl` says how the block is written.
+Ladder gets no email and sends none. [Mail.lad](https://github.com/jkroso/Mail.lad) does that. It's code that your startup page loads: see "Start with a page of your own". It keeps a folder of `.eml` files in step with your email server, lists a folder's emails in the sidebar, puts buttons at the top of an email that answer it, and sends a page that you write as an email.
 
 ## Make a kind of block of your own
 
@@ -556,7 +515,29 @@ Something.start(Ladder)
 ```
 ````
 
-The code has `@use`, as a Julia file that Kip loads has, and the name `Ladder`, which is Ladder's own module. Code that adds to Ladder calls Ladder's functions and adds to its tables. If a block fails, the blocks after it don't run, Ladder opens all the same, and the window says which line of the page failed. A change to the page's code runs the next time Ladder starts.
+The code has `@use`, as a Julia file that Kip loads has, and the name `Ladder`, which is Ladder's own module. Code that adds to Ladder calls Ladder's functions, as Ladder's own files do.
+
+Ladder also has tables for what it does at its own times. Code puts a function in a table under a name of its own, and Ladder calls the function at that time:
+
+| Table | What the function does |
+|---|---|
+| `EACH_FRAME` | `f(e)` gets a turn in each frame of each window, like a look for new email. |
+| `AT_QUIT` | `f()` runs when Ladder quits. |
+| `BAR_PARTS` | `f(e)` gives more buttons for the top bar, for the page that shows. |
+| `BUTTONS` | What such a button does, what its tooltip says, and when it's off. |
+| `PAGE_TITLES` | `f(e)` gives what the top bar calls the page, in place of its file's name. |
+| `MATTER_TITLES` | `f(e)` gives what the card of the page's front matter is called. |
+| `FOLDER_LISTS` | `f(e)` gives a list for the sidebar's folder, in place of the tree of its files, and a line over it. |
+| `FOLDER_MARKS` | `f(e, path)` adds to the row of a folder in the sidebar, like how many of its emails aren't read. |
+| `PAGE_NAMES` | `f(m, e)` gives the code of a window's pages more names. |
+| `FIELD_KEYS` | `f(e, w, K)` takes a key while a field of a live block has the keyboard. |
+| `SETTINGS_FOLDERS` | A folder whose pages show in the settings window. |
+
+```julia
+Ladder.EACH_FRAME[:clock] = e -> tick(e)
+```
+
+A kind of block goes in `Ladder.BLOCKS`, as Ladder's own kinds do. `Ladder.add_insert!` puts it in the Insert menu, and `Ladder.add_commands!` adds commands, with their keys, to the ones on the Key bindings page. The comment over the tables in `main.jl` says more. [Mail.lad](https://github.com/jkroso/Mail.lad) is an example that uses each of them. If a block fails, the blocks after it don't run, Ladder opens all the same, and the window says which line of the page failed. A change to the page's code runs the next time Ladder starts.
 
 ## Go back to the file that showed before
 
@@ -655,16 +636,14 @@ julia -O0 --project=. test/map_view_test.jl       # a map in the page: its pin, 
 julia -O0 --project=. test/file_block_test.jl     # a kind of block that a file defines: what it shows, and what goes back into its lines
 julia -O0 --project=. test/autosave_test.jl       # the setting that saves a page when you leave its window
 julia -O0 --project=. test/children_test.jl       # the parts of the page as the document's children, and a walk from one part to another
-julia -O0 --project=. test/emails_test.jl         # how a list of emails is read and written, and which emails it asks for
-julia -O0 --project=. test/emails_view_test.jl    # the list of the emails with a person, in a page
 julia -O0 --project=. test/timelog_test.jl        # how a time log is read and written, and how its hours and its money are added up
 julia -O0 --project=. test/timelog_view_test.jl   # the rows of a time log, the button that starts and stops the clock, and a time changed in its row
 julia -O0 --project=. test/startup_test.jl        # the startup page: the page that Ladder writes the first time, its code that runs when Ladder starts, and what the window says when the code fails
+julia -O0 --project=. test/extend_test.jl         # what code from the startup page adds to Ladder: buttons, a list for the sidebar, commands, work in each frame
+julia -O0 --project=. test/eml_test.jl            # what Ladder shows of an email file: its page, its front matter, and the links to its files
 julia -O0 --project=. test/mime_test.jl           # how an email becomes the page that a window shows, and a page an email
 julia -O0 --project=. test/webpage_test.jl        # the pictures that are made of an email's HTML: what's read of them, their links, and how they're asked for and kept
 julia -O0 --project=. test/webpage_view_test.jl   # an email as it was sent: its pictures in the page, its links, the Load pictures button, and its words a level down
-julia -O0 --project=. test/mail_test.jl           # the folder of emails that's kept in step with an email server, and sending
-julia -O0 --project=. test/mail_view_test.jl      # the list of emails, the buttons of an email and of a draft, and the Email page of the settings
 ```
 
 The tests are in the `test` folder. Run them from Ladder's folder, as above. The first three need no Centient. `test/centient_fake.jl` answers in its place. The last two use no network and no email account. `test/mail_fake.jl` is a pretend email server that runs in the test.

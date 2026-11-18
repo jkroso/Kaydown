@@ -11,7 +11,7 @@
 
 include("start.jl")
 
-@use ".." build_editor open_editor move_old_folders! WELCOME restyle! problems pages_dir SIDEBAR_ICONS FILE_ICONS todo_at inbox Agent INSERTS PLAN_ICONS SCHEDULE_ICONS BLOCK_ICONS MAIL_ICONS window! editors settings_editor theme! Update
+@use ".." build_editor open_editor move_old_folders! WELCOME restyle! problems pages_dir SIDEBAR_ICONS FILE_ICONS todo_at inbox Agent INSERTS PLAN_ICONS SCHEDULE_ICONS BLOCK_ICONS window! editors settings_editor theme! Update
 @use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse Typed ontype
 @use "github.com/jkroso/Font.jl/units" px
 @use "github.com/jkroso/UI.jl/Interface/abstract" focus window_of
@@ -31,7 +31,7 @@ building && start_packages()
 # them now keeps them in the app, so it doesn't need that folder.
 foreach(load_icon, ["check", "chevron-down", "chevron-right", "chevron-up", "copy", "file-earmark", "file-earmark-text", "folder", "eye", "bell-fill", "bell",
                     "ladder", "layout-sidebar", "pause-fill", "play-fill", "record-fill", "search", "stop-fill", "text-center", "text-left",
-                    "text-paragraph", "text-right", "x-lg", SIDEBAR_ICONS..., FILE_ICONS..., PLAN_ICONS..., SCHEDULE_ICONS..., BLOCK_ICONS..., MAIL_ICONS...])
+                    "text-paragraph", "text-right", "x-lg", SIDEBAR_ICONS..., FILE_ICONS..., PLAN_ICONS..., SCHEDULE_ICONS..., BLOCK_ICONS...])
 
 # The welcome page's text, to type into while the app warms up
 const page = read(WELCOME, String)
@@ -47,7 +47,7 @@ const page = read(WELCOME, String)
 const PAGES = dirname(WELCOME)
 "The text of each of the app's own pages, by the file's place in the folder of pages. The model, the video, the recording, the plan, the table and the pictures that the pages show are here too, as the bytes of their files."
 const pages = Dict(name => read(joinpath(PAGES, name), String)
-                   for name in ("welcome.md", "examples.md", "components.md", "julia.md", "settings/settings.md", "settings/code-editor.md", "settings/key-bindings.md", "settings/email.md", "schedule.md", "counter.md", "widgets.jl", "progress.jl", "knot.stl", "knot.mp4", "hello.m4a", "plan.pdf", "costs.csv",
+                   for name in ("welcome.md", "examples.md", "components.md", "julia.md", "settings/settings.md", "settings/code-editor.md", "settings/key-bindings.md", "schedule.md", "counter.md", "widgets.jl", "progress.jl", "knot.stl", "knot.mp4", "hello.m4a", "plan.pdf", "costs.csv",
                                "photos/1 footings.png", "photos/2 frame.png", "photos/3 roof.png", "photos/4 bricks.png", "photos/5 window.png", "photos/6 finished.png"))
 
 "The `user/repo/file` that a file Kip got from GitHub has there, or nothing for any other file"
@@ -136,7 +136,7 @@ error. An editor only runs the blocks that are on screen, so this scrolls down
 each page a screen at a time.
 """
 check_pages(dir) =
-  for name in ("welcome.md", "examples.md", "components.md", "julia.md", "settings/settings.md", "settings/code-editor.md", "settings/key-bindings.md", "settings/email.md", "schedule.md", "counter.md")
+  for name in ("welcome.md", "examples.md", "components.md", "julia.md", "settings/settings.md", "settings/code-editor.md", "settings/key-bindings.md", "schedule.md", "counter.md")
     empty!(problems)
     e = build_editor(joinpath(dir, name))
     w = Window(e, title="check", size=(1100px, 800px))

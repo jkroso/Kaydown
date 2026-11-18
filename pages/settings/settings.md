@@ -2,11 +2,10 @@
 
 Ladder keeps these choices, and uses them the next time it opens. Each one changes every window as you choose it. Press ⌘W to close this window.
 
-Three more pages have the rest of the settings. Hold ⌘ and click a link to go there. To come back, press ⌘⌥←.
+Two more pages have the rest of the settings. Hold ⌘ and click a link to go there. To come back, press ⌘⌥←.
 
 - [Code editor](code-editor.md) has how code shows.
 - [Key bindings](key-bindings.md) has the keys of each command.
-- [Email](email.md) has your email accounts.
 
 These pages show what a page can do:
 

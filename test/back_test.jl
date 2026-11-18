@@ -186,9 +186,9 @@ end
   end
 end
 
-@testset "⌘[ and ⌘] still belong to the email commands" begin
+@testset "⌘[ and ⌘] aren't the keys that go back and forward" begin
   of = K.bundle_keys("Ladder")
-  @test K.caps(first(of[:mail_last])) == "⌘[" && K.caps(first(of[:mail_next])) == "⌘]"
+  @test K.caps(first(of[:back])) == "⌘⌥←" && K.caps(first(of[:forward])) == "⌘⌥→"
   e, w, _ = window("a.md", "b.md")
   K.follow!(e, "b.md"); frames(w)
   press(w, Keys.left_bracket, cmd)

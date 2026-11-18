@@ -11,6 +11,11 @@
 # The page is laid out again only when the HTML, the width or the zoom changes,
 # so a window that redraws often costs no more than the drawing.
 #
+# A page with an animation, or with a video that plays, is laid out again as
+# time passes, up to 30 times a second, for as long as something in it moves.
+# All of the page is laid out each time, so a big page moves in fewer steps.
+# With `moves=false`, the page is drawn once, as it comes to rest.
+#
 # With `scripts=true`, the page's scripts run: see live.jl. A click is told to
 # the scripts first, and a link opens unless a script said to do no more. The
 # page's timers run when they're due, and the page is laid out again after a
@@ -26,6 +31,8 @@
 @use "github.com/jkroso/UI.jl/Interface/draw" draw cursor open_url rect redraw_in!
 @use "./main" => Web
 @use "./live" => Live
+@use "./dom" document
+@use "./style" Clock
 
 @def mutable struct View <: SemanticUI
   html::String = ""
@@ -43,7 +50,12 @@
   say::Any = (level, text) -> nothing   # called with each line that a script prints
   live::Any = nothing     # the page with its scripts running
   started::Any = nothing  # what its scripts were started for
+  moves::Bool = true      # draw the page's animations as time passes
+  showing::Any = nothing  # the page's document, its clock and when it was first shown, for a page that's laid out again as time passes
 end
+
+# A page that moves is laid out again no sooner than this many seconds after the last time
+const FRAME = 1 / 30
 
 "The page of `v`, laid out for its HTML, its width and its zoom as they are now"
 page!(v::View) = begin
@@ -53,9 +65,23 @@ page!(v::View) = begin
     close(v.live)
     v.live = v.made = nothing
   end
-  if v.made != want
-    v.page = Web.page(v.html; wide=want[2], zoom=v.zoom, fit=v.fit, css=v.css, load=v.load, high=v.high, base=v.base)
+  if !v.moves
+    if v.made != want
+      v.page = Web.page(v.html; wide=want[2], zoom=v.zoom, fit=v.fit, css=v.css, load=v.load, high=v.high, base=v.base)
+      v.made = want
+    end
+    return v.page
+  end
+  # The page's time starts again for another page, and goes on for another width
+  key = (want[1], v.base)
+  (v.showing === nothing || v.showing.key != key) && (v.showing = (; key, doc=document(v.html), clock=Clock(), since=time(), pictures=Web.Pictures(v.load)))
+  if v.made != want || Web.moving(v.page)
+    began = time()
+    v.page = Web.page(v.showing.doc; wide=want[2], zoom=v.zoom, fit=v.fit, css=v.css, load=v.load, pictures=v.showing.pictures, high=v.high, base=v.base,
+                      at=began - v.showing.since, v.showing.clock)
     v.made = want
+    # A window draws only when something asks. A page that takes long to lay out leaves as long again for the rest of the window.
+    Web.moving(v.page) && redraw_in!(v, max(FRAME, time() - began))
   end
   v.page
 end
@@ -76,6 +102,8 @@ running!(v::View, want) = begin
   wait === nothing || redraw_in!(v, max(wait, 1 / 60))
   v.made = want
   v.page = Live.page!(v.live)
+  Web.moving(v.page) && redraw_in!(v, FRAME)
+  v.page
 end
 
 describe(v::View) = (p = page!(v); Box(width(v.wide), height(px(p.tall))))
@@ -104,6 +132,12 @@ onkey(v::View, ::KeyPress{Keys.mouse_left}) = begin
     # A script that heard the click may have changed the page
     redraw_in!(v, 0)
     go || return handled
+  end
+  # A click on a video that shows its buttons starts it or stops it
+  if v.page.at !== nothing && Web.toggle!(v.page, at...)
+    v.live === nothing ? (v.made = nothing) : (v.live.scripts.changed = true)
+    redraw_in!(v, 0)
+    return handled
   end
   l = Web.link(v.page, at...)
   l === nothing && return

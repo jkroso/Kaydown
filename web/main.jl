@@ -31,15 +31,21 @@
 # What it doesn't draw yet: text from right to left in its own order, and text
 # down the page. Letters that join, as in Arabic, and an emoji that's made of
 # several characters. `::first-letter` and `::first-line`. `backdrop-filter`.
-# A picture as a border (`border-image: url(...)`). The page in an <iframe>,
-# and what a <canvas> or a <video> shows. What moves: a `transition`, and an
-# `animation` that doesn't end. An animation that ends and stays is drawn as
-# it ends.
+# A picture as a border (`border-image: url(...)`). The page in an <iframe>.
+# A `transition`.
+#
+# What moves: with `at`, the page is drawn as it is that many seconds after
+# it was first shown. Each animation of its CSS is as far as it has got then,
+# and a <video> that plays by itself shows its picture of that time. A video
+# makes no sound. A <canvas> shows what the page's scripts drew on it: see
+# canvas.jl.
 #
 # The parts: dom.jl reads the HTML into a tree. css.jl reads CSS. style.jl
 # works out the style of each element. box.jl makes the boxes. layout.jl gives
 # each its size and place. paint.jl draws them. svg.jl draws an SVG. text.jl
-# finds fonts and measures text. For a page with scripts: jsc.jl runs
+# finds fonts and measures text. video.jl reads the pictures of a video file.
+# canvas.jl is the surface of a <canvas> and the drawing on it, and context.jl
+# gives it to a page's scripts. For a page with scripts: jsc.jl runs
 # JavaScript, script.jl and window.jl give a script the page, and live.jl lays
 # the page out again after a script changes it.
 
@@ -48,8 +54,9 @@
 @use "./dom" document Document
 @use "./css" resolve
 @use "./svg" => Svg
+@use "./video" => Film
 @use "./box" boxes Box
-@use "./style" styles isauto ispercent
+@use "./style" styles isauto ispercent Clock
 @use "./layout" layout!
 @use "./paint" => Paint
 
@@ -63,11 +70,12 @@ as when the page is laid out for another width.
 mutable struct Pictures
   found::Dict{String,Any}
   load::Function
+  films::Dict{String,Any}   # each video that the page names, or nothing
 end
-Pictures(load) = finalizer(release, Pictures(Dict{String,Any}(), load))
+Pictures(load) = finalizer(release, Pictures(Dict{String,Any}(), load, Dict{String,Any}()))
 
 "Forget the pictures that weren't there, so that they're asked for again: one may have come from the web since"
-retry!(p::Pictures) = (filter!(kv -> kv.second !== nothing, p.found); p)
+retry!(p::Pictures) = (filter!(kv -> kv.second !== nothing, p.found); filter!(kv -> kv.second !== nothing, p.films); p)
 
 # No page shows a picture bigger than this many pixels across or down, so a bigger one is kept at this size
 const MOST = 2048
@@ -132,11 +140,23 @@ end
   end
 end
 
+"The video at the address `src`, as video.jl reads it, or nothing"
+film(p::Pictures, src::AbstractString) = begin
+  src = String(strip(src))
+  isempty(src) && return nothing
+  get!(p.films, src) do
+    bytes = startswith(lowercase(src), "data:") ? inline_bytes(src) : p.load(src)
+    bytes === nothing ? nothing : Film.video(Vector{UInt8}(bytes), src)
+  end
+end
+
 release(p::Pictures) = begin
   for found in values(p.found)
     found === nothing || Skia.sk_image_unref(found[3])
   end
   empty!(p.found)
+  foreach(v -> v === nothing || close(v), values(p.films))
+  empty!(p.films)
 end
 
 "A page of HTML that's laid out and ready to draw"
@@ -149,6 +169,27 @@ struct Page
   words::Vector{Paint.Words}
   pictures::Pictures
   root::Box       # the box of its <html> element, with the boxes of the rest in it
+  at::Union{Float64,Nothing}   # how many seconds after it was first shown the page looks like this, or nothing for the page as it comes to rest
+  until::Float64  # how many seconds after it was first shown the page stops changing: Inf when it never does, 0 when nothing in it moves
+end
+
+"True when the page will look different a moment later: an animation of it runs, or a video in it plays"
+moving(p::Page) = p.at !== nothing && p.at < p.until
+
+"""
+Start or stop the <video> at the point `(x, y)` of the page, as a click on it
+does in a browser, when the video shows its buttons (`controls`). True when
+there was one: lay the page out again then, to see it play.
+"""
+toggle!(p::Page, x, y) = begin
+  x, y = x / p.zoom, y / p.zoom
+  i = findlast(q -> q.element.tag == "video" && q.left <= x < q.left + q.wide && q.top <= y < q.top + q.tall, p.list.places)
+  (i === nothing || !haskey(p.list.places[i].element.attrs, "controls")) && return false
+  e = p.list.places[i].element
+  at, again = something(p.at, 0.0), haskey(e.attrs, "loop")
+  how = Film.play(e)
+  Film.spot(how, at, again)[2] ? Film.pause!(how, at, again) : Film.play!(how, at, again)
+  true
 end
 
 # What lets a page that's wider than its window be as narrow as the window: a table, a picture or a block of code
@@ -187,20 +228,29 @@ whose content still can't be that narrow is as wide as its content, up to
 
 `high` is how high the window that the page is seen through is, or nothing
 for a page that's as tall as its content. `base` is the address of the page.
+
+`at` is how many seconds ago the page was first shown: its animations are
+drawn as they are at that time. `moving(p)` says whether the page will look
+different a moment later, and `p.until` says when it stops changing. With no
+time, the page is drawn as it comes to rest. Give the same `clock`, a
+`Clock()`, each time that one document is laid out again as time passes.
 """
 page(html::AbstractString; kw...) = page(document(html); kw...)
 
 "Lay out the page of a document that's read already. live.jl lays a page out again with this after a script changes its document."
-page(doc::Document; wide=700, zoom=1.0, load=src -> nothing, pictures=Pictures(load), css="", fit=false, widest=2000, high=nothing, base="") = begin
+page(doc::Document; wide=700, zoom=1.0, load=src -> nothing, pictures=Pictures(load), css="", fit=false, widest=2000, high=nothing, base="", at=nothing, clock=nothing) = begin
   from = isempty(doc.base) ? String(base) : resolve(base, doc.base)
   inner = wide / zoom
   window = high === nothing ? NaN : high / zoom
   seen = isnan(window) ? 800.0 : window   # what `100vh` is of, when there's no window
   find = src -> pictures(resolve(from, src))
+  at === nothing || (at = Float64(at))
+  until = 0.0
   lay(across, extra) = begin
     make(containers) = begin
-      look = styles(doc, across; extra, high=seen, load=pictures.load, base=String(base), containers)
-      root = boxes(doc, look; pictures=find, wide=across, high=seen)
+      look = styles(doc, across; extra, high=seen, load=pictures.load, base=String(base), containers, at, clock)
+      root = boxes(doc, look; pictures=find, films=src -> film(pictures, resolve(from, src)), at, wide=across, high=seen)
+      until = look.until
       (look, root, layout!(root, across, doc.mode; high=window))
     end
     look, root, tall = make(nothing)
@@ -231,7 +281,7 @@ page(doc::Document; wide=700, zoom=1.0, load=src -> nothing, pictures=Pictures(l
   end
   z(link::Paint.Link) = (left=link.left * zoom, top=link.top * zoom, wide=link.wide * zoom, tall=link.tall * zoom, url=link.url)
   z(w::Paint.Words) = (before=w.before, top=w.top * zoom, tall=w.tall * zoom, edges=w.edges .* zoom, letters=w.letters, from=w.from)
-  Page(ceil(inner * zoom), ceil(tall * zoom), Float64(zoom), l, zoom == 1 ? l.links : map(z, l.links), zoom == 1 ? l.words : map(z, l.words), pictures, root)
+  Page(ceil(inner * zoom), ceil(tall * zoom), Float64(zoom), l, zoom == 1 ? l.links : map(z, l.links), zoom == 1 ? l.words : map(z, l.words), pictures, root, at, until)
 end
 
 """

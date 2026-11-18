@@ -11,7 +11,8 @@
 # other. Borders of every style, with round and oval corners, and the line
 # round a box. Shadows, outside a box and in it, and of text. Text, with the
 # lines under and through it. Pictures, as `object-fit` says. SVG drawings.
-# The parts of a form. The bullets and numbers of lists.
+# The parts of a form. The bullets and numbers of lists. The picture that a
+# video shows, and what a script drew on a <canvas>.
 #
 # Boxes are drawn in the order that CSS says: what has a `z-index` under 0,
 # then the boxes of the text, then floats, then boxes with a place of their
@@ -27,6 +28,7 @@
 @use "./text" Font font drawn normal
 @use "./box" Box Piece Span Line floats placed flexes grids
 @use "./svg" => Svg
+@use "./canvas" Board found image!
 
 abstract type Item end
 
@@ -69,6 +71,19 @@ struct Picture <: Item
   image::Ptr{Cvoid}
   dx::Float64; dy::Float64; dw::Float64; dh::Float64
   sharp::Bool          # each pixel of it stays a square when it's made bigger
+end
+
+"""
+What a script drew on a <canvas>. It's drawn as the canvas is at the moment
+that the page is drawn, so a page isn't laid out again each time a script
+draws on its canvas.
+"""
+struct Sketch <: Item
+  x::Float64; y::Float64; w::Float64; h::Float64
+  radii::Radii
+  board::Board
+  dx::Float64; dy::Float64; dw::Float64; dh::Float64
+  sharp::Bool
 end
 
 "Colours that run into each other: along a line, out from a point, or round one"
@@ -643,7 +658,7 @@ side4(ws) = length(ws) == 1 ? [ws[1], ws[1], ws[1], ws[1]] : length(ws) == 2 ? [
 matrix(s::Style, x, y, w, h) = begin
   m = SAME
   for list in (s.translate, s.rotate, s.scale, s.transform), t in list
-    m = times(m, t.kind == :move ? shift(px(t.x, w), px(t.y, h)) : t.n)
+    m = times(m, t.kind == :move ? shift(px(t.x, w), px(t.y, h)) : t.kind == :spin ? (cos(t.n[1]), sin(t.n[1]), -sin(t.n[1]), cos(t.n[1]), 0.0, 0.0) : t.n)
   end
   m == SAME && return m
   # It turns round a point of the box
@@ -800,7 +815,8 @@ picture!(l::List, b::Box, image, cx, cy, iw, ih, radii) = begin
     k = s.objectfit == :contain ? min(iw / nw, ih / nh) : s.objectfit == :cover ? max(iw / nw, ih / nh) : s.objectfit == :none ? 1.0 : min(1.0, iw / nw, ih / nh)
     dw, dh = nw * k, nh * k
   end
-  push!(l.items, Picture(cx, cy, iw, ih, radii, image, cx + px(s.objectat[1], iw - dw), cy + px(s.objectat[2], ih - dh), dw, dh, s.rendering == :pixelated))
+  at = (cx + px(s.objectat[1], iw - dw), cy + px(s.objectat[2], ih - dh), dw, dh)
+  push!(l.items, image isa Board ? Sketch(cx, cy, iw, ih, radii, image, at..., s.rendering == :pixelated) : Picture(cx, cy, iw, ih, radii, image, at..., s.rendering == :pixelated))
 end
 
 "Add what the box `b` draws, and what's in it, in the order of the text. `(ox, oy)` is the corner of the border of the box that `b` is in."
@@ -848,11 +864,18 @@ draw!(l::List, b::Box, ox, oy) = begin
     radii = inner(corners(s, w, h), b.border)
     if b.widget == :svg
       s.visible && iw > 0 && ih > 0 && push!(l.items, Clip(cx, cy, iw, ih, radii), Drawing(cx, cy, iw, ih, b.element, b.picture), Unclip())
+    elseif b.widget == :canvas
+      # What a script has drawn on it. With no script, a canvas shows nothing.
+      sketch = s.visible && iw > 0 && ih > 0 ? found(b.element) : nothing
+      sketch === nothing || picture!(l, b, sketch, cx, cy, iw, ih, radii)
     elseif b.widget != :none
-      b.picture !== nothing && s.visible && iw > 0 && ih > 0 && picture!(l, b, b.picture, cx, cy, iw, ih, radii)
-      if s.visible && iw > 0 && ih > 0 && !(b.widget == :video && b.picture !== nothing && !haskey(b.element.attrs, "controls"))
+      # A video's picture is a `Frame` of video.jl, which the box keeps for as long as the page is drawn
+      b.picture !== nothing && s.visible && iw > 0 && ih > 0 && picture!(l, b, b.picture isa Ptr ? b.picture : b.picture.image, cx, cy, iw, ih, radii)
+      # Over a video's picture, the arrow that starts it shows when the video has its buttons and doesn't play
+      if s.visible && iw > 0 && ih > 0 && !(b.widget == :video && b.picture !== nothing && !(haskey(b.element.attrs, "controls") && b.value != 1.0))
         color = b.widget == :color ? something(colour(b.text), 0xff000000) : s.color
-        push!(l.items, Widget(cx, cy, iw, ih, b.widget, b.value, color isa UInt32 ? color : s.color, s.accent))
+        # Over a video's picture, only the arrow that starts it is drawn
+        push!(l.items, Widget(cx, cy, iw, ih, b.widget, b.widget == :video && b.picture !== nothing ? 1.0 : b.value, color isa UInt32 ? color : s.color, s.accent))
       end
     elseif b.picture !== nothing && s.visible && iw > 0 && ih > 0
       picture!(l, b, b.picture, cx, cy, iw, ih, radii)
@@ -1248,6 +1271,15 @@ draw_image(canvas, image, x, y, w, h; sharp=false) = begin
   with_paint(0xffffffff) do paint
     Skia.sk_canvas_draw_image_rect(canvas, image, src, rect(x, y, w, h), Ref(sharp ? NEAREST : SAMPLING), paint, Skia.SRC_RECT_CONSTRAINT_FAST)
   end
+end
+
+paint!(canvas, i::Sketch) = begin
+  image = image!(i.board)
+  image == C_NULL && return
+  cut = i.radii != SQUARE || i.dx < i.x - 0.01 || i.dy < i.y - 0.01 || i.dx + i.dw > i.x + i.w + 0.01 || i.dy + i.dh > i.y + i.h + 0.01
+  cut && (Skia.sk_canvas_save(canvas); clip_shape(canvas, i.x, i.y, i.w, i.h, i.radii))
+  draw_image(canvas, image, i.dx, i.dy, i.dw, i.dh; sharp=i.sharp)
+  cut && Skia.sk_canvas_restore(canvas)
 end
 
 paint!(canvas, i::Picture) = begin
@@ -1688,7 +1720,7 @@ right(l::List) = begin
   depth = 0
   for i in l.items
     i isa Move ? (depth += 1) : i isa Unmove ? (depth -= 1) : nothing
-    depth == 0 && i isa Union{Fill,Edge,Picture,Backing,Glyphs,Widget,Drawing} && (x = max(x, i.x + i.w))
+    depth == 0 && i isa Union{Fill,Edge,Picture,Sketch,Backing,Glyphs,Widget,Drawing} && (x = max(x, i.x + i.w))
   end
   x
 end

@@ -31,6 +31,7 @@
 @use "./css" media
 @use "./style" Style Look Context Len ZERO sides child len px isauto alpha colour
 @use "./text" font width
+@use "./video" frame play spot untouched
 
 "The top and the bottom margin of a box that can join with the margins next to them: the biggest, and the most negative"
 struct Gap
@@ -111,7 +112,7 @@ Base.@kwdef mutable struct Box
   shape::Float64 = NaN                 # of a picture that isn't there: its width over its height, as its tag's `width` and `height` say
   picture::Any = nothing               # of a picture: what the page's pictures have for it
   fills::Bool = false                  # of a drawing with a shape and no size: it's as wide as the box that it's in
-  widget::Symbol = :none               # of an :image that's no picture: :svg, :checkbox, :radio, :range, :color, :progress, :meter, :video, :audio, :frame, :canvas, or :select for the arrows of a <select>
+  widget::Symbol = :none               # of an :image that's no picture: :svg, :checkbox, :radio, :range, :color, :progress, :meter, :video, :audio, :frame, :canvas, or :select for the arrows of a <select>. A video's `picture` is the `Frame` that it shows.
   value::Float64 = NaN                 # of a tick box: 1 when it's ticked. Of a slider or a bar: how much of it is full, from 0 to 1.
   grid::Any = nothing                  # of a table: its rows and its columns
   cbh::Float64 = NaN                   # how tall the content of the box that it's in is, when that's known before its content is laid out: a height in percent is of this
@@ -373,6 +374,8 @@ no_pictures(src) = nothing
 struct Env
   look::Any                          # the style of each element, and of its parts
   pictures::Function
+  films::Function                    # the video at an address, as video.jl reads it, or nothing
+  at::Union{Float64,Nothing}         # how many seconds ago the page was first shown, or nothing for the page as it comes to rest
   counters::Counters
   wide::Float64                      # how wide and how high the window is, for a picture that has a file for each size of window
   high::Float64
@@ -499,6 +502,33 @@ const NO_VALUE = Dict("date" => "dd/mm/yyyy", "time" => "--:-- --", "datetime-lo
 "A number that a tag says, or `default`"
 amount(e::Element, name, default) = something(tryparse(Float64, strip(attr(e, name))), default)
 
+"""
+The picture that the <video> element `e` shows now, and whether the video
+plays, or nothing when its file can't be read. A video that plays shows its
+picture of this moment of the page, and the page is noted to move until the
+video ends. Its file is the first that macOS can read, of its `src` and of the
+<source> elements in it. An address that ends with `#t=10` starts 10 seconds
+in.
+"""
+playing(e::Element, env::Env) = begin
+  for src in (attr(e, "src"), (attr(k, "src") for k in e.children if k isa Element && k.tag == "source")...)
+    src = strip(src)
+    isempty(src) && continue
+    m = match(r"^(.*)#t=([0-9.]+)", src)
+    v = env.films(m === nothing ? src : m[1])
+    v === nothing && continue
+    p = play(e)
+    p.from, p.long = m === nothing ? 0.0 : min(something(tryparse(Float64, m[2]), 0.0), v.long), v.long
+    again = haskey(e.attrs, "loop")
+    at = something(env.at, 0.0)
+    t, going = spot(p, at, again)
+    going && (env.look.until = max(env.look.until, again ? Inf : at + p.long - t))
+    shown = frame(v, t)
+    shown === nothing || return (shown, going)
+  end
+  (nothing, false)
+end
+
 "The box of a part of a form, or nothing when the element is laid out like any other"
 control(e::Element, s::Style, env, link) = begin
   tag = e.tag
@@ -568,6 +598,9 @@ control(e::Element, s::Style, env, link) = begin
     return piece(e, s, link; natural=(amount(e, "width", 300.0), amount(e, "height", 150.0)), widget=:canvas)
   elseif tag == "video"
     found = isempty(strip(attr(e, "poster"))) ? nothing : env.pictures(attr(e, "poster"))
+    # A video that was never started shows its poster. Any other shows its picture of this moment.
+    shown, going = found !== nothing && untouched(play(e)) ? (nothing, false) : playing(e, env)
+    shown === nothing || return piece(e, s, link; natural=(Float64(shown.wide), Float64(shown.high)), widget=:video, picture=shown, value=going ? 1.0 : 0.0)
     return piece(e, s, link; natural=found === nothing ? (300.0, 150.0) : (Float64(found[1]), Float64(found[2])), widget=:video, picture=found === nothing ? nothing : found[3])
   elseif tag == "audio"
     return piece(e, s, link; natural=(300.0, 54.0), widget=:audio)
@@ -770,9 +803,9 @@ The box of the page's <html> element, with the boxes of all that's in it.
 `wide` and `high` are how big the window is, for a picture that has a file
 for each size of window.
 """
-boxes(doc::Document, look; pictures=no_pictures, wide=1024.0, high=800.0) = begin
+boxes(doc::Document, look; pictures=no_pictures, films=no_pictures, at=nothing, wide=1024.0, high=800.0) = begin
   out = Box[]
-  env = Env(look, pictures, Counters(), Float64(wide), Float64(high), IdDict{Style,Style}())
+  env = Env(look, pictures, films, at, Counters(), Float64(wide), Float64(high), IdDict{Style,Style}())
   add!(out, doc.root, Style(), env, "")
   isempty(out) ? Box(kind=:block, style=Style(display=:block)) : (out[1].kind = :block; out[1])
 end

@@ -10,6 +10,8 @@
 @use "github.com/jkroso/UI.jl/Interface/testing" click! move!
 @use "github.com/jkroso/UI.jl/Interface/save" save_png
 @use "../web/view" View
+@use "../web" => Web
+@use "../web/paint" => Paint
 
 const HTML = """<!DOCTYPE html><body style="margin:20px;font:16px/20px Helvetica;background:#f4f4f4">
   <div style="background:white;border-radius:8px;border:1px solid #ddd;padding:16px">
@@ -85,4 +87,47 @@ end
   v.html = "<p>another</p>"
   frame(w)
   @test v.live !== live && !isopen(live)
+end
+
+@testset "a page that moves in a window" begin
+  html = """<!DOCTYPE html><style>@keyframes go { from { margin-left: 0 } to { margin-left: 100px } } p { margin: 0; animation: go 0.3s linear forwards }</style>
+    <body style="margin:0;background:white"><p>x</p></body>"""
+  v = View(html=html, wide=300px)
+  w = Window(v, size=(300px, 100px))
+  frame(w)
+  left() = v.page.words[1].edges[1]
+  # The page is laid out again as time passes, for as long as its animation runs
+  first = v.page
+  @test Web.moving(first) && left() < 50
+  sleep(0.15)
+  frame(w)
+  @test v.page !== first && 30 < left() < 100
+  sleep(0.3)
+  frame(w)
+  @test left() == 100 && !Web.moving(v.page)
+  page = v.page
+  frame(w)
+  @test v.page === page
+  # Another width doesn't start the animation again
+  v.wide = 200px
+  frame(w)
+  @test left() == 100 && v.page.wide == 200
+  # With `moves=false`, the page is drawn once, as it comes to rest
+  still = View(html=html, wide=300px, moves=false)
+  frame(Window(still, size=(300px, 100px)))
+  @test still.page.words[1].edges[1] == 100 && !Web.moving(still.page)
+  # A click on a video that shows its buttons starts it. The test's video is 64 by 48, and 2 seconds long.
+  clip = read(joinpath(@__DIR__, "web_clip.mp4"))
+  film = View(html="""<!DOCTYPE html><body style="margin:0"><video src="clip.mp4" controls style="display:block"></video></body>""", wide=300px, load=src -> src == "clip.mp4" ? clip : nothing)
+  fw = Window(film, size=(300px, 100px))
+  frame(fw)
+  arrows() = count(i -> i isa Paint.Widget, film.page.list.items)
+  @test film.page.tall == 48 && !Web.moving(film.page) && arrows() == 1
+  r = rect(film)
+  click!(fw, (r.left + 20px, r.top + 20px))
+  frame(fw)
+  @test Web.moving(film.page) && arrows() == 0
+  click!(fw, (r.left + 20px, r.top + 20px))
+  frame(fw)
+  @test !Web.moving(film.page) && arrows() == 1
 end

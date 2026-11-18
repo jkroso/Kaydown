@@ -18,8 +18,10 @@
 # (`calc()`, `min()`, `max()`, `clamp()`). Every way to write a colour. The
 # parts of an element (`::before`, `::after`, `::marker`). Rules for the box
 # that an element is in (@container), once `containers` says how big each is.
-# Fonts from the web (@font-face). An animation doesn't run: an element shows
-# the end of one that stops and stays there.
+# Fonts from the web (@font-face). Animations (@keyframes): with a time, each
+# element looks as its animations make it then. With none, an element shows
+# the end of an animation that stops and stays there. A `transition` does
+# nothing.
 
 @use "./dom" Element Text Document attr walk
 @use "./css" Declaration Rule Stylesheet Selector sheet read! declarations matches media container container_name pieces closing resolve selectors
@@ -538,10 +540,10 @@ paint(v) = (x = colour(v); x === :current ? CURRENT : x)
 
 "One step of a `transform`: a move by `x` and `y`, or a turn, a stretch or a slant with the numbers `n`"
 struct Turn
-  kind::Symbol            # :move, :matrix
+  kind::Symbol            # :move, :spin or :matrix
   x::Len
   y::Len
-  n::NTuple{6,Float64}    # of a matrix: a, b, c, d, e, f, as CSS's matrix() has them
+  n::NTuple{6,Float64}    # of a matrix: a, b, c, d, e, f, as CSS's matrix() has them. Of a spin: the angle in radians, then zeros.
 end
 
 "One shadow of a box or of text. The colour is `CURRENT` for the element's own."
@@ -1068,7 +1070,8 @@ calls(v) = begin
 end
 
 matrix(a, b, c, d, e, f) = Turn(:matrix, ZERO, ZERO, (a, b, c, d, e, f))
-spin(r) = matrix(cos(r), sin(r), -sin(r), cos(r), 0.0, 0.0)
+"A turn by `r` radians. It keeps the angle, so that an animation can turn a box all the way round."
+spin(r) = Turn(:spin, ZERO, ZERO, (Float64(r), 0.0, 0.0, 0.0, 0.0, 0.0))
 
 "The steps of a `transform`, or nothing when one can't be read. One that turns out of the page is drawn as flat as it would look from the front."
 turns(v, c) = begin
@@ -2186,13 +2189,14 @@ const BROWSER_INDEX = Index(BROWSER)
 const QUIRKS_INDEX = Index(QUIRKS)
 
 "The style of each element of a page, and of the parts of an element that the page's CSS makes"
-struct Look
+mutable struct Look
   styles::IdDict{Element,Style}
   before::IdDict{Element,Style}
   after::IdDict{Element,Style}
   marker::IdDict{Element,Style}
   sheet::Stylesheet
   contained::Bool                # some rule asks how big the box that an element is in is (@container)
+  until::Float64                 # how many seconds after the page was first shown its last animation stops: Inf for one that never does, 0 with none
 end
 Base.getindex(l::Look, e::Element) = l.styles[e]
 Base.haskey(l::Look, e::Element) = haskey(l.styles, e)
@@ -2202,48 +2206,385 @@ Base.get(l::Look, e::Element, default) = get(l.styles, e, default)
 # element's own style, 4 an animation), its layer, how specific its rule is, its order, and what it declares
 const Found = Tuple{Bool,Int,Int,NTuple{3,Int},Int,String,String}
 
-const TIMING = Set(["ease", "linear", "ease-in", "ease-out", "ease-in-out", "step-start", "step-end", "infinite", "normal", "reverse", "alternate",
-                    "alternate-reverse", "none", "forwards", "backwards", "both", "running", "paused", "auto"])
+# --- what moves ---------------------------------------------------------------------------
+
+"One animation that an element's style names"
+struct Motion
+  name::String       # of its @keyframes
+  long::Float64      # how many seconds one run takes
+  delay::Float64     # how many seconds it waits before the first run
+  count::Float64     # how many runs: Inf for one that never stops
+  way::Symbol        # :normal, :reverse, :alternate or :alternate_reverse
+  fill::Symbol       # :none, :forwards, :backwards or :both: whether it shows before its first run and after its last
+  ease::String       # how it speeds up and slows down between two steps, as CSS writes it
+  paused::Bool
+end
 
 """
-The declarations of the end of each animation that the declarations `found`
-give an element, when the animation stops and stays as it ends. An element
-that an animation makes show (`opacity: 0` to 1) is then drawn as shown.
+When each animation of a page started. A page that's laid out again and again
+as time passes is given the same clock each time, so that an animation that an
+element gets later starts then, and not when the page did.
 """
-ended(found::Vector{Found}, frames) = begin
-  out = Declaration[]
-  isempty(frames) && return out
-  last(name) = (i = findlast(x -> x[6] == name, found); i === nothing ? nothing : found[i][7])
-  short = last("animation")
-  names, fills, counts, ways = String[], String[], String[], String[]
-  if short !== nothing
-    for one in pieces(short, ',')
-      ws = terms(one)
-      name = findfirst(w -> !(lowercase(w) in TIMING) && !occursin(r"^[0-9.+-]|^(cubic-bezier|steps|linear)\(", lowercase(w)), ws)
-      push!(names, name === nothing ? "" : String(strip(ws[name], ['"', '\''])))
-      low = lowercase.(ws)
-      push!(fills, "forwards" in low || "both" in low ? "forwards" : "none")
-      push!(counts, "infinite" in low ? "infinite" : "1")
-      push!(ways, "reverse" in low ? "reverse" : "normal")
+struct Clock
+  began::IdDict{Any,Dict{String,Float64}}   # for an element, or an element and its part: when each of its animations was first seen
+  seen::IdDict{Any,Vector{String}}          # the ones that the styles being worked out have met
+end
+Clock() = Clock(IdDict{Any,Dict{String,Float64}}(), IdDict{Any,Vector{String}}())
+
+"When the animation `name` of `who` started: now, `at` seconds after the page was first shown, unless the clock has met it before"
+started!(k::Clock, who, name, at) = begin
+  push!(get!(() -> String[], k.seen, who), name)
+  get!(get!(() -> Dict{String,Float64}(), k.began, who), name, at)
+end
+
+"Forget the animations that the page has no more, so that one that comes back starts again"
+sweep!(k::Clock) = begin
+  for (who, names) in collect(k.began)
+    seen = get(k.seen, who, nothing)
+    seen === nothing ? delete!(k.began, who) : filter!(kv -> kv.first in seen, names)
+  end
+  empty!(k.seen)
+  k
+end
+
+const WAYS = Dict("normal" => :normal, "reverse" => :reverse, "alternate" => :alternate, "alternate-reverse" => :alternate_reverse)
+const FILLS = Dict("none" => :none, "forwards" => :forwards, "backwards" => :backwards, "both" => :both)
+const EASES = Dict("ease" => (0.25, 0.1, 0.25, 1.0), "ease-in" => (0.42, 0.0, 1.0, 1.0), "ease-out" => (0.0, 0.0, 0.58, 1.0), "ease-in-out" => (0.42, 0.0, 0.58, 1.0))
+const NO_MOTIONS = Motion[]
+
+"How many seconds a time like `1.5s` or `200ms` is, or nothing"
+seconds(v) = begin
+  m = match(r"^([+-]?(?:[0-9]*\.)?[0-9]+)(s|ms)$", v)
+  m === nothing ? nothing : Base.parse(Float64, m[1]) / (m[2] == "ms" ? 1000 : 1)
+end
+
+iseasing(w) = haskey(EASES, w) || w in ("linear", "step-start", "step-end") || occursin(r"^(cubic-bezier|steps|linear)\(", w)
+
+"The animations that the declarations `found` give an element. `vars` holds the element's variables."
+motions(found::Vector{Found}, vars) = begin
+  names, longs, delays, counts = String[], Float64[], Float64[], Float64[]
+  ways, fills, eases, states = Symbol[], Symbol[], String[], Bool[]
+  list(v) = [String(strip(p)) for p in pieces(v, ',')]
+  for x in found
+    name = x[6]
+    startswith(name, "-webkit-animation") && (name = name[9:end])
+    startswith(name, "animation") || continue
+    value = x[7]
+    occursin("var(", value) && (value = substitute(value, n -> get(vars, n, nothing)))
+    value === nothing && continue
+    if name == "animation"
+      foreach(empty!, (names, longs, delays, counts, ways, fills, eases, states))
+      for one in list(value)
+        who, times, count, way, fill, ease, paused = "none", Float64[], 1.0, :normal, :none, "ease", false
+        named = false
+        for word in terms(one)
+          w = lowercase(word)
+          if (t = seconds(w)) !== nothing
+            push!(times, t)
+          elseif w == "infinite"
+            count = Inf
+          elseif occursin(r"^[0-9.]+$", w) && (n = tryparse(Float64, w)) !== nothing
+            count = n
+          elseif iseasing(w)
+            ease = w
+          elseif haskey(WAYS, w)
+            way = WAYS[w]
+          elseif haskey(FILLS, w) && (w != "none" || named)
+            fill = FILLS[w]
+          elseif w in ("running", "paused")
+            paused = w == "paused"
+          elseif !named
+            who, named = String(strip(word, ['"', '\''])), true
+          end
+        end
+        push!(names, who); push!(longs, get(times, 1, 0.0)); push!(delays, get(times, 2, 0.0)); push!(counts, count)
+        push!(ways, way); push!(fills, fill); push!(eases, ease); push!(states, paused)
+      end
+    elseif name == "animation-name"
+      names = [String(strip(n, ['"', '\''])) for n in list(value)]
+    elseif name == "animation-duration"
+      longs = [something(seconds(lowercase(v)), 0.0) for v in list(value)]
+    elseif name == "animation-delay"
+      delays = [something(seconds(lowercase(v)), 0.0) for v in list(value)]
+    elseif name == "animation-iteration-count"
+      counts = [lowercase(v) == "infinite" ? Inf : max(0.0, something(tryparse(Float64, v), 1.0)) for v in list(value)]
+    elseif name == "animation-direction"
+      ways = [get(WAYS, lowercase(v), :normal) for v in list(value)]
+    elseif name == "animation-fill-mode"
+      fills = [get(FILLS, lowercase(v), :none) for v in list(value)]
+    elseif name == "animation-timing-function"
+      eases = [lowercase(v) for v in list(value)]
+    elseif name == "animation-play-state"
+      states = [lowercase(v) == "paused" for v in list(value)]
     end
   end
-  list(v) = [String(strip(strip(p), ['"', '\''])) for p in pieces(v, ',')]
-  (v = last("animation-name")) === nothing || (names = list(v))
-  (v = last("animation-fill-mode")) === nothing || (fills = lowercase.(list(v)))
-  (v = last("animation-iteration-count")) === nothing || (counts = lowercase.(list(v)))
-  (v = last("animation-direction")) === nothing || (ways = lowercase.(list(v)))
-  for (i, name) in enumerate(names)
-    steps = get(frames, name, nothing)
-    steps === nothing && continue
-    pick(v, default) = isempty(v) ? default : v[mod1(i, length(v))]
-    pick(fills, "none") in ("forwards", "both") || continue
-    pick(counts, "1") == "infinite" && continue
-    at = pick(ways, "normal") == "reverse" ? first(steps)[1] : Base.last(steps)[1]
-    for (when, declared) in steps
-      when == at && append!(out, declared)
-    end
+  isempty(names) && return NO_MOTIONS
+  pick(v, i, default) = isempty(v) ? default : v[mod1(i, length(v))]
+  [Motion(n, pick(longs, i, 0.0), pick(delays, i, 0.0), pick(counts, i, 1.0), pick(ways, i, :normal), pick(fills, i, :none), pick(eases, i, "ease"), pick(states, i, false))
+   for (i, n) in enumerate(names) if lowercase(n) != "none"]
+end
+
+"How far along a curve of CSS's `cubic-bezier(x1, y1, x2, y2)` is, `x` of the way through its time"
+bezier(x1, y1, x2, y2, x) = begin
+  (x <= 0 || x >= 1) && return clamp(x, 0.0, 1.0)
+  at(a, b, t) = 3 * a * t * (1 - t)^2 + 3 * b * t^2 * (1 - t) + t^3
+  lo, hi = 0.0, 1.0
+  for _ in 1:40
+    mid = (lo + hi) / 2
+    at(x1, x2, mid) < x ? (lo = mid) : (hi = mid)
   end
+  at(y1, y2, (lo + hi) / 2)
+end
+
+"How far a change has got, `x` of the way through its time, when it speeds up and slows down as `how` says: `ease`, `steps(4)` and the like"
+eased(how::AbstractString, x) = begin
+  how == "linear" && return x
+  curve = get(EASES, how, nothing)
+  curve === nothing || return bezier(curve..., x)
+  how == "step-start" && return 1.0
+  how == "step-end" && return x >= 1 ? 1.0 : 0.0
+  if (m = match(r"^cubic-bezier\(([^)]*)\)$", how)) !== nothing
+    n = [tryparse(Float64, strip(p)) for p in split(m[1], ',')]
+    return length(n) == 4 && !any(isnothing, n) ? bezier(clamp(n[1], 0, 1), n[2], clamp(n[3], 0, 1), n[4], x) : x
+  elseif (m = match(r"^steps\(\s*([0-9]+)\s*(?:,\s*([a-z-]+)\s*)?\)$", how)) !== nothing
+    n = max(1, Base.parse(Int, m[1]))
+    x >= 1 && return 1.0
+    done = floor(x * n)
+    jump = something(m[2], "end")
+    return jump in ("start", "jump-start") ? (done + 1) / n : jump == "jump-none" ? (n == 1 ? 0.0 : done / (n - 1)) : jump == "jump-both" ? (done + 1) / (n + 1) : done / n
+  elseif (m = match(r"^linear\(([^)]*)\)$", how)) !== nothing
+    # The points of a line with corners: each is how far the change has got, and where in the time that is
+    points = Tuple{Float64,Float64}[]
+    parts = [split(strip(p)) for p in split(m[1], ',')]
+    for (i, p) in enumerate(parts)
+      y = isempty(p) ? nothing : tryparse(Float64, p[1])
+      y === nothing && return x
+      at = length(p) > 1 && endswith(p[2], '%') ? something(tryparse(Float64, chop(p[2])), NaN) / 100 : i == 1 ? 0.0 : i == length(parts) ? 1.0 : NaN
+      push!(points, (at, y))
+    end
+    isempty(points) && return x
+    # A point with no place is spread evenly between the ones that have a place
+    i = 1
+    while i <= length(points)
+      if isnan(points[i][1])
+        j = something(findnext(p -> !isnan(p[1]), points, i), length(points))
+        from = points[i-1][1]
+        to = isnan(points[j][1]) ? 1.0 : points[j][1]
+        for k in i:j-1
+          points[k] = (from + (to - from) * (k - i + 1) / (j - i + 1), points[k][2])
+        end
+        i = j
+      end
+      i += 1
+    end
+    j = something(findfirst(p -> p[1] >= x, points), length(points))
+    j == 1 && return points[1][2]
+    (x0, y0), (x1, y1) = points[j-1], points[j]
+    return x1 > x0 ? y0 + (y1 - y0) * (x - x0) / (x1 - x0) : y1
+  end
+  x
+end
+
+# --- a value between two ------------------------------------------------------------------
+
+between(a::Float64, b::Float64, t) = a + (b - a) * t
+
+"""
+The value that's `t` of the way from `a` to `b`: 0 gives `a` and 1 gives `b`.
+Two numbers, two lengths, two colours, two shadows and two transforms have
+values between them. Anything else is `a` for the first half and `b` after.
+"""
+mix(a, b, t) = a === b || t < 0.5 ? a : b
+mix(a::Float64, b::Float64, t) = a == b ? a : isfinite(a) && isfinite(b) ? between(a, b, t) : t < 0.5 ? a : b
+mix(a::Int, b::Int, t) = a == b || a == NO_Z || b == NO_Z ? (t < 0.5 ? a : b) : round(Int, between(Float64(a), Float64(b), t))
+simple(l::Len) = !l.auto && l.how == :length && l.math === nothing
+mix(a::Len, b::Len, t) = a === b ? a : simple(a) && simple(b) ? Len(between(a.px, b.px, t), between(a.pct, b.pct, t), between(a.em, b.em, t), false, :length, nothing) : t < 0.5 ? a : b
+mix(a::UInt32, b::UInt32, t) = begin
+  (a == b || a == CURRENT || b == CURRENT) && return t < 0.5 ? a : b
+  part(x, k) = Float64((x >> k) & 0xff)
+  αa, αb = part(a, 24) / 255, part(b, 24) / 255
+  α = between(αa, αb, t)
+  α <= 0 && return 0x00000000
+  # A colour that's see-through pulls the other less far towards itself
+  one(k) = round(UInt32, clamp((part(a, k) * αa * (1 - t) + part(b, k) * αb * t) / α, 0.0, 255.0))
+  round(UInt32, clamp(α, 0.0, 1.0) * 255) << 24 | one(16) << 16 | one(8) << 8 | one(0)
+end
+mix(a::Tuple, b::Tuple, t) = begin
+  a === b && return a
+  # A word in it, like the `px` of a line height, says what its numbers mean: with two words, there's nothing between
+  (length(a) != length(b) || any(i -> a[i] isa Union{Symbol,Bool,AbstractString} && a[i] != b[i], eachindex(a))) && return t < 0.5 ? a : b
+  map((x, y) -> mix(x, y, t), a, b)
+end
+mix(a::Vector{T}, b::Vector{T}, t) where T<:Union{Tuple,Len} = a === b ? a : length(a) == length(b) ? T[mix(x, y, t) for (x, y) in zip(a, b)] : t < 0.5 ? a : b
+mix(a::Vector{Any}, b::Vector{Any}, t) = a === b ? a : length(a) == length(b) ? Any[mix(x, y, t) for (x, y) in zip(a, b)] : t < 0.5 ? a : b
+
+mix(a::Shade, b::Shade, t) = Shade(between(a.dx, b.dx, t), between(a.dy, b.dy, t), between(a.blur, b.blur, t), between(a.spread, b.spread, t), mix(a.color, b.color, t), a.inset)
+mix(a::Vector{Shade}, b::Vector{Shade}, t) = begin
+  a === b && return a
+  n = max(length(a), length(b))
+  # A shadow that only one of them has comes out of nothing
+  one(v, other, i) = i <= length(v) ? v[i] : Shade(0.0, 0.0, 0.0, 0.0, 0x00000000, other[i].inset)
+  pairs = [(one(a, b, i), one(b, a, i)) for i in 1:n]
+  any(p -> p[1].inset != p[2].inset, pairs) ? (t < 0.5 ? a : b) : Shade[mix(x, y, t) for (x, y) in pairs]
+end
+
+"The step of a filter that changes nothing, of the kind of `e`"
+still(e::Effect) = Effect(e.kind, e.kind in (:brightness, :contrast, :opacity, :saturate) ? 1.0 : 0.0, 0.0, 0.0, 0x00000000)
+mix(a::Effect, b::Effect, t) = Effect(a.kind, between(a.x, b.x, t), between(a.y, b.y, t), between(a.z, b.z, t), mix(a.color, b.color, t))
+mix(a::Vector{Effect}, b::Vector{Effect}, t) = begin
+  a === b && return a
+  isempty(a) && return Effect[mix(still(y), y, t) for y in b]
+  isempty(b) && return Effect[mix(x, still(x), t) for x in a]
+  length(a) == length(b) && all(i -> a[i].kind == b[i].kind, eachindex(a)) ? Effect[mix(x, y, t) for (x, y) in zip(a, b)] : t < 0.5 ? a : b
+end
+
+const SAME_TURN = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+"The step of a transform that changes nothing, of the kind of `t`"
+still(t::Turn) = Turn(t.kind, ZERO, ZERO, t.kind == :matrix ? SAME_TURN : (0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+mix(a::Turn, b::Turn, t) = Turn(a.kind, mix(a.x, b.x, t), mix(a.y, b.y, t), map((x, y) -> between(x, y, t), a.n, b.n))
+
+"The six numbers of the matrix of one step of a transform that has no percent in it"
+six(t::Turn) = t.kind == :move ? (1.0, 0.0, 0.0, 1.0, t.x.px, t.y.px) : t.kind == :spin ? (cos(t.n[1]), sin(t.n[1]), -sin(t.n[1]), cos(t.n[1]), 0.0, 0.0) : t.n
+after(m, n) = (m[1] * n[1] + m[3] * n[2], m[2] * n[1] + m[4] * n[2], m[1] * n[3] + m[3] * n[4], m[2] * n[3] + m[4] * n[4],
+               m[1] * n[5] + m[3] * n[6] + m[5], m[2] * n[5] + m[4] * n[6] + m[6])
+
+"What a matrix does, apart: how far it moves, how much it stretches across and down, how far it slants and how far it turns"
+parts(m) = begin
+  a, b, c, d = m[1:4]
+  sx = hypot(a, b)
+  sx == 0 || (a /= sx; b /= sx)
+  slant = a * c + b * d
+  c -= a * slant
+  d -= b * slant
+  sy = hypot(c, d)
+  sy == 0 || (c /= sy; d /= sy; slant /= sy)
+  a * d < b * c && (a = -a; b = -b; slant = -slant; sx = -sx)
+  (m[5], m[6], sx, sy, slant, atan(b, a))
+end
+
+mix(a::Vector{Turn}, b::Vector{Turn}, t) = begin
+  a === b && return a
+  isempty(a) && return Turn[mix(still(y), y, t) for y in b]
+  isempty(b) && return Turn[mix(x, still(x), t) for x in a]
+  length(a) == length(b) && all(i -> a[i].kind == b[i].kind, eachindex(a)) && return Turn[mix(x, y, t) for (x, y) in zip(a, b)]
+  # Two lists of other steps: each as one matrix, and between what the two matrices do. That needs lengths in px.
+  whole(v) = all(s -> s.kind != :move || (simple(s.x) && simple(s.y) && s.x.pct == 0 && s.y.pct == 0 && s.x.em == 0 && s.y.em == 0), v)
+  (whole(a) && whole(b)) || return t < 0.5 ? a : b
+  pa, pb = parts(foldl(after, six.(a); init=SAME_TURN)), parts(foldl(after, six.(b); init=SAME_TURN))
+  turn = pb[6] - pa[6]
+  turn > π ? (turn -= 2π) : turn < -π ? (turn += 2π) : nothing   # the short way round
+  x, y, sx, sy, slant = (between(pa[i], pb[i], t) for i in 1:5)
+  r = pa[6] + turn * t
+  m = after(after((cos(r), sin(r), -sin(r), cos(r), x, y), (1.0, 0.0, slant, 1.0, 0.0, 0.0)), (sx, 0.0, 0.0, sy, 0.0, 0.0))
+  Turn[Turn(:matrix, ZERO, ZERO, m)]
+end
+
+Base.copy(s::Style) = Style((getfield(s, f) for f in fieldnames(Style))...)
+@eval mix!(s::Style, a::Style, b::Style, t) = begin
+  $((:(s.$f = mix(a.$f, b.$f, t)) for f in fieldnames(Style))...)
+  s
+end
+
+"Each property that `name: value` stands for, with its value: the four sides of a `margin`, and the like"
+longhands!(out, name, value) = begin
+  if !haskey(PROPS, name)
+    longer = expand(name, value)
+    if longer !== nothing
+      foreach(((n, v),) -> longhands!(out, n, v), longer)
+      return out
+    end
+    m = match(r"^-(?:webkit|moz|ms|o)-(.+)$", name)
+    m === nothing || return longhands!(out, m[1], value)
+  end
+  push!(out, String(name) => String(value))
   out
+end
+
+"""
+Give `s` the look that the steps of a @keyframes make of it, `p` of the way
+through one run: 0 at its start and 1 at its end. A property that a step says
+nothing of goes from the step before that says it to the next that does, and
+from or to what `s` has when there's none. `how` is how the change speeds up
+and slows down between two steps.
+"""
+pose!(s::Style, steps, p, how, c::Context, parent::Style) = begin
+  said = Dict{String,Vector{Tuple{Float64,String,String}}}()   # for each property: where it's said, its value there, and how it goes on from there
+  order = String[]
+  vars = s.vars
+  for (at, declared) in steps
+    own = how
+    for d in declared
+      d.name == "animation-timing-function" && (own = lowercase(strip(d.value)))
+    end
+    for d in declared
+      (d.name == "animation-timing-function" || startswith(d.name, "--")) && continue
+      value = occursin("var(", d.value) ? substitute(d.value, n -> get(vars, n, nothing)) : d.value
+      value === nothing && continue
+      for (name, v) in longhands!(Pair{String,String}[], d.name, value)
+        list = get!(() -> (push!(order, name); Tuple{Float64,String,String}[]), said, name)
+        i = findfirst(x -> x[1] == at, list)
+        i === nothing ? push!(list, (at, v, own)) : (list[i] = (at, v, own))
+      end
+    end
+  end
+  # The properties that are between the same two steps go together
+  groups = Dict{Tuple{Float64,Float64,String},Vector{Tuple{String,Union{String,Nothing},Union{String,Nothing}}}}()
+  spans = Tuple{Float64,Float64,String}[]
+  for name in order
+    list = said[name]
+    i, j = findlast(x -> x[1] <= p, list), findfirst(x -> x[1] > p, list)
+    span = (i === nothing ? 0.0 : list[i][1], j === nothing ? 1.0 : list[j][1], i === nothing ? how : list[i][3])
+    push!(get!(() -> (push!(spans, span); valtype(groups)()), groups, span), (name, i === nothing ? nothing : list[i][2], j === nothing ? nothing : list[j][2]))
+  end
+  for span in spans
+    a, b = copy(s), copy(s)
+    for (name, from, to) in groups[span]
+      from === nothing || set!(a, name, from, c, parent)
+      to === nothing || set!(b, name, to, c, parent)
+    end
+    mix!(s, a, b, span[2] > span[1] ? eased(span[3], (p - span[1]) / (span[2] - span[1])) : 0.0)
+  end
+  s
+end
+
+"How far through a run the animation `m` is, `t` seconds after it started, or nothing when it shows nothing then"
+progress(m::Motion, t) = begin
+  t -= m.delay
+  whole = m.long <= 0 ? 0.0 : m.long * m.count
+  run, p = if t < 0
+    m.fill in (:backwards, :both) || return nothing
+    (0.0, 0.0)
+  elseif t >= whole || m.long <= 0
+    m.fill in (:forwards, :both) || return nothing
+    isfinite(m.count) || return nothing
+    # It stays as its last run ended
+    m.count == 0 ? (0.0, 0.0) : isinteger(m.count) ? (m.count - 1, 1.0) : (floor(m.count), m.count - floor(m.count))
+  else
+    n = t / m.long
+    (floor(n), n - floor(n))
+  end
+  back = m.way == :reverse || (m.way == :alternate && isodd(Int(run))) || (m.way == :alternate_reverse && iseven(Int(run)))
+  back ? 1 - p : p
+end
+
+"""
+Give `s` what its animations make of it `at` seconds after the page was first
+shown, and say when the last of them stops: Inf for one that never does, and
+0 with none. With no time, an animation that ends and stays is shown as it
+ends, and the others show nothing: that's the page as it comes to rest.
+`start(name)` gives when an animation of the element started.
+"""
+move!(s::Style, found::Vector{Found}, frames, c::Context, parent::Style, at, start) = begin
+  until = 0.0
+  for m in motions(found, s.vars)
+    steps = get(frames, m.name, nothing)
+    steps === nothing && continue
+    began = start(m.name)
+    m.paused || m.long <= 0 || (until = max(until, began + m.delay + m.long * m.count))
+    p = progress(m, at === nothing ? Inf : m.paused ? 0.0 : at - began)
+    p === nothing || pose!(s, steps, p, m.ease, c, parent)
+  end
+  until
 end
 
 "The faces of a font that an @font-face of the page gives the family `name`: for each, what it says"
@@ -2305,8 +2646,13 @@ font that the page names, or nothing. `base` is the address of the page.
 `containers` gives how wide and how high the box of an element is, and its
 names, for the rules that ask (@container): without it, no such rule is for
 anything.
+
+`at` is how many seconds ago the page was first shown: each element looks as
+its animations make it then, and `look.until` says when the last of them
+stops. With no time, the page is as it comes to rest. `clock` is a `Clock`
+for a page whose styles are worked out again and again as time passes.
 """
-styles(doc::Document, wide; extra="", high=800, load=address -> nothing, base="", containers=nothing) = begin
+styles(doc::Document, wide; extra="", high=800, load=address -> nothing, base="", containers=nothing, at=nothing, clock=nothing) = begin
   text(address) = begin
     found = load(address)
     found === nothing ? nothing : found isa AbstractString ? String(found) : String(copy(found))
@@ -2320,7 +2666,7 @@ styles(doc::Document, wide; extra="", high=800, load=address -> nothing, base=""
   isempty(extra) || read!(css, extra)
   rules = filter(r -> all(q -> media(q, wide, high), r.media), css.rules)
   page = Index(rules)
-  look = Look(IdDict{Element,Style}(), IdDict{Element,Style}(), IdDict{Element,Style}(), IdDict{Element,Style}(), css, any(r -> !isempty(r.container), css.rules))
+  look = Look(IdDict{Element,Style}(), IdDict{Element,Style}(), IdDict{Element,Style}(), IdDict{Element,Style}(), css, any(r -> !isempty(r.container), css.rules), 0.0)
   quirks = doc.mode == :quirks
   rootsize = Ref(16.0)
   families = Dict{String,String}()
@@ -2339,8 +2685,10 @@ styles(doc::Document, wide; extra="", high=800, load=address -> nothing, base=""
     false
   end
   # Give `s` the declarations `found`: the ones that win come last. It gives whether the top and the bottom margin are the browser's own.
-  apply!(s::Style, found::Vector{Found}, c::Context, parent::Style) = begin
+  apply!(s::Style, found::Vector{Found}, c::Context, parent::Style, who) = begin
     sort!(found; alg=MergeSort, by=x -> x[1:5])
+    start(name) = clock === nothing ? 0.0 : started!(clock, who, name, something(at, 0.0))
+    move() = (look.until = max(look.until, move!(s, found, css.frames, c, parent, at, start)); nothing)
     # `revert` takes away what the page says of a property, so that the browser's own stays
     for name in unique(x[6] for x in found if lowercase(strip(x[7])) == "revert")
       last = findlast(x -> x[6] == name, found)
@@ -2378,10 +2726,10 @@ styles(doc::Document, wide; extra="", high=800, load=address -> nothing, base=""
     top = bottom = false
     normal = true
     for (i, (important, origin, _, _, _, name, value)) in enumerate(found)
-      # The end of an animation goes over what isn't !important
+      # What an animation makes of the element goes over what isn't !important
       if normal && important
         normal = false
-        foreach(d -> set!(s, d.name, d.value, c, parent), ended(found, css.frames))
+        isempty(css.frames) || move()
       end
       # Whether the margins that win are the browser's own
       if startswith(name, "margin")
@@ -2395,7 +2743,7 @@ styles(doc::Document, wide; extra="", high=800, load=address -> nothing, base=""
       end
       set!(s, name, value, c, parent)
     end
-    normal && !isempty(css.frames) && foreach(d -> set!(s, d.name, d.value, c, parent), ended(found, css.frames))
+    normal && !isempty(css.frames) && move()
     (top, bottom)
   end
   found = Found[]
@@ -2430,7 +2778,7 @@ styles(doc::Document, wide; extra="", high=800, load=address -> nothing, base=""
       # A variable that the page gives a first value has it from the top of the page down
       s.vars = merge(css.props, s.vars)
     end
-    top, bottom = apply!(s, found, c, parent)
+    top, bottom = apply!(s, found, c, parent, e)
     settle!(s, parent, e.tag)
     e.tag in LOOSE && (s.loose = (top, bottom))
     isempty(css.faces) || s.family === parent.family || (s.family = String[family(name) for name in s.family])
@@ -2439,7 +2787,7 @@ styles(doc::Document, wide; extra="", high=800, load=address -> nothing, base=""
     if parts !== nothing
       for (part, declared) in parts
         ps = child(s)
-        apply!(ps, declared, c, s)
+        apply!(ps, declared, c, s, (e, part))
         settle!(ps, s)
         isempty(css.faces) || ps.family === s.family || (ps.family = String[family(name) for name in ps.family])
         if part == :marker
@@ -2458,5 +2806,6 @@ styles(doc::Document, wide; extra="", high=800, load=address -> nothing, base=""
   top = look.styles[doc.root]
   top.overflow == :visible && haskey(look.styles, doc.body) && (look.styles[doc.body].overflow = :visible)
   top.overflow = :visible
+  clock === nothing || sweep!(clock)
   look
 end

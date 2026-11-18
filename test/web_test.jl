@@ -2,11 +2,13 @@
 # HTML and CSS, the style that each element gets, where layout puts each box,
 # and what the page's links and words are. The second half is the HTML and CSS
 # of today: flex boxes, grids, variables, what CSS makes, boxes with a place
-# of their own, forms and SVG. Run them with
+# of their own, forms and SVG. The last part is what moves: animations and
+# video. Run them with
 # `julia -O0 --project=. test/web_test.jl`. They use the fonts of this Mac and
 # no web.
 
 @use Test: @test, @testset
+@use Skia
 @use "../web/dom" => Dom
 @use "../web/css" => Css
 @use "../web/style" => Styles
@@ -489,4 +491,89 @@ end
     mine = page("Mine, Courier", "@font-face { font-family: Mine; src: url(mine.ttf) }")
     @test near(mine.words[1].edges[end], page("Arial", "").words[1].edges[end]; by=0.5) && !near(mine.words[1].edges[end], page("Missing, Courier", "").words[1].edges[end]; by=5)
   end
+end
+
+"The colour of the pixel at `(x, y)` of the page as it's drawn on white: how red, how green and how blue"
+pixel(p, x, y) = begin
+  info = Ref(Skia.sk_image_info_t(C_NULL, Skia.SK_COLOR_TYPE_RGBA_8888, Skia.SK_ALPHA_TYPE_PREMUL, Int(p.wide), Int(p.tall)))
+  one = Ref(Skia.sk_image_info_t(C_NULL, Skia.SK_COLOR_TYPE_RGBA_8888, Skia.SK_ALPHA_TYPE_PREMUL, 1, 1))
+  out = zeros(UInt8, 4)
+  GC.@preserve info one begin
+    surface = Skia.sk_surface_make_raster_n32_premul(pointer_from_objref(info), C_NULL)
+    canvas = Skia.sk_surface_get_canvas(surface)
+    Skia.sk_canvas_clear(canvas, 0xffffffff)
+    Web.draw(canvas, p)
+    image = Skia.sk_surface_make_image_snapshot(surface)
+    Skia.sk_image_read_pixels(image, pointer_from_objref(one), out, Csize_t(4), Cint(x), Cint(y), Skia.sk_image_caching_hint_t(0))
+    Skia.sk_image_unref(image)
+    Skia.sk_surface_unref(surface)
+  end
+  (Int(out[1]), Int(out[2]), Int(out[3]))
+end
+
+@testset "what moves" begin
+  # An animation is as far as it has got at the page's time
+  doc = Dom.document("""<!DOCTYPE html><style>
+    @keyframes spin { to { transform: rotate(360deg) } }
+    @keyframes fade { from { opacity: 0; margin-left: 0 } 50% { opacity: 1 } to { margin-left: 100px; background: blue } }
+    #a { animation: spin 2s linear infinite } #b { animation: fade 1s linear 0.5s 2 alternate both; background: red } #c { animation: fade 1s steps(4) forwards }
+    #d { animation-name: fade; animation-duration: 2s; animation-play-state: paused }
+    </style><body style="margin:0"><div id=a></div><div id=b></div><div id=c></div><div id=d></div></body>""")
+  s(at, id) = Styles.styles(doc, 400; at)[named(doc, id)]
+  @test s(0.5, "a").transform[1].kind == :spin && near(s(0.5, "a").transform[1].n[1], π / 2) && near(s(2.5, "a").transform[1].n[1], π / 2)   # it turns all the way round, again and again
+  b = s(1.0, "b")
+  @test b.opacity == 1 && near(Styles.px(b.margin[4]), 50) && b.background == 0xff800080   # half way through its first run: a step in the middle says nothing of the margin
+  @test s(0.2, "b").opacity == 0 && near(Styles.px(s(2.0, "b").margin[4]), 50) && s(3.0, "b").opacity == 0 && s(3.0, "b").background == 0xffff0000   # before it starts, on its way back, and after
+  @test s(0.25, "c").opacity == 0.5 && s(5.0, "c").opacity == 1 && Styles.px(s(5.0, "c").margin[4]) == 100   # in four steps, and it stays as it ends
+  @test s(1.0, "d").opacity == 0 && Styles.px(s(1.0, "d").margin[4]) == 0   # one that's stopped stays at its start
+  # With no time, the page is as it comes to rest
+  @test isempty(s(nothing, "a").transform) && s(nothing, "c").opacity == 1 && s(nothing, "b").opacity == 0
+  # The page says whether it still moves, and until when
+  one(at) = Web.page("""<!DOCTYPE html><style>@keyframes go { to { margin-left: 100px } } p { margin: 0; animation: go 2s linear 0.5s forwards }</style><body style="margin:0"><p>x</p></body>"""; wide=300, at)
+  @test one(1.5).until == 2.5 && Web.moving(one(1.5)) && one(1.5).words[1].edges[1] == 50 && !Web.moving(one(3.0)) && one(3.0).words[1].edges[1] == 100
+  @test one(nothing).until == 2.5 && !Web.moving(one(nothing)) && one(nothing).words[1].edges[1] == 100
+  @test Styles.styles(doc, 400; at=0.0).until == Inf && Web.page("<p>still</p>"; at=1.0).until == 0
+  # An animation that an element gets later starts then, when the same clock is given each time
+  later = Dom.document("""<!DOCTYPE html><style>@keyframes grow { from { width: 0 } to { width: 100px } } .on { animation: grow 1s linear }</style><div id=x></div>""")
+  x, clock = named(later, "x"), Styles.Clock()
+  wide(at) = Styles.styles(later, 400; at, clock)[x].width
+  @test Styles.isauto(wide(5.0))
+  x.attrs["class"] = "on"
+  @test Styles.px(wide(7.0)) == 0 && Styles.px(wide(7.5)) == 50 && Styles.isauto(wide(9.0))
+  delete!(x.attrs, "class")
+  wide(9.5)
+  x.attrs["class"] = "on"
+  @test Styles.px(wide(10.0)) == 0 && Styles.px(wide(10.25)) == 25   # and one that comes back starts again
+  # What's between two values, and how a change speeds up and slows down
+  @test Styles.mix(0xffff0000, 0xff0000ff, 0.5) == 0xff800080 && Styles.mix(0x00000000, 0xff0000ff, 0.5) == 0x800000ff && Styles.mix(:block, :none, 0.4) == :block
+  @test Styles.px(Styles.mix(Styles.Len(10), Styles.percent(1), 0.5), 200) == 105 && Styles.mix(Styles.AUTO, Styles.Len(10), 0.6) == Styles.Len(10)
+  @test Styles.eased("linear", 0.3) == 0.3 && near(Styles.eased("ease-in-out", 0.5), 0.5) && Styles.eased("ease", 0.25) > 0.35 && near(Styles.eased("cubic-bezier(0.3, 0.3, 0.6, 0.6)", 0.4), 0.4)
+  @test Styles.eased("steps(4, jump-start)", 0.1) == 0.25 && Styles.eased("step-end", 0.9) == 0 && Styles.eased("linear(0, 0.5 20%, 1)", 0.2) == 0.5
+  c = Styles.Context(400.0, 16.0, false)
+  turn(v) = (t = Styles.Style(); Styles.set!(t, "transform", v, c, Styles.Style()); t.transform)
+  @test Styles.mix(turn("scale(2)"), turn("none"), 0.5)[1].n[1] == 1.5 && Styles.mix(turn("translateX(100px)"), turn("none"), 0.5)[1].x.px == 50
+  mixed = only(Styles.mix(turn("translateX(100px) scale(2)"), turn("rotate(90deg)"), 0.5))   # two unlike lists meet as matrices
+  @test mixed.kind == :matrix && near(mixed.n[5], 50) && near(hypot(mixed.n[1], mixed.n[2]), 1.5)
+
+  # A video shows its picture of the page's time. The test's video is a second of red, then a second of blue, 64 by 48.
+  clip = read(joinpath(@__DIR__, "web_clip.mp4"))
+  load(src) = src == "clip.mp4" ? clip : nothing
+  film = Dom.document("""<!DOCTYPE html><body style="margin:0"><video src="clip.mp4" autoplay style="display:block"></video><video controls style="display:block"><source src="no.webm"><source src="clip.mp4#t=1.5"></video>
+    <video src="gone.mp4" style="display:block"></video></body>""")
+  pictures = Web.Pictures(load)
+  p = Web.page(film; wide=300, pictures, at=0.5)
+  red((r, g, b)) = r > 200 && b < 60
+  blue((r, g, b)) = b > 200 && r < 60
+  @test p.tall == 48 + 48 + 150 && p.until == 2 && Web.moving(p) && red(pixel(p, 10, 10)) && blue(pixel(p, 10, 58))   # the first plays by itself, and the second waits where its address says to start
+  @test count(i -> i isa Paint.Picture, p.list.items) == 2 && count(i -> i isa Paint.Widget, p.list.items) == 2     # the arrow over the one that waits, and the stand-in for the one that can't be read
+  p = Web.page(film; wide=300, pictures, at=1.5)
+  @test blue(pixel(p, 10, 10)) && !Web.moving(Web.page(film; wide=300, pictures, at=2.5)) && red(pixel(Web.page(film; wide=300, pictures), 10, 10))
+  # A click on a video that shows its buttons starts it, and another stops it
+  @test !Web.toggle!(p, 10, 10) && Web.toggle!(p, 10, 58) && !Web.toggle!(p, 10, 200)
+  p = Web.page(film; wide=300, pictures, at=1.75)
+  @test Web.moving(p) && count(i -> i isa Paint.Widget, p.list.items) == 1      # its arrow is gone while it plays
+  @test Web.toggle!(p, 10, 58) && count(i -> i isa Paint.Widget, Web.page(film; wide=300, pictures, at=1.9).list.items) == 2
+  # A video that waits with a poster shows the poster
+  poster = Web.page("""<!DOCTYPE html><body style="margin:0"><video src="clip.mp4" poster="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='20' height='10'><rect width='20' height='10' fill='lime'/></svg>"></video></body>"""; wide=300, load)
+  @test poster.tall >= 10 && poster.tall < 48 && pixel(poster, 5, 5)[2] > 200
 end

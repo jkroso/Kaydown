@@ -31,7 +31,8 @@
 # - `document.write`. The page is read before its first script runs, so a
 #   script in the <head> sees the whole page.
 # - Send anything: `fetch` and XMLHttpRequest only get, through `load`.
-# - Workers, WebSocket, canvas drawing, shadow trees and custom elements.
+# - Workers, WebSocket, shadow trees and custom elements. A <canvas> draws in 2D
+#   only: see context.jl.
 # - Scroll. The page is laid out whole, so `scrollY` is 0 and an element's
 #   rectangle is its place on the page.
 # - `getComputedStyle` knows only what `computed` gives: see live.jl.
@@ -48,6 +49,7 @@
 @use "./dom" Node Element Text Document document attr text VOID RAW
 @use "./css" selectors matches resolve media
 @use "./window" WINDOW
+@use "./context" => Drawing
 
 "The scripts of a page, and what they need of it"
 mutable struct Scripts
@@ -91,6 +93,8 @@ Scripts(doc::Document; load=address -> nothing, base="", say=(level, text) -> no
     s.hooks[name] = made[name]
   end
   JS.unhandled!(s.js, s.hooks["rejected"])
+  # A <canvas> that a script can draw on: see context.jl
+  Drawing.start!(s.js; node=id -> element(s, id), load=address -> s.load(resolve(home(s), address)), now=() -> time() - s.started, changed=() -> (s.changed = true))
   s
 end
 

@@ -18,6 +18,10 @@
 # that asks where an element is (`getBoundingClientRect`, `offsetWidth`) gets
 # the answer from a layout of the page as it is at that moment.
 #
+# An animation of the page's CSS runs too: while one does, `page!` lays the
+# page out again each time, as it is at that moment, and `moving(p)` is true
+# of the page that it gives.
+#
 # All of a page is laid out again after any change. A script that changes the
 # page and then asks for a size, again and again in one loop, makes that many
 # layouts.
@@ -26,10 +30,10 @@
 
 @use "./dom" Element Document document
 @use "./box" Box
-@use "./style" alpha
+@use "./style" alpha Clock
 @use "./script" => JS
 @use "./script" Scripts ScriptError
-@use "./main" Page Pictures page
+@use "./main" Page Pictures page moving
 
 "A page whose scripts run"
 mutable struct Live
@@ -53,7 +57,7 @@ takes. `limit` is how many seconds a script may run before it's stopped, and
 live(html::AbstractString; wide=700, zoom=1.0, load=src -> nothing, pictures=Pictures(load), css="", fit=false, widest=2000, high=nothing, base="",
      limit=10, say=(level, text) -> nothing) = begin
   doc = document(html)
-  options = (; wide, zoom, load, css=css * WITH_SCRIPTS, fit, widest, high, base)
+  options = (; wide, zoom, load, css=css * WITH_SCRIPTS, fit, widest, high, base, clock=Clock())
   l = Live(doc, Scripts(doc; load, base, say, limit), options, pictures, nothing, IdDict{Element,Vector{NTuple{4,Float64}}}(), IdDict{Element,Box}())
   s = l.scripts
   s.place = e -> (page!(l); get(l.places, e, NTuple{4,Float64}[]))
@@ -70,13 +74,14 @@ Base.isopen(l::Live) = isopen(l.scripts)
 "The page of `l`, laid out as its tree is now"
 page!(l::Live) = begin
   s = l.scripts
-  (l.page === nothing || s.changed) || return l.page
+  (l.page === nothing || s.changed || moving(l.page)) || return l.page
   s.changed = false
   # A script can add a <style> or a <base>, and can put another <body> in the page
   root = l.doc.root
   i = findfirst(c -> c isa Element && c.tag == "body", root.children)
   l.doc = s.doc = Document(root, i === nothing ? l.doc.body : root.children[i], l.doc.mode)
-  p = l.page = page(l.doc; l.options..., pictures=l.pictures)
+  # The page's time is the scripts' time: what `performance.now()` gives a script
+  p = l.page = page(l.doc; l.options..., pictures=l.pictures, at=time() - s.started)
   empty!(l.places)
   for q in p.list.places
     push!(get!(() -> NTuple{4,Float64}[], l.places, q.element), (q.left, q.top, q.wide, q.tall))

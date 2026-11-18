@@ -16426,17 +16426,29 @@ level(h::EmailHead) = h.full ? 1 : 2
 level!(h::EmailHead, i::Int) = (h.full = i == 1; h)
 
 """
-The top of the email that the page shows, while the top bar asks it for its
-levels: while it has the keyboard, or while the caret is on it as a whole.
-Otherwise it's nothing.
+What shows the page's front matter, like the top of an email, while the top
+bar asks it for its levels: while it or a part of it has the keyboard, or
+while the caret is on it as a whole. Otherwise it's nothing. One with no
+levels of its own, like the card of front matter, passes the question on to
+the page, as any part does. So code from the startup page can show front
+matter as a part with levels of its own: see `MATTER_CARDS`.
 """
 head_in_charge(e) = begin
   w = window_of(e)
   (w === nothing || isempty(e.layout)) && return nothing
   it = e.layout[1]
-  (it.content isa Live && it.content.node isa EmailHead) || return nothing
+  (it.content isa Live && it.first == 1 && it.last == front_matter(e.buf.lines)) || return nothing
   h = it.content.node
-  (w.focus === h || ((w.focus === e || w.focus === input(e)) && picked(e.buf) == (it.first, it.last))) ? h : nothing
+  (part_of(w.focus, h) || ((w.focus === e || w.focus === input(e)) && picked(e.buf) == (it.first, it.last))) ? h : nothing
+end
+
+"True when `node` is `part`, or is in it"
+part_of(node, part) = begin
+  while node isa SemanticUI
+    node === part && return true
+    node = node.parent
+  end
+  false
 end
 
 cursor(::EmailHead) = :arrow
@@ -19844,8 +19856,8 @@ end
 
 cursor(::Mode) = :hand
 # A block that the click makes fill the window again keeps the keyboard that it took
-# The top of an email keeps the keyboard, so the ladder stays the top's
-onkey(m::Mode, ::KeyPress{Keys.mouse_left}) = (e = editor(m); level!(e); hush!(m); full_block(e) === nothing && !(level_part(e) isa EmailHead) && focus(e); handled)
+# What shows the front matter, like the top of an email, keeps the keyboard, so the ladder stays its own
+onkey(m::Mode, ::KeyPress{Keys.mouse_left}) = (e = editor(m); level!(e); hush!(m); full_block(e) === nothing && head_in_charge(e) === nothing && focus(e); handled)
 # The tip says what a click does, as the count's tip does
 tip(m::Mode) = (e = editor(m); stop_tip(e, other_level(e)))
 
@@ -19895,9 +19907,10 @@ const TRACK_W = 14px     # the line between the two ends, when there's no level 
 const OPENS_IN = 0.14    # seconds for the slider to open out from the picture
 
 """
-The part of the window that the top bar asks for its levels: the top of an
-email while it has the keyboard or the caret is on it, the block of Julia code
-that the caret is in, or the document when the caret is in no such block.
+The part of the window that the top bar asks for its levels: what shows the
+front matter, like the top of an email, while it or a part of it has the
+keyboard or the caret is on it, the block of Julia code that the caret is in,
+or the document when the caret is in no such block.
 While a block fills the window, the caret is out of sight, and the document
 answers for that block.
 """
@@ -20049,13 +20062,13 @@ end
 
 cursor(::Stop) = :hand
 
-"Go to the level that a click on `s` goes to, and give the page the keyboard. A block that fills the window again keeps the keyboard that it took, and so does the top of an email."
+"Go to the level that a click on `s` goes to, and give the page the keyboard. A block that fills the window again keeps the keyboard that it took, and so does what shows the front matter, like the top of an email."
 go!(s::Stop) = begin
   e = editor(s)
   level!(e, click_level(e, s.level))
   s.quiet = true
   hide_tooltip!(window_of(s))
-  full_block(e) === nothing && !(level_part(e) isa EmailHead) && focus(e)
+  full_block(e) === nothing && head_in_charge(e) === nothing && focus(e)
   handled
 end
 
@@ -20573,7 +20586,7 @@ ring_part(ctx, e, ui) = begin
   b = e.buf
   w = window_of(e)
   # The top of an email that has the keyboard has the line round it too
-  held = w !== nothing && w.focus isa EmailHead && head_in_charge(e) === w.focus
+  held = w !== nothing && w.focus isa SemanticUI && head_in_charge(e) === w.focus
   run = held ? (1, 1) : picked(b)
   (run === nothing || isempty(e.layout)) && return
   # While the part has the keyboard, the field in it that takes the keys shows that itself

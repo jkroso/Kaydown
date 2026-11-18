@@ -356,6 +356,43 @@ end
   @test e.buf.lines[end] == "" && e.buf.caret == (7, 0)
 end
 
+@testset "a selection that grows with ⇧↓ or ⇧↑ takes a block that shows as one thing as a whole" begin
+  blocks = ["```contact\nPaul Saunderson\ncompany: Pa & Ks\nmobile: 0411 777 877\n```", "```chart\nbar\na, 1\nb, 2\n```",
+            "```ui\nTextInput(placeholder=\"Name\")\n```", "```mermaid\ngraph TD\n  A --> B\n```"]
+  for block in blocks
+    e, w = window("one\n\n$block\n\ntwo\n")
+    s, t = 3, 2 + length(split(block, '\n'))
+    # From the line over the block, the selection's end goes to the line under it, and then on down the page
+    caret!(e, w, 2, 0)
+    press(w, Keys.down, shift)
+    @test e.buf.caret == (t + 1, 0) && e.buf.anchor == (2, 0)
+    press(w, Keys.down, shift)
+    @test e.buf.caret[1] == t + 2
+    # From the line under the block, it goes to the line over it
+    caret!(e, w, t + 1, 0)
+    press(w, Keys.up, shift)
+    @test e.buf.caret == (s - 1, 0) && e.buf.anchor == (t + 1, 0)
+    # ⇧→ at the end of the line before the block takes the block too, and so does ⇧← after it
+    caret!(e, w, s - 1, 0)
+    press(w, Keys.right, shift)
+    @test e.buf.caret == (t + 1, 0)
+    press(w, Keys.left, shift)
+    @test e.buf.caret == (s - 1, 0)
+  end
+  # A block that ends the page has no line under it. The selection ends where the block does, and stays there.
+  e, w = window("one\n\n```contact\nPaul Saunderson\n```")
+  caret!(e, w, 2, 0)
+  press(w, Keys.down, shift)
+  @test e.buf.caret == (5, 3) && length(e.buf.lines) == 5
+  press(w, Keys.down, shift)
+  @test e.buf.caret == (5, 3)
+  # The front matter starts the page, and ⇧↑ from under it takes all of it
+  e, w = window("---\ntitle: x\n---\n\none\n")
+  caret!(e, w, 4, 0)
+  press(w, Keys.up, shift)
+  @test e.buf.caret == (1, 0) && e.buf.anchor == (4, 0)
+end
+
 @testset "what the keys do while the caret is on a part as a whole" begin
   e, w = window("one\n\n```ui\nTextInput(placeholder=\"Name\")\n```\n\ntwo\n\n```mermaid\ngraph TD\n  A --> B\n```\n\nthree\n")
   caret!(e, w, 2, 0)

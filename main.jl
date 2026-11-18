@@ -16195,8 +16195,8 @@ end
 
 """
 Where a selection that grows to `p` ends. It steps over the ``` lines of a code
-block that the selection didn't start in, and over the whole of a live block,
-because those lines don't show.
+block that the selection didn't start in, and over the whole of a block that
+shows as one thing, like a diagram or a contact, because those lines don't show.
 """
 pass(b::Buffer, p::Pos, by::Int) = begin
   ks = kinds(b)
@@ -16204,10 +16204,11 @@ pass(b::Buffer, p::Pos, by::Int) = begin
   ks[i].kind in (Kind.fence, Kind.code) || return p
   s, t = codeblock(b, i)
   s <= b.anchor[1] <= t && return p
-  closed = t > s && ks[t].kind == Kind.fence && ks[t].level == 1
-  if closed && (ks[s].lang == LIVE || (ks[s].lang == DIAGRAM && isdiagram(join(b.lines[s+1:t-1], "\n"))) ||
-                (ks[s].lang == MATH && has_maths(join(b.lines[s+1:t-1], "\n"))))
-    i = by < 0 ? s - 1 : t + 1
+  whole = solid(b, i)
+  if whole !== nothing && whole[1] < whole[2]
+    # Under a block that ends the document there's no line to go to, so the selection ends where the block does
+    by > 0 && whole[2] == length(b.lines) && return line_end(b, whole[2])
+    i = by < 0 ? whole[1] - 1 : whole[2] + 1
   elseif ks[i].kind == Kind.fence
     i += by
   else

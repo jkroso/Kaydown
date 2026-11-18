@@ -4509,7 +4509,7 @@ describe(t::JSONTree) = begin
   n = length(t.rows)
   _, high = window_size(e)
   # Only the rows that are in the window are made, and a few more above and below
-  lo = clamp(floor(Int, (e.scroll.offset - PAGE_TOP) / h) - 6, 0, n)
+  lo = clamp(floor(Int, (e.scroll.offset - page_top(e) - LIVE_GAP) / h) - 6, 0, n)
   hi = min(n, lo + ceil(Int, high / h) + 12)
   over = json_under(t)
   w = window_of(t)
@@ -4864,14 +4864,13 @@ describe(v::FileView) = begin
       return words((Icon("file-earmark-binary", size=34px, color=colours.faint), label("$(basename(v.path)) is a binary file", 15px),
                     line, Box(height(4px)), v.button))
     end
-    # A table can be long, so what's said about it is in the top bar, where it stays in sight while the table scrolls
-    if lowercase(splitext(v.path)[2]) in TABLES
+    # A table and the tree of a JSON file can be long, so what's said about them is in the top bar, where it
+    # stays in sight while they scroll. Anything else has the line about it under it.
+    if lowercase(splitext(v.path)[2]) in (TABLES..., JSONS...)
       e.buf.path == v.path && (e.buf.about = about)
       return Box(width(grow=grow), Alignment.Start, content)
     end
-    # A tree can be long, so the line about it is over it. Anything else has the line under it.
-    lowercase(splitext(v.path)[2]) in JSONS ? Column(width(grow=grow), Alignment.Start, child_gap=10px, line, content) :
-                                              Column(width(grow=grow), child_gap=10px, content, Box(line))
+    Column(width(grow=grow), child_gap=10px, content, Box(line))
   end
 end
 
@@ -15956,8 +15955,8 @@ geometry(node::GeometricUI) = detach!(node)
 "True when the page shows a CSV file as a table"
 sheet_page(b::Buffer) = b.view == :file && lowercase(splitext(b.path)[2]) in TABLES
 
-"How far under the top bar the page starts. A CSV file's table starts nearer than the text of a page does."
-page_top(e) = sheet_page(e.buf) ? SHEET_ABOVE : PAGE_TOP
+"How far under the top bar the page starts. A CSV file's table and a JSON file's tree start nearer than the text of a page does."
+page_top(e) = sheet_page(e.buf) || (e.buf.view == :file && json_page(e.buf)) ? SHEET_ABOVE : PAGE_TOP
 
 "How wide the page's text is in the window"
 text_width(e) = begin

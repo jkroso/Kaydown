@@ -82,6 +82,9 @@ end
   @test shown(t, 2) == ("job", "\"Kitchen\"") && shown(t, 4) == ("price", "1.50") && shown(t, 6) == ("note", "null")
   i = findfirst(r -> r.key == "items", t.rows)
   @test shown(t, i) == ("items", "[2 items]") && t.rows[i+1].key == 0 && t.rows[i+1].depth == 2
+  # What's said about the file is in the top bar, as it is for a CSV file, and the tree starts just under the bar
+  @test startswith(e.buf.about, "233 bytes  ·  Changed ") && endswith(e.buf.about, "  ·  9 keys")
+  @test K.num(rect(t).top) < K.num(K.TOPBAR_H) + 30
   @test shown(t, findfirst(r -> r.key == "tags", t.rows))[2] == "[]"
   shot("json-small.png")
   # A click closes an open object, and its row shows what it holds

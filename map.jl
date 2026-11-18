@@ -18,7 +18,7 @@
 # This file reads and writes those lines, writes the place as a link to Apple
 # Maps, finds where the place is, and gets the picture of the map. It also
 # works out which latitude and longitude is at each point of the picture, so
-# that Kaydown can draw the pin on the place, a drag can move the map and a
+# that Ladder can draw the pin on the place, a drag can move the map and a
 # click can move the place. It draws nothing.
 #
 # map.swift does the two things that need Apple's maps, as a program of its
@@ -39,7 +39,7 @@
 #     p = picture!(folder, (-37.7694, 144.9405), 15, 720, 280, false)
 #     p.file          # the PNG file, once its state is :there
 #
-# The Kaydown app has the program in it, beside its own program. When Kaydown
+# The Ladder app has the program in it, beside its own program. When Ladder
 # runs from its source, it compiles map.swift the first time it's needed,
 # which takes a few seconds, and keeps the program in a folder of the Mac's
 # caches. That needs Swift, which comes with Xcode and its command line tools.
@@ -54,7 +54,7 @@ const ZOOM = 15       # the zoom of a block that names none
 const ZOOMS = 3:19    # the least and the most that a block can ask for: a continent, and one building
 const TALL = 280      # how tall the picture of a map is, in px
 const SCALE = 2       # how many pixels of the picture's file go to a px, as map.swift has it
-const RETRY = 60      # seconds after the program fails before Kaydown runs it again
+const RETRY = 60      # seconds after the program fails before Ladder runs it again
 
 "A latitude and a longitude, in degrees"
 const LatLon = NTuple{2,Float64}
@@ -229,7 +229,7 @@ end
 
 const SOURCE = joinpath(@__DIR__, "map.swift")
 
-"The program in the Kaydown app, or nothing when Kaydown runs from its source"
+"The program in the Ladder app, or nothing when Ladder runs from its source"
 bundled() = begin
   Sys.isapple() || return nothing
   path = with_pool() do
@@ -245,7 +245,7 @@ target() = "$(Sys.ARCH == :aarch64 ? "arm64" : "x86_64")-apple-macos26.0"
 compile(out) = run(`swiftc -O -parse-as-library -target $(target()) $SOURCE -o $out`)
 
 "The folder of the Mac's caches that keeps the program that's compiled from the source"
-programs() = joinpath(homedir(), "Library", "Caches", "Kaydown")
+programs() = joinpath(homedir(), "Library", "Caches", "Ladder")
 
 """
 The command that runs the program with `args`: the program in the app, or the
@@ -314,22 +314,22 @@ open_place(place::AbstractString) = try OPENER[](app_link(place)) catch; nothing
 const jobs = Dict{String,Any}()
 
 "What to say when Apple's maps have no such place"
-const LOST = "Kaydown can't find this place. Check the address."
+const LOST = "Ladder can't find this place. Check the address."
 "What to say when the picture can't be made for now"
-const FAILED = "Kaydown can't get this map now."
-const NO_SWIFT = "Kaydown needs Swift to make a map. It comes with Xcode's command line tools."
+const FAILED = "Ladder can't get this map now."
+const NO_SWIFT = "Ladder needs Swift to make a map. It comes with Xcode's command line tools."
 
 "What `picture!` and `found!` give: the state of a file, the file, what to say when it can't be made, and in how many seconds to ask again"
 const Kept = @NamedTuple{state::Symbol, file::String, problem::String, wait::Float64}
 
 """
-The state of the file `target`, which a program makes and Kaydown keeps:
+The state of the file `target`, which a program makes and Ladder keeps:
 
 - `:there` when the file is kept.
 - `:coming` while the program makes it. Ask again in `wait` seconds.
 - `:failed` for a minute after the program couldn't make it, as with no
-  network. Kaydown tries again after that minute.
-- `:lost` when Apple's maps have no such place. Kaydown doesn't try again.
+  network. Ladder tries again after that minute.
+- `:lost` when Apple's maps have no such place. Ladder doesn't try again.
 - `:none` when it isn't kept and, with `start=false`, it wasn't asked for.
 
 `problem` is what to tell the person when the state is `:failed` or `:lost`.
@@ -419,7 +419,7 @@ end
 
 """
 The file `target` turned out not to hold what it should, as a picture that
-was cut short. Take it away, so that Kaydown makes it again in a minute.
+was cut short. Take it away, so that Ladder makes it again in a minute.
 """
 spoiled!(target) = begin
   rm(target, force=true)

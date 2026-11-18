@@ -3,7 +3,7 @@
 # description and its picture. Run them with
 # `julia -O0 --project=. test/linkcard_view_test.jl`. They use a window that
 # isn't on the screen, and no network: a function of the test stands in for
-# `curl`, and another for the browser. Set `KAYDOWN_SHOTS` to a folder, and
+# `curl`, and another for the browser. Set `LADDER_SHOTS` to a folder, and
 # they save pictures of the page there.
 
 @use Test: @test, @testset
@@ -71,7 +71,7 @@ $PAINT
 The end.
 """)
 
-# Kaydown gets a picture from the web with `curl` itself. Here it knows that the logo can't be had, and that the photo
+# Ladder gets a picture from the web with `curl` itself. Here it knows that the logo can't be had, and that the photo
 # is the file plan.png, so that it asks the web for nothing.
 K.fetches[LOGO] = nothing
 K.fetches[PHOTO] = joinpath(dir, "plan.png")
@@ -81,7 +81,7 @@ const w = Window(e, size=(1000px, 1000px))
 frames(n=2) = foreach(_ -> frame(w), 1:n)
 frames()
 K.focus(e)
-shot(name) = haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(ENV["KAYDOWN_SHOTS"], name), w)
+shot(name) = haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], name), w)
 line(text) = findfirst(startswith(text), e.buf.lines)
 flows(i) = K.item(e, i).content isa K.Flow
 "The card that line `i` shows, or nothing when it shows none"
@@ -135,7 +135,7 @@ end
   bare = findlast(==(PAINT), e.buf.lines)
   @test flows(bare) && K.solid(e.buf, bare) === nothing && flows(line("Some words"))
   @test join(seg.text for vl in K.item(e, bare).content.lines for seg in vl.segs) == PAINT
-  # An address that ends as a picture's does is a picture line. Kaydown has no picture for this one, so it shows as
+  # An address that ends as a picture's does is a picture line. Ladder has no picture for this one, so it shows as
   # it's written. It's no card, and no card was asked for.
   logo = line("![Julia]")
   @test !K.card_address(e, LOGO) && !K.card_address(e, "https://example.com/talk.MP4?t=3") && !K.card_address(e, "https://example.com/plan.pdf")
@@ -155,7 +155,7 @@ end
   # Until the page comes, the card's title is the line's words, with the address under them. With no words, it's the address.
   @test C.heading(c.card, c.words) == "Paint for the hall" && C.blurb(c.card, c.words) == PAINT && C.source(c.card) == "bunnings.com.au"
   @test C.heading(card(slow).card, card(slow).words) == SLOW
-  # Until Kaydown knows what's at the photo's address, its line shows a card too
+  # Until Ladder knows what's at the photo's address, its line shows a card too
   @test card(photo) !== nothing && card(photo).card == C.Card(PHOTO)
   shot("cards-waiting.png")
   tops = [K.item(e, i).top for i in (paint, slow, gone)]
@@ -222,7 +222,7 @@ end
     ontype(e, Typed(c, w))
   end
   frames()
-  # Kaydown asks for no page until the caret leaves the line
+  # Ladder asks for no page until the caret leaves the line
   @test e.buf.lines[i] == "![](https://example.org/new)" && !any(startswith("https://example.org"), asked)
   caret!((1, 0)); frames(4)
   @test card(i) !== nothing && card(i).card.title == "A new page" && "https://example.org/new" in asked
@@ -286,6 +286,6 @@ end
   narrow = Window(e, size=(420px, 1000px))
   foreach(_ -> frame(narrow), 1:3)
   @test rect(card(lines()[1])).width ≈ e.width && K.num(e.width) < 400
-  haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(ENV["KAYDOWN_SHOTS"], "cards-narrow.png"), narrow)
+  haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], "cards-narrow.png"), narrow)
   close(narrow)
 end

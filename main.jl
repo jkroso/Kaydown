@@ -1,4 +1,4 @@
-# Kaydown
+# Ladder
 #
 # A Markdown editor made with UI.jl, modelled on Constly. You type Markdown, and each line is drawn
 # the way it will read: headings are big, **bold** is bold, tables are tables.
@@ -67,7 +67,7 @@
 #     to keep only the lines that have them, and choose the kind of line and
 #     the folder from two menus.
 #   - Write a code block in the language `email` to list the emails with a
-#     person, once Kaydown has your email account.
+#     person, once Ladder has your email account.
 #   - Write a code block in the language `timelog` to keep the hours of a
 #     job. Type a task and click Start, and click Stop when you stop. The
 #     block adds up the hours of each task.
@@ -105,7 +105,7 @@
 #   - ⌘⌥← goes back to the file that showed before, and ⌘⌥→ goes forward
 #     again. The two arrows at the top right of that list do the same, and so
 #     do the two buttons at the side of a mouse that has them.
-#   - Click a file in that list that isn't Markdown to see it. Kaydown shows it
+#   - Click a file in that list that isn't Markdown to see it. Ladder shows it
 #     and doesn't change it: the text of a file of code, a picture, a model, a
 #     sound, a video, a PDF file, a table. A file that it has no way to show is
 #     a binary file, and a button shows its bytes in hexadecimal. The button at
@@ -159,17 +159,17 @@
 #   - ⌘, opens the settings in a window of their own, where you choose the
 #     colours, the font and its weight, the text size, the width of the page
 #     and what the count at the top right counts. A button there makes
-#     Kaydown the app that opens Markdown files. Links at the top of that
+#     Ladder the app that opens Markdown files. Links at the top of that
 #     page go to the other pages of the settings: Code editor, for how code
 #     shows, Key bindings, for the keys of each command, and Email. ⌘, again
 #     closes that window.
-#   - ⌘, then Email takes your email accounts. Kaydown then keeps a folder
+#   - ⌘, then Email takes your email accounts. Ladder then keeps a folder
 #     for each account with every email in it, as an .eml file, in the
 #     folders that the email server has. ⌘⇧I shows the inbox: the sidebar lists the emails,
 #     and the top bar of an email has buttons that answer it, archive it and
 #     delete it. ⌘⇧N starts a new email, which is a page like any other, and
 #     ⌘⇧Return sends it. mail.jl says how it works.
-#   - The Kaydown app updates itself. It gets a newer version while you work,
+#   - The Ladder app updates itself. It gets a newer version while you work,
 #     and the new version takes its place when you quit. A box in the settings
 #     turns that off. update.jl says how it works.
 #   - On the Key bindings page, choose the keys of VS Code, Sublime Text or
@@ -181,7 +181,7 @@
 #     that has it. Those are the places that ⌘D goes to.
 #   - ⌘/ makes a comment of a line of code. ⌘L selects a line, ⌘⇧D copies it
 #     to the line under it, ⌘⇧K deletes it, and ⌘⌥[ and ⌘⌥] move it up and down.
-#   - ⌘W closes a window. Kaydown quits when its last window closes.
+#   - ⌘W closes a window. Ladder quits when its last window closes.
 #   - ⌘⌥I opens the layout inspector.
 #
 # It uses these UI.jl features: a `Scroll` that only builds the lines
@@ -672,12 +672,12 @@ Base.@kwdef mutable struct Buffer
   sent::Vector{String} = [""]           # the text as it was when you last sent it to an agent, or when the file was opened
 end
 
-"True when the file is only shown. Kaydown changes Markdown files and the files of code in `CODE_FILES`, and no others."
+"True when the file is only shown. Ladder changes Markdown files and the files of code in `CODE_FILES`, and no others."
 readonly(b::Buffer) = !(b.view in (:markdown, :code))
 
 """
-True when Kaydown shows the file at `path` as a page and never changes it: the
-file is an email, or the Mac marks it as read-only. Kaydown marks each email
+True when Ladder shows the file at `path` as a page and never changes it: the
+file is an email, or the Mac marks it as read-only. Ladder marks each email
 that it keeps, and a mark that you put on a page of your own counts the same.
 """
 protected(path) = Mail.isemail(path) || (isfile(path) && !iswritable(path))
@@ -949,7 +949,7 @@ isspread(g::Grid) = g.head > 0px
   code_font::String = CODE_FONT         # the font of code, by the name of its family
   code_weight::Int = 300                # how heavy code is, like `weight`. A font without Light draws its nearest weight.
   guide::Int = 0                        # a faint line goes down a file of code after this many characters. 0 is no line.
-  bundle::String = "Kaydown"            # the bundle of key bindings: the shortcuts of every command
+  bundle::String = "Ladder"            # the bundle of key bindings: the shortcuts of every command
   rebound::Dict{Symbol,String} = Dict{Symbol,String}()   # the shortcuts of each command that has other keys than the bundle's, as the settings file writes them
   popup::Symbol = :none                # :finder while the file finder is open
   picked::Int = 1                       # the file the finder will open
@@ -3190,9 +3190,9 @@ sandbox(e) = get!(e.nodes, :sandbox) do
   Core.eval(m, :(const key_list = $(() -> own!(e, KeyList()))))
   Core.eval(m, :(const keys_changed = $(() -> (reads!(e, :bundle); reads!(e, :rebound); !isempty(e.rebound)))))
   Core.eval(m, :(const key_reset! = $(() -> bundle!(e, e.bundle))))
-  # ... and the app that opens Markdown files: `markdown_app()` gives its name, like "Kaydown", or "" when macOS can't say.
-  # `default_app!()` asks macOS to make that app Kaydown. It gives false when the Kaydown app isn't installed.
-  # `app_installed()` is true when the Kaydown app is on this Mac.
+  # ... and the app that opens Markdown files: `markdown_app()` gives its name, like "Ladder", or "" when macOS can't say.
+  # `default_app!()` asks macOS to make that app Ladder. It gives false when the Ladder app isn't installed.
+  # `app_installed()` is true when the Ladder app is on this Mac.
   Core.eval(m, :(const markdown_app = $(() -> (reads!(e, :app); app_name(markdown_app())))))
   Core.eval(m, :(const app_installed = $(() -> (reads!(e, :app); !isempty(app_path())))))
   Core.eval(m, :(const default_app! = $(() -> default_app!(e))))
@@ -3207,7 +3207,7 @@ sandbox(e) = get!(e.nodes, :sandbox) do
   # ... and the email. `email_form()` shows the fields of the account, with a button that keeps them. `email_news()`
   # says how far the look for new email has got. `email_check!()` looks now, and `email_show!()` shows the inbox.
   # `email_every()` is how many minutes go by between two looks. `email_back()` is how many months back the emails
-  # that Kaydown gets go, with 0 for every email. `email_rest()` is whether it gets the other folders after the inbox.
+  # that Ladder gets go, with 0 for every email. `email_rest()` is whether it gets the other folders after the inbox.
   Core.eval(m, :(const email_form = $(() -> node!(MailForm, e, :mail_form))))
   Core.eval(m, :(const email_news = $(() -> mail_news(e))))
   Core.eval(m, :(const email_check! = $(() -> mail_check!(e))))
@@ -3237,9 +3237,9 @@ reads!(e, setting::Symbol) = begin
 end
 
 """
-Ask macOS to make Kaydown the app that opens Markdown files, for the button on
+Ask macOS to make Ladder the app that opens Markdown files, for the button on
 the settings page. macOS asks you to confirm, so the window then looks for
-your answer. It's false when the Kaydown app isn't installed.
+your answer. It's false when the Ladder app isn't installed.
 """
 default_app!(e) = begin
   before = markdown_app()
@@ -4029,7 +4029,7 @@ end
 # --- a file that isn't Markdown, in the page -------------------------------------------------
 #
 # A click on a file in the sidebar shows the file in the page, whatever kind of
-# file it is. Kaydown changes Markdown files and Julia files, so any other file
+# file it is. Ladder changes Markdown files and Julia files, so any other file
 # is only shown, and the top bar says "Read only". The button beside those
 # words opens the file in the app that the Mac uses for it.
 #
@@ -4321,7 +4321,7 @@ fitted(e, key, wide; line=false) = begin
 end
 
 """
-What shows the file of `v`, or nothing if Kaydown has nothing that shows it.
+What shows the file of `v`, or nothing if Ladder has nothing that shows it.
 `note(words)` adds words to the line that says how big the file is.
 """
 viewer(v::FileView, e, note) = begin
@@ -4490,7 +4490,7 @@ draw(ctx, size, ui::ConcreteRect, m::Equation) = begin
   nothing
 end
 
-# The mouse over a formula that has a command that Kaydown doesn't know says which. Two lines with the
+# The mouse over a formula that has a command that Ladder doesn't know says which. Two lines with the
 # same text show the same formula, so the words go under the mouse, not under where the formula was drawn.
 onmouse(m::Equation, ev::MouseMove) = begin
   words = tip(m)
@@ -4500,8 +4500,8 @@ onmouse(m::Equation, ev::MouseMove) = begin
   nothing
 end
 
-"What the mouse over a formula says: the commands of its TeX that Kaydown doesn't know, or nothing when it knows them all"
-tip(m::Equation) = (unknown = unique(typeset(m).problems); isempty(unknown) ? "" : "Kaydown doesn't know " * join(unknown, ", ", " or "))
+"What the mouse over a formula says: the commands of its TeX that Ladder doesn't know, or nothing when it knows them all"
+tip(m::Equation) = (unknown = unique(typeset(m).problems); isempty(unknown) ? "" : "Ladder doesn't know " * join(unknown, ", ", " or "))
 
 "The piece that stands for the formula of span `s`, in text drawn in `base`"
 equation(e, s::Span, base::Face) = begin
@@ -5007,7 +5007,7 @@ end
 make_quote!(v::TakeoffView) = begin
   v.quoting === nothing || return handled
   t = v.data
-  Centient.available() || return say!(v, "Centient isn't on this Mac, so Kaydown can't make the quote", true)
+  Centient.available() || return say!(v, "Centient isn't on this Mac, so Ladder can't make the quote", true)
   isempty(t.customer) && return say!(v, "Choose the customer first", true)
   lines = Any[]
   for m in t.measures
@@ -5018,7 +5018,7 @@ make_quote!(v::TakeoffView) = begin
   end
   isempty(lines) && return say!(v, "Nothing is measured yet", true)
   plan = isempty(t.plan) ? "" : " of " * basename(t.plan)
-  v.quoting = Centient.ask("create_quote", Dict{String,Any}("customer" => t.customer, "notes" => "From a takeoff$plan in Kaydown", "lines" => lines))
+  v.quoting = Centient.ask("create_quote", Dict{String,Any}("customer" => t.customer, "notes" => "From a takeoff$plan in Ladder", "lines" => lines))
   say!(v, "Making the quote in Centient…")
 end
 
@@ -5699,7 +5699,7 @@ describe(a::PlanArea) = begin
   h = v.full ? height(grow=grow) : height(plan_h(v, editor(v).width - 2px))
   plan_size(v) === nothing || return Box(width(grow=grow), h, background(takeoff_back()))
   words = isempty(v.data.plan) ? "Drop a plan here, or click to choose one: a PDF file or a picture" :
-                                 "$(v.data.plan) isn't a plan that Kaydown can show. Click to choose another."
+                                 "$(v.data.plan) isn't a plan that Ladder can show. Click to choose another."
   Column(width(grow=grow), h, justify=Alignment.Center, child_gap=10px, background(colours.stripe),
     Icon("map", size=26px, color=colours.faint), Box(label(words, 13px, color=colours.dim)))
 end
@@ -7801,7 +7801,7 @@ end
 answer!(v::ScheduleView) = begin
   v.asking || return handled
   d = Schedules.date(schedule_input(v).text)
-  d === nothing && return (v.said = "Kaydown can't read that day. Type it like 16 Nov 2026."; handled)
+  d === nothing && return (v.said = "Ladder can't read that day. Type it like 16 Nov 2026."; handled)
   v.data.start = d
   stop_asking!(v)
   commit!(v)
@@ -9154,7 +9154,7 @@ BLOCKS[CHART] = BlockKind("Chart", "bar-chart", ChartView, chart_html)
 #   - The button beside the map's top right corner makes it fill the window,
 #     as a picture does, and so does Return with the caret on the map.
 #
-# The picture has no pin in it. Kaydown draws the pin over the picture, on the
+# The picture has no pin in it. Ladder draws the pin over the picture, on the
 # point where the place is. So a click moves the pin in the same frame, and
 # the picture stays the one that it was: it depends on the middle, the zoom,
 # the size and dark or light, and not on the place. The address under the map
@@ -9172,8 +9172,8 @@ BLOCKS[CHART] = BlockKind("Chart", "bar-chart", ChartView, chart_html)
 @use "github.com/jkroso/UI.jl/Interface/image" register_image
 
 const MAP = Maps.MAP
-# Seconds that a map keeps one width before Kaydown asks for a picture that wide, and that a pin
-# keeps its place before Kaydown makes the picture that fills the window
+# Seconds that a map keeps one width before Ladder asks for a picture that wide, and that a pin
+# keeps its place before Ladder makes the picture that fills the window
 const MAP_PAUSE = 0.3
 const MAP_ROUND = 7.0   # the radius of the map's top corners, which are just inside the round corners of its block
 const MAP_SLACK = 4.0   # px that the mouse can move between a press and a release that are still a click
@@ -9217,7 +9217,7 @@ end
 "True in a window that's on the screen. A window that a test makes isn't."
 on_screen(node) = (w = window_of(node); w !== nothing && !isempty(w.glfw))
 
-"True when `file` holds a picture that Kaydown can draw"
+"True when `file` holds a picture that Ladder can draw"
 whole_picture(file) = try image_aspect(file) > 0 catch; false end
 
 "The place of the block, as two blocks that name one place have it"
@@ -9745,7 +9745,7 @@ BLOCKS[ASK] = BlockKind("Question", "question-circle", AskView, ask_html)
 # changes.jl says how the block is written. Each change has an Accept and a
 # Reject button. Your choice is written at the end of the change's @@ line,
 # so an agent that waits for the page reads it in the lines that you changed.
-# Kaydown doesn't change the files that the diff is of.
+# Ladder doesn't change the files that the diff is of.
 #
 # The lines have the colours of code in the language of their file. Where a
 # line that comes is a new version of a line that goes, the words that are
@@ -10255,7 +10255,7 @@ BLOCKS[CHANGES] = BlockKind("Changes", "file-diff", ChangesView, changes_html)
 #     Today goes back to the month of today.
 #   - Click a thing to select it, and click it twice to go to its line.
 #   - Click the box of a to-do item to tick it in the page.
-#   - Drag a to-do item or an event to another day. Kaydown writes the new day
+#   - Drag a to-do item or an event to another day. Ladder writes the new day
 #     into the item's text or the event's line. A task stays where it is: the
 #     schedule says when it's done.
 #   - Click a day twice to add an event to it, type its words, and press Return.
@@ -10624,7 +10624,7 @@ draw(ctx, size, ui::ConcreteRect, layer::CalendarDrag) = begin
   write_ink(ctx, elide(t.words, 12px, px(wide - 12)), x + 6, y + 14, face)
 end
 
-"A drag ended. Kaydown writes the day that the thing was dropped on into the to-do item's text, or into the event's line."
+"A drag ended. Ladder writes the day that the thing was dropped on into the to-do item's text, or into the event's line."
 drop!(v::CalendarView) = begin
   g = v.grab
   v.grab = nothing
@@ -11320,7 +11320,7 @@ foreach(lang -> BLOCKS[lang] = BlockKind("Columns", "columns-gap", ColumnsView, 
 # some words. find.jl says how the block is written. The list has the name of
 # each page over that page's lines. A click on a line opens its page at that
 # line. A click on the box of a to-do item ticks it in its own page. If that
-# page isn't open, or is open with nothing to save, Kaydown writes the tick to
+# page isn't open, or is open with nothing to save, Ladder writes the tick to
 # the page's file at once. An item that you tick stays in the list, ticked,
 # until another page shows.
 #
@@ -11665,7 +11665,7 @@ search_folder(e, q::Searches.Query) = isempty(q.folder) ? docdir(e) : abspath(jo
 """
 What the list shows: the lines that match, page by page, whether every page of
 the folder was read, and why there are no lines when the folder can't be read.
-It's worked out again when a page changes in Kaydown, and when the folder is
+It's worked out again when a page changes in Ladder, and when the folder is
 read again. Only the pages that changed are looked through again.
 """
 found!(v::SearchView) = begin
@@ -11856,7 +11856,7 @@ describe(v::SearchView) = begin
       push!(rows, block_part!(() -> SearchRow(of=v, i=i), v, (:row, i)))
     end
     length(ms) > FIND_MOST && push!(rows, block_note("And $(length(ms) - FIND_MOST) more. Add words to the block's with: line to list fewer."))
-    found.whole || push!(rows, block_note("This folder has more pages than Kaydown reads for a list. Name a folder in it with the block's in: line."))
+    found.whole || push!(rows, block_note("This folder has more pages than Ladder reads for a list. Name a folder in it with the block's in: line."))
     Column(block_look()..., clip=true, name="Found", bars..., rows..., Box(height(6px)))
   end
 end
@@ -11900,7 +11900,7 @@ BLOCKS[FIND] = BlockKind("Find", "search", SearchView, find_html)
 #     line for the picture, and the file stays where it is.
 #
 # A big folder mustn't stop the window. macOS makes a small picture of each
-# file, as it does for the Finder, and Kaydown asks for a few of them in each
+# file, as it does for the Finder, and Ladder asks for a few of them in each
 # frame. Only the rows of the grid that are in the window are built. The
 # folder is read again every few seconds while the window is drawn.
 
@@ -13341,7 +13341,7 @@ BLOCKS[TIMELOG] = BlockKind("Time log", "stopwatch", TimelogView, timelog_html)
 #
 # A code block in the language `email` lists the emails with one person, or
 # with a few people, newest first. emails.jl says how the block is written.
-# The emails are the ones that Kaydown keeps on the Mac, in every folder but
+# The emails are the ones that Ladder keeps on the Mac, in every folder but
 # the drafts, the junk and the trash. See "email" in this file, and mail.jl.
 # A click on an email opens it. The Reply button starts an answer to the
 # newest one, and New email starts one to the block's address.
@@ -13387,7 +13387,7 @@ end
 
 """
 What the list shows: the emails that the block asks for, newest first, how
-many emails are still to be read, and why there are none when Kaydown has no
+many emails are still to be read, and why there are none when Ladder has no
 email. An email that's in two folders, as Gmail has them, is listed once.
 """
 emails!(v::EmailsView) = begin
@@ -13395,7 +13395,7 @@ emails!(v::EmailsView) = begin
   # The emails of every account are in the list
   ready = [m for m in mailers(e) if Mail.ready(m.account)]
   isempty(ready) &&
-    return (rows=[], left=0, problem="Kaydown has no email account yet. Press ⌘, and choose Email to give it one.")
+    return (rows=[], left=0, problem="Ladder has no email account yet. Press ⌘, and choose Email to give it one.")
   # The list is worked out again no more than once a second, however fast email comes in
   key = (v.lines, floor(Int, time()), length(EMAIL_PEOPLE))
   v.shown !== nothing && v.shown[1] == key && return v.shown[2]
@@ -14332,15 +14332,15 @@ BLOCKS[SIGNATURE] = BlockKind("Signature", "pen", SignatureView, signature_html)
 #
 # What's at the address decides what the line shows. An address whose name
 # ends as a picture's, a video's, a sound's or a table's does, like .png, shows
-# that, and Kaydown asks for no card. For any other address, Kaydown gets the
+# that, and Ladder asks for no card. For any other address, Ladder gets the
 # start of what's there, in the background. A web page shows as a card.
 # Anything else, like a picture whose address doesn't end in .png, shows as a
-# picture. Until Kaydown knows, the line shows a card with the address.
+# picture. Until Ladder knows, the line shows a card with the address.
 #
-# Kaydown reads what the page says of itself. See linkcard.jl. It keeps that,
+# Ladder reads what the page says of itself. See linkcard.jl. It keeps that,
 # and the picture, in a folder of the Mac's caches, so the card shows at once
 # the next time, and with no network. When the page can't be had, the card
-# shows the address. Kaydown asks the web for nothing in a window that isn't
+# shows the address. Ladder asks the web for nothing in a window that isn't
 # on the screen. An email shows no cards: each such line in it is a picture.
 
 push!(BLOCK_ICONS, "globe")
@@ -14349,7 +14349,7 @@ push!(BLOCK_ICONS, "globe")
 const BROWSER = Ref{Function}(open_url)
 
 "The folder that keeps what the cards read from the web, and their pictures"
-cards_dir() = isempty(MEDIA_CACHE[]) ? joinpath(homedir(), "Library", "Caches", "Kaydown", "cards") : joinpath(MEDIA_CACHE[], "cards")
+cards_dir() = isempty(MEDIA_CACHE[]) ? joinpath(homedir(), "Library", "Caches", "Ladder", "cards") : joinpath(MEDIA_CACHE[], "cards")
 
 "A card that a line of the page shows: what the web page at the line's address says of itself"
 @def mutable struct LinkCard <: SemanticUI
@@ -14388,13 +14388,13 @@ covered(key, wide, tall) = begin
 end
 
 """
-True when Kaydown can ask the web for what a card shows: the page isn't an
+True when Ladder can ask the web for what a card shows: the page isn't an
 email, and its window is on the screen. A window that a test makes isn't, so a
 test asks the web for nothing, unless it put its own function in place of `curl`.
 """
 online(e) = !Mail.isemail(e.buf.path) && (Cards.getter[] !== Cards.curl || (w = window_of(e); w !== nothing && !isempty(w.glfw)))
 
-"The key, for an Image, of the picture at the web address `url`, or \"\" while Kaydown has none. It asks for the next frame while the picture is on its way."
+"The key, for an Image, of the picture at the web address `url`, or \"\" while Ladder has none. It asks for the next frame while the picture is on its way."
 card_picture(e, url) = begin
   file, coming = Cards.picture!(url, cards_dir(), ask=online(e))
   coming && redraw_in!(e, 0.2)   # look again soon
@@ -14494,8 +14494,8 @@ end
 
 # --- blocks that a file defines --------------------------------------------------------------
 #
-# A page can have kinds of block that Kaydown doesn't know. A code block in a
-# language that isn't one of Kaydown's own, like `progress`, is such a block
+# A page can have kinds of block that Ladder doesn't know. A code block in a
+# language that isn't one of Ladder's own, like `progress`, is such a block
 # when a file defines the language. The file is `progress.jl` in the page's
 # folder, or the file or the GitHub repository that the line that opens the
 # block names after the language:
@@ -14506,7 +14506,7 @@ end
 #     ```progress github.com/sam/blocks@v2    one branch of it
 #
 # The file can be a Markdown page too: `progress.md` beside the page, when
-# there's no `progress.jl`, or a path that ends in `.md`. Kaydown runs the code
+# there's no `progress.jl`, or a path that ends in `.md`. Ladder runs the code
 # of the page's `julia` blocks, from the top, in one module, and that module
 # defines the kind of block as a Julia file's module does. So the page can say
 # in words what its code does, and can hold a block of its own kind to try.
@@ -14515,23 +14515,23 @@ end
 # language's name that takes one thing. So a page in a folder of Julia code
 # doesn't run `json.jl` because it has a block of JSON.
 #
-# The file has a function with the language's name. Kaydown gives it the lines
+# The file has a function with the language's name. Ladder gives it the lines
 # of the block, and shows what it makes, as a `ui` block shows what its code
 # makes: a node draws itself, and any other value shows as text. If the file
 # also has a function called `written`, it gives the lines of what was made,
-# and Kaydown writes them into the block. So what you do to the block is in
+# and Ladder writes them into the block. So what you do to the block is in
 # the page's file.
 #
 #     progress(lines)          makes a Progress from the lines of the block
 #     describe(p::Progress)    draws it
 #     written(p::Progress)     the lines of its block now
 #
-# There are three times that Kaydown writes a block's lines:
+# There are three times that Ladder writes a block's lines:
 #
 #   - Before something reads the page's text: ⌘S, the caret going into the
 #     block, a copy, a page of HTML, another page taking the window. The file
 #     does nothing for this.
-#   - When the component asks, with UI.jl's `changed!(p)`. Kaydown writes in
+#   - When the component asks, with UI.jl's `changed!(p)`. Ladder writes in
 #     the next frame that the mouse isn't held in. Changes that come one soon
 #     after another are one step for ⌘Z.
 #   - At once, when the component says `changed!(p, now=true)`.
@@ -14543,7 +14543,7 @@ end
 # What was made is kept until the block's lines change some other way: you
 # type in them, or ⌘Z puts back older ones. Then the function makes it again.
 #
-# Kaydown asks you before it runs the code of a GitHub repository for the
+# Ladder asks you before it runs the code of a GitHub repository for the
 # first time, and keeps the repositories that you allow in a file.
 #
 # A file on this Mac is loaded again when it's saved, so a kind of block
@@ -14552,7 +14552,7 @@ end
 "The file or the repository that follows the language on the line that opens a code block"
 const SOURCE = r"^\s*(?:```|~~~)\s*[^\s`]+[ \t]+((?:\.{1,2}/|~?/|github\.com/)\S+)\s*$"
 
-"True when Kaydown itself says what a code block in the language `lang` shows"
+"True when Ladder itself says what a code block in the language `lang` shows"
 known_lang(lang) = lang in (LIVE, SHEET, SPREADSHEET, DIAGRAM, MATH, TAKEOFF, SCHEDULE, MATTER, TOML_MATTER, HEX, "julia") || haskey(BLOCKS, lang)
 
 "What was found in each file that could define a kind of block: when the file was saved, and whether its text defines the function"
@@ -14650,7 +14650,7 @@ block_source(b::Buffer, s::Int) = block_source(b.lines[s], kinds(b)[s].lang, ise
 "The `user/repo` of a source that's a GitHub repository, or nothing for a file on this Mac"
 repository(source::AbstractString) = (m = match(r"^github\.com/([\w\-.]+)/([\w\-.]+)", source); m === nothing ? nothing : "$(m[1])/$(m[2])")
 
-"The GitHub repositories whose code you let a block run, since Kaydown opened"
+"The GitHub repositories whose code you let a block run, since Ladder opened"
 const ALLOWED = Set{String}()
 
 "The file that keeps the repositories you allowed, one on each line"
@@ -14659,7 +14659,7 @@ allowed_file() = joinpath(dirname(settings_file()), "repositories")
 "True when you have let a block run the code of the GitHub repository `repo`"
 allowed(e, repo::AbstractString) = repo in ALLOWED || (e.remember && isfile(allowed_file()) && repo in eachline(allowed_file()))
 
-"Let a block run the code of the GitHub repository `repo`, now and when Kaydown next opens"
+"Let a block run the code of the GitHub repository `repo`, now and when Ladder next opens"
 allow!(e, repo::AbstractString) = begin
   allowed(e, repo) && return
   push!(ALLOWED, repo)
@@ -14668,7 +14668,7 @@ allow!(e, repo::AbstractString) = begin
     mkpath(dirname(allowed_file()))
     open(io -> println(io, repo), allowed_file(), "a")
   catch
-    # A file that can't be written only means Kaydown asks again the next time it opens
+    # A file that can't be written only means Ladder asks again the next time it opens
   end
   nothing
 end
@@ -14729,7 +14729,7 @@ source_module(e, source::AbstractString) = begin
   # A Markdown page isn't Julia code, so Kip doesn't load it: the page's `julia` blocks make its module
   if ismarkdown(source)
     file = repository(source) === nothing ? source_file(e, source) : repository_file(source)
-    isfile(file) || error("Kaydown can't find the page $source.")
+    isfile(file) || error("Ladder can't find the page $source.")
     return cd(() -> Base.invokelatest(page_module, realpath(file)), folder)
   end
   cd(() -> Base.invokelatest(Kip.require, source, folder), folder)
@@ -14832,7 +14832,7 @@ make!(v::FileBlock; now=false) = begin
     (now || here(repo)) || (v.state = :wait; return v)
   end
   v.from === nothing && repo === nothing && !source_found(e, v.source) &&
-    return fault!(v, "Kaydown can't find the file $(v.source). The line that opens this block names it.")
+    return fault!(v, "Ladder can't find the file $(v.source). The line that opens this block names it.")
   repo === nothing && isempty(v.file) && (v.file = source_file(e, v.source))
   if !isempty(v.file)
     v.read = get!(() -> mtime(v.file), LOADED, v.file)
@@ -16841,8 +16841,8 @@ ismouse(k) = k in (Keys.mouse_left, Keys.mouse_right, Keys.mouse_middle, Keys.mo
 # Each thing that a key does is a command with a name, like `:save`. A shortcut
 # is the keys that run a command: one key with the keys that are held with it,
 # like ⌘S, or two of those pressed one after the other, like ⌃X ⌃S. A bundle
-# gives every command its shortcuts. Kaydown starts with the bundle called
-# "Kaydown". Each other bundle has the keys of another editor. The key bindings
+# gives every command its shortcuts. Ladder starts with the bundle called
+# "Ladder". Each other bundle has the keys of another editor. The key bindings
 # page of the settings chooses the bundle, and gives any one command another
 # shortcut. The bundle and those changes are settings: every window has the
 # same keys, and the settings file keeps them.
@@ -16924,7 +16924,7 @@ caps(s::Shortcut) = join(map(caps, s), ' ')
 
 """
 Something that a key does. `keys` are its shortcuts in the bundle called
-Kaydown. `run` gets the editor, its window, and true when ⇧ is held to grow
+Ladder. `run` gets the editor, its window, and true when ⇧ is held to grow
 the selection.
 """
 struct Command
@@ -17242,7 +17242,7 @@ end
 
 """
 The commands, in the groups and the order that the key bindings page shows
-them. Each has its shortcuts in the bundle called Kaydown.
+them. Each has its shortcuts in the bundle called Ladder.
 """
 const COMMAND_GROUPS = [
   "Files and windows" => [
@@ -17331,10 +17331,10 @@ const COMMANDS = Dict{Symbol,Command}(c.name => c for (_, cs) in COMMAND_GROUPS 
 """
 The bundles of key bindings, in the order that the key bindings page offers
 them. Each lists only the commands whose shortcuts are different from the
-ones in the bundle called Kaydown, with the shortcuts it gives them.
+ones in the bundle called Ladder, with the shortcuts it gives them.
 """
 const BUNDLES = [
-  "Kaydown" => Pair{Symbol,String}[],
+  "Ladder" => Pair{Symbol,String}[],
   # ⌘P finds a file, as Quick Open does, so printing has another key. The slides' key, ⌃⌘⇧P, is free in every bundle.
   "VS Code" => [
     :open => "cmd+p, cmd+o", :print => "cmd+opt+p", :back => "ctrl+minus", :forward => "ctrl+shift+minus",
@@ -18170,7 +18170,7 @@ onkey(s::SendButton, ::KeyPress{Keys.mouse_left}) = (e = editor(s); send!(e); hu
 
 const JOB_SHOWS = 8   # seconds that Centient's answer stays under the button
 
-"What Kaydown asked Centient to make from a page, and what the button says of it"
+"What Ladder asked Centient to make from a page, and what the button says of it"
 mutable struct JobAsk
   path::String      # the page's file
   request::Any      # what Centient was asked, or nothing once it has answered
@@ -18211,7 +18211,7 @@ job_args(e) = begin
   args
 end
 
-"What Kaydown asked Centient to make from the page that shows, or nothing"
+"What Ladder asked Centient to make from the page that shows, or nothing"
 job(e) = (j = get(e.nodes, :job_ask, nothing); j !== nothing && j.path == e.buf.path ? j : nothing)
 
 "True while Centient makes a job"
@@ -18271,7 +18271,7 @@ job_tick!(e) = begin
     if Centient.finished(r)
       j.request, j.at = nothing, time()
       j.wrong = Centient.failed(r) || !(r.value isa AbstractDict)
-      j.said = Centient.failed(r) ? r.problem : j.wrong ? "Centient gave an answer that Kaydown can't read" : job_words(r.value)
+      j.said = Centient.failed(r) ? r.problem : j.wrong ? "Centient gave an answer that Ladder can't read" : job_words(r.value)
     else
       redraw_in!(e, 0.1)   # while Centient works, the window looks again soon
     end
@@ -19078,7 +19078,7 @@ describe(l::FileLabel) = begin
     ismarkdown(l.path) ?
     Box(width(grow=grow), Alignment.Start, label(basename(l.path), color=ishidden(l.path) && l.path != e.buf.path ? colours.dim : colours.ink,
                                                  weight=l.path == e.buf.path ? "Semibold" : "")) :
-    # A file that Kaydown only shows has its whole name, and it's fainter until it's the file that shows
+    # A file that Ladder only shows has its whole name, and it's fainter until it's the file that shows
     Box(width(grow=grow), Alignment.Start, label(basename(l.path), color=l.path == e.buf.path ? colours.ink : colours.dim,
                                                  weight=l.path == e.buf.path ? "Semibold" : ""))
   # A page that an agent waits for has a dot in the colour of the Nudge button
@@ -19393,7 +19393,7 @@ panel_theme() = Theme(size=Tree.LABEL_SIZE, surface=colours.panel, text=colours.
 # in the top bar, shows a menu that renames the file, copies its path, shows it
 # in the Finder or moves it to the Trash. It's a menu of macOS's own, so it
 # looks and works like the other menus on the Mac. A window that isn't on a
-# screen, like the one a test makes, gets a menu that Kaydown draws.
+# screen, like the one a test makes, gets a menu that Ladder draws.
 
 const FILE_MENU = ["Rename", "Copy Path", "Show in Finder", "-", "Move to Trash"]   # "-" is a line between two groups
 
@@ -19876,7 +19876,7 @@ page_act!(e, i::Int, j::Int=0) = begin
 end
 
 """
-Show `items` as a menu that Kaydown draws, for a window that macOS has no menu
+Show `items` as a menu that Ladder draws, for a window that macOS has no menu
 for. They're the items that `system_menu` takes. An item that opens a menu
 shows that menu in this one's place.
 """
@@ -19999,12 +19999,12 @@ end
 # --- the app for Markdown files ----------------------------------------------------------
 #
 # macOS keeps, for each kind of file, the app that opens it when you
-# double-click one. The settings page has a button that makes Kaydown that app
-# for Markdown files. macOS then tells Kaydown which file to open with a
+# double-click one. The settings page has a button that makes Ladder that app
+# for Markdown files. macOS then tells Ladder which file to open with a
 # message, not with an argument, so the app keeps a list of the files it's
 # been asked for and the window opens them.
 
-const APP_ID = "com.jkroso.kaydown"                   # the Kaydown app's name for macOS, as app/build.jl gives it
+const APP_ID = "com.jkroso.ladder"                   # the Ladder app's name for macOS, as app/build.jl gives it
 const MARKDOWN_TYPE = "net.daringfireball.markdown"   # macOS's name for the kind of file that Markdown is
 
 "macOS's object for the kind of file that Markdown is"
@@ -20018,7 +20018,7 @@ workspace() = msg(cls("NSWorkspace"), "sharedWorkspace")
 "The file path of an NSURL, or an empty string for none"
 url_path(url::Ptr{Cvoid}) = url == C_NULL ? "" : jstring(msg(url, "path"))
 
-"Where the Kaydown app is on this Mac, or an empty string when it isn't installed"
+"Where the Ladder app is on this Mac, or an empty string when it isn't installed"
 app_path() = Sys.isapple() ? with_pool(() -> url_path(msg(workspace(), "URLForApplicationWithBundleIdentifier:", nsstring(APP_ID)))) : ""
 
 "The app that opens a Markdown file when you double-click one, or an empty string when macOS can't say"
@@ -20054,13 +20054,13 @@ open_outside!(e) = begin
   e
 end
 
-"The name of the app at `path`, like Kaydown for /Applications/Kaydown.app"
+"The name of the app at `path`, like Ladder for /Applications/Ladder.app"
 app_name(path) = splitext(basename(path))[1]
 
 """
-Ask macOS to make Kaydown the app that opens Markdown files. macOS shows a
+Ask macOS to make Ladder the app that opens Markdown files. macOS shows a
 dialog of its own that asks you to confirm, and changes the app when you say
-yes. It's true when macOS was asked. It's false when the Kaydown app isn't
+yes. It's true when macOS was asked. It's false when the Ladder app isn't
 installed on this Mac, because macOS would then ask about an app with no name.
 """
 make_default!() = begin
@@ -20095,9 +20095,9 @@ await_default!(e) = begin
 end
 
 """
-The files that macOS asked Kaydown to open, which it hasn't opened yet. macOS
+The files that macOS asked Ladder to open, which it hasn't opened yet. macOS
 asks when you double-click a Markdown file in the Finder or drop one on
-Kaydown's icon. The app puts its own list here.
+Ladder's icon. The app puts its own list here.
 """
 const inbox = Ref(String[])
 
@@ -20173,7 +20173,7 @@ end
 # What's known of each web address that a picture has: the `curl` that's fetching
 # it, the file it's kept in, or nothing if it couldn't be fetched
 const fetches = Dict{String,Any}()
-pictures_dir() = joinpath(homedir(), "Library", "Caches", "Kaydown", "pictures")
+pictures_dir() = joinpath(homedir(), "Library", "Caches", "Ladder", "pictures")
 
 "The file that holds the picture at the web address `url`. It's nothing while the picture is fetched, and if it can't be."
 fetched(e, url) = begin
@@ -20231,22 +20231,22 @@ end
 # --- video and sound from the web --------------------------------------------------------
 #
 # A line can name a video or a sound by its address on the web, as it can a
-# picture. Kaydown downloads the file once, into a folder of the Mac's caches,
+# picture. Ladder downloads the file once, into a folder of the Mac's caches,
 # and the line's player plays that copy. The copy's name ends as the file's
 # does, like .mov, because macOS goes by that. What follows a ? or a # in the
 # address isn't part of the name, so each part of one video, like
 # walk.mov#t=61,86, plays from the same copy.
 #
-# While Kaydown downloads the file, the line says so. If Kaydown can't get it,
-# the line says that, and Kaydown tries again a minute later. A new try goes on
+# While Ladder downloads the file, the line says so. If Ladder can't get it,
+# the line says that, and Ladder tries again a minute later. A new try goes on
 # from what the last one got.
 
 const MEDIA_CACHE = Ref("")   # the folder a test keeps the copies in, in place of the one in the Mac's caches
-const RETRY = 60              # seconds after a download fails before Kaydown tries again
+const RETRY = 60              # seconds after a download fails before Ladder tries again
 # What's known of each copy that isn't whole yet: the `curl` that downloads it, or when the last one failed
 const downloads = Dict{String,Any}()
 
-"A line that says that Kaydown is downloading its video or its sound, or that it couldn't"
+"A line that says that Ladder is downloading its video or its sound, or that it couldn't"
 @def mutable struct MediaNote <: SemanticUI
   line::Int = 0
   words::String = ""
@@ -20255,7 +20255,7 @@ const downloads = Dict{String,Any}()
 end
 
 "The folder that keeps the copies of the videos and the sounds from the web"
-media_dir() = isempty(MEDIA_CACHE[]) ? joinpath(homedir(), "Library", "Caches", "Kaydown", "media") : MEDIA_CACHE[]
+media_dir() = isempty(MEDIA_CACHE[]) ? joinpath(homedir(), "Library", "Caches", "Ladder", "media") : MEDIA_CACHE[]
 
 "The web address `url` without what follows its ? or its #"
 web_file(url) = String(first(split(url, r"[?#]", limit=2)))
@@ -20312,7 +20312,7 @@ end
 
 """
 What line `i` shows while the video or the sound at the web address `src` isn't
-on the Mac: that Kaydown is downloading it, or that it couldn't. It's nothing
+on the Mac: that Ladder is downloading it, or that it couldn't. It's nothing
 once the copy is there, and when `src` is anything else.
 """
 media_note(e, i, src) = begin
@@ -20324,7 +20324,7 @@ media_note(e, i, src) = begin
   got = isfile(part) ? filesize(part) >> 20 : 0
   node = node!(MediaNote, e, (:media_note, i))
   node.line, node.failed, node.size = i, state == :failed, body(e).size * 0.76
-  node.words = state == :failed ? "Kaydown couldn't get the $what. It tries again in a minute." :
+  node.words = state == :failed ? "Ladder couldn't get the $what. It tries again in a minute." :
                "Downloading the $what…" * (got > 0 ? " $got MB so far" : "")
   own!(node!(Document, e, :document), node)
   # Lay it out once to learn how tall it is
@@ -20357,7 +20357,7 @@ onkey(n::MediaNote, ::KeyPress{Keys.mouse_left}) = edit_matter!(n, n.line)
 # many more there are, and a click on it shows them all. A click on the table
 # puts the caret on its line, so the line shows as it's written.
 #
-# Kaydown reads the file once, and again when the file changes on the disk. A
+# Ladder reads the file once, and again when the file changes on the disk. A
 # file that isn't there, or that isn't a table, shows a line that says so. A
 # `chart` block draws the numbers of a line like this as it draws a table's.
 # csv.jl reads the file.
@@ -20480,7 +20480,7 @@ caption_high(t::TableLine) = t.size * 2.1
 more_words(t::TableLine) = begin
   g = t.laid::FileGrid
   rest = length(g.table.rows) - g.rows
-  cut = g.table.more ? "The file has more rows than Kaydown reads." : ""
+  cut = g.table.more ? "The file has more rows than Ladder reads." : ""
   rest > 0 && return ("and $(g.table.more ? "more than " : "")$(Charts.commas(string(rest))) more row$(rest == 1 ? "" : "s")", "")
   t.whole && g.rows > TABLE_ROWS + 1 ? ("Show the first $TABLE_ROWS rows only", cut) : ("", cut)
 end
@@ -20679,7 +20679,7 @@ end
 # down what's said in the file, as it does for a sound file. See transcribe.jl.
 # A few minutes of video take it a second or two, and the drop-down says how far
 # it has got. A line that names part of a file, like walk.mov#t=61,86, shows what
-# was said in that part. Each file is transcribed once while Kaydown runs, so the
+# was said in that part. Each file is transcribed once while Ladder runs, so the
 # parts of a file share it.
 
 const TRANSCRIPT_W = 520px      # the widest the drop-down is
@@ -20858,7 +20858,7 @@ const TRANSCRIBE_H = 26px   # how tall the Transcribe button is
 const TRANSCRIBE_GAP = 6px  # between a sound's player and the Transcribe button under it
 
 # The recorder of each sound file that a line has shown. They're kept while
-# Kaydown runs, so that a recording goes on while another file shows.
+# Ladder runs, so that a recording goes on while another file shows.
 const recorders = Dict{String,AudioRecorder}()
 # The transcription of each sound file that has had one, by the file's path
 const transcriptions = Dict{String,Transcription}()
@@ -21213,7 +21213,7 @@ True when `text` is a word that a dictionary could have. The name of a file,
 like notes.md, a name from code, like page_width, and a web address aren't,
 and nor is the app's own name.
 """
-spellable(text::AbstractString) = text != "Kaydown" && !any(c -> isdigit(c) || c in "._/@:\\", text)
+spellable(text::AbstractString) = text != "Ladder" && !any(c -> isdigit(c) || c in "._/@:\\", text)
 
 "Every word of line `i` that's spelt wrong: the columns where it starts and ends"
 misspellings(e, i) = begin
@@ -23890,7 +23890,7 @@ end
 
 # --- email --------------------------------------------------------------------------------
 #
-# Kaydown keeps a folder that holds every email of an account, as .eml files,
+# Ladder keeps a folder that holds every email of an account, as .eml files,
 # in step with the email server. mail.jl does that work, and says how. This
 # part is what the window shows of it:
 #
@@ -24153,7 +24153,7 @@ mail_new!(e) = (m = mail_ready(e); m === nothing ? nothing : mail_window!(e, Mai
 
 """
 True when what shows is an email: an .eml file, which holds an email as a
-server sends one. A Markdown page that the Kaydown before this one made from
+server sends one. A Markdown page that the Ladder before this one made from
 an email counts too, while its folder's index still lists it.
 """
 mail_shows(e) = begin
@@ -24386,12 +24386,12 @@ end
 
 # --- the account, on the Email page of the settings ---------------------------------------
 
-# The form asks for as little as it can. An address at a company that Kaydown
+# The form asks for as little as it can. An address at a company that Ladder
 # knows, like Gmail, needs only a name and a password, and the form says which
 # password that company takes, with a button that opens the page where you make
-# one. For an address at a domain of its own, Kaydown asks which company takes
+# one. For an address at a domain of its own, Ladder asks which company takes
 # the domain's email (see `lookup!` in mail.jl). The servers are under a line
-# that shows them. When Kaydown can't tell the servers, their two fields show
+# that shows them. When Ladder can't tell the servers, their two fields show
 # with the other fields, and that line isn't there.
 
 "The fields of the account on the Email page of the settings, and the button that connects it"
@@ -24400,7 +24400,7 @@ end
   kept::Union{Nothing,Bool} = nothing     # true when the Keychain has the account's password. Nothing until it's asked.
   more::Bool = false                      # the servers and the folder show
   typed::Tuple{String,Float64} = ("", 0.0)   # the address as the form last saw it, and when it changed
-  waits::Bool = false                     # Connect was clicked, and waits until Kaydown knows who takes the domain's email
+  waits::Bool = false                     # Connect was clicked, and waits until Ladder knows who takes the domain's email
   filled::Union{Nothing,Tuple{String,String}} = nothing   # the two servers that the form last put in its fields by itself
 end
 "The line of the form that shows and hides the servers"
@@ -24423,7 +24423,7 @@ const MAIL_MORE = (:incoming => "Incoming mail server", :outgoing => "Outgoing m
 const MAIL_ADDRESS = r"^[^@\s]+@[^@\s]+\.[^@\s.]{2,}$"
 const MAIL_LABEL_W = 170px   # how wide the names of the fields are
 const MAIL_FIELD_W = 340px   # and the fields
-const MAIL_PAUSE = 0.8       # seconds after the last letter of an address until Kaydown asks who takes its domain's email
+const MAIL_PAUSE = 0.8       # seconds after the last letter of an address until Ladder asks who takes its domain's email
 
 "The text field of the form for `key`. It's made with `text` in it."
 mail_field(e, key, text="") =
@@ -24454,7 +24454,7 @@ mail_words(words; color=colours.dim) =
 
 """
 What the form knows of the address that's typed: the address, whether it's a
-whole address, the company that holds its email or nothing, and whether Kaydown
+whole address, the company that holds its email or nothing, and whether Ladder
 is still asking who takes its domain's email.
 """
 mail_typed(e, f::MailForm, account) = begin
@@ -24464,7 +24464,7 @@ mail_typed(e, f::MailForm, account) = begin
   company = whole ? Mail.provider(typed) : nothing
   asking = false
   if whole && company === nothing
-    # A domain of its own. Once you stop typing, Kaydown asks who takes its email.
+    # A domain of its own. Once you stop typing, Ladder asks who takes its email.
     wait = f.waits ? 0.0 : MAIL_PAUSE - (time() - f.typed[2])
     if wait > 0
       redraw_in!(e, wait)
@@ -24482,10 +24482,10 @@ describe(f::MailForm) = begin
   a = m === nothing ? Mail.Account() : m.account
   f.kept === nothing && (f.kept = !isempty(Mail.secret(a.address)))
   typed, whole, company, asking = mail_typed(e, f, a)
-  # A click on Connect that came before Kaydown knew the servers goes on now that it does
+  # A click on Connect that came before Ladder knew the servers goes on now that it does
   f.waits && !asking && (f.waits = false; mail_keep!(e, f))
   guess = whole ? Mail.servers(typed) : ("", "")
-  # The two servers follow the address, unless you typed servers of your own. They wait until Kaydown
+  # The two servers follow the address, unless you typed servers of your own. They wait until Ladder
   # knows the address's company, or knows that it can't tell.
   f.filled === nothing && (f.filled = Mail.servers(a.address))
   if whole && !asking && (company !== nothing || haskey(Mail.exchanges, Mail.domain(typed)))
@@ -24518,9 +24518,9 @@ describe(f::MailForm) = begin
   # What the form says of the address: the password that its company takes, or that it can't tell the servers
   unknown = whole && company === nothing && !asking
   help = !whole ? () :
-         asking ? (mail_words("Kaydown is finding the servers of $(Mail.domain(typed))."),) :
+         asking ? (mail_words("Ladder is finding the servers of $(Mail.domain(typed))."),) :
          company !== nothing ? (mail_words(company.how, color=company.secret === :none ? colours.ink : colours.dim),) :
-         (mail_words("Kaydown doesn't know who holds the email of $(Mail.domain(typed)). Check the two servers below. Your email company's help pages name them."),)
+         (mail_words("Ladder doesn't know who holds the email of $(Mail.domain(typed)). Check the two servers below. Your email company's help pages name them."),)
   # A link opens the page where that company makes an app password. It has a line under it while the mouse is over it.
   page = if company === nothing || isempty(company.page)
     ()
@@ -24534,7 +24534,7 @@ describe(f::MailForm) = begin
     (Row(height(26px), padding(0px, 0px, 0px, MAIL_LABEL_W + 12px), link),)
   end
   more = f.more || unknown
-  # Over the fields, the accounts that Kaydown has, with the one that the form shows lit, and the words that add one
+  # Over the fields, the accounts that Ladder has, with the one that the form shows lit, and the words that add one
   all = mailers(e)
   tabs = map(enumerate(all)) do (k, o)
     tab = node!(MailTab, e, (:mail_tab, k))
@@ -24550,12 +24550,12 @@ describe(f::MailForm) = begin
     map(row, MAIL_FIELDS)...,
     help..., page...,
     folder,
-    # The line that shows and hides the servers is for an address whose servers Kaydown knows. When it can't
+    # The line that shows and hides the servers is for an address whose servers Ladder knows. When it can't
     # tell them, the two fields are fields of the form like the others, with no line over them.
     (unknown ? () : (node!(MailMore, e, :mail_more),))...,
     (more ? map(row, MAIL_MORE) : ())...,
     # The button is the last thing in the form, after every field, with what it came to under it. The words
-    # that take the account away are beside it. A company that Kaydown can't sign in to has no button: the
+    # that take the account away are beside it. A company that Ladder can't sign in to has no button: the
     # words above say why.
     (!can && !goes ? () :
       (Row(height(56px), child_gap=18px, padding(0px, 0px, 0px, MAIL_LABEL_W + 12px),
@@ -24619,7 +24619,7 @@ mail_add!(e) = begin
 end
 
 """
-Take the account that the form shows away from Kaydown: its work stops, and
+Take the account that the form shows away from Ladder: its work stops, and
 its address and its password go from the settings and the Keychain. The
 emails stay in their folder on the Mac.
 """
@@ -24641,7 +24641,7 @@ mail_status(e, f::MailForm, typed) = begin
   m = mailer(e)
   (m === nothing || !Mail.ready(m.account) || typed != m.account.address) && return ""
   isempty(m.problem) || return m.problem
-  Mail.busy(m) && return isempty(m.doing) ? "Kaydown is connecting." : m.doing
+  Mail.busy(m) && return isempty(m.doing) ? "Ladder is connecting." : m.doing
   # The account got all that its company allows in a day, and the rest of its emails wait
   m.held > 0 ? Mail.waiting(m) : m.checked > 0 ? "Connected." : ""
 end
@@ -24680,7 +24680,7 @@ describe(b::MailConnect) = begin
   e = editor(b)
   f = node!(MailForm, e, :mail_form)
   m = mailer(e)
-  # Kaydown is on its way to the server. Once it's signed in, the words under the button say what it does.
+  # Ladder is on its way to the server. Once it's signed in, the words under the button say what it does.
   going = f.waits || (m !== nothing && Mail.ready(m.account) && Mail.busy(m) && isempty(m.doing) && m.checked == 0 && isempty(m.problem) && isempty(f.note))
   down = ishovered(b) && held(b, Keys.mouse_left)
   fill = darker(colours.accent, down ? 0.2 : ishovered(b) ? 0.09 : 0.0)
@@ -24719,7 +24719,7 @@ onkey(c::MailChoose, ev::KeyPress{Keys.mouse_left}) = begin
     ccall((:objc_msgSend, libobjc), Cvoid, (Ptr{Cvoid}, Ptr{Cvoid}, Bool), panel, sel("setCanChooseDirectories:"), true)
     ccall((:objc_msgSend, libobjc), Cvoid, (Ptr{Cvoid}, Ptr{Cvoid}, Bool), panel, sel("setCanChooseFiles:"), false)
     ccall((:objc_msgSend, libobjc), Cvoid, (Ptr{Cvoid}, Ptr{Cvoid}, Bool), panel, sel("setCanCreateDirectories:"), true)
-    msg(panel, "setMessage:", nsstring("Choose the folder that keeps your email. Kaydown makes a folder in it that's named for your address."))
+    msg(panel, "setMessage:", nsstring("Choose the folder that keeps your email. Ladder makes a folder in it that's named for your address."))
     msg(panel, "setPrompt:", nsstring("Choose"))
     msg(panel, "setDirectoryURL:", msg(cls("NSURL"), "fileURLWithPath:", nsstring(start)))
     # 1 is the panel's Choose button
@@ -24748,17 +24748,17 @@ mail_keep!(e, f::MailForm) = begin
   a = Mail.Account(address=text(:address), name=text(:name), incoming=text(:incoming), outgoing=text(:outgoing), folder=folder,
                    user=m.account.user, every=m.account.every, safe=m.account.safe, back=m.account.back, rest=m.account.rest)
   occursin(MAIL_ADDRESS, a.address) || return say("Type your email address first.")
-  any(o -> o !== m && Mail.is(o.account, a.address), mailers(e)) && return say("Kaydown has an account for $(a.address) already.")
+  any(o -> o !== m && Mail.is(o.account, a.address), mailers(e)) && return say("Ladder has an account for $(a.address) already.")
   f.waits = false
   company = Mail.provider(a.address)
   company !== nothing && company.secret === :none && return say(company.how)
   # A server that's empty, or that the form put in its field by itself, is the form's to choose
   own(i, server) = !isempty(server) && (f.filled === nothing || server != f.filled[i])
-  # An address at a domain of its own, with a server still to choose: Kaydown asks who takes the domain's
+  # An address at a domain of its own, with a server still to choose: Ladder asks who takes the domain's
   # email, and the form connects by itself when the answer is in
   if company === nothing && !(own(1, a.incoming) && own(2, a.outgoing)) && !Mail.lookup!(Mail.domain(a.address))
     f.waits = true
-    return say("Kaydown is finding the servers of $(Mail.domain(a.address)).")
+    return say("Ladder is finding the servers of $(Mail.domain(a.address)).")
   end
   company = Mail.provider(a.address)
   company !== nothing && company.secret === :none && return say(company.how)
@@ -24802,7 +24802,7 @@ mail_every!(e, minutes) = begin
   nothing
 end
 
-"How many months back the emails that Kaydown gets go, with 0 for every email, and a way to change that"
+"How many months back the emails that Ladder gets go, with 0 for every email, and a way to change that"
 mail_back(e) = (reads!(e, :mail); m = mailer(e); m === nothing ? 12 : m.account.back)
 mail_back!(e, months) = begin
   m = mailer(e)
@@ -24811,7 +24811,7 @@ mail_back!(e, months) = begin
   mail_again!(e, m)
 end
 
-"Whether Kaydown gets the other folders once the inbox has come, and a way to change that"
+"Whether Ladder gets the other folders once the inbox has come, and a way to change that"
 mail_rest(e) = (reads!(e, :mail); m = mailer(e); m === nothing || m.account.rest)
 mail_rest!(e, on) = begin
   m = mailer(e)
@@ -24820,7 +24820,7 @@ mail_rest!(e, on) = begin
   mail_again!(e, m)
 end
 
-"What Kaydown gets has changed: keep the account, and start the look for email again so that it gets that"
+"What Ladder gets has changed: keep the account, and start the look for email again so that it gets that"
 mail_again!(e, m) = begin
   Mail.ready(m.account) && (Mail.keep(m.account); Mail.account!(m, m.account))
   rerun!(e, :mail)
@@ -24901,9 +24901,9 @@ end
 
 # --- windows ------------------------------------------------------------------------------
 #
-# Kaydown can have more than one window open, each with an editor of its own.
+# Ladder can have more than one window open, each with an editor of its own.
 # The settings page opens in a window of its own, so the page you were working
-# on stays as it was. ⌘W closes a window, and Kaydown quits when its last
+# on stays as it was. ⌘W closes a window, and Ladder quits when its last
 # window closes.
 
 const WELCOME = joinpath(@__DIR__, "pages", "welcome.md")
@@ -24939,7 +24939,7 @@ page_window(path, like) = begin
   foreach(name -> setfield!(e, name, getfield(like, name)), SHARED)
   e.remember = like.remember
   e.size = paper_window(screen_room(), e.side)
-  window!(e, title="Kaydown", size=e.size)
+  window!(e, title="Ladder", size=e.size)
 end
 
 # --- settings -----------------------------------------------------------------------------
@@ -24955,7 +24955,7 @@ end
 # setting that changes in one window changes in every window. They are kept in
 # a file, so the next window opens with them.
 
-"The folder of Kaydown's own pages. The built app changes it to the copies it writes out."
+"The folder of Ladder's own pages. The built app changes it to the copies it writes out."
 const pages_dir = Ref(joinpath(@__DIR__, "pages"))
 
 "The settings that every window has the same: each is a field of the editor"
@@ -25041,7 +25041,25 @@ adopt_settings!(o, e) = begin
   o
 end
 
-settings_file() = joinpath(homedir(), "Library", "Application Support", "Kaydown", "settings")
+settings_file() = joinpath(homedir(), "Library", "Application Support", "Ladder", "settings")
+
+# The app was called Kaydown until 18 November 2026, and its folders in
+# ~/Library had that name. The first time Ladder starts, it gives them its own
+# name, so the settings, the email accounts and the Welcome pages stay. A
+# folder that has the new name already stays as it is, and so does the old one.
+# mail.jl moves each email password in the Keychain to the new name.
+
+"Give the app's folders in `home`'s Library the name Ladder, if they still have the old name Kaydown"
+move_old_folders!(home=homedir()) =
+  for parts in (("Application Support",), ("Caches",))
+    old, new = joinpath(home, "Library", parts..., "Kaydown"), joinpath(home, "Library", parts..., "Ladder")
+    (isdir(old) && !ispath(new)) || continue
+    try
+      mv(old, new)
+    catch err
+      @warn "Ladder couldn't give its folder its new name" old new exception=err
+    end
+  end
 
 """
 Give the other windows the settings of `e`, and write them to their file if
@@ -25064,7 +25082,7 @@ end
 
 # --- the app's own updates ------------------------------------------------------------------
 #
-# The Kaydown app gets a newer version of itself while you work, and the new
+# The Ladder app gets a newer version of itself while you work, and the new
 # version takes the app's place when you quit. update.jl does the work, and
 # says how. The settings page has a box that turns it off, a line that says how
 # far an update has got, and a button to look for one now.
@@ -25199,9 +25217,10 @@ Open an editor window and run it until it closes. `args` can name a Markdown
 file or a folder, and `--paper` or `--night` to choose the colours for this window.
 """
 open_editor(args) = begin
+  move_old_folders!()
   # macOS can pass its own -options to an app it opens, so skip anything with a dash
   paths = filter(a -> !startswith(a, "-"), args)
-  Agent.announce()   # an agent's script knows from now on that this Kaydown can send it a page
+  Agent.announce()   # an agent's script knows from now on that this Ladder can send it a page
   e = build_editor(isempty(paths) ? WELCOME : paths[1])
   load_settings!(e)
   "--night" in args && (e.theme = :night)
@@ -25209,10 +25228,10 @@ open_editor(args) = begin
   e.remember = true
   e.size = paper_window(screen_room(), e.side)
   # This returns when the last window has closed
-  display(window!(e, title="Kaydown", size=e.size))
+  display(window!(e, title="Ladder", size=e.size))
   # The look for email stops, and each folder's list of its emails is kept
   Mail.quit!()
-  # A newer version of the app that's ready takes the app's place once Kaydown has quit
+  # A newer version of the app that's ready takes the app's place once Ladder has quit
   Update.quit!(Update.own())
 end
 
@@ -25221,10 +25240,10 @@ onopen(e::Editor, w::Window) = (watch_front!(e, w); place_window_buttons!(hide_t
 
 # --- saving a page when you leave its window ------------------------------------------------
 #
-# Kaydown writes a page to its file when you press ⌘S, and at no other time.
+# Ladder writes a page to its file when you press ⌘S, and at no other time.
 # A setting changes that: with it on, a window writes its pages when it stops
 # being the front window. That's when you click another window, change to
-# another app, or hide Kaydown. A page with no file has nowhere to go, so it
+# another app, or hide Ladder. A page with no file has nowhere to go, so it
 # stays as it is.
 
 "Turn on or off whether a page is written to its file when its window stops being the front window"
@@ -25416,7 +25435,7 @@ print_pdf(e, paper=paper_size()) = begin
     total = isempty(e.layout) ? 0px : lowest(e, e.layout)
     # A live block's code can load the drawing methods of what it shows, so the newest methods are used
     scene = Base.invokelatest(describe, whole, (w, total))
-    title, creator, none = splitext(name(b))[1], "Kaydown", ""
+    title, creator, none = splitext(name(b))[1], "Ladder", ""
     never = Skia.sk_date_time_t(0, 0, 0, 0, 0, 0, 0, 0)
     # Skia copies the text of the PDF's details as it makes the PDF
     doc = GC.@preserve title creator none begin
@@ -25511,9 +25530,9 @@ here, in Objective-C's runtime, with `printed` as its one method.
 """
 print_listener() = begin
   listener[] == C_NULL || return listener[]
-  class = cls("KaydownPrintListener")
+  class = cls("LadderPrintListener")
   if class == C_NULL
-    class = ccall((:objc_allocateClassPair, libobjc), Ptr{Cvoid}, (Ptr{Cvoid}, Cstring, Csize_t), cls("NSObject"), "KaydownPrintListener", 0)
+    class = ccall((:objc_allocateClassPair, libobjc), Ptr{Cvoid}, (Ptr{Cvoid}, Cstring, Csize_t), cls("NSObject"), "LadderPrintListener", 0)
     method = @cfunction(printed, Cvoid, (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}, Bool, Ptr{Cvoid}))
     ccall((:class_addMethod, libobjc), Bool, (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}, Cstring), class, sel("printed:success:window:"), method, "v@:@B^v")
     ccall((:objc_registerClassPair, libobjc), Cvoid, (Ptr{Cvoid},), class)

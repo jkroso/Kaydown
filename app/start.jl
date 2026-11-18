@@ -4,7 +4,7 @@
 #     include("start.jl")
 #
 # The code at the top level of app.jl runs once, while the app is being built.
-# It loads UI.jl and Kaydown, and draws the editor off screen so that code
+# It loads UI.jl and Ladder, and draws the editor off screen so that code
 # is compiled ahead of time. `main` runs each time the app opens, and calls
 # `run_app`.
 

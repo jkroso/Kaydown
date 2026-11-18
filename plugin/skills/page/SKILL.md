@@ -1,30 +1,30 @@
 ---
 name: page
-description: Show the user a page in Kaydown, a Markdown app on their Mac that draws diagrams, tables, tick boxes and sums, and read what they change in it. Use it when an answer is too big or too visual for the terminal - a plan, a design, a comparison of options, a report, a set of choices for the user to make - or when the user and you will work on one document together. Also use it when the user asks for a page, or names Kaydown.
+description: Show the user a page in Ladder, a Markdown app on their Mac that draws diagrams, tables, tick boxes and sums, and read what they change in it. Use it when an answer is too big or too visual for the terminal - a plan, a design, a comparison of options, a report, a set of choices for the user to make - or when the user and you will work on one document together. Also use it when the user asks for a page, or names Ladder.
 ---
 
-# Show a page in Kaydown
+# Show a page in Ladder
 
-Kaydown is a Markdown app on the user's Mac. It draws a Markdown file as a page: a `mermaid` code block is a diagram, a table is a table, `- [ ]` is a box that the user can tick. The user can type anywhere on the page. A button in Kaydown, a bell at the top right called "Nudge Claude", sends you the lines that the user changed.
+Ladder is a Markdown app on the user's Mac. It draws a Markdown file as a page: a `mermaid` code block is a diagram, a table is a table, `- [ ]` is a box that the user can tick. The user can type anywhere on the page. A button in Ladder, a bell at the top right called "Nudge Claude", sends you the lines that the user changed.
 
 So a page does two jobs. It shows the user more than the terminal can. And it is the form that the user answers on.
 
 ## The steps
 
-1. Write the page as a Markdown file. Its name must end in `.md`. Put it where the user says. If the user names no place, put it in a `.kaydown` folder in the project.
-2. Run `kaydown show <file>`. Kaydown opens the page in front of the other windows.
-3. Run `kaydown wait <file>` in the background (in Claude Code: the Bash tool with `run_in_background: true`). Do not poll, and do not run it in the foreground, because the user can take any length of time.
-4. Tell the user, in one or two sentences, what is on the page and what you need from them. Tell them to click the bell at the top right of Kaydown, or press ⌘Return, when they are done. Then end your turn.
-5. When `kaydown wait` stops, its output is what the user changed. Read it, and do what it asks.
-6. If you change the page, edit the file. Kaydown shows your change in less than a second, so do not run `kaydown show` again.
-7. If the work on the page goes on, run `kaydown wait <file>` in the background again. If the work is done, do not. The Nudge button shows in Kaydown only while a `kaydown wait` runs.
+1. Write the page as a Markdown file. Its name must end in `.md`. Put it where the user says. If the user names no place, put it in a `.ladder` folder in the project.
+2. Run `ladder show <file>`. Ladder opens the page in front of the other windows.
+3. Run `ladder wait <file>` in the background (in Claude Code: the Bash tool with `run_in_background: true`). Do not poll, and do not run it in the foreground, because the user can take any length of time.
+4. Tell the user, in one or two sentences, what is on the page and what you need from them. Tell them to click the bell at the top right of Ladder, or press ⌘Return, when they are done. Then end your turn.
+5. When `ladder wait` stops, its output is what the user changed. Read it, and do what it asks.
+6. If you change the page, edit the file. Ladder shows your change in less than a second, so do not run `ladder show` again.
+7. If the work on the page goes on, run `ladder wait <file>` in the background again. If the work is done, do not. The Nudge button shows in Ladder only while a `ladder wait` runs.
 
-If the user answers in the terminal and not on the page, do what they say. A `kaydown wait` that still runs does no harm.
+If the user answers in the terminal and not on the page, do what they say. A `ladder wait` that still runs does no harm.
 
-## What `kaydown wait` prints
+## What `ladder wait` prints
 
 ```
-The user sent /Users/sam/shop/.kaydown/plan.md from Kaydown.
+The user sent /Users/sam/shop/.ladder/plan.md from Ladder.
 
 What the user changed since your last version of the file (- is your line, + is the user's):
 
@@ -50,13 +50,13 @@ How to read it:
 - "The user changed nothing in it" means that the user read the page and has nothing to add. If the page asked for approval, that is approval.
 - If the output ends with "The user selected this text", the user's note or their words in the terminal are about that text.
 
-Exit code 3 means that Kaydown is not installed, or that it is too old to send a page. Tell the user, and carry on in the terminal.
+Exit code 3 means that Ladder is not installed, or that it is too old to send a page. Tell the user, and carry on in the terminal.
 
 ## Change the page while the user reads it
 
 - Read the file again before you change it. The user's changes are in it after they send.
-- Make small edits. Do not write the whole file again. The user can be typing in the page while you work, and Kaydown puts your edit and their typing together.
-- If you and the user change the same lines at the same time, Kaydown keeps the user's lines. You see their lines the next time they send.
+- Make small edits. Do not write the whole file again. The user can be typing in the page while you work, and Ladder puts your edit and their typing together.
+- If you and the user change the same lines at the same time, Ladder keeps the user's lines. You see their lines the next time they send.
 
 ## What a page can have
 
@@ -79,22 +79,22 @@ Exit code 3 means that Kaydown is not installed, or that it is too old to send a
 | A table | A Markdown table. The user can type in its cells and add rows. |
 | The rows of a CSV file | `![what it holds](prices.csv)` on a line of its own. The path starts at the page's folder. The user can't type in this table. See below. |
 | A flow, a sequence, states, classes, shares, a mind map, the tables of a database, tasks with dates, a timeline | A `mermaid` code block. See below. |
-| Code | A code block with its language. Kaydown colours it. |
+| Code | A code block with its language. Ladder colours it. |
 | Sums that the user can change | A `sheet` or a `spreadsheet` code block. See below. |
 | Maths | TeX between dollar signs: `$x^2$` in a line of text, and on lines of its own between a line of `$$` and another. A dollar sign before a number, like `$5`, stays a dollar sign. |
 | A picture | `![what it shows](picture.png)` on a line of its own. The path starts at the page's folder. A web address works too. |
 | Several pictures as a grid | A `gallery` code block. See below. |
-| A web page as a card, with its title, its description and its picture | A `card` code block with the page's address on a line, like `https://julialang.org`. One card for each address. Kaydown gets the page. A bare address outside the block stays text. |
+| A web page as a card, with its title, its description and its picture | A `card` code block with the page's address on a line, like `https://julialang.org`. One card for each address. Ladder gets the page. A bare address outside the block stays text. |
 | A footnote | `[^1]` in the text, and a line that starts with `[^1]:`. |
 | Another page | A link to another `.md` file. The user holds ⌘ and clicks it. |
 
-Kaydown does not draw HTML tags. Do not use them.
+Ladder does not draw HTML tags. Do not use them.
 
 The user can show a page as slides, one part at a time, with ⌃⌘⇧P. Each heading of level 1 or 2 starts a slide, and so does a line of `---`.
 
 ### Diagrams
 
-Kaydown draws nine kinds of Mermaid diagram: `flowchart` (or `graph`), `sequenceDiagram`, `stateDiagram-v2`, `classDiagram`, `pie`, `mindmap`, `erDiagram`, `gantt` and `timeline`. Any other kind, like `journey`, `gitGraph` or `quadrantChart`, shows as code, so do not use it. A diagram with a line that Kaydown can't read shows as code too.
+Ladder draws nine kinds of Mermaid diagram: `flowchart` (or `graph`), `sequenceDiagram`, `stateDiagram-v2`, `classDiagram`, `pie`, `mindmap`, `erDiagram`, `gantt` and `timeline`. Any other kind, like `journey`, `gitGraph` or `quadrantChart`, shows as code, so do not use it. A diagram with a line that Ladder can't read shows as code too.
 
 ````
 ```mermaid
@@ -125,7 +125,7 @@ mindmap
 ```
 ````
 
-An entity relationship diagram shows tables and how they are related. A row of a table is a type, a name, then `PK`, `FK` or `UK`, then a comment in quotes. Each end of a line has a sign for how many: `||` exactly one, `|o` or `o|` none or one, `}|` or `|{` one or more, `}o` or `o{` none or more. Use `--` for a full line and `..` for a dashed one. Do not use `subgraph`: Kaydown does not draw its box.
+An entity relationship diagram shows tables and how they are related. A row of a table is a type, a name, then `PK`, `FK` or `UK`, then a comment in quotes. Each end of a line has a sign for how many: `||` exactly one, `|o` or `o|` none or one, `}|` or `|{` one or more, `}o` or `o{` none or more. Use `--` for a full line and `..` for a dashed one. Do not use `subgraph`: Ladder does not draw its box.
 
 ````
 ```mermaid
@@ -179,7 +179,7 @@ timeline
 
 ### Sums
 
-A `sheet` is a list of rows. Each row is a name, `=`, and a number or a sum. A sum can use the names of the rows above it. A number can have a unit, like `12m` or `2hr`. Kaydown shows what each row comes to, and the user can change any number.
+A `sheet` is a list of rows. Each row is a name, `=`, and a number or a sum. A sum can use the names of the rows above it. A number can have a unit, like `12m` or `2hr`. Ladder shows what each row comes to, and the user can change any number.
 
 ````
 ```sheet
@@ -203,7 +203,7 @@ A `spreadsheet` is a grid. Column letters and row numbers name the cells, and a 
 
 ### A schedule
 
-A `schedule` code block shows every `- [ ]` item of the page as a bar on a line of days. The user drags the bars to change the plan, and Kaydown writes each change into the block. The block names each task by the text of its item, without the marks of bold and the like. A task with no line takes one day and starts when the work starts.
+A `schedule` code block shows every `- [ ]` item of the page as a bar on a line of days. The user drags the bars to change the plan, and Ladder writes each change into the block. The block names each task by the text of its item, without the marks of bold and the like. A task with no line takes one day and starts when the work starts.
 
 ````
 - [ ] Add the queue table
@@ -223,7 +223,7 @@ After the name: `3 days` is how many working days the task takes, `after` and a 
 
 ### A question
 
-An `ask` code block asks one question. Its first lines are the question. A line that starts with `( )` is an answer, and the user chooses one of those. A line that starts with `[ ]` is an answer that the user can choose with any others. Under the answers, Kaydown shows a field that the user can type in. A block with no answers is a question that the user answers in that field.
+An `ask` code block asks one question. Its first lines are the question. A line that starts with `( )` is an answer, and the user chooses one of those. A line that starts with `[ ]` is an answer that the user can choose with any others. Under the answers, Ladder shows a field that the user can type in. A block with no answers is a question that the user answers in that field.
 
 ````
 ```ask
@@ -234,11 +234,11 @@ Which queue should the price checks use?
 ```
 ````
 
-The user clicks an answer, and Kaydown writes `(x)` or `[x]` in its line. What they type goes in a line that starts with `>`. Use one block for each question. An older Kaydown shows the block as code, and the user can still type an `x` between the brackets.
+The user clicks an answer, and Ladder writes `(x)` or `[x]` in its line. What they type goes in a line that starts with `>`. Use one block for each question. An older Ladder shows the block as code, and the user can still type an `x` between the brackets.
 
 ### Changes to accept or reject
 
-A `changes` code block holds a diff, as `git diff` or `diff -u` writes one. Kaydown shows each change, with the lines that go in red and the lines that come in green, and an Accept and a Reject button.
+A `changes` code block holds a diff, as `git diff` or `diff -u` writes one. Ladder shows each change, with the lines that go in red and the lines that come in green, and an Accept and a Reject button.
 
 ````
 ```changes
@@ -253,9 +253,9 @@ A `changes` code block holds a diff, as `git diff` or `diff -u` writes one. Kayd
 ```
 ````
 
-Kaydown writes the user's choice at the end of the change's `@@` line: `[accepted]` or `[rejected]`. It changes no file but the page. So show the changes before you make them, and then make only the ones that the user accepted. Give each change that the user can choose apart from the others its own `@@` line.
+Ladder writes the user's choice at the end of the change's `@@` line: `[accepted]` or `[rejected]`. It changes no file but the page. So show the changes before you make them, and then make only the ones that the user accepted. Give each change that the user can choose apart from the others its own `@@` line.
 
-The user can click a line of the diff and say something about it. Kaydown writes that at the end of the block, in two lines:
+The user can click a line of the diff and say something about it. Ladder writes that at the end of the block, in two lines:
 
 ```
 # Comment on change 1, line 2: -  run(job)
@@ -294,7 +294,7 @@ The first row of the file has the names of the columns. The table shows the firs
 
 ### A board
 
-A `board` code block shows every `- [ ]` item of the page as a card, in the columns To do, Doing and Done. The user drags a card to another column. A ticked item is in the last column. Kaydown writes a line in the block for each card that is between the first column and the last: the item's text, a `|`, and the column.
+A `board` code block shows every `- [ ]` item of the page as a card, in the columns To do, Doing and Done. The user drags a card to another column. A ticked item is in the last column. Ladder writes a line in the block for each card that is between the first column and the last: the item's text, a `|`, and the column.
 
 ````
 - [ ] Add the queue table
@@ -317,7 +317,7 @@ name: Sam Lee
 ```
 ````
 
-Kaydown writes the rest. The first stroke adds the line `signed: 2026-11-18 09:14`, and each stroke adds a line that starts with `pen`. A block with a `pen` line is signed. Do not write `signed:` or `pen` lines yourself, and do not change them.
+Ladder writes the rest. The first stroke adds the line `signed: 2026-11-18 09:14`, and each stroke adds a line that starts with `pen`. A block with a `pen` line is signed. Do not write `signed:` or `pen` lines yourself, and do not change them.
 
 ### A contact
 
@@ -373,11 +373,11 @@ month: 2026-11
 ```
 ````
 
-`month` is the month that shows. Leave it out to show the month of today. Write every day as year-month-day. When the user drags a thing, Kaydown writes the new day into the item's text or the event's line.
+`month` is the month that shows. Leave it out to show the month of today. Write every day as year-month-day. When the user drags a thing, Ladder writes the new day into the item's text or the event's line.
 
 ### A map
 
-A `map` code block shows the map round a place, with a pin on the place. Its first line is a street address, or a latitude and a longitude. Kaydown doesn't find a place by its name alone, so write the address. `zoom` says how much the map shows, from 3 for a continent to 19 for one building. Without it, the zoom is 15, which shows a few streets.
+A `map` code block shows the map round a place, with a pin on the place. Its first line is a street address, or a latitude and a longitude. Ladder doesn't find a place by its name alone, so write the address. `zoom` says how much the map shows, from 3 for a continent to 19 for one building. Without it, the zoom is 15, which shows a few streets.
 
 ````
 ```map
@@ -390,15 +390,15 @@ zoom: 16
 
 The user can change each line on the map itself, so read the block again after they send:
 
-- Two buttons change the zoom, and Kaydown writes the `zoom` line.
-- A drag moves the map, and Kaydown writes the `centre` line.
-- A click moves the pin, and Kaydown writes the point's latitude and longitude as the first line, like `-33.85930, 151.21320`.
+- Two buttons change the zoom, and Ladder writes the `zoom` line.
+- A drag moves the map, and Ladder writes the `centre` line.
+- A click moves the pin, and Ladder writes the point's latitude and longitude as the first line, like `-33.85930, 151.21320`.
 
 The first picture of a place needs the network.
 
 ### A time log
 
-A `timelog` code block keeps the hours that the user works on each task. Each line is one stretch of work: the day, the start time, a `-`, the stop time, a `|`, and the task. Write times with 24 hours. The block shows the rows, the total and the hours of each task. The user starts and stops the clock with a button, and Kaydown writes the line.
+A `timelog` code block keeps the hours that the user works on each task. Each line is one stretch of work: the day, the start time, a `-`, the stop time, a `|`, and the task. Write times with 24 hours. The block shows the rows, the total and the hours of each task. The user starts and stops the clock with a button, and Ladder writes the line.
 
 ````
 ```timelog
@@ -447,11 +447,11 @@ This paragraph is under the columns.
 - When the last column starts with a heading, put a line of `---` after its last block. Without it, the text that follows is in that column too.
 - Several numbers are widths. `2 1` is two columns, the first twice as wide as the second.
 - The headings and the tasks in the columns are the page's own. They are in the list of contents, on a `board` and in a `schedule`.
-- In a narrow window, Kaydown shows the blocks one under another. Use two or three columns, not more.
+- In a narrow window, Ladder shows the blocks one under another. Use two or three columns, not more.
 
 ### Code that runs
 
-A code block in the language `ui`, and code between backticks straight after a `!`, is Julia code that Kaydown runs when the page opens. Use these only if the user asks for a live block.
+A code block in the language `ui`, and code between backticks straight after a `!`, is Julia code that Ladder runs when the page opens. Use these only if the user asks for a live block.
 
 ## Write a page that is easy to answer
 

@@ -275,7 +275,7 @@ end
   click(s.nodes[(:mail_tab, 2)], sw)
   @test K.mailer(s) === m2 && (field(:address), field(:name), field(:incoming)) == ("two@example.com", "Jake Two", "127.0.0.1:$(server2.port)")
   @test occursin(joinpath(top, "mail", "two@example.com"), K.mail_news(s)) && s.nodes[:mail_place].at == joinpath(top, "mail")
-  # What Kaydown gets is a setting of the account that shows
+  # What Ladder gets is a setting of the account that shows
   K.mail_rest!(s, false)
   @test !Mail.account("two@example.com").rest && Mail.account("you@example.com").rest && !K.mail_rest(s)
   K.mail_rest!(s, true)
@@ -309,14 +309,14 @@ end
   frames(sw, 3)
   @test isempty(K.problems)
   @test s.nodes[(:mail_field, :address)].text == "you@example.com"
-  # Kaydown doesn't know who holds the email of example.com, so the servers show without a click
+  # Ladder doesn't know who holds the email of example.com, so the servers show without a click
   @test s.nodes[(:mail_field, :incoming)].text == "127.0.0.1:$(server.port)" && !s.nodes[:mail_form].more && !haskey(s.nodes, :mail_page)
   @test s.nodes[(:mail_field, :password)].hidden && s.nodes[(:mail_field, :password)].placeholder == "Kept in your Keychain"
-  @test occursin("Kaydown has", K.mail_news(s))
+  @test occursin("Ladder has", K.mail_news(s))
   # The Connect button is the last thing in the form, under the servers, with the words that take the account away beside it
   low(node) = K.num(rect(node).top)
   @test low(s.nodes[:mail_keep]) > low(s.nodes[(:mail_field, :outgoing)]) > low(s.nodes[(:mail_field, :incoming)]) > low(s.nodes[:mail_place])
-  # Kaydown can't tell the servers of example.com, so the two fields show with the others, with no line over them
+  # Ladder can't tell the servers of example.com, so the two fields show with the others, with no line over them
   @test !haskey(s.nodes, :mail_more)
   @test abs(low(s.nodes[:mail_remove]) - low(s.nodes[:mail_keep])) < 30 && K.num(rect(s.nodes[:mail_remove]).left) > K.num(rect(s.nodes[:mail_keep]).left)
   @test s.nodes[:mail_servers]   # the servers show, so the line over them points down
@@ -324,7 +324,7 @@ end
   # While emails come, the form has a bar that fills, and says how many have come and how long the rest take.
   # The task here never starts, so the mailer looks busy and does nothing.
   @test K.mail_progress(s, s.nodes[:mail_form], "you@example.com") == () && K.mail_status(s, s.nodes[:mail_form], "you@example.com") == "Connected."
-  m.task, m.total, m.left, m.began, m.doing = Task(() -> nothing), 22314, 21114, time() - 600, "Kaydown is getting your email from Inbox."
+  m.task, m.total, m.left, m.began, m.doing = Task(() -> nothing), 22314, 21114, time() - 600, "Ladder is getting your email from Inbox."
   frames(sw, 2)
   @test length(K.mail_progress(s, s.nodes[:mail_form], "you@example.com")) == 2 && K.mail_progress(s, s.nodes[:mail_form], "jo@other.example") == ()
   @test K.mail_status(s, s.nodes[:mail_form], "you@example.com") == m.doing && K.mail_brief(s)[1] == "1,200 of 22,314 emails have come"
@@ -336,7 +336,7 @@ end
   @test occursin("with 14,200 emails still to come. It goes on ", K.mail_status(s, s.nodes[:mail_form], "you@example.com")) && K.mail_brief(s)[1] == "14,200 emails come later"
   m.held = 0
   frames(sw, 2)
-  # What Kaydown gets: how far back the emails go, and whether the other folders come. A change is kept with the account.
+  # What Ladder gets: how far back the emails go, and whether the other folders come. A change is kept with the account.
   @test K.mail_back(s) == 0 && K.mail_rest(s)
   K.mail_back!(s, 12)
   K.mail_rest!(s, false)
@@ -397,7 +397,7 @@ end
   @test m.kind === :login && occursin("didn't take the password", K.mail_news(s)) && K.mail_status(s, s.nodes[:mail_form], "you@example.com") == m.problem && K.mail_status(s, s.nodes[:mail_form], "jo@other.example") == ""
   shot("8-wrong-password", sw)
   # An address with no account yet: the servers that it most likely has fill the empty fields. The account
-  # is one that encrypts, with no password, so that Kaydown asks for the password and connects to nothing.
+  # is one that encrypts, with no password, so that Ladder asks for the password and connects to nothing.
   m.account.safe = true
   s.nodes[(:mail_field, :address)].text = "jo@gmail.com"
   s.nodes[(:mail_field, :incoming)].text = s.nodes[(:mail_field, :outgoing)].text = ""
@@ -419,7 +419,7 @@ end
   K.mail_keep!(s, s.nodes[:mail_form])
   Mail.account!(m, Mail.Account())
   @test Mail.secret("jo@gmail.com") == "abcdefghijklmnop"
-  # Kaydown can't sign in to Outlook.com yet, and says so in place of trying
+  # Ladder can't sign in to Outlook.com yet, and says so in place of trying
   s.nodes[(:mail_field, :address)].text = "jo@hotmail.com"
   frames(sw)
   @test rect(s.nodes[:mail_keep]) === nothing   # the form has no Connect button for it
@@ -430,7 +430,7 @@ end
   s.nodes[(:mail_field, :address)].text = "jo@yahoo.com"
   frames(sw)
   @test s.nodes[(:mail_field, :incoming)].text == "imap.mail.yahoo.com:993" && s.nodes[:mail_page].url == "https://login.yahoo.com/account/security"
-  # An address whose servers Kaydown knows has a line that shows and hides the servers
+  # An address whose servers Ladder knows has a line that shows and hides the servers
   @test rect(s.nodes[:mail_more]) !== nothing && !s.nodes[:mail_servers]
   click(s.nodes[:mail_more], sw)
   @test s.nodes[:mail_form].more

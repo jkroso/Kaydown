@@ -2,7 +2,7 @@
 # See "a table from a CSV file" in main.jl. Run them with
 # `julia -O0 --project=. test/csv_view_test.jl`. They write small CSV files
 # into a temporary folder, and click in a window that isn't on the screen. Set
-# `KAYDOWN_SHOTS` to a folder, and they save pictures of the tables there.
+# `LADDER_SHOTS` to a folder, and they save pictures of the tables there.
 
 @use Test: @test, @testset
 @use "../main" => K
@@ -66,7 +66,7 @@ const w = Window(e, size=(1000px, 900px))
 frames(n=2) = foreach(_ -> frame(w), 1:n)
 frames()
 K.focus(e)
-shot(name) = haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(ENV["KAYDOWN_SHOTS"], name), w)
+shot(name) = haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], name), w)
 
 "The line of the page that holds `text`"
 line(text) = findfirst(l -> occursin(text, l), e.buf.lines)
@@ -260,7 +260,7 @@ end
   @test occursin("<caption>long.csv</caption>", out)
   # Every row of a long file is in the page
   @test occursin("<tr><td style=\"text-align: right\">100</td><td style=\"text-align: right\">2 mm</td></tr>", out)
-  @test occursin("<p><em>Kaydown can't find the file gone.csv.</em></p>", out)
+  @test occursin("<p><em>Ladder can't find the file gone.csv.</em></p>", out)
   @test !occursin("<img", out)
 end
 
@@ -301,10 +301,10 @@ end
   close(w)
   narrow = Window(e, size=(460px, 800px))
   foreach(_ -> frame(narrow), 1:3)
-  haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(ENV["KAYDOWN_SHOTS"], "csv-narrow.png"), narrow)
+  haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], "csv-narrow.png"), narrow)
   e.scroll.offset = max(0px, K.item(e, line("wide.csv")).top - 60px)
   foreach(_ -> frame(narrow), 1:3)
-  haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(ENV["KAYDOWN_SHOTS"], "csv-narrow-wide.png"), narrow)
+  haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], "csv-narrow-wide.png"), narrow)
   @test isapprox(K.num(sum(shown("wide.csv").laid.widths)), K.num(e.width) - 10, atol=0.01)
 end
 

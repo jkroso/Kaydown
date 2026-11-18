@@ -198,13 +198,13 @@ end
   empty!(asked)
   gone = "https://example.com/gone"
   @test C.lookup!(gone, dir) == (C.Card(gone), true)    # it's on its way
-  # The site said no. Kaydown isn't done with it: it asks once more a little later, and not straight away.
+  # The site said no. Ladder isn't done with it: it asks once more a little later, and not straight away.
   @test C.lookup!(gone, dir) == (C.Card(gone), true) && C.lookup!(gone, dir) == (C.Card(gone), true) && asked == [gone]
   @test !any(endswith(".card"), readdir(dir)) && !any(endswith(".part"), readdir(dir))
   raw = joinpath(dir, C.name(gone) * ".html")
   C.jobs[raw] = time() - C.SOON - 1
   @test C.lookup!(gone, dir) == (C.Card(gone), true) && asked == [gone, gone]
-  # The site said no again. Now the card stays as it is, and Kaydown waits longer before it asks.
+  # The site said no again. Now the card stays as it is, and Ladder waits longer before it asks.
   @test C.lookup!(gone, dir) == (C.Card(gone), false)
   C.jobs[raw] = time() - C.SOON - 1
   @test C.lookup!(gone, dir) == (C.Card(gone), false) && asked == [gone, gone]

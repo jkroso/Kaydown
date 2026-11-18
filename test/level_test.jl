@@ -1,7 +1,7 @@
 # Tests for a change of level while a block fills the window: the lines of the
 # block fill the window in its place, as text. Run them with
 # `julia -O0 --project=. test/level_test.jl`. They draw in a window that isn't
-# on the screen. Set `KAYDOWN_SHOTS` to a folder, and they save a picture of
+# on the screen. Set `LADDER_SHOTS` to a folder, and they save a picture of
 # the page there.
 
 @use Test: @test, @testset
@@ -37,7 +37,7 @@ frames(n=2) = foreach(_ -> frame(w), 1:n)
 e.panel = true   # the sidebar shows
 frames()
 const v = e.nodes[(:schedule, page, 1)]
-shot(name) = haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(ENV["KAYDOWN_SHOTS"], name), w)
+shot(name) = haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], name), w)
 
 at((x, y)) = (w.mouse = typeof(w.mouse)(px(x), px(y)); onmouse(w, MouseMove(Vec2{px}(px(x), px(y)), w)); frames(1))
 press(place) = (at(place); w.keys |= Keys.mouse_left; onkey(w, KeyPress{Keys.mouse_left}(0, w)))

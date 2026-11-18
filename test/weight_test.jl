@@ -270,7 +270,7 @@ end
   K.open!(e, file); frames()
 end
 
-@testset "each weight of Source Code Pro draws its own face, though Kaydown reads one of its files itself" begin
+@testset "each weight of Source Code Pro draws its own face, though Ladder reads one of its files itself" begin
   if "Source Code Pro" in K.code_fonts()
     # The Mac says its ExtraLight weighs 300 and its Light 342, so asking for 300 by number would get ExtraLight
     @test labels("Source Code Pro") == ["ExtraLight", "Light", "Regular", "Medium", "Semibold"]

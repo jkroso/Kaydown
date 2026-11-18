@@ -1,11 +1,11 @@
 ---
 title: Examples
-about: Everything that Kaydown does, with a link to an example of each
+about: Everything that Ladder does, with a link to an example of each
 ---
 
 # Examples
 
-This page lists everything that Kaydown does. Each line links to the place that shows it. Hold ⌘ and click a link to go there. To come back, press ⌘⌥←.
+This page lists everything that Ladder does. Each line links to the place that shows it. Hold ⌘ and click a link to go there. To come back, press ⌘⌥←.
 
 The block at the top of this page is front matter: lines at the very top of a file that say things about it.
 
@@ -18,7 +18,7 @@ The block at the top of this page is front matter: lines at the very top of a fi
 - [A link card: a web page as a card, with its title, its description and its picture](welcome.md#link-cards)
 - [Maths: formulas written in TeX](welcome.md#maths)
 - [Lists and to-do items](welcome.md#lists)
-- [Tables, and the keys that Kaydown uses](welcome.md#tables)
+- [Tables, and the keys that Ladder uses](welcome.md#tables)
 - [A table from a CSV file](welcome.md#tables-from-a-file)
 - [Columns: blocks of a page side by side](welcome.md#columns)
 - Columns that start with a heading: [one](welcome.md#copper-pipe) and [the next](welcome.md#plastic-pipe)
@@ -75,7 +75,7 @@ The block at the top of this page is front matter: lines at the very top of a fi
 ## Email
 
 - [The emails with a person, in a page](welcome.md#emails)
-- [Your email account, and how Kaydown keeps your email](settings/email.md)
+- [Your email account, and how Ladder keeps your email](settings/email.md)
 
 ## The window and its settings
 

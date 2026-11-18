@@ -1,7 +1,7 @@
 # Tests for the menu of the file's name in the top bar. See "a right-click on
 # the file's name" in main.jl. Run them with `julia -O0 --project=. test/title_test.jl`.
 # They right-click, type and press keys in a window that isn't on the screen,
-# so the menu is the one that Kaydown draws, not the Mac's own.
+# so the menu is the one that Ladder draws, not the Mac's own.
 
 @use Test: @test, @testset
 @use "github.com/jkroso/MiniFB.jl" Window KeyPress MouseMove Keys onkey onmouse Typed ontype
@@ -31,9 +31,9 @@ key(k) = (onkey(w, KeyPress{k}(0, w)); frames())
 typed(s) = (foreach(c -> ontype(w, Typed(c, w)), s); frames())
 
 title() = e.nodes[:title]
-"The menu that Kaydown drew, or nothing"
+"The menu that Ladder drew, or nothing"
 menu() = (ps = [p for p in popups(w) if p.key == :menu]; isempty(ps) ? nothing : only(ps).content)
-"Choose the item called `name` in the menu that Kaydown drew, with ↓ and Return"
+"Choose the item called `name` in the menu that Ladder drew, with ↓ and Return"
 choose(name) = begin
   m = menu()
   foreach(_ -> key(Keys.down), 1:findfirst(==(name), m.items))

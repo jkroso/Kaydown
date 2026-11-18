@@ -1,10 +1,10 @@
 # Tests for the blocks that a file defines, in main.jl: a code block in a
-# language that Kaydown doesn't know shows what a function of a file makes of
+# language that Ladder doesn't know shows what a function of a file makes of
 # its lines, and the lines that the file's `written` gives go back into the
 # block: when the component asks, at once when it says so, and before
 # something reads the page's text. Run them with `julia -O0 --project=. test/file_block_test.jl`. They
 # click and drag in a window that isn't on the screen, and use no network: a
-# folder stands in for a repository on GitHub. Set `KAYDOWN_SHOTS` to a
+# folder stands in for a repository on GitHub. Set `LADDER_SHOTS` to a
 # folder, and they save a picture of the page there.
 
 @use Test: @test, @testset
@@ -16,7 +16,7 @@
 const px = K.px
 
 # The folder has the same name each time, so that Kip compiles its files once
-const dir = joinpath(tempdir(), "kaydown-file-block-test")
+const dir = joinpath(tempdir(), "ladder-file-block-test")
 rm(dir, recursive=true, force=true)
 mkpath(dir)
 const page = joinpath(dir, "job.md")
@@ -70,7 +70,7 @@ const e = K.build_editor(page)
 const w = Window(e, size=(1000px, 900px))
 frames(n=2) = foreach(_ -> frame(w), 1:n)
 frames()
-shot(name) = haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(ENV["KAYDOWN_SHOTS"], name), w)
+shot(name) = haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], name), w)
 
 at((x, y)) = (w.mouse = typeof(w.mouse)(px(x), px(y)); onmouse(w, MouseMove(Vec2{px}(px(x), px(y)), w)); frames(1))
 press(place) = (at(place); w.keys |= Keys.mouse_left; onkey(w, KeyPress{Keys.mouse_left}(0, w)); frames(1))
@@ -99,7 +99,7 @@ said(v) = v.shown.value.firstchild.content
   @test K.block_source("```progress ~/b.jl", "progress", "") == "~/b.jl"
   # Words after the language that aren't a file or a repository are something else, like a title
   @test K.block_source("```python title=\"x\"", "python", dir) === nothing
-  # Kaydown's own kinds stay as they are, whatever follows them and whatever files are there
+  # Ladder's own kinds stay as they are, whatever follows them and whatever files are there
   write(joinpath(dir, "board.jl"), "board(lines) = 1\n")
   @test all(lang -> K.block_source("```$lang ./kinds.jl", lang, dir) === nothing, ["board", "ui", "julia", "sheet", "mermaid", "chart"])
   rm(joinpath(dir, "board.jl"))
@@ -116,7 +116,7 @@ end
   @test view("shout").state == :made && said(view("shout")) == "LAY THE PIPE"
   # A language with no file is a code block like any other, and so is a file that isn't there
   @test !haskey(e.nodes, (:block, "python", page, 1))
-  @test view("nothing_here").state == :fault && view("nothing_here").fault == "Kaydown can't find the file ./missing.jl. The line that opens this block names it."
+  @test view("nothing_here").state == :fault && view("nothing_here").fault == "Ladder can't find the file ./missing.jl. The line that opens this block names it."
   # A function that fails says why in the block
   @test view("broken").state == :fault && occursin("This block can't be made", view("broken").fault)
   # The sidebar names each block by its language
@@ -326,7 +326,7 @@ end
     K.edit!(e.buf, (i, 0), (i, 0), "```stamp github.com/sam/blocks\none\ntwo\n```\n\n```stamp github.com/sam/blocks\nthree\n```\n\n```stamp github.com/sam/elsewhere\n```\n\n")
     frames()
     v, second, far = view("stamp"), view("stamp", 2), view("stamp", 3)
-    # Kaydown asks before it runs the code of a repository, and loads nothing until you say
+    # Ladder asks before it runs the code of a repository, and loads nothing until you say
     @test v.state == :ask && second.state == :ask && v.from === nothing
     shot("file_block_ask.png")
     click(let r = rect(v.parts[(:button, :allow)]); (K.num(r.left + r.width / 2), K.num(r.top + r.height / 2)) end)
@@ -355,7 +355,7 @@ end
 close(w)
 rm(dir, recursive=true, force=true)
 
-@testset "the page that comes with Kaydown and defines a counter" begin
+@testset "the page that comes with Ladder and defines a counter" begin
   counter = joinpath(K.pages_dir[], "counter.md")
   o = K.build_editor(counter)
   win = Window(o, size=(1000px, 900px))
@@ -372,7 +372,7 @@ rm(dir, recursive=true, force=true)
   @test v.value.count == 4 && o.buf.lines[s[1]+1:s[2]-1] == ["4"]
   K.undo!(o.buf); foreach(_ -> frame(win), 1:2)
   @test o.buf.lines[s[1]+1:s[2]-1] == ["3"] && v.value.count == 3 && !K.dirty(o.buf)
-  haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(ENV["KAYDOWN_SHOTS"], "counter.png"), win)
+  haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], "counter.png"), win)
   close(win)
 end
 

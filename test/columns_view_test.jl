@@ -1,7 +1,7 @@
 # Tests for the `columns` block of main.jl: the blocks after it show side by
 # side, and stay the page's own lines. Run them with
 # `julia -O0 --project=. test/columns_view_test.jl`. They click and type in a
-# window that isn't on the screen. Set `KAYDOWN_SHOTS` to a folder, and they
+# window that isn't on the screen. Set `LADDER_SHOTS` to a folder, and they
 # save pictures of the page there.
 
 @use Test: @test, @testset
@@ -14,7 +14,7 @@ const px = K.px
 
 const dir = mktempdir()
 write(joinpath(dir, "other.md"), "# The other page\n")
-# The level that these tests choose goes to a settings file of their own, not to the one that Kaydown uses
+# The level that these tests choose goes to a settings file of their own, not to the one that Ladder uses
 const kept = joinpath(dir, "settings")
 @eval K settings_file() = $kept
 
@@ -29,7 +29,7 @@ window(name, text; size=(1100px, 900px)) = begin
   e, w
 end
 frames(w, n=2) = foreach(_ -> frame(w), 1:n)
-shot(w, name) = haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(ENV["KAYDOWN_SHOTS"], name), w)
+shot(w, name) = haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], name), w)
 at(w, (x, y)) = (w.mouse = typeof(w.mouse)(px(x), px(y)); onmouse(w, MouseMove(Vec2{px}(px(x), px(y)), w)); frames(w, 1))
 press(w, place, keys=Keys(0)) = (at(w, place); w.keys |= keys | Keys.mouse_left; onkey(w, KeyPress{Keys.mouse_left}(0, w)))
 release(w, keys=Keys(0)) = (w.keys ⊻= keys | Keys.mouse_left; onkey(w, KeyRelease{Keys.mouse_left}(0, w)); frames(w))

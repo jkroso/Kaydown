@@ -1,7 +1,7 @@
-# The entry point for the Kaydown app. build.jl compiles it with JuliaC.
+# The entry point for the Ladder app. build.jl compiles it with JuliaC.
 #
 # The code at the top level runs once, while the app is being built. It loads
-# UI.jl and Kaydown, reads the icons the app uses, and types into a document
+# UI.jl and Ladder, reads the icons the app uses, and types into a document
 # off screen so that code is compiled ahead of time. `main` runs each time the
 # app opens.
 #
@@ -11,7 +11,7 @@
 
 include("start.jl")
 
-@use ".." build_editor open_editor WELCOME restyle! problems pages_dir SIDEBAR_ICONS FILE_ICONS todo_at inbox Agent INSERTS PLAN_ICONS SCHEDULE_ICONS BLOCK_ICONS MAIL_ICONS window! editors settings_editor theme! Update
+@use ".." build_editor open_editor move_old_folders! WELCOME restyle! problems pages_dir SIDEBAR_ICONS FILE_ICONS todo_at inbox Agent INSERTS PLAN_ICONS SCHEDULE_ICONS BLOCK_ICONS MAIL_ICONS window! editors settings_editor theme! Update
 @use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse Typed ontype
 @use "github.com/jkroso/Font.jl/units" px
 @use "github.com/jkroso/UI.jl/Interface/abstract" focus window_of
@@ -75,8 +75,8 @@ const packages = [joinpath(m[1], m[2]) for m in (match(r"^github\.com/([^/]+)/([
 "The Julia files that the pages load, and where each one was when the app was built"
 const code_files = Dict(name => realpath(joinpath(PAGES, name)) for name in ("widgets.jl", "progress.jl"))
 
-"Kaydown's folder for its own files"
-support() = joinpath(homedir(), "Library", "Application Support", "Kaydown")
+"Ladder's folder for its own files"
+support() = joinpath(homedir(), "Library", "Application Support", "Ladder")
 
 "Write `text` to `file` unless it holds that already"
 put(file, text) = (isfile(file) && read(file, String) == text) || (mkpath(dirname(file)); write(file, text))
@@ -218,7 +218,7 @@ warm_up() = begin
   right_click(60, 88); click(80, 104)
   press(Keys.a); press(Keys.escape); press(Keys.escape)
   # The menu of the page: open it and click away, then add a block of each kind from its Insert menu.
-  # Kaydown draws the menu, 28px for each item, with Insert as its fifth item. A menu that would run
+  # Ladder draws the menu, 28px for each item, with Insert as its fifth item. A menu that would run
   # off the bottom of the window moves up, so `pick` clicks item `k` where the menu is. A recording is
   # left out, since it would record from the microphone while the app is built.
   pick(k) = (menu = only(p for p in popups(w) if p.key == :menu).scene; click(540, round(Int, menu.top.value) + 1 + 28(k - 1) + 14))
@@ -291,8 +291,8 @@ warm_up() = begin
   Update.tick!(u)
   Update.finish!(u)
   u.newest == v"2.0.0" || error("The app didn't read which version is the newest")
-  (u.staged === nothing && startswith(Update.says(u), "The download of Kaydown 2.0.0 stopped.")) || error("A download with no file didn't fail: ", Update.says(u))
-  Update.label(u) == "Get Kaydown 2.0.0" || error("The app didn't offer the newer version after its download failed")
+  (u.staged === nothing && startswith(Update.says(u), "The download of Ladder 2.0.0 stopped.")) || error("A download with no file didn't fail: ", Update.says(u))
+  Update.label(u) == "Get Ladder 2.0.0" || error("The app didn't offer the newer version after its download failed")
   Update.quit!(u) && error("A quit started an update with no new version ready")
   # The app is built with the list of windows as the warm-up leaves it, so it must leave none
   close(w)
@@ -319,7 +319,8 @@ self_test() = begin
 end
 
 "Open the file or folder named in `args`, or the welcome page"
-open_kaydown(args) = begin
+open_ladder(args) = begin
+  move_old_folders!()   # before the pages are written into the app's folder
   welcome = unpack(support())
   # The window opens the files that macOS asks for: one you double-clicked to start the app, and any after that
   Opened.listen()
@@ -329,5 +330,5 @@ open_kaydown(args) = begin
 end
 
 function (@main)(args::Vector{String})
-  run_app(open_kaydown, args, self_test)
+  run_app(open_ladder, args, self_test)
 end

@@ -2,7 +2,7 @@
 # lines of a schedule as text, or a diagram. The sidebar isn't there then, so
 # the bar has none of the sidebar's buttons. Run them with
 # `julia -O0 --project=. test/full_bar_test.jl`. They draw in a window that
-# isn't on the screen. Set `KAYDOWN_SHOTS` to a folder, and they save a
+# isn't on the screen. Set `LADDER_SHOTS` to a folder, and they save a
 # picture of each step there.
 
 @use Test: @test, @testset
@@ -39,7 +39,7 @@ e.panel = true   # the sidebar shows
 K.open!(e, joinpath(dir, "other.md")); K.open!(e, page)
 frames(3)
 const v = e.nodes[(:schedule, page, 1)]
-shot(name) = haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(ENV["KAYDOWN_SHOTS"], name), w)
+shot(name) = haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], name), w)
 key(k) = (onkey(w, KeyPress{k}(0, w)); frames())
 
 "The buttons of the top bar, as what each one does"

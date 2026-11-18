@@ -12,7 +12,7 @@
 # subject has every one of them. A block with only a name or an address in it
 # lists the emails with that person.
 #
-# The emails are the ones that Kaydown keeps on the Mac: mail.jl says how.
+# The emails are the ones that Ladder keeps on the Mac: mail.jl says how.
 # This file reads and writes the block's lines, and says whether an email is
 # one that the block asks for. It reads no email.
 

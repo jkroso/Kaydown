@@ -2,7 +2,7 @@
 # of small squares. Run them with `julia -O0 --project=. test/gallery_view_test.jl`.
 # They click and press keys in a window that isn't on the screen. The pictures
 # are small PNG files that the tests write into a temporary folder. Set
-# `KAYDOWN_SHOTS` to a folder, and they save a picture of each step there.
+# `LADDER_SHOTS` to a folder, and they save a picture of each step there.
 
 @use Test: @test, @testset
 @use "../main" => K
@@ -110,7 +110,7 @@ end
 settle()
 gallery(n, path=page) = e.nodes[(:block, K.GALLERY, path, n)]
 const v = gallery(1)
-const shots = get(ENV, "KAYDOWN_SHOTS", "")
+const shots = get(ENV, "LADDER_SHOTS", "")
 shot(name) = isempty(shots) || save_png(joinpath(shots, name), w)
 
 at((x, y)) = (w.mouse = typeof(w.mouse)(px(x), px(y)); onmouse(w, MouseMove(Vec2{px}(px(x), px(y)), w)); frames(1))
@@ -358,7 +358,7 @@ end
   for _ in 1:40
     frame(small)
   end
-  haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(shots, "gallery-narrow.png"), small)
+  haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(shots, "gallery-narrow.png"), small)
   n = narrow.nodes[(:block, K.GALLERY, page, 1)]
   g = G.grid(6, K.num(narrow.width) - 2 - 2K.num(K.GALLERY_PAD), :medium)
   @test g.columns < 5 && K.num(n.side) ≈ g.side && rect(n.parts[(:thumb, 6)]).top > rect(n.parts[(:thumb, 1)]).top
@@ -367,7 +367,7 @@ end
   K.show_picture!(n, 2); frame(small); frame(small)
   z = K.zooming(narrow)
   @test "2 of 6" in said(rect(z)) && "photo 2.png" in said(rect(z)) && fits(z, 420)
-  haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(shots, "gallery-bar-narrow.png"), small)
+  haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(shots, "gallery-bar-narrow.png"), small)
   close(small)
   # In a window that's narrower still, the name goes first
   tight = K.build_editor(page)
@@ -376,7 +376,7 @@ end
   K.show_picture!(tight.nodes[(:block, K.GALLERY, page, 1)], 2); frame(tiny); frame(tiny)
   z = K.zooming(tight)
   @test "2 of 6" in said(rect(z)) && !any(t -> startswith(t, "photo"), said(rect(z))) && fits(z, 340)
-  haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(shots, "gallery-bar-tiny.png"), tiny)
+  haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(shots, "gallery-bar-tiny.png"), tiny)
   close(tiny)
 end
 

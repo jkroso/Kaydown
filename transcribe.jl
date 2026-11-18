@@ -14,7 +14,7 @@
 #     t = Transcription("walk.mov", times=true)
 #     check!(t) && words_between(phrases(t), 61, 86)   # what was said from 1:01 to 1:26
 #
-# The Kaydown app has the program in it, beside its own program. When Kaydown
+# The Ladder app has the program in it, beside its own program. When Ladder
 # runs from its source, it compiles transcribe.swift the first time it's needed,
 # which takes a few seconds, and keeps the program in a folder of the Mac's
 # caches. That needs Swift, which comes with Xcode and its command line tools.
@@ -23,7 +23,7 @@
 
 const SOURCE = joinpath(@__DIR__, "transcribe.swift")
 
-"The program in the Kaydown app, or nothing when Kaydown runs from its source"
+"The program in the Ladder app, or nothing when Ladder runs from its source"
 bundled() = begin
   Sys.isapple() || return nothing
   path = with_pool() do
@@ -47,7 +47,7 @@ command(file, flags::String...) = begin
   args = [flags..., file]
   app = bundled()
   app === nothing || return `$app $args`
-  dir = joinpath(homedir(), "Library", "Caches", "Kaydown")
+  dir = joinpath(homedir(), "Library", "Caches", "Ladder")
   # A change to the source makes a program of a new name
   program = joinpath(dir, "transcribe-" * string(hash(read(SOURCE)), base=16))
   isfile(program) && return `$program $args`
@@ -77,7 +77,7 @@ Transcription(file::AbstractString; times=false) = begin
   try
     t.process = run(pipeline(times ? command(t.file, "--times") : command(t.file), stdout=t.out, stderr=t.err), wait=false)
   catch
-    t.problem = "Kaydown couldn't start to transcribe the file"
+    t.problem = "Ladder couldn't start to transcribe the file"
   end
   t
 end
@@ -99,7 +99,7 @@ check!(t::Transcription) = begin
   else
     why = findlast(l -> startswith(l, "error: "), lines)
     t.problem = why !== nothing ? lines[why][8:end] :
-                t.process.exitcode == 127 ? "Kaydown needs Swift to transcribe. It comes with Xcode's command line tools." :
+                t.process.exitcode == 127 ? "Ladder needs Swift to transcribe. It comes with Xcode's command line tools." :
                 "The program that transcribes stopped before it finished"
   end
   rm(dirname(t.out), recursive=true, force=true)

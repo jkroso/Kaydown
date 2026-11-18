@@ -1,6 +1,6 @@
 # Key bindings
 
-A key binding is the keys that you press to do something, like ⌘S to save. These are the same in every window, on a page and in a file of code. Kaydown keeps them, and uses them the next time it opens.
+A key binding is the keys that you press to do something, like ⌘S to save. These are the same in every window, on a page and in a file of code. Ladder keeps them, and uses them the next time it opens.
 
 The other settings are on the [Settings](settings.md) page.
 
@@ -12,7 +12,7 @@ RadioGroup(labels=bundles, selected=something(findfirst(==(key_bundle()), bundle
            onchange=group -> key_bundle!(bundles[group.selected]))
 ```
 
-A bundle gives every command its keys. Kaydown has the keys that this app started with. The others have the keys of another editor, for the commands that Kaydown has too.
+A bundle gives every command its keys. Ladder has the keys that this app started with. The others have the keys of another editor, for the commands that Ladder has too.
 
 - **VS Code**: ⌘P finds a file, ⌃- goes back to the file that showed before, ⌥↑ and ⌥↓ move a line, and ⇧⌥↓ copies it. Printing moves to ⌘⌥P.
 - **Sublime Text**: ⌘P finds a file, ⌃- goes back to the file that showed before, ⌃⌘↑ and ⌃⌘↓ move a line, ⌘⇧D copies it, ⌃⇧K deletes it, and ⌘K then ⌘B shows the sidebar. Printing moves to ⌘⌥P.
@@ -39,4 +39,4 @@ Some keys have no command, so they aren't in the list. Return, esc and Space do 
 
 ---
 
-This page is a Markdown file, like any other in Kaydown. To see the code of a setting, hold ⌥ and click it.
+This page is a Markdown file, like any other in Ladder. To see the code of a setting, hold ⌥ and click it.

@@ -1,6 +1,6 @@
 # Tests for the formulas of main.jl: maths written in TeX between dollar signs.
 # Run them with `julia -O0 --project=. test/math_view_test.jl`. They use a
-# window that isn't on the screen. Set `KAYDOWN_SHOTS` to a folder, and they
+# window that isn't on the screen. Set `LADDER_SHOTS` to a folder, and they
 # save pictures of the page there.
 
 @use Test: @test, @testset
@@ -47,7 +47,7 @@ const w = Window(e, size=(1000px, 900px))
 frames(n=2) = foreach(_ -> frame(w), 1:n)
 frames()
 K.focus(e)
-shot(name) = haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(ENV["KAYDOWN_SHOTS"], name), w)
+shot(name) = haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], name), w)
 line(text) = findfirst(startswith(text), e.buf.lines)
 "The formulas in line `i`, as the pieces of its line that show them"
 formulas(i) = [seg for vl in K.item(e, i).content.lines for seg in vl.segs if seg.node !== nothing && seg.node.node isa K.Equation]
@@ -81,9 +81,9 @@ const roots = line("The roots")
   cell = K.item(e, circle).content.flows[2][2]
   @test any(seg -> seg.node !== nothing && seg.node.node.tex == "\\pi r^2", [s for vl in cell.lines for s in vl.segs])
   @test [seg.node.node.tex for seg in formulas(line("- An item"))] == ["\\alpha + \\beta", "\\foo"]
-  # The mouse over a formula says which of its commands Kaydown doesn't know
+  # The mouse over a formula says which of its commands Ladder doesn't know
   known, unknown = [seg.node.node for seg in formulas(line("- An item"))]
-  @test K.tip(known) == "" && K.tip(unknown) == "Kaydown doesn't know \\foo"
+  @test K.tip(known) == "" && K.tip(unknown) == "Ladder doesn't know \\foo"
   box = rect(unknown)
   spot = Vec2{px}(box.left + box.width / 2, box.top + box.height / 2)
   @test onmouse(unknown, MouseMove(spot, w)) === nothing && onmouse(known, MouseMove(spot, w)) === nothing

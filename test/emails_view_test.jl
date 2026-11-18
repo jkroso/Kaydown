@@ -2,7 +2,7 @@
 # in a page. Run them with `julia -O0 --project=. test/emails_view_test.jl`.
 # They click in a window that isn't on the screen. The emails are pages that
 # the tests write in a folder of their own, so they use no network and no real
-# account. Set `KAYDOWN_SHOTS` to a folder, and they save a picture of the page there.
+# account. Set `LADDER_SHOTS` to a folder, and they save a picture of the page there.
 
 @use Test: @test, @testset
 @use "../mail" => Mail
@@ -21,7 +21,7 @@ m.next = time() + 1e9   # it never looks for new email, so nothing connects
 const root = Mail.root(m.account)   # the folder that the account's emails are kept in
 const NOON = 1.7948e9   # a time in November 2026
 
-"Write a folder of emails as Kaydown keeps one: a page for each email, and the folder's index"
+"Write a folder of emails as Ladder keeps one: a page for each email, and the folder's index"
 folder(name, role, emails...) = begin
   dir = joinpath(root, name)
   mkpath(dir)
@@ -72,7 +72,7 @@ const w = K.window!(e, title="test", size=(1000px, 900px))
 frames(n=2) = foreach(_ -> frame(w), 1:n)
 frames()
 list(n) = e.nodes[(:block, K.EMAIL, page, n)]
-shot(name) = haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(ENV["KAYDOWN_SHOTS"], name), w)
+shot(name) = haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], name), w)
 
 at((x, y)) = (w.mouse = typeof(w.mouse)(px(x), px(y)); onmouse(w, MouseMove(Vec2{px}(px(x), px(y)), w)); frames(1))
 press(place) = (at(place); w.keys |= Keys.mouse_left; onkey(w, KeyPress{Keys.mouse_left}(0, w)))

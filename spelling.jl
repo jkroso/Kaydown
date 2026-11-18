@@ -3,7 +3,7 @@
 #
 #     misspelt("A sentance.")   # [(2, 10)]: the columns where each wrong word starts and ends
 #     guesses("sentance")       # ["sentence", ...]
-#     learn!("Kaydown")         # the dictionary has the word from now on
+#     learn!("Ladder")         # the dictionary has the word from now on
 #
 # Columns count characters from 0, as in markdown.jl. This file only works on macOS.
 

@@ -1,4 +1,4 @@
-# Email. Kaydown keeps a folder on the Mac that holds every email of an
+# Email. Ladder keeps a folder on the Mac that holds every email of an
 # account, and has the same folders in it as the email server has. Each email
 # is one file:
 #
@@ -16,7 +16,7 @@
 # file itself is never changed.
 #
 # A draft is a Markdown page: one whose front matter has `to` and no `date`.
-# You write it as you write any page. When Kaydown sends it, the email that
+# You write it as you write any page. When Ladder sends it, the email that
 # went is kept as an .eml file in the folder of sent email, and the draft goes.
 #
 #     m = own()[1]             # the mailers of the app that's running, one for each account
@@ -34,7 +34,7 @@
 # goes from the folder, and one that the Finder moved or deleted comes back.
 # Only the calls above change what the server has.
 #
-# How it talks to the server. Kaydown reads email with IMAP and sends it with
+# How it talks to the server. Ladder reads email with IMAP and sends it with
 # SMTP, the two ways that every email server has. libcurl, which comes with
 # Julia, makes the connection: it checks the server's certificate, encrypts
 # what's sent and signs in. Then this file speaks IMAP over that connection
@@ -54,8 +54,8 @@
 # hand, the next look makes it again: the server says the Message-ID of each
 # email, and the file with that Message-ID is that email. See `adopt!`.
 #
-# The password is in the Mac's Keychain, under "Kaydown email". The rest of
-# the account is in the file `email` in Kaydown's folder in
+# The password is in the Mac's Keychain, under "Ladder email". The rest of
+# the account is in the file `email` in Ladder's folder in
 # ~/Library/Application Support.
 
 @use LibCURL...
@@ -76,28 +76,29 @@ const RETRY = 60.0             # seconds until it tries again after the server c
 const QUIET = 90.0             # seconds without a word from the server until the connection counts as broken
 const BATCH = 8                # the emails that one request asks for
 const SHARE = 200              # the emails of one folder that come before the next folder has its turn
-const SERVICE = "Kaydown email"   # what the Keychain calls the password
+const SERVICE = "Ladder email"   # what the Keychain calls the password
+const OLD_SERVICE = "Kaydown email"   # what it called it while the app was called Kaydown. `secret` moves it.
 "Seconds that the connection stays open after the work is done, so that the next thing you do goes to the server at once. A test makes it 0."
 const LINGER = Ref(20.0)
 const IDLE = 0.25              # seconds between two turns of the work while it only waits for something to do
 
 "A test names a folder of its own here, to keep out of the real one"
 const place = Ref("")
-"Kaydown's folder for its settings"
-home() = isempty(place[]) ? joinpath(homedir(), "Library", "Application Support", "Kaydown") : place[]
+"Ladder's folder for its settings"
+home() = isempty(place[]) ? joinpath(homedir(), "Library", "Application Support", "Ladder") : place[]
 account_file() = joinpath(home(), "email")
 
 # --- how much comes in a day -----------------------------------------------------------
 #
 # Gmail lets one app get 2,500 MB of email in a day. When an app gets more,
-# Google stops every email app of the account for up to a day. So Kaydown
+# Google stops every email app of the account for up to a day. So Ladder
 # counts the bytes that come for each account, hour by hour, and a look stops
 # getting emails when the last 24 hours hold most of what the company allows.
 # It goes on when the oldest of those hours is a day old.
 
 "The MB of email that a company lets one app get in a day, by the company's name"
 const DAILY = Dict("Gmail" => 2500)
-const DAY_SHARE = 0.8   # the part of that which Kaydown uses
+const DAY_SHARE = 0.8   # the part of that which Ladder uses
 "A test puts a number of bytes here, to be what any account can get in a day"
 const allowance = Ref{Union{Nothing,Int}}(nothing)
 "The bytes that came in each hour for each account: by the account's address, then by the hour's number since 1970. Nothing until the file is read."
@@ -108,7 +109,7 @@ hours_file() = joinpath(home(), "email-bytes")
 tally(address) = begin
   if hours[] === nothing
     hours[] = Dict{String,Dict{Int,Int}}()
-    # A line that an older Kaydown wrote names no account. Kaydown had one account then, which is the first one now.
+    # A line that an older Ladder wrote names no account. Ladder had one account then, which is the first one now.
     first = (all = accounts(); isempty(all) ? "" : lowercase(all[1].address))
     for text in (isfile(hours_file()) ? eachline(hours_file()) : ())
       parts = split(text, '\t')
@@ -126,7 +127,7 @@ end
 "The bytes that came since the count was last kept"
 const unkept = Ref(0)
 
-"Count `n` bytes that came from the server now for the account with `address`. The count is kept after every few MB, so that little is lost if Kaydown stops at once."
+"Count `n` bytes that came from the server now for the account with `address`. The count is kept after every few MB, so that little is lost if Ladder stops at once."
 tally!(address, n) = begin
   t = tally(address)
   h = floor(Int, time() / 3600)
@@ -135,7 +136,7 @@ tally!(address, n) = begin
   nothing
 end
 
-"Keep the count of the bytes, so that it holds when Kaydown opens again"
+"Keep the count of the bytes, so that it holds when Ladder opens again"
 keep_tally() = try
   unkept[] = 0
   hours[] === nothing && return nothing
@@ -145,14 +146,14 @@ keep_tally() = try
 catch
 end
 
-"The bytes that the account `a` can get in a day, or nothing when its company sets no limit that Kaydown knows"
+"The bytes that the account `a` can get in a day, or nothing when its company sets no limit that Ladder knows"
 allowed(a) = begin
   allowance[] === nothing || return allowance[]
   p = provider(a.address)
   p === nothing || !haskey(DAILY, p.name) ? nothing : round(Int, DAILY[p.name] * DAY_SHARE) << 20
 end
 
-"True when the account `a` has got as much email in the last 24 hours as Kaydown lets it"
+"True when the account `a` has got as much email in the last 24 hours as Ladder lets it"
 capped(a) = (most = allowed(a); most !== nothing && sum(values(tally(a.address)), init=0) >= most)
 
 "The time when the oldest hour that's counted for the account `a` is a day old, so that the account can get more"
@@ -169,7 +170,7 @@ Base.@kwdef mutable struct Account
   outgoing::String = ""   # the server that sends email and its port, like smtp.example.com:465
   folder::String = ""     # where the emails are kept. Empty for a folder named for the address, in ~/Mail.
   every::Int = 5          # minutes from one look for new email to the next
-  back::Int = 12          # how many months back the emails that Kaydown gets go. 0 for every email.
+  back::Int = 12          # how many months back the emails that Ladder gets go. 0 for every email.
   rest::Bool = true       # get the other folders too, once the inbox has come
   safe::Bool = true       # encrypt what's sent. Only a test, with a server on this Mac, turns it off.
 end
@@ -177,7 +178,7 @@ end
 """
 An email company, and how an account with it connects. `secret` says which
 password it takes: `:usual` is the one you sign in to its website with, `:app`
-is a password that you make for one app, and `:none` means that Kaydown can't
+is a password that you make for one app, and `:none` means that Ladder can't
 sign in to it yet.
 """
 struct Provider
@@ -191,7 +192,7 @@ struct Provider
   exchanges::Vector{String}   # the end of the name of each server that takes the email of a domain that it hosts
 end
 
-"The email companies that Kaydown knows"
+"The email companies that Ladder knows"
 const PROVIDERS = [
   Provider("Gmail", "imap.gmail.com:993", "smtp.gmail.com:465", :app, "https://myaccount.google.com/apppasswords",
            "Gmail takes an app password, not your usual password: 16 letters that Google makes for one app. " *
@@ -213,10 +214,10 @@ const PROVIDERS = [
            "Telstra takes the password that you sign in to Telstra Mail with.",
            ["telstra.com", "bigpond.com", "bigpond.net.au"], String[]),
   Provider("Outlook", "outlook.office365.com:993", "smtp-mail.outlook.com:587", :none, "",
-           "Outlook.com and Microsoft 365 only let an app sign in through Microsoft's own sign-in page. Kaydown can't do that yet.",
+           "Outlook.com and Microsoft 365 only let an app sign in through Microsoft's own sign-in page. Ladder can't do that yet.",
            ["outlook.com", "outlook.com.au", "hotmail.com", "live.com", "live.com.au", "msn.com"], ["outlook.com"]),
   Provider("Proton Mail", "", "", :none, "",
-           "Proton Mail only works with other apps through its Bridge app. Kaydown doesn't work with the Bridge yet.",
+           "Proton Mail only works with other apps through its Bridge app. Ladder doesn't work with the Bridge yet.",
            ["proton.me", "protonmail.com", "pm.me"], ["protonmail.ch"])]
 
 "The part of an email address after the @, in lower case"
@@ -264,7 +265,7 @@ lookup!(domain) = begin
 end
 
 """
-The company that holds the email of `address`, or nothing when Kaydown doesn't
+The company that holds the email of `address`, or nothing when Ladder doesn't
 know it. It's known from the part after the @, or from the servers that take
 the email of that domain, once `lookup!` has asked for them.
 """
@@ -294,7 +295,7 @@ base(a::Account) = isempty(strip(a.folder)) ? joinpath(homedir(), "Mail") : absp
 """
 The folder that holds the account's emails. It's named for the address, and
 it's in `base(a)`. So the folder that you choose can have other things in it,
-like your home folder has, and Kaydown only looks in a folder of its own.
+like your home folder has, and Ladder only looks in a folder of its own.
 """
 root(a::Account) = joinpath(base(a), a.address)
 
@@ -307,7 +308,7 @@ end
 """
 The accounts that the settings file holds, in the order that they were added.
 The lines of each account start with its address. A file that an older
-Kaydown wrote holds one account, and reads the same.
+Ladder wrote holds one account, and reads the same.
 """
 accounts() = begin
   out = Account[]
@@ -378,15 +379,15 @@ cfstring(s) = ccall((:CFStringCreateWithCString, CORE), Ptr{Cvoid}, (Ptr{Cvoid},
 cfdata(bytes) = ccall((:CFDataCreate, CORE), Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{UInt8}, Clong), C_NULL, bytes, length(bytes))
 release(x) = x == C_NULL || ccall((:CFRelease, CORE), Cvoid, (Ptr{Cvoid},), x)
 
-"Call `use` with what the Keychain is asked for: the password of `address`, with `more` keys and values"
-asking(use, address, more...) = begin
+"Call `use` with what the Keychain is asked for: the password of `address` under the name `service`, with `more` keys and values"
+asking(use, address, more...; service=SERVICE) = begin
   made = Ptr{Cvoid}[]
   d = ccall((:CFDictionaryCreateMutable, CORE), Ptr{Cvoid}, (Ptr{Cvoid}, Clong, Ptr{Cvoid}, Ptr{Cvoid}), C_NULL, 0,
             Libdl.dlsym(Libdl.dlopen(CORE), :kCFTypeDictionaryKeyCallBacks), Libdl.dlsym(Libdl.dlopen(CORE), :kCFTypeDictionaryValueCallBacks))
   put(key, value) = ccall((:CFDictionarySetValue, CORE), Cvoid, (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}), d, named(SECURITY, key), value)
   hold(x) = (push!(made, x); x)
   put(:kSecClass, named(SECURITY, :kSecClassGenericPassword))
-  put(:kSecAttrService, hold(cfstring(SERVICE)))
+  put(:kSecAttrService, hold(cfstring(service)))
   put(:kSecAttrAccount, hold(cfstring(address)))
   foreach(((key, value),) -> put(key, value isa Ptr ? value : hold(value isa String ? cfstring(value) : cfdata(value))), more)
   try
@@ -397,11 +398,24 @@ asking(use, address, more...) = begin
   end
 end
 
-"The password of `address`, or an empty string when the Keychain has none"
+"""
+The password of `address`, or an empty string when the Keychain has none. A
+password that the app kept while it was called Kaydown moves to the new name.
+"""
 secret(address) = begin
   vault[] === nothing || return get(vault[], address, "")
   (Sys.isapple() && !isempty(address)) || return ""
-  asking(address, :kSecReturnData => named(CORE, :kCFBooleanTrue), :kSecMatchLimit => named(SECURITY, :kSecMatchLimitOne)) do query
+  text = kept(address)
+  isempty(text) || return text
+  text = kept(address, OLD_SERVICE)
+  isempty(text) && return text
+  secret!(address, text) && asking(query -> ccall((:SecItemDelete, SECURITY), Int32, (Ptr{Cvoid},), query), address, service=OLD_SERVICE)
+  text
+end
+
+"The password that the Keychain has for `address` under the name `service`, or an empty string"
+kept(address, service=SERVICE) =
+  asking(address, :kSecReturnData => named(CORE, :kCFBooleanTrue), :kSecMatchLimit => named(SECURITY, :kSecMatchLimitOne), service=service) do query
     found = Ref{Ptr{Cvoid}}(C_NULL)
     ccall((:SecItemCopyMatching, SECURITY), Int32, (Ptr{Cvoid}, Ptr{Ptr{Cvoid}}), query, found) == 0 || return ""
     n = ccall((:CFDataGetLength, CORE), Clong, (Ptr{Cvoid},), found[])
@@ -409,7 +423,6 @@ secret(address) = begin
     release(found[])
     text
   end
-end
 
 "Keep `password` as the password of `address`. An empty one takes the password away. True when the Keychain took it."
 secret!(address, password) = begin
@@ -434,15 +447,15 @@ mutable struct Letter
   flagged::Bool
   answered::Bool
   out::Bool         # you sent it
-  mine::Bool        # Kaydown sent it, and wrote its page from the draft. It stays even if the server never has a copy.
-  waits::Bool       # Kaydown moved it here, and the server's copy hasn't come yet
+  mine::Bool        # Ladder sent it, and wrote its page from the draft. It stays even if the server never has a copy.
+  waits::Bool       # Ladder moved it here, and the server's copy hasn't come yet
   at::Float64       # when it was sent, in Unix seconds
   from::String      # who sent it, as a list shows them
   to::String        # who it was sent to
   subject::String
   id::String        # its Message-ID
   file::String      # the name of its page in the folder
-  written::Float64  # when Kaydown wrote the file, as the disk tells it. A later time means something changed the file.
+  written::Float64  # when Ladder wrote the file, as the disk tells it. A later time means something changed the file.
 end
 
 "A folder of emails"
@@ -527,7 +540,7 @@ box(dir) = begin
     end
   end
   b.dirty = false
-  # An email file that an older Kaydown wrote, or that came here some other way, is marked now
+  # An email file that an older Ladder wrote, or that came here some other way, is marked now
   foreach(l -> isemail(l.file) && protect!(joinpath(dir, l.file)), b.letters)
   boxes[dir] = b
 end
@@ -550,7 +563,7 @@ note(b::Box, l::Letter) = open(io -> println(io, line(l)), joinpath(b.path, INDE
 
 "The folders of emails in `dir` and in the folders in it. A folder of attached files isn't looked in."
 nested(dir, out=Box[]) = begin
-  # A folder that this Mac won't let Kaydown read has no emails that Kaydown put there
+  # A folder that this Mac won't let Ladder read has no emails that Ladder put there
   names = try readdir(dir) catch; return out end
   b = try box(dir) catch; nothing end
   b === nothing || push!(out, b)
@@ -773,9 +786,9 @@ end
 "A sentence for libcurl's code `code`, about the server `host`"
 why(code, host) =
   code == 67 ? Trouble(:login, "$host didn't take the password. Check the address and the password.") :
-  code == 6 ? Trouble(:network, "Kaydown couldn't find the server $host.") :
-  code in (7, 28) ? Trouble(:network, "Kaydown couldn't reach $host.") :
-  code in (35, 51, 53, 54, 58, 59, 60, 64, 66, 77, 80, 83, 90, 91) ? Trouble(:network, "Kaydown couldn't make a safe connection to $host.") :
+  code == 6 ? Trouble(:network, "Ladder couldn't find the server $host.") :
+  code in (7, 28) ? Trouble(:network, "Ladder couldn't reach $host.") :
+  code in (35, 51, 53, 54, 58, 59, 60, 64, 66, 77, 80, 83, 90, 91) ? Trouble(:network, "Ladder couldn't make a safe connection to $host.") :
   code == 8 ? Trouble(:server, "$host doesn't answer as an email server does. Check the server's name and port.") :
   Trouble(:network, "The connection to $host stopped: $(unsafe_string(curl_easy_strerror(code))).")
 
@@ -879,7 +892,7 @@ transmit(m::Mailer, w::Wire, bytes) = begin
   while at < length(bytes)
     code = GC.@preserve bytes curl_easy_send(w.easy, pointer(bytes, at + 1), length(bytes) - at, n)
     if code == CURLE_AGAIN
-      time() - started > QUIET && throw(Trouble(:network, "The email server stopped taking what Kaydown sent."))
+      time() - started > QUIET && throw(Trouble(:network, "The email server stopped taking what Ladder sent."))
       rest(m)
     elseif code != 0
       throw(Trouble(:network, "The connection to the email server broke."))
@@ -1050,7 +1063,7 @@ unpage!(b::Box, l::Letter) = begin
   path = joinpath(b.path, l.file)
   if isfile(path) && mtime(path) == l.written
     rm(path, force=true)
-    # A Markdown page of the Kaydown before this one had its attached files in a folder beside it
+    # A Markdown page of the Ladder before this one had its attached files in a folder beside it
     rm(joinpath(b.path, FILES, splitext(l.file)[1]), recursive=true, force=true)
     try rm(joinpath(b.path, FILES)) catch end   # the folder of those folders goes with the last of them
   end
@@ -1069,12 +1082,12 @@ end
 
 "True for the name of a file that holds an email as a server sends one"
 isemail(name) = endswith(lowercase(name), ".eml")
-"True for the name of a Markdown page: a draft, or an email as the Kaydown before this one kept it"
+"True for the name of a Markdown page: a draft, or an email as the Ladder before this one kept it"
 ispage(name) = endswith(lowercase(name), ".md")
 
 """
 Mark the email file at `path` as a file to read and not to write. An email is
-what somebody sent, so no app should change it: Kaydown doesn't, and with the
+what somebody sent, so no app should change it: Ladder doesn't, and with the
 mark the Mac lets no other app do it by mistake. The file can still be moved
 and deleted. A draft is a page that you write, and never gets the mark.
 """
@@ -1091,7 +1104,7 @@ store!(m::Mailer, b::Box, uid, flags, came, raw) = begin
   part = message(raw)
   id = String(strip(header(part, "message-id")))
   seen, flagged, answered = "\\seen" in flags, "\\flagged" in flags, "\\answered" in flags
-  # A file that Kaydown moved here, or wrote when it sent the email, is the file of this email already
+  # A file that Ladder moved here, or wrote when it sent the email, is the file of this email already
   if !isempty(id)
     i = findfirst(l -> l.uid == 0 && l.id == id && isfile(joinpath(b.path, l.file)), b.letters)
     if i !== nothing
@@ -1123,7 +1136,7 @@ end
 #
 # An .eml file is the email. The index of its folder only repeats what the
 # file's head says, with the server's number for the email and its marks. So
-# Kaydown can make the index again from the files and the server: see `adopt!`.
+# Ladder can make the index again from the files and the server: see `adopt!`.
 
 """
 What the head of the email file at `path` says: who it's from, to and copied
@@ -1156,13 +1169,13 @@ headlines(path) = begin
 end
 
 "The folder that holds the files of the emails that were opened, like a PDF that came with one"
-cache() = isempty(place[]) ? joinpath(homedir(), "Library", "Caches", "Kaydown", "email") : joinpath(place[], "cache")
+cache() = isempty(place[]) ? joinpath(homedir(), "Library", "Caches", "Ladder", "email") : joinpath(place[], "cache")
 
 """
 The email in the file at `path` as the lines of a page, for a window to show:
 front matter that says who it's from and so on, then its text as Markdown,
 then a link to each file that came with it. Those files are inside the email,
-so a copy of each goes in Kaydown's cache for the links to open. The email's
+so a copy of each goes in Ladder's cache for the links to open. The email's
 file isn't changed.
 """
 render(path) = begin
@@ -1193,7 +1206,7 @@ index, when it's one of the emails `new` that the server has in the folder.
 The server says the Message-ID of each of those, and a file with that
 Message-ID is that email. So an index that's lost, or a file that's put back
 in its folder, costs no new download. `there` is the server's marks by UID. A
-file that Kaydown moved here, or wrote when it sent an email, is matched in
+file that Ladder moved here, or wrote when it sent an email, is matched in
 the same way. Each UID that finds its file is taken out of `new`.
 """
 adopt!(m::Mailer, w::Wire, b::Box, new, there) = begin
@@ -1329,11 +1342,11 @@ survey!(m::Mailer, w::Wire, b::Box) = begin
     end
     filter!(in(recent), new)
   end
-  # The Kaydown before this one kept each email as a Markdown page. Each of those emails comes again, to be
+  # The Ladder before this one kept each email as a Markdown page. Each of those emails comes again, to be
   # kept as the email itself, however old it is. The new emails come first.
   b.renew = Set(l.uid for l in b.letters if l.uid > 0 && ispage(l.file) && haskey(there, l.uid))
   append!(new, sort!(collect(b.renew), rev=true))
-  # A page that Kaydown moved here waits for the server's copy. When the server knows of the move
+  # A page that Ladder moved here waits for the server's copy. When the server knows of the move
   # and has nothing new here, no copy is coming: the move failed. The page goes, and the email is
   # still in the folder that it was in.
   if isempty(new) && !any(j -> j[1] === :move && j[4] === b, m.jobs)
@@ -1371,7 +1384,7 @@ fetch!(m::Mailer, w::Wire, b::Box, uids) = begin
     catch e
       e isa Union{Stopped,Trouble} && rethrow()
       # One email that can't be written doesn't stop the rest. It's asked for again at the next look.
-      @warn "Kaydown couldn't write the page of an email" folder=b.path uid exception=e
+      @warn "Ladder couldn't write the page of an email" folder=b.path uid exception=e
     end
     m.left = max(0, m.left - 1)
     changed!(m)
@@ -1389,7 +1402,7 @@ gather!(m::Mailer, w::Wire, some) = begin
   for b in some
     serve!(m, w)
     # The folder's name, since a folder with many emails takes a while
-    m.doing = "Kaydown is looking for new email in $(basename(b.path))."
+    m.doing = "Ladder is looking for new email in $(basename(b.path))."
     changed!(m)
     said = state(m, w, b)
     # A change to how far back the account goes makes every folder say something new
@@ -1424,7 +1437,7 @@ bring!(m::Mailer, w::Wire, due; often=Box[]) = begin
   full = false
   while !isempty(due) && !full
     for (b, new, said) in copy(due)
-      m.doing = "Kaydown is getting your email from $(basename(b.path))."
+      m.doing = "Ladder is getting your email from $(basename(b.path))."
       for _ in 1:cld(SHARE, BATCH)
         (isempty(new) || (full = capped(m.account))) && break
         serve!(m, w)
@@ -1454,7 +1467,7 @@ them. The inbox comes first, whole. Then the other folders come, if the
 account gets them, with the newest emails of each folder first.
 """
 look!(m::Mailer, w::Wire) = begin
-  m.doing = "Kaydown is looking for new email."
+  m.doing = "Ladder is looking for new email."
   m.left, m.total, m.began = 0, 0, 0.0
   changed!(m)
   all = folders!(m, w)
@@ -1465,7 +1478,7 @@ look!(m::Mailer, w::Wire) = begin
   full = bring!(m, w, gather!(m, w, inbox))
   others = m.account.rest ? filter(b -> b.role !== :inbox, all) : Box[]
   if !full && !isempty(others)
-    # The inbox is here, so Kaydown has looked. The count starts again for the other folders.
+    # The inbox is here, so Ladder has looked. The count starts again for the other folders.
     m.checked = time()
     m.left, m.total, m.began = 0, 0, 0.0
     full = bring!(m, w, gather!(m, w, others), often=inbox)
@@ -1534,7 +1547,7 @@ move!(m::Mailer, path, to::Box) = begin
   mkpath(to.path)
   changed = mtime(path) != l.written   # something changed the file
   mv(path, joinpath(to.path, file))
-  # A Markdown page of the Kaydown before this one has its attached files in a folder beside it
+  # A Markdown page of the Ladder before this one has its attached files in a folder beside it
   kept = joinpath(b.path, FILES, stem)
   if isdir(kept)
     mkpath(joinpath(to.path, FILES))
@@ -1586,7 +1599,7 @@ trash!(m::Mailer, path) = begin
   at === nothing && return false
   b, l = at
   if l.uid == 0 && !l.waits
-    # Kaydown wrote this page, and the server has no copy of it. The index forgets it, and the page is yours.
+    # Ladder wrote this page, and the server has no copy of it. The index forgets it, and the page is yours.
     drop!(b, l)
     save(b)
     changed!(m)
@@ -1616,9 +1629,9 @@ serve!(m::Mailer, w::Wire) = begin
       # When the server can't be reached, the job waits for the next connection. Any other failure ends the job:
       # doing it again would fail again, and a job is never done twice.
       (e isa Stopped || (e isa Trouble && e.kind !== :server)) && rethrow()
-      e isa Trouble || @warn "Kaydown couldn't tell the email server what you did" job=job[1] exception=(e, catch_backtrace())
+      e isa Trouble || @warn "Ladder couldn't tell the email server what you did" job=job[1] exception=(e, catch_backtrace())
       # Another look, straight after this one, puts the Mac's folders back in step with the server
-      m.problem, m.kind, m.again = e isa Trouble ? e.says : "Kaydown couldn't tell the email server what you did: $(sprint(showerror, e))", :server, true
+      m.problem, m.kind, m.again = e isa Trouble ? e.says : "Ladder couldn't tell the email server what you did: $(sprint(showerror, e))", :server, true
       foreach(x -> x isa Box && (x.state = ""), job)
     end
     popfirst!(m.jobs)
@@ -1664,7 +1677,7 @@ run!(m::Mailer, w::Wire, job) = begin
   elseif kind === :send
     post!(m, w, job[2])
   elseif kind === :copy
-    # Gmail keeps a copy of what it sends by itself. Any other server gets one from Kaydown.
+    # Gmail keeps a copy of what it sends by itself. Any other server gets one from Ladder.
     _, b, raw = job
     "X-GM-EXT-1" in w.can || ask(m, w, "APPEND $(quoted(b.server)) (\\Seen) {$(length(raw))}", literal=raw)
     b.state = ""
@@ -1875,25 +1888,25 @@ post!(m::Mailer, w::Wire, path) = begin
   end
   to, cc, bcc = (addresses(get(said, key, "")) for key in ("to", "cc", "bcc"))
   subject = get(said, "subject", "")
-  id = "<$(string(rand(UInt128), base=16)).kaydown@$(domain(a.address))>"
+  id = "<$(string(rand(UInt128), base=16)).ladder@$(domain(a.address))>"
   at = time()
   from = written([a.name => a.address])
   raw = compose(from=from, to=written(to), cc=written(cc), subject=subject, text=join(words, "\n"), html=html(words, title=subject),
                 files=files, reply=get(said, "in-reply-to", ""), references=get(said, "in-reply-to", ""), id=id, at=at)
-  m.doing = "Kaydown is sending your email."
+  m.doing = "Ladder is sending your email."
   changed!(m)
   deliver(m, raw, a.address, unique(String[p.second for p in [to..., cc..., bcc...]]))
   push!(m.sent, id)
   try
     filed!(m, path, said, text, from, to, cc, subject, id, at, raw)
   catch e
-    m.problem, m.kind = "Kaydown sent your email, but couldn't keep it in the folder of sent email: $(sprint(showerror, e))", :server
+    m.problem, m.kind = "Ladder sent your email, but couldn't keep it in the folder of sent email: $(sprint(showerror, e))", :server
     # The draft is still where it was. A date in its front matter says that it went, so it can't be sent a second time.
     try
       isfile(path) && write(path, join([lines[1]; "from: $(flat(from))"; "date: $(longdate(at))"; lines[2:end]], "\n"))
     catch
     end
-    @warn "Kaydown sent an email, but couldn't file its page" exception=(e, catch_backtrace())
+    @warn "Ladder sent an email, but couldn't file its page" exception=(e, catch_backtrace())
   end
   nothing
 end
@@ -1960,7 +1973,7 @@ start!(m::Mailer) = begin
   m.stop = false
   password = secret(m.account.address)
   if isempty(password) && m.account.safe
-    m.problem, m.kind, m.next = "Kaydown has no password for $(m.account.address). Type it on the Email page of the settings.", :login, Inf
+    m.problem, m.kind, m.next = "Ladder has no password for $(m.account.address). Type it on the Email page of the settings.", :login, Inf
     return changed!(m)
   end
   only = time() < m.next   # just the jobs: the next look isn't due
@@ -2008,9 +2021,9 @@ start!(m::Mailer) = begin
         # A wrong password stays wrong, so the next look waits until the account changes
         m.next = e.kind === :login ? Inf : time() + RETRY
       elseif !(e isa Stopped)
-        m.problem, m.kind = "Kaydown's look for email stopped: $(sprint(showerror, e))", :stopped
+        m.problem, m.kind = "Ladder's look for email stopped: $(sprint(showerror, e))", :stopped
         m.next = time() + 5RETRY
-        @warn "Kaydown's look for email stopped" exception=(e, catch_backtrace())
+        @warn "Ladder's look for email stopped" exception=(e, catch_backtrace())
       end
     finally
       wire === nothing || close(wire)
@@ -2099,7 +2112,7 @@ lasting(seconds) = begin
   hours == 1 ? "about an hour" : "about $hours hours"
 end
 
-"How many emails of the look have come, in words, and how long the rest take once Kaydown can tell"
+"How many emails of the look have come, in words, and how long the rest take once Ladder can tell"
 counted(p) = "$(commas(p.come)) of $(commas(p.total)) email$(p.total == 1 ? " has" : "s have") come." *
   (p.left === nothing ? "" : " The rest take $(lasting(p.left)).")
 
@@ -2111,12 +2124,12 @@ resuming(at; now=time()) = begin
   day(at) == day(now) ? "at $clock" : day(at) == day(now + 86400) ? "at $clock tomorrow" : "on $(shortdate(at, now=now))"
 end
 
-"Why some emails wait, when the account got all that its company allows in a day, and when Kaydown goes on"
+"Why some emails wait, when the account got all that its company allows in a day, and when Ladder goes on"
 waiting(m::Mailer) = begin
   p = provider(m.account.address)
   who = p === nothing ? "Your email company" : p.name
   most = p !== nothing && haskey(DAILY, p.name) ? " $(commas(DAILY[p.name])) MB of" : " only so much"
-  "$who lets an app get$most email in a day. Kaydown stopped before that, with $(commas(m.held)) email$(m.held == 1 ? "" : "s") still to come. " *
+  "$who lets an app get$most email in a day. Ladder stopped before that, with $(commas(m.held)) email$(m.held == 1 ? "" : "s") still to come. " *
   "It goes on $(resuming(max(m.next, resumes(m.account))))."
 end
 
@@ -2126,15 +2139,15 @@ says(m::Mailer) = begin
   # An account that's still to fill, beside others that are connected
   ready(a) || (ours[] !== nothing && any(o -> o !== m && ready(o.account), ours[])) &&
     return "This account isn't connected yet. Type its address and its password above, then click Connect."
-  ready(a) || return "Kaydown has no email account yet. Type your address and your password above."
+  ready(a) || return "Ladder has no email account yet. Type your address and your password above."
   isempty(m.problem) || return m.problem
   p = progress(m)
   p === nothing || return "$(m.doing) $(counted(p))"
   busy(m) && !isempty(m.doing) && return m.doing
   m.held > 0 && return waiting(m)
   have = sum(b -> count(l -> l.uid > 0, b.letters), m.all, init=0)
-  m.checked == 0 && return "Kaydown hasn't looked for email since it opened."
-  "Kaydown has $(commas(have)) email$(have == 1 ? "" : "s") in $(root(a)). It last looked at $(shortdate(m.checked))."
+  m.checked == 0 && return "Ladder hasn't looked for email since it opened."
+  "Ladder has $(commas(have)) email$(have == 1 ? "" : "s") in $(root(a)). It last looked at $(shortdate(m.checked))."
 end
 
 # --- what a list of a folder shows ---------------------------------------------------------------

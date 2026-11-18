@@ -11,7 +11,7 @@
 const px = K.px
 
 # The folder has the same name each time, so that Kip compiles its files once
-const dir = joinpath(tempdir(), "kaydown-children-test")
+const dir = joinpath(tempdir(), "ladder-children-test")
 rm(dir, recursive=true, force=true)
 mkpath(dir)
 const page = joinpath(dir, "job.md")

@@ -27,7 +27,7 @@ end
 "The word at columns `lo` to `hi` of line `i`"
 word(e, i, lo, hi) = K.rest(K.head(e.buf.lines[i], hi), lo)
 
-@testset "Julia's filter! isn't hidden by one of Kaydown's own" begin
+@testset "Julia's filter! isn't hidden by one of Ladder's own" begin
   # A function of main.jl named filter! hid Julia's from all of main.jl, so Learn Spelling failed
   @test K.filter! === Base.filter!
 end

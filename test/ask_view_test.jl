@@ -1,6 +1,6 @@
 # Tests for the `ask` block of main.jl: a question with answers to choose. Run
 # them with `julia -O0 --project=. test/ask_view_test.jl`. They click and type
-# in a window that isn't on the screen. Set `KAYDOWN_SHOTS` to a folder, and
+# in a window that isn't on the screen. Set `LADDER_SHOTS` to a folder, and
 # they save a picture of the page there.
 
 @use Test: @test, @testset
@@ -35,7 +35,7 @@ const w = Window(e, size=(1000px, 900px))
 frames(n=2) = foreach(_ -> frame(w), 1:n)
 frames()
 ask(n) = e.nodes[(:block, K.ASK, page, n)]
-shot(name) = haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(ENV["KAYDOWN_SHOTS"], name), w)
+shot(name) = haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], name), w)
 
 at((x, y)) = (w.mouse = typeof(w.mouse)(px(x), px(y)); onmouse(w, MouseMove(Vec2{px}(px(x), px(y)), w)); frames(1))
 press(place) = (at(place); w.keys |= Keys.mouse_left; onkey(w, KeyPress{Keys.mouse_left}(0, w)))

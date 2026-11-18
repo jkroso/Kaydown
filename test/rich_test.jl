@@ -10,7 +10,7 @@
 const px = K.px
 
 const dir = mktempdir()
-# The settings that these tests keep go to a file of their own, not to the one that Kaydown uses
+# The settings that these tests keep go to a file of their own, not to the one that Ladder uses
 const kept = joinpath(dir, "settings")
 @eval K settings_file() = $kept
 
@@ -546,7 +546,7 @@ end
   frame(w)
   # A snake while it's down
   @test icon() == "snake"
-  @test !isempty(K.icon_cache["snake"].paths)   # UI.jl has no snake among its icons, so Kaydown gives it the shape
+  @test !isempty(K.icon_cache["snake"].paths)   # UI.jl has no snake among its icons, so Ladder gives it the shape
   @test K.tip(e.nodes[:mode]) == "Go up a level, to the graphics that the symbols make  ⌘E"
   click(w, e.nodes[:mode])
   @test !e.plain

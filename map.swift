@@ -1,6 +1,6 @@
-// Does the two things that Kaydown's maps need from MapKit, which is part of
+// Does the two things that Ladder's maps need from MapKit, which is part of
 // macOS. macOS only offers MapKit to Swift and Objective-C, so this is a
-// program of its own, and Kaydown runs it. See map.jl.
+// program of its own, and Ladder runs it. See map.jl.
 //
 // It makes a picture of the map round a point:
 //
@@ -12,7 +12,7 @@
 // picture. The zoom is the one that maps on the web use: each step shows half
 // as much from side to side, and 15 shows a few streets. The file has two
 // pixels to the px, so the picture is sharp on a Retina screen. With --dark,
-// the map has the colours of a dark page. The picture has no pin: Kaydown
+// the map has the colours of a dark page. The picture has no pin: Ladder
 // draws the pin over it.
 //
 // The picture is a rectangle of the map of the world as maps on the web draw

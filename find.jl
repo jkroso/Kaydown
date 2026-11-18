@@ -18,10 +18,10 @@
 #
 # Or a kind of block:
 #
-# - `code blocks`: the blocks of code that Kaydown shows as code
+# - `code blocks`: the blocks of code that Ladder shows as code
 # - `sheets`, `spreadsheets`, `live blocks`, `diagrams`, `takeoffs`,
 #   `schedules`, `charts`, `boards`, `calendars`, `columns`, `sketches`, `signatures`, `contacts`, `maps`, `find lists`, `email lists`,
-#   `time logs`, `questions`, `changes`: the blocks that Kaydown shows as that component
+#   `time logs`, `questions`, `changes`: the blocks that Ladder shows as that component
 #
 # A block is listed by the heading that it's under. A block of code, and a
 # block with no heading over it, is listed by its own first line.
@@ -44,9 +44,9 @@ const FIND = "find"
 what_is(names...; one, many=names[1], langs=(), block=!isempty(langs)) = (names=names, one=one, many=many, langs=langs, block=block)
 
 """
-The kinds of thing that a list can be of, in the order that Kaydown offers
+The kinds of thing that a list can be of, in the order that Ladder offers
 them. `names` are the words that a block can name the kind by, and the first
-is the one that Kaydown writes. `one` and `many` are what the top of a list
+is the one that Ladder writes. `one` and `many` are what the top of a list
 calls one of them and several. A kind of block has `block`, and `langs`, the
 languages of the code blocks that are of that kind. The kind `code` is every
 block in another language.

@@ -1,5 +1,5 @@
-# Kaydown updates itself. The app asks GitHub which version of Kaydown is the
-# newest. It gets a newer version while you work, checks that Kaydown's
+# Ladder updates itself. The app asks GitHub which version of Ladder is the
+# newest. It gets a newer version while you work, checks that Ladder's
 # developer signed it, and puts it in the app's place when you quit. The
 # settings page has a box that turns this off, and says how far an update has
 # got.
@@ -13,47 +13,47 @@
 # A release has two files. latest.txt names the newest version:
 #
 #     version=0.2.0
-#     file=Kaydown-0.2.0.zip
+#     file=Ladder-0.2.0.zip
 #     sha256=<the SHA-256 sum of the zip file>
 #     macos=12.0
 #
 # `macos` is the oldest macOS that the version runs on. The zip file holds
-# Kaydown.app. release.jl makes both files, and publishes them in `REPO`.
+# Ladder.app. release.jl makes both files, and publishes them in `REPO`.
 #
-# Only the Kaydown app updates itself, and only a copy that was signed with a
-# Developer ID certificate, as release.jl signs it. Kaydown run from its
+# Only the Ladder app updates itself, and only a copy that was signed with a
+# Developer ID certificate, as release.jl signs it. Ladder run from its
 # source doesn't, and nor does an app that app/build.jl signed for one Mac.
 #
 # A new version must pass the designated requirement of the app that's
 # running. That is the rule that macOS reads from an app's signature, and it
 # says who signed the app. So an app that someone else made can't take
-# Kaydown's place, wherever it came from.
+# Ladder's place, wherever it came from.
 #
-# The new version waits in Kaydown's folder in ~/Library/Application Support,
-# in `update`. It takes the app's place after Kaydown has quit, because a
+# The new version waits in Ladder's folder in ~/Library/Application Support,
+# in `update`. It takes the app's place after Ladder has quit, because a
 # program that's running reads its own files as it goes.
 #
-# KAYDOWN_UPDATE_FEED gives the app another address for latest.txt, to try an
+# LADDER_UPDATE_FEED gives the app another address for latest.txt, to try an
 # update without a release. The new version must still pass the rule above.
 
 @use "github.com/jkroso/UI.jl/Interface/objc" cls msg nsstring jstring with_pool
 
 "The GitHub repo whose releases the app looks at. release.jl publishes to it."
-const REPO = "jkroso/Kaydown"
+const REPO = "jkroso/Ladder"
 "The file of a release that names the newest version"
 const LATEST = "latest.txt"
-"The Kaydown app's name for macOS, as app/build.jl gives it"
-const ID = "com.jkroso.kaydown"
+"The Ladder app's name for macOS, as app/build.jl gives it"
+const ID = "com.jkroso.ladder"
 const EVERY = 24 * 60 * 60.0   # seconds from one look for a newer version to the next
 const RETRY = 60 * 60.0        # seconds until it looks again after it couldn't
 const POLL = 1.0               # seconds between two looks at a download that's running
 const LSREGISTER = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 
 "The address of latest.txt"
-feed() = get(ENV, "KAYDOWN_UPDATE_FEED", "https://github.com/$REPO/releases/latest/download/$LATEST")
+feed() = get(ENV, "LADDER_UPDATE_FEED", "https://github.com/$REPO/releases/latest/download/$LATEST")
 
 mutable struct Updater
-  app::String                             # the app that's running, or "" when Kaydown runs from its source
+  app::String                             # the app that's running, or "" when Ladder runs from its source
   version::VersionNumber                  # the version that's running
   feed::String                            # the address of latest.txt
   dir::String                             # the folder where a new version waits
@@ -83,7 +83,7 @@ Updater(app, version; feed=feed(), dir=waiting_room(), rule=nothing, register=LS
   Updater(app, version, feed, dir, rule, register, true, :idle, nothing, nothing, "", "", v"0", nothing, false, "", 0.0, false, 0)
 
 "The folder where a new version waits"
-waiting_room() = joinpath(homedir(), "Library", "Application Support", "Kaydown", "update")
+waiting_room() = joinpath(homedir(), "Library", "Application Support", "Ladder", "update")
 
 "The updater of the app that's running"
 const mine = Ref{Union{Nothing,Updater}}(nothing)
@@ -95,7 +95,7 @@ own() = begin
   u
 end
 
-"Where the Kaydown app that's running is, and its version. The place is an empty string when Kaydown runs from its source."
+"Where the Ladder app that's running is, and its version. The place is an empty string when Ladder runs from its source."
 running() = begin
   Sys.isapple() || return ("", v"0")
   with_pool() do
@@ -122,20 +122,20 @@ rule(u::Updater) = begin
   end
 end
 
-"True when Kaydown can change the file or folder at `path`"
+"True when Ladder can change the file or folder at `path`"
 writable(path) = ccall(:access, Cint, (Cstring, Cint), path, 2) == 0
 
 "Why the app can't update itself, or an empty string when it can"
 blocked(u::Updater) = begin
-  isempty(u.app) && return "Kaydown runs from its source here. Only the Kaydown app updates itself."
-  isempty(rule(u)) && return "This copy of Kaydown was built on this Mac. Only a copy from Kaydown's releases updates itself."
+  isempty(u.app) && return "Ladder runs from its source here. Only the Ladder app updates itself."
+  isempty(rule(u)) && return "This copy of Ladder was built on this Mac. Only a copy from Ladder's releases updates itself."
   # macOS runs an app that's still in the folder it was downloaded to from a place that nothing can change
   (writable(u.app) && writable(dirname(u.app))) ||
-    return "Kaydown can't change its own files where it is. Move it to your Applications folder, then open it again."
+    return "Ladder can't change its own files where it is. Move it to your Applications folder, then open it again."
   ""
 end
 
-"The version of macOS on this Mac, or nothing when Kaydown can't tell"
+"The version of macOS on this Mac, or nothing when Ladder can't tell"
 macos() = try
   m = match(r"<key>ProductVersion</key>\s*<string>([\d.]+)</string>", read("/System/Library/CoreServices/SystemVersion.plist", String))
   m === nothing ? nothing : tryparse(VersionNumber, m[1])
@@ -199,19 +199,19 @@ check!(u::Updater) = begin
     u.process = run(pipeline(`/usr/bin/curl -fsSL --max-time 30 -o $(feed_file(u)) $(u.feed)`, stdout=devnull, stderr=devnull), wait=false)
     u.stage = :checking
   catch
-    failed!(u, "Kaydown couldn't look for a newer version.")
+    failed!(u, "Ladder couldn't look for a newer version.")
   end
   changed!(u)
 end
 
-"Note that a check or a download failed, and why. Kaydown tries again in an hour."
+"Note that a check or a download failed, and why. Ladder tries again in an hour."
 failed!(u::Updater, why) = (u.stage = :idle; u.problem = why; u.next = time() + RETRY; changed!(u))
 
 "Take the answer to `check!`. With `auto`, start to get the version it names if that one is newer."
 checked!(u::Updater) = begin
   named = success(u.process) && isfile(feed_file(u)) ? parse_feed(read(feed_file(u), String)) : nothing
   rm(feed_file(u), force=true)
-  named === nothing && return failed!(u, "Kaydown couldn't look for a newer version.")
+  named === nothing && return failed!(u, "Ladder couldn't look for a newer version.")
   u.stage = :idle
   u.newest, u.file, u.sum, u.needs = named
   u.next = time() + EVERY
@@ -227,7 +227,7 @@ path of latest.txt. release.jl calls this.
 announce(dir, version, zip; macos="12.0") = begin
   sum = first(split(readchomp(`/usr/bin/shasum -a 256 $zip`)))
   text = "version=$version\nfile=$(basename(zip))\nsha256=$sum\nmacos=$macos\n"
-  parse_feed(text) === nothing && error("Kaydown can't read a latest.txt for version $version and the file $(basename(zip)). ",
+  parse_feed(text) === nothing && error("Ladder can't read a latest.txt for version $version and the file $(basename(zip)). ",
                                         "Write the version like 1.2.0, and give the file a name of letters, digits, dots and dashes.")
   file = joinpath(dir, LATEST)
   write(file, text)
@@ -245,15 +245,15 @@ url="$1"; sum="$2"; dir="$3"; version="$4"; rule="$5"
 new="$dir/new"
 fail() { echo "$1" >&2; rm -rf "$new"; exit 1; }
 rm -rf "$new" "$dir/ready" "$dir/staged.app"
-mkdir -p "$new" || fail "Kaydown couldn't make a folder for version $version."
-/usr/bin/curl -fsSL --retry 2 -o "$new/app.zip" "$url" || fail "The download of Kaydown $version stopped."
+mkdir -p "$new" || fail "Ladder couldn't make a folder for version $version."
+/usr/bin/curl -fsSL --retry 2 -o "$new/app.zip" "$url" || fail "The download of Ladder $version stopped."
 [ "$(/usr/bin/shasum -a 256 "$new/app.zip" | /usr/bin/cut -d' ' -f1)" = "$sum" ] || fail "The file that came isn't the one that was released."
-/usr/bin/ditto -x -k "$new/app.zip" "$new/open" || fail "Kaydown couldn't open the file of version $version."
+/usr/bin/ditto -x -k "$new/app.zip" "$new/open" || fail "Ladder couldn't open the file of version $version."
 set -- "$new/open"/*.app
 { [ $# = 1 ] && [ -d "$1" ]; } || fail "The file of version $version doesn't hold an app."
 [ "$(/usr/bin/plutil -extract CFBundleShortVersionString raw "$1/Contents/Info.plist" 2>/dev/null)" = "$version" ] || fail "The app that came isn't version $version."
-/usr/bin/codesign --verify --deep --strict -R="$rule" "$1" 2>/dev/null || fail "Kaydown's developer didn't sign the app that came, so Kaydown left it alone."
-/bin/mv "$1" "$dir/staged.app" || fail "Kaydown couldn't keep version $version."
+/usr/bin/codesign --verify --deep --strict -R="$rule" "$1" 2>/dev/null || fail "Ladder's developer didn't sign the app that came, so Ladder left it alone."
+/bin/mv "$1" "$dir/staged.app" || fail "Ladder couldn't keep version $version."
 echo "$version" > "$dir/ready"
 rm -rf "$new"
 """
@@ -271,7 +271,7 @@ fetch!(u::Updater) = begin
     u.process = run(pipeline(cmd, stdout=devnull, stderr=problem_file(u)), wait=false)
     u.stage = :fetching
   catch
-    failed!(u, "Kaydown couldn't get version $(u.newest).")
+    failed!(u, "Ladder couldn't get version $(u.newest).")
   end
   changed!(u)
 end
@@ -280,7 +280,7 @@ end
 fetched!(u::Updater) = begin
   said = isfile(problem_file(u)) ? split(strip(read(problem_file(u), String)), '\n', keepempty=false) : SubString{String}[]
   rm(problem_file(u), force=true)
-  success(u.process) || return failed!(u, isempty(said) ? "Kaydown couldn't get version $(u.newest)." : String(last(said)))
+  success(u.process) || return failed!(u, isempty(said) ? "Ladder couldn't get version $(u.newest)." : String(last(said)))
   u.stage = :idle
   u.staged = u.newest
   changed!(u)
@@ -324,15 +324,15 @@ end
 says(u::Updater) = begin
   no = blocked(u)
   isempty(no) || return no
-  u.stage == :checking && return "Kaydown is looking for a newer version…"
-  u.stage == :fetching && return "Kaydown is getting version $(u.newest)…"
+  u.stage == :checking && return "Ladder is looking for a newer version…"
+  u.stage == :fetching && return "Ladder is getting version $(u.newest)…"
   u.staged !== nothing &&
-    return "Kaydown $(u.staged) is ready." * (u.auto ? " It takes the place of version $(u.version) when you quit Kaydown." : "")
-  isempty(u.problem) || return u.problem * (u.auto ? " Kaydown tries again in an hour." : "")
-  u.newest === nothing && return "This is Kaydown $(u.version)."
-  u.newest <= u.version && return "This is Kaydown $(u.version), the newest version."
-  fits(u) || return "Kaydown $(u.newest) needs macOS $(u.needs.major).$(u.needs.minor) or later. This is Kaydown $(u.version)."
-  "Kaydown $(u.newest) is out. This is Kaydown $(u.version)."
+    return "Ladder $(u.staged) is ready." * (u.auto ? " It takes the place of version $(u.version) when you quit Ladder." : "")
+  isempty(u.problem) || return u.problem * (u.auto ? " Ladder tries again in an hour." : "")
+  u.newest === nothing && return "This is Ladder $(u.version)."
+  u.newest <= u.version && return "This is Ladder $(u.version), the newest version."
+  fits(u) || return "Ladder $(u.newest) needs macOS $(u.needs.major).$(u.needs.minor) or later. This is Ladder $(u.version)."
+  "Ladder $(u.newest) is out. This is Ladder $(u.version)."
 end
 
 """
@@ -349,7 +349,7 @@ end
 "What the button says for each `action`"
 label(u::Updater) = begin
   a = action(u)
-  a === :restart ? "Restart to update" : a === :get ? "Get Kaydown $(u.newest)" : a === :check ? "Check now" : ""
+  a === :restart ? "Restart to update" : a === :get ? "Get Ladder $(u.newest)" : a === :check ? "Check now" : ""
 end
 
 """
@@ -364,8 +364,8 @@ act!(u::Updater) = begin
   u
 end
 
-# Puts staged.app in the app's place, once the Kaydown that asked has quit. It leaves the app alone while
-# another Kaydown from the same app is open, since that one still reads the app's files. The new app must
+# Puts staged.app in the app's place, once the Ladder that asked has quit. It leaves the app alone while
+# another Ladder from the same app is open, since that one still reads the app's files. The new app must
 # pass the rule again, in case a file of it was lost while it waited. `again` opens the app at the end,
 # whichever version is there then.
 const INSTALL = raw"""
@@ -379,8 +379,8 @@ if /bin/ps -axo comm= | /usr/bin/grep -qF "$app/Contents/MacOS/"; then finish 1;
 rm -f "$dir/ready"
 /usr/bin/codesign --verify --deep --strict -R="$rule" "$new" 2>/dev/null || { rm -rf "$new"; finish 1; }
 place="$(/usr/bin/dirname "$app")"
-beside="$place/.kaydown-new-$$.app"
-old="$place/.kaydown-old-$$.app"
+beside="$place/.ladder-new-$$.app"
+old="$place/.ladder-old-$$.app"
 # First onto the app's disk, which can be another one. Then the two swap places, so the app is never half there.
 /bin/mv "$new" "$beside" || { rm -rf "$beside" "$new"; finish 1; }
 /bin/mv "$app" "$old" || { rm -rf "$beside"; finish 1; }
@@ -400,7 +400,7 @@ install(u::Updater, pid) =
 
 """
 Call this when the last window has closed. It starts a program that outlives
-Kaydown, and puts the new version in the app's place once Kaydown has quit. It
+Ladder, and puts the new version in the app's place once Ladder has quit. It
 does that when a version is ready, and `auto` is on or you clicked Restart to
 update. It's true when it started the program.
 """

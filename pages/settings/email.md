@@ -1,6 +1,6 @@
 # Email
 
-Kaydown can keep a copy of your email in a folder on this Mac. The folder has the same folders in it as your email server has. Each email is one `.eml` file: the email as the server sent it, with what was attached to it inside. Kaydown shows it as a page. You read it there, and you can't change it: Kaydown marks each email file as read-only on your Mac, so no other app changes one by mistake. Click a link in an email to open it. An email that you write is a Markdown page until you send it.
+Ladder can keep a copy of your email in a folder on this Mac. The folder has the same folders in it as your email server has. Each email is one `.eml` file: the email as the server sent it, with what was attached to it inside. Ladder shows it as a page. You read it there, and you can't change it: Ladder marks each email file as read-only on your Mac, so no other app changes one by mistake. Click a link in an email to open it. An email that you write is a Markdown page until you send it.
 
 The other settings are on the [Settings](settings.md) page.
 
@@ -10,19 +10,19 @@ The other settings are on the [Settings](settings.md) page.
 email_form()
 ```
 
-Type your address, and Kaydown says which password your email company takes. For an address at a domain of your own, like a business address, Kaydown asks the internet which company takes that domain's email, to find its servers.
+Type your address, and Ladder says which password your email company takes. For an address at a domain of your own, like a business address, Ladder asks the internet which company takes that domain's email, to find its servers.
 
-Kaydown keeps the password in the Keychain of this Mac, and nowhere else.
+Ladder keeps the password in the Keychain of this Mac, and nowhere else.
 
-Kaydown can have more than one account. Click **Add an account** for a form with nothing in it. Type the address and the password there, then click Connect. The row over the form has each account's address. Click an address to see that account in the form. The settings on the rest of this page are for the account that's lit in that row.
+Ladder can have more than one account. Click **Add an account** for a form with nothing in it. Type the address and the password there, then click Connect. The row over the form has each account's address. Click an address to see that account in the form. The settings on the rest of this page are for the account that's lit in that row.
 
-**Remove this account** takes the account that shows away from Kaydown. Its password goes from the Keychain. Its emails stay in their folder on this Mac.
+**Remove this account** takes the account that shows away from Ladder. Its password goes from the Keychain. Its emails stay in their folder on this Mac.
 
-The email of each account goes in a folder that's named for its address. Kaydown makes that folder in a folder called Mail in your home folder, unless you choose another one. To choose, click a name in the path to go to that folder, and the last name to list the folders in it. Choose, beside the path, asks for a folder with the Mac's own panel, which can make a new one. The folder that you choose can have other things in it, because Kaydown only uses the folder that's named for your address. If you change the folder later, Kaydown gets your email again into the new folder, and leaves the old folder as it is.
+The email of each account goes in a folder that's named for its address. Ladder makes that folder in a folder called Mail in your home folder, unless you choose another one. To choose, click a name in the path to go to that folder, and the last name to list the folders in it. Choose, beside the path, asks for a folder with the Mac's own panel, which can make a new one. The folder that you choose can have other things in it, because Ladder only uses the folder that's named for your address. If you change the folder later, Ladder gets your email again into the new folder, and leaves the old folder as it is.
 
-## What Kaydown gets
+## What Ladder gets
 
-Kaydown gets your inbox first. Choose how far back the emails that it gets go.
+Ladder gets your inbox first. Choose how far back the emails that it gets go.
 
 ```ui
 months = [1, 3, 12, 36, 0]
@@ -35,7 +35,7 @@ RadioGroup(labels=names, selected=something(findfirst(==(email_back()), months),
 Checkbox(label="Get the other folders too, once the inbox has come", checked=email_rest(), onchange=box -> email_rest!(box.checked))
 ```
 
-Kaydown looks at the inbox as often as ever while the other folders come. Without the other folders, Kaydown still makes each one on this Mac, with nothing in it. If you choose a longer time later, Kaydown gets the older emails. If you choose a shorter time, the emails that have come stay.
+Ladder looks at the inbox as often as ever while the other folders come. Without the other folders, Ladder still makes each one on this Mac, with nothing in it. If you choose a longer time later, Ladder gets the older emails. If you choose a shorter time, the emails that have come stay.
 
 ## New email
 
@@ -53,13 +53,13 @@ RadioGroup(labels=names, selected=something(findfirst(==(email_every()), minutes
            onchange=group -> email_every!(minutes[group.selected]))
 ```
 
-The first time, Kaydown gets every email of the time that you chose, the newest first. That can take a long time. The form above shows how many emails have come, and how long the rest take. You can read the ones that have come while the rest come.
+The first time, Ladder gets every email of the time that you chose, the newest first. That can take a long time. The form above shows how many emails have come, and how long the rest take. You can read the ones that have come while the rest come.
 
-Gmail lets an app get 2,500 MB of email in a day. Kaydown stops before that, and goes on a day later. So the first time can take a few days for a Gmail account with many attached files.
+Gmail lets an app get 2,500 MB of email in a day. Ladder stops before that, and goes on a day later. So the first time can take a few days for a Gmail account with many attached files.
 
 ## How it works
 
-The server is the one that's right. An email that you delete in another app goes from the folder here. An email file that you move or delete in the Finder comes back the next time Kaydown looks. Each folder also has a hidden list of its emails. If that list is lost, Kaydown makes it again from the files and the server, with no new download.
+The server is the one that's right. An email that you delete in another app goes from the folder here. An email file that you move or delete in the Finder comes back the next time Ladder looks. Each folder also has a hidden list of its emails. If that list is lost, Ladder makes it again from the files and the server, with no new download.
 
 These change what the server has:
 

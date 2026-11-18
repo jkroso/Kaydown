@@ -1,18 +1,18 @@
 # A page that an agent and you work on together. An agent is a program like
-# Claude Code that writes a Markdown file, shows it to you in Kaydown and
+# Claude Code that writes a Markdown file, shows it to you in Ladder and
 # waits. You read the page, change it, and send it back.
 #
-# The agent waits by running `kaydown wait page.md` (the script is in
-# plugin/bin). That script and Kaydown talk through files in one folder:
+# The agent waits by running `ladder wait page.md` (the script is in
+# plugin/bin). That script and Ladder talk through files in one folder:
 #
-#     ~/Library/Application Support/Kaydown/agents/
+#     ~/Library/Application Support/Ladder/agents/
 #       4711.wait   the script wrote it. 4711 is the script's process. Its first
 #                   line is the page's path, and its second is the agent's name.
-#       4711.seen   Kaydown wrote it, to say that it knows the script is waiting
-#       812.app     Kaydown wrote it as it opened. 812 is Kaydown's process. While
-#                   that runs, the script keeps waiting for a Kaydown that's busy,
+#       4711.seen   Ladder wrote it, to say that it knows the script is waiting
+#       812.app     Ladder wrote it as it opened. 812 is Ladder's process. While
+#                   that runs, the script keeps waiting for a Ladder that's busy,
 #                   like one that waits for you to answer a question from macOS.
-#       4711.sent   Kaydown wrote it when you sent the page. It holds what you
+#       4711.sent   Ladder wrote it when you sent the page. It holds what you
 #                   changed. The script prints it and stops.
 #
 #     waiting("/notes/plan.md")   # the agents that wait for that page
@@ -24,8 +24,8 @@
 "A test names a folder of its own here, to keep out of the real one"
 const place = Ref("")
 
-"The folder that the script and Kaydown talk through"
-folder() = isempty(place[]) ? joinpath(homedir(), "Library", "Application Support", "Kaydown", "agents") : place[]
+"The folder that the script and Ladder talk through"
+folder() = isempty(place[]) ? joinpath(homedir(), "Library", "Application Support", "Ladder", "agents") : place[]
 
 "An agent that's waiting for you to send a page"
 struct Waiter
@@ -35,7 +35,7 @@ struct Waiter
 end
 
 """
-Say that this Kaydown is open and can send a page to an agent, with a file
+Say that this Ladder is open and can send a page to an agent, with a file
 that's named for its process. It does nothing the second time.
 """
 announce(dir=folder()) = begin
@@ -53,7 +53,7 @@ end
 running(pid::Integer) = ccall(:kill, Cint, (Cint, Cint), pid, 0) == 0
 
 """
-Every agent that's waiting, for any page. Each one is told that Kaydown has
+Every agent that's waiting, for any page. Each one is told that Ladder has
 seen it. The files of a script that has stopped are removed.
 """
 waiters(dir=folder()) = begin
@@ -104,7 +104,7 @@ that it starts on.
 """
 report(path, told, lines, line::Int=0, selected="") = begin
   io = IOBuffer()
-  println(io, "The user sent ", path, " from Kaydown.")
+  println(io, "The user sent ", path, " from Ladder.")
   println(io)
   diff = unified(told, lines)
   if isempty(diff)

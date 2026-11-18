@@ -70,5 +70,5 @@ end
   @test timedwait(() -> process_exited(program), 10) == :ok
   # A command that can't run
   none = C.ask("lookup_items", s=C.Server(), cmd=`/nowhere/julia`)
-  @test C.failed(none) && none.problem == "Kaydown couldn't start Centient's program"
+  @test C.failed(none) && none.problem == "Ladder couldn't start Centient's program"
 end

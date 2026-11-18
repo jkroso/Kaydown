@@ -1,6 +1,6 @@
 # Tests for the `signature` block of main.jl: a box that a person signs in
 # with the mouse. Run them with `julia -O0 --project=. test/signature_view_test.jl`.
-# They draw in windows that aren't on the screen. Set `KAYDOWN_SHOTS` to a
+# They draw in windows that aren't on the screen. Set `LADDER_SHOTS` to a
 # folder, and they save pictures of the page there.
 
 @use Test: @test, @testset
@@ -40,7 +40,7 @@ frames(n=2, w=w) = foreach(_ -> frame(w), 1:n)
 frames()
 const v = e.nodes[(:block, K.SIGNATURE, page, 1)]
 const u = e.nodes[(:block, K.SIGNATURE, page, 2)]
-shot(name, w=w) = haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(ENV["KAYDOWN_SHOTS"], name), w)
+shot(name, w=w) = haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], name), w)
 
 at((x, y), w=w) = (w.mouse = typeof(w.mouse)(px(x), px(y)); onmouse(w, MouseMove(Vec2{px}(px(x), px(y)), w)); frames(1, w))
 press(place, w=w) = (at(place, w); w.keys |= Keys.mouse_left; onkey(w, KeyPress{Keys.mouse_left}(0, w)))

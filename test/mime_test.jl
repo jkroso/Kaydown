@@ -515,7 +515,7 @@ end
   at = unix(2026, 11, 13, 22, 32, 7)
   raw = M.compose(from="Jörg Müller <joerg@example.de>", to="\"Lee, Sam\" <sam@example.com>, kim@example.com", cc="Zoë <zoe@example.com>",
                   bcc="secret@example.com", subject=subject, text=words, html=html, files=[file, other], reply="<1@example.com>",
-                  references="<0@example.com>", id="<2@kaydown.example>", at=at)
+                  references="<0@example.com>", id="<2@ladder.example>", at=at)
   sent = String(copy(raw))
   # Only ASCII, lines that end the way an email's do, and none that's too long. The people it's copied to in secret aren't in it.
   @test isascii(sent) && !occursin(r"(?<!\r)\n", sent) && !occursin(r"\r(?!\n)", sent) && all(l -> length(l) <= 78, split(sent, "\r\n"))
@@ -525,7 +525,7 @@ end
   @test M.header(m, "subject") == subject && M.sent(m) == at
   @test M.addresses(m, "from") == ["Jörg Müller" => "joerg@example.de"]
   @test M.addresses(m, "to") == ["Lee, Sam" => "sam@example.com", "" => "kim@example.com"] && M.addresses(m, "cc") == ["Zoë" => "zoe@example.com"]
-  @test M.header(m, "message-id") == "<2@kaydown.example>" && M.header(m, "in-reply-to") == "<1@example.com>"
+  @test M.header(m, "message-id") == "<2@ladder.example>" && M.header(m, "in-reply-to") == "<1@example.com>"
   @test M.header(m, "references") == "<0@example.com> <1@example.com>"
   @test m.type == "multipart/mixed" && [p.type for p in m.parts] == ["multipart/alternative", "application/pdf", "application/octet-stream"]
   plain, rich = m.parts[1].parts
@@ -539,7 +539,7 @@ end
   @test lines[8:end] == ["", "Hi Sam,", "", "The **café** costs €500.", "", "[Café plan (v2).pdf](files/Café%20plan%20%28v2%29.pdf)", "[notes.xyz](files/notes.xyz)"]
 
   # Plain text alone, to one person, in answer to nothing
-  raw = M.compose(from="me@example.com", to="sam@example.com", subject="Hi", text="One line", id="<3@kaydown.example>", at=at)
+  raw = M.compose(from="me@example.com", to="sam@example.com", subject="Hi", text="One line", id="<3@ladder.example>", at=at)
   m = M.message(raw)
   @test m.type == "text/plain" && m.params["charset"] == "UTF-8" && M.text(m) == "One line\r\n" && isempty(m.parts)
   @test M.header(m, "in-reply-to") == "" && M.header(m, "references") == "" && M.header(m, "cc") == "" && M.header(m, "to") == "sam@example.com"

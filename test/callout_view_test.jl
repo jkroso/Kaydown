@@ -1,7 +1,7 @@
 # Tests for the callouts of main.jl: a quote whose first line names a kind of
 # note, like `> [!NOTE]`. Run them with
 # `julia -O0 --project=. test/callout_view_test.jl`. They use a window that
-# isn't on the screen. Set `KAYDOWN_SHOTS` to a folder, and they save pictures
+# isn't on the screen. Set `LADDER_SHOTS` to a folder, and they save pictures
 # of the page there.
 
 @use Test: @test, @testset
@@ -43,7 +43,7 @@ const w = Window(e, size=(900px, 820px))
 frames(n=2) = foreach(_ -> frame(w), 1:n)
 frames()
 K.focus(e)
-shot(name) = haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(ENV["KAYDOWN_SHOTS"], name), w)
+shot(name) = haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], name), w)
 line(text) = findfirst(startswith(text), e.buf.lines)
 segs(i) = [seg for vl in K.item(e, i).content.lines for seg in vl.segs]
 "The mark that shows in place of what starts line `i`, or nothing"

@@ -130,23 +130,23 @@ page. It never throws.
 """
 load(path) = begin
   name = basename(path)
-  isfile(path) || return nothing_to_show("Kaydown can't find the file $name.")
+  isfile(path) || return nothing_to_show("Ladder can't find the file $name.")
   try
     bytes = open(io -> read(io, MOST_BYTES + 1), path)
     more = length(bytes) > MOST_BYTES
     if more
       # A file that was cut short can stop part way through a row, so it ends at its last whole line
       stop = findlast(==(0x0a), @view bytes[1:MOST_BYTES])
-      stop === nothing && return nothing_to_show("Kaydown can't read $name as a table.")
+      stop === nothing && return nothing_to_show("Ladder can't read $name as a table.")
       resize!(bytes, stop)
     end
-    0x00 in view(bytes, 1:min(length(bytes), 4000)) && return nothing_to_show("Kaydown can't read $name as a table. It isn't a file of text.")
+    0x00 in view(bytes, 1:min(length(bytes), 4000)) && return nothing_to_show("Ladder can't read $name as a table. It isn't a file of text.")
     text = String(bytes)
-    isvalid(text) || return nothing_to_show("Kaydown can't read $name as a table. It isn't a file of text.")
+    isvalid(text) || return nothing_to_show("Ladder can't read $name as a table. It isn't a file of text.")
     t = table(text)
     isempty(t.rows) && return nothing_to_show("The file $name has no rows yet.")
     Table(t.rows, t.numbers, t.more || more, "")
   catch
-    nothing_to_show("Kaydown can't read the file $name.")
+    nothing_to_show("Ladder can't read the file $name.")
   end
 end

@@ -2,7 +2,7 @@
 # Run them with `julia -O0 --project=. test/contact_view_test.jl`. They click
 # and type in windows that aren't on the screen. A function of the test takes
 # the place of the browser, so nothing opens. Another takes the place of the
-# web, and the Mac's clipboard is left as it is. Set `KAYDOWN_SHOTS` to a
+# web, and the Mac's clipboard is left as it is. Set `LADDER_SHOTS` to a
 # folder, and they save pictures of the page there.
 
 @use Test: @test, @testset
@@ -77,7 +77,7 @@ const w = Window(e, size=(1000px, 1100px))
 frames(n=2, w=w) = foreach(_ -> frame(w), 1:n)
 frames()
 view(n=1, e=e) = e.nodes[(:block, K.CONTACT, e.buf.path, n)]
-shot(name, w=w) = haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(ENV["KAYDOWN_SHOTS"], name), w)
+shot(name, w=w) = haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], name), w)
 
 at((x, y), w=w) = (w.mouse = typeof(w.mouse)(px(x), px(y)); onmouse(w, MouseMove(Vec2{px}(px(x), px(y)), w)); frames(1, w))
 press(place, w=w) = (at(place, w); w.keys |= Keys.mouse_left; onkey(w, KeyPress{Keys.mouse_left}(0, w)))

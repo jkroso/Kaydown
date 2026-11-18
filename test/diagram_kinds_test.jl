@@ -2,7 +2,7 @@
 # changed where they're drawn: a mind map, an entity relationship diagram, a
 # Gantt chart and a timeline. See "diagrams" in main.jl. Run them with
 # `julia -O0 --project=. test/diagram_kinds_test.jl`. They click and press
-# keys in a window that isn't on the screen. Set `KAYDOWN_SHOTS` to a folder,
+# keys in a window that isn't on the screen. Set `LADDER_SHOTS` to a folder,
 # and they save a picture of each kind there.
 
 @use Test: @test, @testset
@@ -75,7 +75,7 @@ const w = Window(e, size=(900px, 3200px))
 frames(n=2) = foreach(_ -> frame(w), 1:n)
 frames()
 
-shot(name) = haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(ENV["KAYDOWN_SHOTS"], name), w)
+shot(name) = haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], name), w)
 
 at((x, y)) = (w.mouse = typeof(w.mouse)(px(x), px(y)); onmouse(w, MouseMove(Vec2{px}(px(x), px(y)), w)); frames())
 press(place) = (at(place); w.keys |= Keys.mouse_left; onkey(w, KeyPress{Keys.mouse_left}(0, w)))
@@ -149,7 +149,7 @@ end
     @test K.num(rect(s.value).left) >= 0 && K.num(rect(s.value).left + rect(s.value).width) <= 380
   end
   @test length(diagrams(narrow)) == length(KINDS)
-  haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(ENV["KAYDOWN_SHOTS"], "kinds-narrow.png"), small)
+  haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], "kinds-narrow.png"), small)
 end
 
 @testset "each diagram that the docs give as an example is drawn" begin

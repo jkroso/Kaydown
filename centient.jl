@@ -1,4 +1,4 @@
-# Kaydown's way to Centient's books, for the takeoff block: the items of the
+# Ladder's way to Centient's books, for the takeoff block: the items of the
 # catalogue, the contacts, and the quote that a takeoff makes.
 #
 # Centient has an MCP server, sidecar/mcp_server.jl, that runs Centient's own
@@ -20,7 +20,7 @@
 
 # --- JSON ----------------------------------------------------------------------
 #
-# The server speaks JSON. This is all of it that the two need, so that Kaydown
+# The server speaks JSON. This is all of it that the two need, so that Ladder
 # needs no package for it.
 
 "`value` as JSON: a Dict, a list, a string, a number, true, false or nothing"
@@ -161,7 +161,7 @@ sidecar() = begin
   i === nothing ? nothing : places()[i]
 end
 
-"True when this Mac has a Centient that Kaydown can work with"
+"True when this Mac has a Centient that Ladder can work with"
 available() = sidecar() !== nothing
 
 """
@@ -183,7 +183,7 @@ end
 
 # --- the server ------------------------------------------------------------------
 
-"Something that Kaydown asked the server for"
+"Something that Ladder asked the server for"
 mutable struct Request
   tool::String
   done::Bool
@@ -196,7 +196,7 @@ failed(r::Request) = r.done && !isempty(r.problem)
 
 mutable struct Server
   process::Any                    # the program while it runs, or nothing
-  input::Any                      # what Kaydown writes its requests to
+  input::Any                      # what Ladder writes its requests to
   out::String                     # the file that the program writes its answers into
   err::String                     # the file that it writes everything else into
   read::Int                       # how many bytes of `out` have been read
@@ -214,11 +214,11 @@ const server = Server()
 const IDLE = 15 * 60   # seconds with nothing asked, after which the program is stopped. It holds a lot of memory.
 const PROTOCOL = "2026-07-28"
 const META = Dict{String,Any}("io.modelcontextprotocol/protocolVersion" => PROTOCOL,
-                              "io.modelcontextprotocol/clientInfo" => Dict{String,Any}("name" => "kaydown", "version" => "1"))
+                              "io.modelcontextprotocol/clientInfo" => Dict{String,Any}("name" => "ladder", "version" => "1"))
 
 running(s::Server=server) = s.process !== nothing && !process_exited(s.process)
 
-"True once Julia has been told to stop Centient's program when Kaydown quits"
+"True once Julia has been told to stop Centient's program when Ladder quits"
 const hooked = Ref(false)
 
 "Start the program with `cmd`. It's false when it can't be started."
@@ -294,7 +294,7 @@ ask(tool::AbstractString, args::AbstractDict=Dict{String,Any}(); s::Server=serve
   if !running(s)
     dir = cmd === nothing ? sidecar() : ""
     dir === nothing && return (r.done = true; r.problem = "Centient isn't on this Mac"; r)
-    start!(s, cmd === nothing ? command(dir) : cmd) || return (r.done = true; r.problem = "Kaydown couldn't start Centient's program"; r)
+    start!(s, cmd === nothing ? command(dir) : cmd) || return (r.done = true; r.problem = "Ladder couldn't start Centient's program"; r)
   end
   id = s.next
   s.next += 1
@@ -340,7 +340,7 @@ answer!(s::Server, line::AbstractString) = begin
   elseif result isa Dict
     r.value = get(result, "structuredContent", nothing)
   else
-    r.problem = "Centient gave an answer that Kaydown can't read"
+    r.problem = "Centient gave an answer that Ladder can't read"
   end
   nothing
 end

@@ -1,4 +1,4 @@
-# Tests for Kaydown's windows: the settings window that ⌘, opens, ⌘W, and the
+# Tests for Ladder's windows: the settings window that ⌘, opens, ⌘W, and the
 # settings that every window shares. See "windows" and "settings" in main.jl.
 # Run them with `julia -O0 --project=. test/window_test.jl`. They press keys in windows
 # that aren't on the screen, and they don't write the settings file.
@@ -24,7 +24,7 @@ press(w, key, mods...) = begin
   frame(w)
 end
 
-"A window that shows `path`, made the way Kaydown makes its first window"
+"A window that shows `path`, made the way Ladder makes its first window"
 window(path) = begin
   e = K.build_editor(path)
   w = K.window!(e, title="test", size=(1100px, 800px))

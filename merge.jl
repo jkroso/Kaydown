@@ -6,7 +6,7 @@
 #     unified(["a", "b"], ["a", "c"])           # the changes the way `diff -u` shows them
 #     follow(changes(old, new), 4)              # the line of `new` that line 4 of `old` became
 #
-# Kaydown uses these when a file changes on the disk while the document has
+# Ladder uses these when a file changes on the disk while the document has
 # changes that aren't saved, and to tell an agent what the user changed.
 
 "A run of lines of the old text, and the run of lines of the new text that took its place. Either can be empty."

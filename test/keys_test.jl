@@ -10,7 +10,7 @@
 const px = K.px
 
 const dir = mktempdir()
-# The settings that these tests keep go to a file of their own, not to the one that Kaydown uses
+# The settings that these tests keep go to a file of their own, not to the one that Ladder uses
 const kept = joinpath(dir, "settings")
 @eval K settings_file() = $kept
 
@@ -63,7 +63,7 @@ const cmd, ctrl, opt, shift = Keys.cmd, Keys.ctrl, Keys.opt, Keys.shft
 end
 
 @testset "in each bundle, every shortcut runs one command" begin
-  @test first.(K.BUNDLES) == ["Kaydown", "VS Code", "Sublime Text", "Emacs"]
+  @test first.(K.BUNDLES) == ["Ladder", "VS Code", "Sublime Text", "Emacs"]
   for (bundle, theirs) in K.BUNDLES
     of = K.bundle_keys(bundle)
     @test Set(keys(of)) == Set(keys(K.COMMANDS))
@@ -76,15 +76,15 @@ end
     clash = [(K.caps(a[1]), a[2], b[2]) for (i, a) in enumerate(all) for b in all[i+1:end] if K.clashes(a[1], b[1])]
     @test isempty(clash)
   end
-  # The keys that Kaydown has always had
-  of = K.bundle_keys("Kaydown")
+  # The keys that Ladder has always had
+  of = K.bundle_keys("Ladder")
   for (name, keys) in (:save => "⌘S", :open => "⌘O", :print => "⌘P", :export => "⌘⇧E", :close => "⌘W", :settings => "⌘,", :sidebar => "⌘\\",
                        :undo => "⌘Z", :redo => "⌘⇧Z", :bold => "⌘B", :italic => "⌘I", :find => "⌘F", :run => "⌘Return", :run_step => "⇧Return")
     @test K.caps(first(of[name])) == keys
   end
 end
 
-@testset "the keys of the bundle called Kaydown do what they always did" begin
+@testset "the keys of the bundle called Ladder do what they always did" begin
   e, w = window("one two three\nfour five six\nseven")
   b = e.buf
   caret!(e, w, 1, 0)
@@ -211,8 +211,8 @@ end
     press(w, Keys.d, cmd)
     @test picked() == "three" && b.lines[1] == "one two_3 three"
   end
-  # ⌘⇧D copies the line now, in the bundles of Kaydown and Sublime Text
-  @test K.caps.(K.bundle_keys("Kaydown")[:duplicate_line]) == K.caps.(K.bundle_keys("Sublime Text")[:duplicate_line]) == ["⌘⇧D"]
+  # ⌘⇧D copies the line now, in the bundles of Ladder and Sublime Text
+  @test K.caps.(K.bundle_keys("Ladder")[:duplicate_line]) == K.caps.(K.bundle_keys("Sublime Text")[:duplicate_line]) == ["⌘⇧D"]
   e.bundle = "Emacs"
   caret!(e, w, 1, 1)
   press(w, K.read_shortcuts("opt+shift+2")[1][1].key, opt, shift)
@@ -347,7 +347,7 @@ end
   press(w, Keys.escape)
   @test e.popup == :none
   @test_throws ErrorException K.bundle!(e, "Notepad")
-  # The keys of the bundle called Kaydown for a line don't move one here
+  # The keys of the bundle called Ladder for a line don't move one here
   K.bundle!(e, "VS Code")
   caret!(e, w, 1, 0)
   press(w, Keys.right_bracket, cmd, opt)
@@ -488,12 +488,12 @@ end
   K.rebind!(e, :bold, (K.read_stroke("ctrl+x"),))
   @test keys(:save) == ["⌘S"] && keys(:undo) == ["⌃/", "⌘Z"] && keys(:bold) == ["⌃X"]
   # Choosing a bundle gives every command the bundle's keys
-  K.bundle!(e, "Kaydown")
+  K.bundle!(e, "Ladder")
   @test isempty(e.rebound) && keys(:bold) == ["⌘B"]
   close(w)
 end
 
-@testset "every window has the same keys, and Kaydown keeps them" begin
+@testset "every window has the same keys, and Ladder keeps them" begin
   rm(kept, force=true)
   a = K.build_editor(joinpath(dir, "page.md"))
   b = K.build_editor(joinpath(dir, "code.jl"))
@@ -520,7 +520,7 @@ end
   write(kept, "keys=Wordstar\nkey.nothing=cmd+s\nkey.save=hyper+s\nkey.bold=cmd+y\n")
   d = K.build_editor(joinpath(dir, "page.md"))
   K.load_settings!(d)
-  @test d.bundle == "Kaydown" && d.rebound == Dict(:save => "", :bold => "cmd+y")
+  @test d.bundle == "Ladder" && d.rebound == Dict(:save => "", :bold => "cmd+y")
   close(wa); close(wb)
   @test isempty(K.editors)
   rm(kept, force=true)
@@ -569,7 +569,7 @@ end
   # A choice on that page changes the keys of the other window
   K.bundle!(s, "Emacs")
   @test e.bundle == "Emacs"
-  K.bundle!(s, "Kaydown")
+  K.bundle!(s, "Ladder")
   # ⌘, closes the settings window from any of its pages
   press(sw, Keys.comma, cmd)
   @test K.settings_editor() === nothing

@@ -1,14 +1,14 @@
 {
-  "name": "kaydown",
-  "description": "Kaydown's plugin for Claude Code: show the user a Markdown page in Kaydown and read what they change in it.",
+  "name": "ladder",
+  "description": "Ladder's plugin for Claude Code: show the user a Markdown page in Ladder and read what they change in it.",
   "owner": {
     "name": "Jake Rosoman"
   },
   "plugins": [
     {
-      "name": "kaydown",
+      "name": "ladder",
       "source": "./plugin",
-      "description": "Show the user a page in Kaydown, a Markdown app for the Mac that draws diagrams, tables, tick boxes and sums. The user changes the page and sends it back."
+      "description": "Show the user a page in Ladder, a Markdown app for the Mac that draws diagrams, tables, tick boxes and sums. The user changes the page and sends it back."
     }
   ]
 }

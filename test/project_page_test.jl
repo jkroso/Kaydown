@@ -177,8 +177,8 @@ if Sys.isapple() && Sys.which("ffmpeg") !== nothing
     @test first.path == rest.path == K.media_file("$site/media/later.mov")
     @test read(first.path) == read(joinpath(dir, "walk.mov")) && !isfile(first.path * ".part")
     @test (first.from, first.to) == (0.0, 1.0) && (rest.from, rest.to) == (1.0, Inf)
-    @test shown("![Another note]").words == "Kaydown couldn't get the sound. It tries again in a minute."
-    # The web has the sound now. Kaydown asks for it again when a minute has gone, and not before.
+    @test shown("![Another note]").words == "Ladder couldn't get the sound. It tries again in a minute."
+    # The web has the sound now. Ladder asks for it again when a minute has gone, and not before.
     cp(joinpath(dir, "note.m4a"), joinpath(web, "lost.m4a"))
     frames()
     @test shown("![Another note]") isa K.MediaNote && length(calls("lost.m4a")) == 1

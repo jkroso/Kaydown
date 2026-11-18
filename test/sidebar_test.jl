@@ -10,7 +10,7 @@
 const px = K.px
 
 const dir = mktempdir()
-# The settings that these tests keep go to a file of their own, not to the one that Kaydown uses
+# The settings that these tests keep go to a file of their own, not to the one that Ladder uses
 @eval K settings_file() = $(joinpath(dir, "settings"))
 
 for name in ("a.md", "b.md", "c.md")

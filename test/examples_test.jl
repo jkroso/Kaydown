@@ -1,8 +1,8 @@
-# Tests for pages/examples.md, the page that lists everything that Kaydown
+# Tests for pages/examples.md, the page that lists everything that Ladder
 # does: each of its links goes to a page and a heading that are there, every
 # page and every kind of block has an example that it links to, and a link
 # that names a heading goes to that heading. Run them with
-# `julia -O0 --project=. test/examples_test.jl`. Set `KAYDOWN_SHOTS` to a
+# `julia -O0 --project=. test/examples_test.jl`. Set `LADDER_SHOTS` to a
 # folder, and they save a picture of the page there.
 
 @use Test: @test, @testset
@@ -32,7 +32,7 @@ end
 
 @testset "nothing is left out" begin
   linked = unique(first.(parts.(links)))
-  # Every page that comes with Kaydown
+  # Every page that comes with Ladder
   for name in readdir(pages)
     (K.ismarkdown(name) && name != "examples.md") || continue
     @test name in linked
@@ -54,7 +54,7 @@ end
   w = Window(e, size=(1000px, 800px))
   frames() = foreach(_ -> frame(w), 1:3)
   frames()
-  haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(ENV["KAYDOWN_SHOTS"], "examples.png"), w)
+  haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], "examples.png"), w)
   # A click on a link with ⌘ held follows it
   i = findfirst(l -> occursin("(welcome.md#sheets)", l), e.buf.lines)
   it = K.item(e, i)

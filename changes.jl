@@ -32,7 +32,7 @@
 # the block is still a diff that `git apply` reads. Between two changes of
 # one file such lines would stop it, so they're never written there. An agent
 # writes the block, and reads your choices and your comments in the lines that
-# you changed. Kaydown changes no file but the page.
+# you changed. Ladder changes no file but the page.
 #
 # This file reads those lines and writes your choices. It also says which
 # line that comes is a new version of which line that goes, and which of their

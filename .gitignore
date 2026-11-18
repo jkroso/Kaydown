@@ -2,6 +2,7 @@
 .DS_Store
 **/.claude/settings.local.json
 /.codegraph
+/.ladder
 /.kaydown
 /pages/memo.m4a
 /pages/recording-*.m4a

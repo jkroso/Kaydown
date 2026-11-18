@@ -1,12 +1,12 @@
 #!/bin/bash
-# Show a Markdown page to the user in Kaydown, and wait for the user to send it back.
+# Show a Markdown page to the user in Ladder, and wait for the user to send it back.
 #
 # An agent writes a page, shows it, and waits:
 #
-#     kaydown show plan.md
-#     kaydown wait plan.md
+#     ladder show plan.md
+#     ladder wait plan.md
 #
-# `wait` talks to Kaydown through files in one folder. Kaydown's agent.jl says
+# `wait` talks to Ladder through files in one folder. Ladder's agent.jl says
 # what each file is for.
 
 set -u
@@ -14,32 +14,32 @@ set -u
 usage() {
   cat <<'EOF'
 Usage:
-  kaydown show <file or folder>
-      Open it in Kaydown, in front of the other windows.
+  ladder show <file or folder>
+      Open it in Ladder, in front of the other windows.
 
-  kaydown wait <file.md> [--as <name>] [--timeout <seconds>]
-      Wait until the user presses "Nudge" in Kaydown. Then print the lines that
+  ladder wait <file.md> [--as <name>] [--timeout <seconds>]
+      Wait until the user presses "Nudge" in Ladder. Then print the lines that
       the user changed in the file, and stop.
-      --as <name>          What Kaydown calls you on its Nudge button.
+      --as <name>          What Ladder calls you on its Nudge button.
       --timeout <seconds>  Stop waiting after this long. The exit code is then 2.
 
-Exit codes: 0 done, 1 an error, 2 the time ran out, 3 Kaydown can't take part.
+Exit codes: 0 done, 1 an error, 2 the time ran out, 3 Ladder can't take part.
 EOF
 }
 
-fail() { echo "kaydown: $1" >&2; exit "${2:-1}"; }
+fail() { echo "ladder: $1" >&2; exit "${2:-1}"; }
 
-# The path of a file with no symbolic links in it, the way Kaydown names it
+# The path of a file with no symbolic links in it, the way Ladder names it
 real() {
   if [ -x /bin/realpath ]; then /bin/realpath "$1"
   else (cd "$(dirname "$1")" && printf '%s/%s\n' "$(pwd -P)" "$(basename "$1")")
   fi
 }
 
-app="${KAYDOWN_APP:-Kaydown}"
+app="${LADDER_APP:-Ladder}"
 
-# True when a Kaydown that can send a page to an agent is open. It names a file for its process as it opens.
-kaydown_open() {
+# True when a Ladder that can send a page to an agent is open. It names a file for its process as it opens.
+ladder_open() {
   for f in "$1"/*.app; do
     [ -e "$f" ] || continue
     pid="$(basename "$f" .app)"
@@ -51,11 +51,11 @@ kaydown_open() {
 show() {
   [ $# -ge 1 ] || { usage >&2; exit 1; }
   [ -e "$1" ] || fail "there's no file or folder at $1"
-  open -a "$app" "$(real "$1")" 2>/dev/null || fail "Kaydown isn't installed on this Mac. It's at https://github.com/jkroso/Kaydown" 3
+  open -a "$app" "$(real "$1")" 2>/dev/null || fail "Ladder isn't installed on this Mac. It's at https://github.com/jkroso/Ladder" 3
 }
 
 wait_for() {
-  page="" name="${KAYDOWN_AGENT:-}" limit=0
+  page="" name="${LADDER_AGENT:-}" limit=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --as) [ $# -ge 2 ] || fail "--as needs a name"; name="$2"; shift 2 ;;
@@ -71,27 +71,27 @@ wait_for() {
   [ -n "$name" ] || { [ -n "${CLAUDECODE:-}" ] && name="Claude" || name="the agent"; }
   page="$(real "$page")"
 
-  dir="$HOME/Library/Application Support/Kaydown/agents"
+  dir="$HOME/Library/Application Support/Ladder/agents"
   mkdir -p "$dir" || fail "can't make the folder $dir"
   me="$dir/$$"
   trap 'rm -f "$me.wait" "$me.seen" "$me.sent" "$me.part" "$me.new"' EXIT
   trap 'exit 130' INT TERM HUP
-  # Kaydown reads the file as soon as it's there, so it gets its name when it's whole
+  # Ladder reads the file as soon as it's there, so it gets its name when it's whole
   printf '%s\n%s\n' "$page" "$name" > "$me.new" && mv "$me.new" "$me.wait" || fail "can't write in $dir"
 
   opened=0
   while [ ! -f "$me.sent" ]; do
     sleep 0.2
     if [ ! -f "$me.seen" ]; then
-      # A Kaydown that's open marks the wait as seen within a second. One that's busy takes
+      # A Ladder that's open marks the wait as seen within a second. One that's busy takes
       # longer: it can be waiting for the user to answer a question from macOS.
-      if kaydown_open "$dir"; then
+      if ladder_open "$dir"; then
         :
       elif [ $opened -eq 0 ] && [ $SECONDS -ge 3 ]; then
         opened=$SECONDS
-        open -g -a "$app" "$page" 2>/dev/null || fail "Kaydown isn't installed on this Mac. It's at https://github.com/jkroso/Kaydown" 3
+        open -g -a "$app" "$page" 2>/dev/null || fail "Ladder isn't installed on this Mac. It's at https://github.com/jkroso/Ladder" 3
       elif [ $opened -gt 0 ] && [ $((SECONDS - opened)) -ge 30 ]; then
-        fail "Kaydown opened, but it didn't answer in 30 seconds. Ask the user to look at Kaydown: it may show a question from macOS that they must answer, or it may be a version from before it could send a page to an agent. Then run this again." 3
+        fail "Ladder opened, but it didn't answer in 30 seconds. Ask the user to look at Ladder: it may show a question from macOS that they must answer, or it may be a version from before it could send a page to an agent. Then run this again." 3
       fi
     fi
     if [ "$limit" -gt 0 ] && [ $SECONDS -ge "$limit" ]; then
@@ -106,5 +106,5 @@ case "${1:-}" in
   show) shift; show "$@" ;;
   wait) shift; wait_for "$@" ;;
   -h|--help|help|"") usage ;;
-  *) echo "kaydown: there's no command '$1'" >&2; usage >&2; exit 1 ;;
+  *) echo "ladder: there's no command '$1'" >&2; usage >&2; exit 1 ;;
 esac

@@ -1,11 +1,11 @@
 # Tests for the `map` block of main.jl: the map of a place, the pin that
-# Kaydown draws on the place, the map's buttons, a drag that moves the map, a
+# Ladder draws on the place, the map's buttons, a drag that moves the map, a
 # click that moves the place, and what the block shows while the place or the
 # picture isn't there. Run them with
 # `julia -O0 --project=. test/map_view_test.jl`. They click in a window that
 # isn't on the screen. They use neither the network nor the program that
 # asks Apple's maps, and they open no app: map_fake.jl takes the place of
-# both. Set `KAYDOWN_SHOTS` to a folder, and they save pictures of
+# both. Set `LADDER_SHOTS` to a folder, and they save pictures of
 # the page there.
 
 @use Test: @test, @testset
@@ -44,7 +44,7 @@ frames(n=2) = foreach(_ -> frame(w), 1:n)
 frames()
 K.focus(e)
 view(n=1) = e.nodes[(:block, K.MAP, page, n)]
-shot(name, window=w) = haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(ENV["KAYDOWN_SHOTS"], name), window)
+shot(name, window=w) = haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], name), window)
 
 at((x, y)) = (w.mouse = typeof(w.mouse)(px(x), px(y)); onmouse(w, MouseMove(Vec2{px}(px(x), px(y)), w)); frames(1))
 press(place) = (at(place); w.keys |= Keys.mouse_left; onkey(w, KeyPress{Keys.mouse_left}(0, w)))
@@ -80,7 +80,7 @@ colours(places...) = begin
   map(p -> rgb(dots)(p[1] * k, p[2] * k), places)
 end
 colour(place) = colours(place)[1]
-"True for the red of the pin that Kaydown draws"
+"True for the red of the pin that Ladder draws"
 red(c) = all(abs.(c .- (235, 66, 54)) .< 14)
 "True when the window shows a pin whose point is at `place`: the red of its head, and the white dot in it"
 pinned(place) = ((head, dot) = colours(place .+ (-7, -26), place .+ (0, -26)); red(head) && dot == (255, 255, 255))
@@ -108,7 +108,7 @@ const HOME = M.rounded(Fake.ADDRESS)
   # The picture is as wide as the page's text, but for the line round the block, and 280 px tall
   r = area()
   @test r.height == 280px && e.width - 4px <= r.width <= e.width
-  # The picture has no pin in it. Kaydown draws the pin, with its point on the place, which is in the middle of the map.
+  # The picture has no pin in it. Ladder draws the pin, with its point on the place, which is in the middle of the map.
   @test pinned(middle(r)) && !red(rgb(pixels(kept(HOME)))(wide() - 14, 228))
   # The address that Apple has for the place is under the map
   @test K.map_address(v) == "$WATTLE, Australia"
@@ -374,7 +374,7 @@ end
   shot("map-lost.png")
   n, f = length(Fake.calls), length(Fake.finds)
   frames(5)
-  @test length(Fake.calls) == n && length(Fake.finds) == f   # Kaydown doesn't ask again
+  @test length(Fake.calls) == n && length(Fake.finds) == f   # Ladder doesn't ask again
   html = K.page_html(e)
   @test !occursin("<img", html) && occursin("<a href=\"https://maps.apple.com/?q=1%20Nowhere%20Road%2C%20Atlantis\">1 Nowhere Road, Atlantis</a>", html)
   # With a centre line, the map shows though Apple doesn't know the address. It has no pin, and the words under it say why.

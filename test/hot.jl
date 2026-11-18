@@ -27,7 +27,7 @@
 #     run a test that fails here once in a process of its own, and do the same
 #     with the tests of what you changed before you call the work done:
 #     `KIP_FROZEN=1 julia -O0 --project=. test/board_view_test.jl`.
-#   - A test that saves pictures reads `KAYDOWN_SHOTS` from this process, so
+#   - A test that saves pictures reads `LADDER_SHOTS` from this process, so
 #     set it when you start the process.
 
 using Kip, Logging

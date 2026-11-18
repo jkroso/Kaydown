@@ -1,7 +1,7 @@
 # Tests for the `calendar` block of main.jl: a month with the page's tasks,
 # its to-do items that have a day, and the calendar's own events. Run them with
 # `julia -O0 --project=. test/calendar_view_test.jl`. They click, drag and type
-# in a window that isn't on the screen. Set `KAYDOWN_SHOTS` to a folder, and
+# in a window that isn't on the screen. Set `LADDER_SHOTS` to a folder, and
 # they save pictures of the page there.
 
 @use Test: @test, @testset
@@ -52,7 +52,7 @@ const w = Window(e, size=(1000px, 1400px))
 frames(n=2) = foreach(_ -> frame(w), 1:n)
 frames()
 const v = e.nodes[(:block, K.CALENDAR, page, 1)]
-shot(name, win=w) = haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(ENV["KAYDOWN_SHOTS"], name), win)
+shot(name, win=w) = haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], name), win)
 
 at((x, y)) = (w.mouse = typeof(w.mouse)(px(x), px(y)); onmouse(w, MouseMove(Vec2{px}(px(x), px(y)), w)); frames(1))
 press(place) = (at(place); w.keys |= Keys.mouse_left; onkey(w, KeyPress{Keys.mouse_left}(0, w)))

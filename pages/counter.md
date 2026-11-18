@@ -8,9 +8,9 @@ This page defines a kind of block. A code block in the language `counter` shows 
 
 Click the button. Press ⌘E on the block to see its line, and ⌘Z to take a click back.
 
-Kaydown finds this page by its name: a block in the language `counter` is for `counter.md` in the folder of its page, when that folder has no `counter.jl`. Kaydown runs the code of each `julia` block below, from the top, in one module. That module defines the kind of block, as the module of a Julia file does. A page in another folder names this page after the language: `counter ./pages/counter.md`.
+Ladder finds this page by its name: a block in the language `counter` is for `counter.md` in the folder of its page, when that folder has no `counter.jl`. Ladder runs the code of each `julia` block below, from the top, in one module. That module defines the kind of block, as the module of a Julia file does. A page in another folder names this page after the language: `counter ./pages/counter.md`.
 
-When you save a change to this page, Kaydown runs its code again, and the button above changes with it.
+When you save a change to this page, Ladder runs its code again, and the button above changes with it.
 
 ## What the code loads
 
@@ -27,7 +27,7 @@ The code says where each name that it uses comes from, as a Julia file does.
 
 ## From the block's lines to a counter
 
-Kaydown gives the lines of the block to the function that has the language's name. It shows what the function makes.
+Ladder gives the lines of the block to the function that has the language's name. It shows what the function makes.
 
 ```julia
 "A button that counts the times you click it"
@@ -50,7 +50,7 @@ cursor(::Counter) = :hand
 
 ## What a click does
 
-A click adds one, and asks Kaydown for a write with `changed!`. Kaydown then writes the block's line, and ⌘Z can take the click back.
+A click adds one, and asks Ladder for a write with `changed!`. Ladder then writes the block's line, and ⌘Z can take the click back.
 
 ```julia
 onkey(c::Counter, ::KeyPress{Keys.mouse_left}) = (c.count += 1; changed!(c); handled)
@@ -58,7 +58,7 @@ onkey(c::Counter, ::KeyPress{Keys.mouse_left}) = (c.count += 1; changed!(c); han
 
 ## From a counter to the block's lines
 
-Kaydown asks `written` for the lines of the block when it writes them.
+Ladder asks `written` for the lines of the block when it writes them.
 
 ```julia
 written(c::Counter) = [string(c.count)]

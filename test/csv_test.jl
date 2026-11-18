@@ -94,7 +94,7 @@ end
   @test occursin("can't find", C.load(dir).problem)
   @test occursin("isn't a file of text", C.load(file("bytes.csv", UInt8[0x50, 0x4b, 0x00, 0x01, 0xff])).problem)
   @test occursin("isn't a file of text", C.load(file("latin.csv", UInt8[0x61, 0x2c, 0xe9, 0x0a])).problem)
-  # A file that's longer than Kaydown reads stops at the end of a row
+  # A file that's longer than Ladder reads stops at the end of a row
   huge = C.load(file("huge.csv", "n,word\n" * repeat("12345,abcdefghijklmnopqrstuvwxyz\n", C.MOST_BYTES ÷ 32 + 10)))
   @test huge.more && huge.problem == "" && all(row -> row == ["12345", "abcdefghijklmnopqrstuvwxyz"], huge.rows[2:end])
 end

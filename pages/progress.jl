@@ -6,12 +6,12 @@
 #     label: Framing
 #     ```
 #
-# Kaydown finds this file by its name: a block in the language `progress` is
-# for `progress.jl` in the folder of its page. Kaydown gives the lines of the
+# Ladder finds this file by its name: a block in the language `progress` is
+# for `progress.jl` in the folder of its page. Ladder gives the lines of the
 # block to the function `progress`, and shows what it makes. Click in the bar,
 # or drag in it, to say how much is done. The bar then asks for a write with
-# `changed!`, and Kaydown asks `written` for the lines and writes them into
-# the block. Without `changed!`, Kaydown still writes them when the page is
+# `changed!`, and Ladder asks `written` for the lines and writes them into
+# the block. Without `changed!`, Ladder still writes them when the page is
 # saved, but ⌘Z couldn't take the change back. See welcome.md.
 
 @use "github.com/jkroso/Prospects.jl" @def
@@ -71,7 +71,7 @@ reach!(p::Progress, x) = begin
   b = bar(p)
   b === nothing && return handled
   p.done = round(clamp(Float64((x - b.left) / b.width), 0, 1), digits=2)
-  changed!(p)   # Kaydown writes the block's lines once the mouse lets go
+  changed!(p)   # Ladder writes the block's lines once the mouse lets go
   handled
 end
 

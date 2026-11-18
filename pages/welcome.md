@@ -1,8 +1,8 @@
-# Kaydown
+# Ladder
 
-Kaydown is a Markdown editor made with UI.jl. This page is a Markdown file. Each line is drawn the way it will read, and the markup characters stay out of sight. A line keeps that look while you type in it. To change its markup, **click the line and press ⌘E**, or click the ladder at the top right. As in the game of snakes and ladders, a ladder means that you are up and a snake means that you are down. The click takes you down a level: the part of the page with the caret shows its markup, and a snake takes the ladder's place. ⌘E again, or a click on the snake, takes you back up. Press ⌘S to write your changes to the file.
+Ladder is a Markdown editor made with UI.jl. This page is a Markdown file. Each line is drawn the way it will read, and the markup characters stay out of sight. A line keeps that look while you type in it. To change its markup, **click the line and press ⌘E**, or click the ladder at the top right. As in the game of snakes and ladders, a ladder means that you are up and a snake means that you are down. The click takes you down a level: the part of the page with the caret shows its markup, and a snake takes the ladder's place. ⌘E again, or a click on the snake, takes you back up. Press ⌘S to write your changes to the file.
 
-The page [examples.md](examples.md) lists everything that Kaydown does, with a link to an example of each.
+The page [examples.md](examples.md) lists everything that Ladder does, with a link to an example of each.
 
 ## Text
 
@@ -23,7 +23,7 @@ A line can point to a footnote[^note]. The footnote is a line of its own, anywhe
 
 [^note]: This is the footnote. Its line starts with the same name in square brackets, and a colon.
 
-A line that holds only a picture, like `![plan](plan.png)`, shows the picture. Drop a picture on the page from the Finder to add one. Any other file that you drop goes in as a path that you can click. ⌘V does the same with files that you copied in the Finder: a picture, a video, a sound, a PDF or any other file. It also pastes a picture that you copied as itself, like a screenshot. Kaydown keeps the picture as a file in a hidden folder called `.media`, beside the page.
+A line that holds only a picture, like `![plan](plan.png)`, shows the picture. Drop a picture on the page from the Finder to add one. Any other file that you drop goes in as a path that you can click. ⌘V does the same with files that you copied in the Finder: a picture, a video, a sound, a PDF or any other file. It also pastes a picture that you copied as itself, like a screenshot. Ladder keeps the picture as a file in a hidden folder called `.media`, beside the page.
 
 A line that holds only a video file shows a player for it, like `![The kitchen](walk.mov)`. To play only part of the video, add the seconds where the part starts and stops to the end of the file's name. `![The kitchen](walk.mov#t=61,86)` starts at 1:01 and stops at 1:26. Leave out the second number to play on to the end. To read what was said in the video, move the mouse over it, and click the button under the one that makes it fill the window. The first time, macOS writes down what's said in the file. A line that plays part of a file shows what was said in that part. A button in the drop-down copies the words.
 
@@ -139,18 +139,18 @@ The page [components.md](components.md) has a live block for each of UI.jl's com
 
 ## Blocks of your own
 
-A file can define a kind of block. The block below is in the language `progress`, which Kaydown doesn't know. The file `progress.jl` in this page's folder has a function called `progress`. Kaydown gives that function the lines of the block, and shows what it makes.
+A file can define a kind of block. The block below is in the language `progress`, which Ladder doesn't know. The file `progress.jl` in this page's folder has a function called `progress`. Ladder gives that function the lines of the block, and shows what it makes.
 
 ```progress
 done: 0.7
 label: Framing
 ```
 
-Click in the bar, or drag in it, to say how much is done. The bar asks Kaydown for a write, the file's function `written` gives the new lines, and Kaydown writes them into the block: press ⌘E to see them. ⌘Z takes the change back. A block that doesn't ask is still written when you save the page.
+Click in the bar, or drag in it, to say how much is done. The bar asks Ladder for a write, the file's function `written` gives the new lines, and Ladder writes them into the block: press ⌘E to see them. ⌘Z takes the change back. A block that doesn't ask is still written when you save the page.
 
-The line that opens a block can name the file after the language, so one file can define many kinds of block: `progress ./widgets.jl`. It can name a repository on GitHub too, like `progress github.com/sam/blocks`. Kaydown asks you before it runs the code of a repository for the first time. A Markdown page can define a kind of block too: Kaydown runs the code of the page's `julia` blocks. The page [counter.md](counter.md) defines one, and says in words what each part of its code does.
+The line that opens a block can name the file after the language, so one file can define many kinds of block: `progress ./widgets.jl`. It can name a repository on GitHub too, like `progress github.com/sam/blocks`. Ladder asks you before it runs the code of a repository for the first time. A Markdown page can define a kind of block too: Ladder runs the code of the page's `julia` blocks. The page [counter.md](counter.md) defines one, and says in words what each part of its code does.
 
-Open [progress.jl](progress.jl) to see how a kind of block is written in a Julia file. When you save a change to that file, Kaydown loads it again, and the block above changes with it.
+Open [progress.jl](progress.jl) to see how a kind of block is written in a Julia file. When you save a change to that file, Ladder loads it again, and the block above changes with it.
 
 ## Sheets
 
@@ -194,11 +194,11 @@ flowchart LR
   Edit --> Clear
 ```
 
-Kaydown draws nine kinds of diagram: `flowchart`, `sequenceDiagram`, `stateDiagram-v2`, `classDiagram`, `pie`, `mindmap`, `erDiagram`, `gantt` and `timeline`. They're written in the language of [Mermaid](https://mermaid.js.org), so a diagram from another app shows here too. A kind that Kaydown can't draw yet shows as its code. To see the code of a diagram, hold ⌥ and click it.
+Ladder draws nine kinds of diagram: `flowchart`, `sequenceDiagram`, `stateDiagram-v2`, `classDiagram`, `pie`, `mindmap`, `erDiagram`, `gantt` and `timeline`. They're written in the language of [Mermaid](https://mermaid.js.org), so a diagram from another app shows here too. A kind that Ladder can't draw yet shows as its code. To see the code of a diagram, hold ⌥ and click it.
 
 A diagram that's too small to read can fill the window. Move the mouse over it, and click the button that shows beside its top right corner, or pinch outwards on it. Then pinch, or scroll with ⌘ held, to make it bigger, and drag it to see the rest. Esc puts the page back. A picture and a page of a PDF file do the same, and a model and a video fill the window too.
 
-You can change a diagram while it fills the window. Click a box, a line or another part to select it. Click it again, or press Return, to type its words where they are. The first buttons under the diagram are the tools for the part that's selected. For a box of a flowchart they add a box after it, draw a line from it to the box that you click next, change its shape and take it away. With nothing selected, they are the tools for the whole diagram, like the one that adds a box. While the mouse is over a box, a point shows on its edge. Drag the point onto another box to draw a line to it. ⌫ takes the selected part away, and ⌘Z takes back the last change. Kaydown writes each change in the code of the block and draws the diagram again. It chooses where each box goes, so you can't drag a box to another place. With a part selected, Esc selects nothing, and Esc again puts the page back.
+You can change a diagram while it fills the window. Click a box, a line or another part to select it. Click it again, or press Return, to type its words where they are. The first buttons under the diagram are the tools for the part that's selected. For a box of a flowchart they add a box after it, draw a line from it to the box that you click next, change its shape and take it away. With nothing selected, they are the tools for the whole diagram, like the one that adds a box. While the mouse is over a box, a point shows on its edge. Drag the point onto another box to draw a line to it. ⌫ takes the selected part away, and ⌘Z takes back the last change. Ladder writes each change in the code of the block and draws the diagram again. It chooses where each box goes, so you can't drag a box to another place. With a part selected, Esc selects nothing, and Esc again puts the page back.
 
 The first five kinds can be changed that way. The four kinds below fill the window too, and you change them in their code.
 
@@ -285,7 +285,7 @@ $$
 &= a^2 + 2ab + b^2
 $$
 
-Kaydown reads the TeX that LaTeX reads: fractions and roots, Greek letters, the signs of maths, brackets that grow with `\left` and `\right`, a matrix, the cases of a function and so on.
+Ladder reads the TeX that LaTeX reads: fractions and roots, Greek letters, the signs of maths, brackets that grow with `\left` and `\right`, a matrix, the cases of a function and so on.
 
 $$
 A = \begin{pmatrix} a & b \\ c & d \end{pmatrix}
@@ -293,7 +293,7 @@ A = \begin{pmatrix} a & b \\ c & d \end{pmatrix}
 |x| = \begin{cases} x & \text{if } x \ge 0 \\ -x & \text{otherwise} \end{cases}
 $$
 
-To change a formula in a line of text, put the caret in the line and press ⌘E: the line shows its TeX. To change a formula on lines of its own, hold ⌥ and click it, or move the caret onto it and press Return. A command that Kaydown doesn't know shows as its name, in colour. In a page of HTML, each formula is MathML, which a browser shows as maths.
+To change a formula in a line of text, put the caret in the line and press ⌘E: the line shows its TeX. To change a formula on lines of its own, hold ⌥ and click it, or move the caret onto it and press Return. A command that Ladder doesn't know shows as its name, in colour. In a page of HTML, each formula is MathML, which a browser shows as maths.
 
 ## Link cards
 
@@ -301,9 +301,9 @@ Write the address of a web page as you would a picture's, on a line of its own, 
 
 ![Julia](https://julialang.org)
 
-Hold ⌘ and click the card to open the page in your browser. To change the address, click the card: the line shows as it's written. Kaydown gets each page once and keeps what the card shows, so the card is there the next time with no network.
+Hold ⌘ and click the card to open the page in your browser. To change the address, click the card: the line shows as it's written. Ladder gets each page once and keeps what the card shows, so the card is there the next time with no network.
 
-An address that ends as a picture's does, like `![Julia](https://julialang.org/logo.png)`, shows the picture. So does an address that turns out to be a picture when Kaydown gets it. A web address by itself, like https://julialang.org, is text.
+An address that ends as a picture's does, like `![Julia](https://julialang.org/logo.png)`, shows the picture. So does an address that turns out to be a picture when Ladder gets it. A web address by itself, like https://julialang.org, is text.
 
 ## Takeoffs
 
@@ -384,7 +384,7 @@ A code block in the language `gallery` shows the pictures of a folder as a grid 
 in: photos
 ```
 
-An empty block shows the pictures in the page's own folder. `sort: newest` puts the newest file first, and `size: small` or `size: large` sets the size. Any other line is the path of one picture, so a block can list its pictures by hand. Drop a picture on the gallery from the Finder, and Kaydown copies it into the folder.
+An empty block shows the pictures in the page's own folder. `sort: newest` puts the newest file first, and `size: small` or `size: large` sets the size. Any other line is the path of one picture, so a block can list its pictures by hand. Drop a picture on the gallery from the Finder, and Ladder copies it into the folder.
 
 ## Calendars
 
@@ -398,7 +398,7 @@ month: 2026-11
 2026-11-27 | Council inspection
 ```
 
-The arrows go to the month before and the month after, and **Today** goes back to the month of today. Drag an event or a to-do item to another day, and Kaydown writes the new day into its line. Click an empty part of a day twice to add an event: type its words and press Return. Click a thing twice to go to its line.
+The arrows go to the month before and the month after, and **Today** goes back to the month of today. Drag an event or a to-do item to another day, and Ladder writes the new day into its line. Click an empty part of a day twice to add an event: type its words and press Return. Click a thing twice to go to its line.
 
 ## Columns
 
@@ -500,7 +500,7 @@ The − and the + on the map show more and less of what's round the place. Drag 
 
 The block keeps what you do as lines. A drag writes the middle of the map, like `centre: -33.86120, 151.21010`. A click writes the latitude and the longitude of the pin as the place. After a drag, a third button beside the − puts the place back in the middle.
 
-Apple's maps make the picture, so the first one needs the network. Kaydown keeps it on your Mac, and the map shows at once the next time. To see the block's lines, hold ⌥ and click the map.
+Apple's maps make the picture, so the first one needs the network. Ladder keeps it on your Mac, and the map shows at once the next time. To see the block's lines, hold ⌥ and click the map.
 
 ## Find
 
@@ -530,7 +530,7 @@ with: email
 
 ## Emails
 
-Once Kaydown has your email account, a code block in the language `email` lists the emails with a person, newest first. Write a name or an address in it. A click opens an email, and the block's buttons start an answer or a new email. To give Kaydown your account, press ⌘, and choose Email.
+Once Ladder has your email account, a code block in the language `email` lists the emails with a person, newest first. Write a name or an address in it. A click opens an email, and the block's buttons start an answer or a new email. To give Ladder your account, press ⌘, and choose Email.
 
 ```email
 with: sam@example.com
@@ -552,7 +552,7 @@ Under the rows are the total, and the hours of each task. The line `rate: 85` is
 
 ## Recordings
 
-To record from your Mac's microphone, right-click the page and choose Insert › Recording. Kaydown starts to record at once, into a new file in the hidden folder `.media` beside this page. Bars show how loud the sound is, and you can type while it records. Click the red button to stop. The first time, macOS asks whether Kaydown may use the microphone.
+To record from your Mac's microphone, right-click the page and choose Insert › Recording. Ladder starts to record at once, into a new file in the hidden folder `.media` beside this page. Bars show how loud the sound is, and you can type while it records. Click the red button to stop. The first time, macOS asks whether Ladder may use the microphone.
 
 A line that holds only a sound file shows a player for it. The line is written as a picture is, like `![A recording](hello.m4a)`. Move the mouse over the player and click Transcribe under it, and macOS writes down what's said in the file. The words go into a paragraph under the player, and you can change them as you would any text. macOS does this on your Mac, so the sound stays there. It needs macOS 26 or later.
 
@@ -560,7 +560,7 @@ A line that holds only a sound file shows a player for it. The line is written a
 
 ## Work with an agent
 
-An agent like Claude Code can write a page and show it to you here: a plan with a diagram, a table of options, a list of boxes to tick. While the agent waits for you, a bell shows at the top right. It's a button called "Nudge Claude". Change the page any way you like: tick a box, change a number, type a question on a new line. Then click the button, or press ⌘Return. Kaydown saves the page and gives the agent the lines that you changed.
+An agent like Claude Code can write a page and show it to you here: a plan with a diagram, a table of options, a list of boxes to tick. While the agent waits for you, a bell shows at the top right. It's a button called "Nudge Claude". Change the page any way you like: tick a box, change a number, type a question on a new line. Then click the button, or press ⌘Return. Ladder saves the page and gives the agent the lines that you changed.
 
 An agent can ask a question in a block of its own. Click an answer, or type one in the field, and then send the page. A round mark means that you choose one answer, and a square box means that you choose as many as you like.
 
@@ -571,7 +571,7 @@ Which should the agent do first?
 [ ] Tell me when it's done
 ```
 
-An agent can show you its changes to a file too. Accept or reject each one, and send the page. Kaydown changes no file: the agent reads your choices and makes the changes that you accepted.
+An agent can show you its changes to a file too. Accept or reject each one, and send the page. Ladder changes no file: the agent reads your choices and makes the changes that you accepted.
 
 The lines have the colours of their code. Where a new line is another version of an old line, a darker mark shows the words that are different. The two buttons at the top of the block choose how the lines show: the new lines under the old lines, or the old lines at the left and the new lines at the right. A window that's too narrow for two columns shows the new lines under the old.
 
@@ -595,7 +595,7 @@ Click a line of a change to say something about it. A field opens under the line
 # Say "See you soon" here. It's friendlier.
 ```
 
-The agent can change the page while you read it. What you're typing stays, and the agent's changes show around it. A bar shows for a few seconds beside each line that the agent changed. If you missed them, click the button with an eye at the top right: it shows a bar beside every line that the agent changed since you last sent the page, until you click it again. In the list of files, a dot marks a page that an agent waits for. While the list is hidden, the dot shows beside the button that opens it. [Kaydown's page on GitHub](https://github.com/jkroso/Kaydown#use-it-with-an-agent) says how to set up an agent.
+The agent can change the page while you read it. What you're typing stays, and the agent's changes show around it. A bar shows for a few seconds beside each line that the agent changed. If you missed them, click the button with an eye at the top right: it shows a bar beside every line that the agent changed since you last sent the page, until you click it again. In the list of files, a dot marks a page that an agent waits for. While the list is hidden, the dot shows beside the button that opens it. [Ladder's page on GitHub](https://github.com/jkroso/Ladder#use-it-with-an-agent) says how to set up an agent.
 
 ## Slides
 
@@ -609,16 +609,16 @@ The button at the top left shows the files in this folder. Under the file that s
 
 The list leaves out hidden files and folders, the ones whose names start with a dot, like `.media`. To list them too, click the eye beside the button at the top left, or press ⌘⇧. as you do in the Finder. Click the eye again to leave them out.
 
-Click a file in the list that isn't Markdown to see it in the page. Kaydown shows such a file and never changes it, so the top bar says "Read only". A file of code shows its text, which you can select, copy and search. A picture, a model, a sound, a video, a PDF and a CSV file each show as what they are. Any other file is a binary file, and a button shows its bytes in hexadecimal. The button at the top right opens the file in the app that your Mac uses for it.
+Click a file in the list that isn't Markdown to see it in the page. Ladder shows such a file and never changes it, so the top bar says "Read only". A file of code shows its text, which you can select, copy and search. A picture, a model, a sound, a video, a PDF and a CSV file each show as what they are. Any other file is a binary file, and a button shows its bytes in hexadecimal. The button at the top right opens the file in the app that your Mac uses for it.
 
-A Markdown page or a file of code that your Mac marks as read-only shows as it always does. Kaydown doesn't change it, and the top bar says "Read only". A click on a link in it opens the link, with no key held. Take the mark off in the Finder's Get Info window, and you can write in the page again.
+A Markdown page or a file of code that your Mac marks as read-only shows as it always does. Ladder doesn't change it, and the top bar says "Read only". A click on a link in it opens the link, with no key held. Take the mark off in the Finder's Get Info window, and you can write in the page again.
 
 Right-click a file in the list to rename it, copy its path, show it in the Finder or move it to the Trash. Right-click the file's name at the top of the window for the same menu.
 
 Right-click the page to cut, copy or paste. The menu's Insert item adds a new block where you clicked: a heading, a list, a to-do item, a table, a sheet, a spreadsheet, a diagram, a takeoff, a schedule, a chart, a board, a calendar, a sketch, a live block and more.
 
-A file can start with front matter: lines like `title: Notes` between two lines of `---`. Kaydown shows it as a block of its own, and leaves it out of the word count.
+A file can start with front matter: lines like `title: Notes` between two lines of `---`. Ladder shows it as a block of its own, and leaves it out of the word count.
 
-Press ⌘, to open the settings in a window of their own: the colours, the font and its weight, the size of the text, the width of the page and what the count at the top right shows. A button there makes Kaydown the app that opens your Markdown files. Links at the top of that page go to the other pages of the settings. Code editor has the settings for code: its font, its weight, its size, its indent, its line numbers and whether a long line wraps. Key bindings has the keys of each command. There you can choose the keys of VS Code, Sublime Text or Emacs, or click a command and press the keys you want for it.
+Press ⌘, to open the settings in a window of their own: the colours, the font and its weight, the size of the text, the width of the page and what the count at the top right shows. A button there makes Ladder the app that opens your Markdown files. Links at the top of that page go to the other pages of the settings. Code editor has the settings for code: its font, its weight, its size, its indent, its line numbers and whether a long line wraps. Key bindings has the keys of each command. There you can choose the keys of VS Code, Sublime Text or Emacs, or click a command and press the keys you want for it.
 
-The Kaydown app updates itself. It gets a newer version while you work, and the new version takes the place of this one when you quit. A box at the end of the settings turns that off.
+The Ladder app updates itself. It gets a newer version while you work, and the new version takes the place of this one when you quit. A box at the end of the settings turns that off.

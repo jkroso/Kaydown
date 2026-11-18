@@ -1,4 +1,4 @@
-# Tests for mail.jl: the folder of emails that Kaydown keeps in step with an
+# Tests for mail.jl: the folder of emails that Ladder keeps in step with an
 # email server. Run them with `julia -O0 --project=. test/mail_test.jl`.
 #
 # They use no network and no real account. test/mail_fake.jl is a pretend
@@ -116,7 +116,7 @@ end
   end
   @test Mail.exchanges["smithbuilders.example"] == ["aspmx.l.google.com", "alt1.aspmx.l.google.com"]
   @test Mail.provider("jo@smithbuilders.example").name == "Gmail" && Mail.servers("jo@smithbuilders.example")[1] == "imap.gmail.com:993"
-  # A domain that no company Kaydown knows takes the email of, and one that has no answer
+  # A domain that no company Ladder knows takes the email of, and one that has no answer
   write(answer, "other.example mail is handled by 10 mx.other.example.\n")
   while !Mail.lookup!("other.example") sleep(0.01) end
   @test Mail.provider("jo@other.example") === nothing && Mail.servers("jo@other.example") == ("imap.other.example:993", "smtp.other.example:465")
@@ -168,7 +168,7 @@ end
   # The file is the email as the server sent it, with what was attached inside it
   plans = joinpath(dir, "Inbox", "2026-11-16 1405 Kim Wu - Plans.eml")
   @test read(plans) == inbox.notes[2].raw && !isdir(joinpath(dir, "Inbox", "files"))
-  # What a window shows of it links to a copy of the attached file, in Kaydown's cache
+  # What a window shows of it links to a copy of the attached file, in Ladder's cache
   kept = Mail.linked(last(filter(!isempty, page(plans))), dirname(plans))
   @test kept !== nothing && startswith(kept, Mail.cache()) && basename(kept) == "Floor plan.pdf" && read(kept, String) == "%PDF-1.4\n"
   @test read(plans) == inbox.notes[2].raw   # showing it changed nothing
@@ -186,7 +186,7 @@ end
   @test [r.subject for r in list] == ["Plans", "Re: Roof quote", "Roof quote"]
   @test [r.who for r in list] == ["Kim Wu", "To Sam Lee", "Sam Lee"] && [r.unread for r in list] == [true, false, false]
   @test list[2].answered && !list[1].draft
-  @test occursin("Kaydown has 4 emails", Mail.says(m))
+  @test occursin("Ladder has 4 emails", Mail.says(m))
 
   @testset "the next look" begin
     said = length(s.said)
@@ -366,7 +366,7 @@ end
   settle(m)
   @test isfile(bad) && occursin("didn't take the email", m.problem) && length(s.posted) == 1 && isempty(m.jobs)
 
-  # An email goes once, even when Kaydown can't file its page after: here the folder of sent email can't be written to
+  # An email goes once, even when Ladder can't file its page after: here the folder of sent email can't be written to
   once = Mail.draft!(m, to="sam@example.com", subject="Once")
   chmod(joinpath(dir, "Sent"), 0o555)
   @test Mail.send!(m, once) == ""
@@ -403,7 +403,7 @@ end
   @test !isfile(page_in) && length(names(joinpath(dir, "[Gmail]", "All Mail"))) == 2
   settle(m)
   @test isempty(inbox.notes) && any(c -> occursin("UID MOVE 1 \"[Gmail]/All Mail\"", c), s.said)
-  # Kaydown gives Gmail's folder of sent email no copy of what it sends
+  # Ladder gives Gmail's folder of sent email no copy of what it sends
   draft = Mail.draft!(m, to="sam@example.com", subject="Hi")
   @test dirname(draft) == joinpath(dir, "Drafts")   # Gmail's own folder of drafts isn't in this test
   Mail.send!(m, draft)
@@ -427,9 +427,9 @@ end
   end
   p = Mail.progress(m)
   @test p !== nothing && p.total == 40 && 0 < p.come < 40 && p.come + m.left == 40
-  @test Mail.says(m) == "Kaydown is getting your email from Inbox. $(p.come) of 40 emails have come."
+  @test Mail.says(m) == "Ladder is getting your email from Inbox. $(p.come) of 40 emails have come."
   settle(m)
-  @test Mail.progress(m) === nothing && m.total == 0 && occursin("Kaydown has 40 emails", Mail.says(m))
+  @test Mail.progress(m) === nothing && m.total == 0 && occursin("Ladder has 40 emails", Mail.says(m))
   # How long the rest take, once enough emails have come to tell
   @test Mail.counted((come=1200, total=48300, left=7000.0)) == "1,200 of 48,300 emails have come. The rest take about 2 hours."
   @test Mail.counted((come=0, total=1, left=nothing)) == "0 of 1 email has come."
@@ -452,7 +452,7 @@ end
   # An account that goes back a year, and gets the inbox only
   m = mailer(s, back=12, rest=false)
   settle(m)
-  @test (have("Inbox"), have("Sent"), have("Jobs")) == (3, 0, 0) && occursin("Kaydown has 3 emails", Mail.says(m))
+  @test (have("Inbox"), have("Sent"), have("Jobs")) == (3, 0, 0) && occursin("Ladder has 3 emails", Mail.says(m))
   @test any(c -> occursin("UID SEARCH SINCE $(Mail.imapday(time() - 12 * Mail.MONTH))", c), s.said)
   # A look that finds nothing new asks for nothing
   asked = length(s.said)
@@ -555,14 +555,14 @@ end
   Fake.stop(s)
 end
 
-@testset "the Markdown pages of the Kaydown before" begin
+@testset "the Markdown pages of the Ladder before" begin
   s = Fake.serve()
   inbox = Fake.folder!(s, "INBOX")
   foreach(i -> put!(inbox, email(subject="Email $i", id="<older$i@example.com>", date="Sat, 14 Nov 2026 09:0$i:00 +1100")), 1:3)
   m = settle(mailer(s))
   dir = joinpath(Mail.root(m.account), "Inbox")
   b = Mail.box(dir)
-  # Make the folder what that Kaydown left: a Markdown page for each email, with a folder of its attached files
+  # Make the folder what that Ladder left: a Markdown page for each email, with a folder of its attached files
   for l in b.letters
     rm(joinpath(dir, l.file))
     delete!(b.byfile, l.file)
@@ -603,11 +603,11 @@ end
   settle(m)
   dir = joinpath(Mail.root(m.account), "Inbox")
   have = length(names(dir))
-  # The look stopped before the limit. The emails that didn't come wait, and Kaydown says when it goes on.
+  # The look stopped before the limit. The emails that didn't come wait, and Ladder says when it goes on.
   @test 0 < have < 40 && m.held == 40 - have && isempty(m.problem)
-  @test occursin("Kaydown stopped before that, with $(m.held) emails still to come. It goes on ", Mail.says(m))
+  @test occursin("Ladder stopped before that, with $(m.held) emails still to come. It goes on ", Mail.says(m))
   @test m.next >= Mail.resumes(m.account) > time() + 23 * 3600
-  # The count of the bytes is kept, for when Kaydown opens again
+  # The count of the bytes is kept, for when Ladder opens again
   kept = [split(n, '\t') for n in readlines(Mail.hours_file())]
   @test sum(n -> parse(Int, n[2]), filter(n -> n[3] == "you@example.com", kept)) == sum(values(Mail.tally("you@example.com")))
   # A look that you ask for gets nothing more while the limit holds
@@ -616,7 +616,7 @@ end
   # When the account can get more, the rest come
   Mail.allowance[] = nothing
   look(m)
-  @test length(names(dir)) == 40 && m.held == 0 && occursin("Kaydown has 40 emails", Mail.says(m))
+  @test length(names(dir)) == 40 && m.held == 0 && occursin("Ladder has 40 emails", Mail.says(m))
   @test Mail.resuming(time() + 60, now=time())[1:3] == "at " && endswith(Mail.resuming(time() + 86400, now=time()), " tomorrow")
   Fake.stop(s)
 end
@@ -635,7 +635,7 @@ end
   Mail.account!(m, m.account)
   settle(m)
   @test isempty(m.problem) && length(names(joinpath(Mail.root(m.account), "Inbox"))) == 1
-  # A folder that this Mac won't let Kaydown read, and a link back to a folder above, don't stop the account
+  # A folder that this Mac won't let Ladder read, and a link back to a folder above, don't stop the account
   locked = mkpath(joinpath(Mail.root(m.account), "Locked", "In it"))
   chmod(dirname(locked), 0o000)
   symlink(Mail.base(m.account), joinpath(Mail.root(m.account), "Round"))
@@ -673,7 +673,7 @@ end
   Mail.keep(one)
   Mail.keep(Mail.Account(address="deux@example.com", name="Deux"), was="two@example.com")
   @test [(a.address, a.name) for a in Mail.accounts()] == [("one@example.com", "Uno"), ("deux@example.com", "Deux")]
-  # A file that an older Kaydown wrote holds one account, and reads the same
+  # A file that an older Ladder wrote holds one account, and reads the same
   write(Mail.account_file(), "address=old@example.com\nname=Old\nuser=\nincoming=imap.example.com\noutgoing=smtp.example.com\nfolder=\nevery=7\n")
   @test [a.address for a in Mail.accounts()] == ["old@example.com"] && Mail.account().every == 7
   # An account that's forgotten goes from the file, and its password goes too
@@ -691,7 +691,7 @@ end
   Mail.allowance[] = nothing
   Mail.keep_tally()
   @test any(n -> endswith(n, "\t500\tone@example.com"), readlines(Mail.hours_file())) && any(n -> endswith(n, "\t70\ttwo@example.com"), readlines(Mail.hours_file()))
-  # A count that an older Kaydown kept names no account. It's the count of the first account.
+  # A count that an older Ladder kept names no account. It's the count of the first account.
   write(Mail.hours_file(), "$(floor(Int, time() / 3600))\t900\n")
   Mail.hours[] = nothing
   @test sum(values(Mail.tally("old@example.com"))) == 900 && isempty(Mail.tally("one@example.com"))

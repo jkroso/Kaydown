@@ -24,7 +24,7 @@ found(place; start=true) = M.found!(dir, place; start)
   @test s.place == WATTLE && s.zoom == 17 && s.other == ["The back gate", "colour: red"]
   @test M.written(s) == [WATTLE, "zoom: 17", "The back gate", "colour: red"]
   @test M.site(M.written(s)).place == WATTLE && M.written(M.site(M.written(s))) == M.written(s)
-  # The middle of the map is a line of its own. Kaydown writes "centre", and reads "center" as the same word.
+  # The middle of the map is a line of its own. Ladder writes "centre", and reads "center" as the same word.
   s = M.site([WATTLE, "Center:  -37.7681 , 144.9426", "zoom: 16"])
   @test s.place == WATTLE && s.centre == (-37.7681, 144.9426) && s.zoom == 16 && isempty(s.other)
   @test M.written(s) == [WATTLE, "zoom: 16", "centre: -37.76810, 144.94260"]
@@ -116,7 +116,7 @@ end
   n = length(Fake.finds)
   l = found("1 Nowhere Road")
   @test l.state == :lost && l.problem == M.LOST && !isfile(l.file) && found("1 Nowhere Road").state == :lost && length(Fake.finds) == n + 1
-  # With no network, Kaydown tries again after a minute
+  # With no network, Ladder tries again after a minute
   o = found("1 Offline Road")
   @test o.state == :failed && o.problem == M.FAILED && 0 < o.wait <= M.RETRY && found("1 Offline Road").state == :failed && length(Fake.finds) == n + 2
   M.jobs[o.file] = (:failed, time() - M.RETRY - 1, M.FAILED)

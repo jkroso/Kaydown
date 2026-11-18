@@ -1,6 +1,6 @@
 # Tests for the `find` block of main.jl: the lines that match in the pages of
 # a folder. Run them with `julia -O0 --project=. test/find_view_test.jl`. They
-# click in a window that isn't on the screen. Set `KAYDOWN_SHOTS` to a folder,
+# click in a window that isn't on the screen. Set `LADDER_SHOTS` to a folder,
 # and they save a picture of the page there.
 
 @use Test: @test, @testset
@@ -47,7 +47,7 @@ const w = Window(e, size=(1000px, 1100px))
 frames(n=2) = foreach(_ -> frame(w), 1:n)
 frames()
 list(n) = e.nodes[(:block, K.FIND, page, n)]
-shot(name) = haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(ENV["KAYDOWN_SHOTS"], name), w)
+shot(name) = haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], name), w)
 
 at((x, y)) = (w.mouse = typeof(w.mouse)(px(x), px(y)); onmouse(w, MouseMove(Vec2{px}(px(x), px(y)), w)); frames(1))
 press(place) = (at(place); w.keys |= Keys.mouse_left; onkey(w, KeyPress{Keys.mouse_left}(0, w)))
@@ -251,7 +251,7 @@ end
   @test block(1) == ["what: takeoffs"] && found(1) == [("jobs/plans.md", "Floor plan", :takeoff)]
   @test K.search_words(v) == "1 takeoff in 1 page of this folder" && K.choice_words(choice(1, :kind)) == "Takeoffs"
   @test K.block_icon(:takeoff) == "rulers" && K.block_icon(:board) == "kanban" && K.block_icon(:code) == "code-slash"
-  # Every language that Kaydown shows as a component is a kind of its own
+  # Every language that Ladder shows as a component is a kind of its own
   @test all(lang -> K.Searches.block_kind(lang) != :code, [collect(keys(K.BLOCKS)); K.TAKEOFF; K.SCHEDULE; K.SHEET; K.SPREADSHEET; K.DIAGRAM; K.LIVE])
   shot("find-blocks.png")
   # A click on it opens its page, with the caret under the block, so that the block's lines don't show

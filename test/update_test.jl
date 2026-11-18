@@ -5,8 +5,8 @@
 # name of its own, and a release of each as a zip file with a latest.txt. The
 # updater reads the release from that folder, so the tests use no network. The
 # rule that a new version must pass is that its signature has the name
-# "test.kaydown.update". The app of a real release must have the signature of
-# Kaydown's developer.
+# "test.ladder.update". The app of a real release must have the signature of
+# Ladder's developer.
 
 @use Test: @test, @testset
 @use "../update" => Update
@@ -14,7 +14,7 @@
 @use "github.com/jkroso/UI.jl/Interface/draw" frame
 const px = K.px
 
-const NAME = "test.kaydown.update"
+const NAME = "test.ladder.update"
 const RULE = "identifier \"$NAME\""
 const root = mktempdir()
 
@@ -67,26 +67,26 @@ end
 "The number of a process that has ended"
 ended() = (p = run(`sleep 0.3`, wait=false); pid = getpid(p); wait(p); pid)
 
-"Put the version that waits in the app's place, as happens once Kaydown has quit"
+"Put the version that waits in the app's place, as happens once Ladder has quit"
 install!(u) = success(run(ignorestatus(Update.install(u, ended()))))
 
 @testset "what latest.txt names" begin
   sum = repeat("ab", 32)
-  @test Update.parse_feed("version=0.2.0\nfile=Kaydown-0.2.0.zip\nsha256=$sum\nmacos=13.0\n") == (v"0.2.0", "Kaydown-0.2.0.zip", sum, v"13")
-  @test Update.parse_feed("version=0.2.0\r\nfile=Kaydown-0.2.0.zip\r\nsha256=$(uppercase(sum))\r\n") == (v"0.2.0", "Kaydown-0.2.0.zip", sum, v"0")
+  @test Update.parse_feed("version=0.2.0\nfile=Ladder-0.2.0.zip\nsha256=$sum\nmacos=13.0\n") == (v"0.2.0", "Ladder-0.2.0.zip", sum, v"13")
+  @test Update.parse_feed("version=0.2.0\r\nfile=Ladder-0.2.0.zip\r\nsha256=$(uppercase(sum))\r\n") == (v"0.2.0", "Ladder-0.2.0.zip", sum, v"0")
   @test Update.parse_feed("") === nothing
   @test Update.parse_feed("<html>Not Found</html>") === nothing
-  @test Update.parse_feed("version=0.2.0\nfile=Kaydown-0.2.0.zip\n") === nothing               # no sum
-  @test Update.parse_feed("version=two\nfile=Kaydown.zip\nsha256=$sum\n") === nothing           # not a version
-  @test Update.parse_feed("version=0.2\nfile=Kaydown.zip\nsha256=$sum\n") === nothing           # not written as the app writes it
+  @test Update.parse_feed("version=0.2.0\nfile=Ladder-0.2.0.zip\n") === nothing               # no sum
+  @test Update.parse_feed("version=two\nfile=Ladder.zip\nsha256=$sum\n") === nothing           # not a version
+  @test Update.parse_feed("version=0.2\nfile=Ladder.zip\nsha256=$sum\n") === nothing           # not written as the app writes it
   # The file is a name beside latest.txt: not a path, and not an address
-  @test Update.parse_feed("version=0.2.0\nfile=../Kaydown.zip\nsha256=$sum\n") === nothing
-  @test Update.parse_feed("version=0.2.0\nfile=https://example.com/Kaydown.zip\nsha256=$sum\n") === nothing
+  @test Update.parse_feed("version=0.2.0\nfile=../Ladder.zip\nsha256=$sum\n") === nothing
+  @test Update.parse_feed("version=0.2.0\nfile=https://example.com/Ladder.zip\nsha256=$sum\n") === nothing
 end
 
 @testset "a newer version comes, waits, and takes the app's place" begin
   u = installed("1.0.0", release("1.1.0"))
-  @test Update.says(u) == "This is Kaydown 1.0.0."
+  @test Update.says(u) == "This is Ladder 1.0.0."
   @test Update.action(u) === :check
   @test Update.tick!(u) == Update.POLL    # the first frame starts to look
   @test u.stage === :checking
@@ -94,7 +94,7 @@ end
   Update.finish!(u)
   @test u.newest == v"1.1.0"
   @test u.staged == v"1.1.0"
-  @test Update.says(u) == "Kaydown 1.1.0 is ready. It takes the place of version 1.0.0 when you quit Kaydown."
+  @test Update.says(u) == "Ladder 1.1.0 is ready. It takes the place of version 1.0.0 when you quit Ladder."
   @test Update.label(u) == "Restart to update"
   @test version_of(u.app) == "1.0.0"      # nothing has changed in the app yet
   @test Update.tick!(u) == Inf            # and it doesn't look again for a day
@@ -110,7 +110,7 @@ end
   Update.tick!(u)
   Update.finish!(u)
   @test u.staged === nothing
-  @test Update.says(u) == "This is Kaydown 1.1.0, the newest version."
+  @test Update.says(u) == "This is Ladder 1.1.0, the newest version."
   @test Update.label(u) == "Check now"
   @test !Update.quit!(u)
   # An older release doesn't take the app back
@@ -118,7 +118,7 @@ end
   Update.tick!(u)
   Update.finish!(u)
   @test u.staged === nothing
-  @test Update.says(u) == "This is Kaydown 1.2.0, the newest version."
+  @test Update.says(u) == "This is Ladder 1.2.0, the newest version."
 end
 
 @testset "an app that someone else signed is left alone" begin
@@ -126,7 +126,7 @@ end
   Update.tick!(u)
   Update.finish!(u)
   @test u.staged === nothing
-  @test Update.says(u) == "Kaydown's developer didn't sign the app that came, so Kaydown left it alone. Kaydown tries again in an hour."
+  @test Update.says(u) == "Ladder's developer didn't sign the app that came, so Ladder left it alone. Ladder tries again in an hour."
   @test !ispath(Update.staged_app(u)) && !ispath(joinpath(u.dir, "new"))
   @test Update.tick!(u) == Inf            # not before the hour is up
   @test 0 < u.next - time() <= Update.RETRY
@@ -139,7 +139,7 @@ end
   Update.tick!(u)
   Update.finish!(u)
   @test u.staged === nothing
-  @test startswith(Update.says(u), "Kaydown's developer didn't sign the app that came")
+  @test startswith(Update.says(u), "Ladder's developer didn't sign the app that came")
 end
 
 @testset "a zip file that isn't the one that was released is left alone" begin
@@ -171,7 +171,7 @@ end
   u = installed("1.0.0", "file://" * joinpath(root, "nowhere", "latest.txt"))
   Update.tick!(u)
   Update.finish!(u)
-  @test Update.says(u) == "Kaydown couldn't look for a newer version. Kaydown tries again in an hour."
+  @test Update.says(u) == "Ladder couldn't look for a newer version. Ladder tries again in an hour."
   @test Update.label(u) == "Check now"
   @test Update.tick!(u) == Inf
   # A click on Check now looks at once
@@ -185,7 +185,7 @@ end
   Update.tick!(u)
   Update.finish!(u)
   @test u.staged === nothing && u.stage === :idle
-  @test Update.says(u) == "Kaydown 1.1.0 needs macOS 999.0 or later. This is Kaydown 1.0.0."
+  @test Update.says(u) == "Ladder 1.1.0 needs macOS 999.0 or later. This is Ladder 1.0.0."
   @test Update.label(u) == "Check now"
   @test !ispath(joinpath(u.dir, "new"))
 end
@@ -199,13 +199,13 @@ end
   Update.act!(u)
   Update.finish!(u)
   @test u.staged === nothing              # it looked, and didn't get it
-  @test Update.says(u) == "Kaydown 1.1.0 is out. This is Kaydown 1.0.0."
-  @test Update.label(u) == "Get Kaydown 1.1.0"
+  @test Update.says(u) == "Ladder 1.1.0 is out. This is Ladder 1.0.0."
+  @test Update.label(u) == "Get Ladder 1.1.0"
   Update.act!(u)
-  @test Update.says(u) == "Kaydown is getting version 1.1.0…"
+  @test Update.says(u) == "Ladder is getting version 1.1.0…"
   Update.finish!(u)
   @test u.staged == v"1.1.0"
-  @test Update.says(u) == "Kaydown 1.1.0 is ready."
+  @test Update.says(u) == "Ladder 1.1.0 is ready."
   @test Update.label(u) == "Restart to update"
   @test !Update.quit!(u)                  # a quit leaves the app as it is
   @test version_of(u.app) == "1.0.0"
@@ -218,7 +218,7 @@ end
   Update.tick!(u)
   Update.finish!(u)
   @test u.staged == v"1.1.0"
-  # Kaydown opens again before the new version took the app's place
+  # Ladder opens again before the new version took the app's place
   again = Update.Updater(u.app, v"1.0.0"; feed=u.feed, dir=u.dir, rule=RULE, register="/usr/bin/true")
   again.auto = false
   Update.tick!(again)
@@ -244,11 +244,11 @@ end
   @test !ispath(Update.staged_app(u))     # so the next run gets it again
 end
 
-@testset "the app stays while another Kaydown from it is open" begin
+@testset "the app stays while another Ladder from it is open" begin
   u = installed("1.0.0", release("1.1.0"))
   Update.tick!(u)
   Update.finish!(u)
-  # A program that runs from inside the app, as a second Kaydown would. The app's signature doesn't cover it,
+  # A program that runs from inside the app, as a second Ladder would. The app's signature doesn't cover it,
   # so the app that's installed is no longer whole, which the swap doesn't mind.
   program = joinpath(u.app, "Contents", "MacOS", "second")
   if success(pipeline(`clang -x c - -o $program`, stdin=IOBuffer("#include <unistd.h>\nint main(){sleep(60);return 0;}\n"), stderr=devnull))
@@ -298,7 +298,7 @@ end
   u = installed("1.0.0", release("1.1.0"))
   Update.tick!(u)
   Update.finish!(u)
-  # Another Julia stands in for the Kaydown that quits: it finds the version that waits, and ends
+  # Another Julia stands in for the Ladder that quits: it finds the version that waits, and ends
   script = """
     @use "$(joinpath(@__DIR__, "..", "update"))" => Update
     u = Update.Updater("$(u.app)", v"1.0.0"; feed="$(u.feed)", dir="$(u.dir)", rule="$(escape_string(RULE))", register="/usr/bin/true")
@@ -314,10 +314,10 @@ end
   @test version_of(u.app) == "1.1.0"
 end
 
-@testset "why a copy of Kaydown can't update itself" begin
+@testset "why a copy of Ladder can't update itself" begin
   feed = release("1.1.0")
   source = Update.Updater("", v"0"; feed, dir=joinpath(mktempdir(root), "update"))
-  @test Update.says(source) == "Kaydown runs from its source here. Only the Kaydown app updates itself."
+  @test Update.says(source) == "Ladder runs from its source here. Only the Ladder app updates itself."
   @test Update.label(source) == ""
   @test Update.tick!(source) == Inf
   @test source.stage === :idle && !ispath(source.dir)
@@ -326,20 +326,20 @@ end
   local_build = installed("1.0.0", feed)
   local_build.rule = nothing
   @test Update.rule(local_build) == ""
-  @test startswith(Update.says(local_build), "This copy of Kaydown was built on this Mac.")
+  @test startswith(Update.says(local_build), "This copy of Ladder was built on this Mac.")
   @test Update.tick!(local_build) == Inf
   # An app whose developer signed it has a rule that says who that is
   @test Update.rule(Update.Updater("/System/Applications/Calculator.app", v"1")) == "identifier \"com.apple.calculator\" and anchor apple"
-  # An app in a folder that Kaydown can't change
+  # An app in a folder that Ladder can't change
   fixed = installed("1.0.0", feed)
   chmod(dirname(fixed.app), 0o555)
-  @test startswith(Update.says(fixed), "Kaydown can't change its own files where it is.")
+  @test startswith(Update.says(fixed), "Ladder can't change its own files where it is.")
   @test Update.tick!(fixed) == Inf
   chmod(dirname(fixed.app), 0o755)
-  @test Update.says(fixed) == "This is Kaydown 1.0.0."
+  @test Update.says(fixed) == "This is Ladder 1.0.0."
 end
 
-@testset "this run is Kaydown from its source" begin
+@testset "this run is Ladder from its source" begin
   @test Update.running() == ("", v"0")
   @test Update.own().app == ""
   @test Update.macos() isa VersionNumber
@@ -388,15 +388,15 @@ end
     # What a live block of the page calls, like `update_news()`
     ask(name, args...) = Base.invokelatest(getglobal(K.sandbox(e), name), args...)
     @test ask(:app_updates)
-    @test ask(:update_news) == "This is Kaydown 1.0.0."
+    @test ask(:update_news) == "This is Ladder 1.0.0."
     @test ask(:update_offer) == "Check now"
     ask(:update!)                      # Check now
     Update.finish!(u)
-    @test ask(:update_news) == "Kaydown 1.1.0 is ready. It takes the place of version 1.0.0 when you quit Kaydown."
+    @test ask(:update_news) == "Ladder 1.1.0 is ready. It takes the place of version 1.0.0 when you quit Ladder."
     @test ask(:update_offer) == "Restart to update"
     ask(:app_updates!, false)
     @test !e.updates
-    @test ask(:update_news) == "Kaydown 1.1.0 is ready."
+    @test ask(:update_news) == "Ladder 1.1.0 is ready."
     # A page with changes that aren't saved stops the restart
     page = joinpath(mktempdir(root), "notes.md")
     write(page, "# Notes\n")

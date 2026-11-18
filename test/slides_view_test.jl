@@ -1,6 +1,6 @@
 # Tests for a page that shows as slides: see "a page as slides" in main.jl.
 # Run them with `julia -O0 --project=. test/slides_view_test.jl`. They press
-# keys and click in windows that aren't on the screen. Set `KAYDOWN_SHOTS` to
+# keys and click in windows that aren't on the screen. Set `LADDER_SHOTS` to
 # a folder, and they save a picture of each slide there.
 
 @use Test: @test, @testset
@@ -12,7 +12,7 @@
 const px = K.px
 
 const dir = mktempdir()
-# The settings that these tests keep go to a file of their own, not to the one that Kaydown uses
+# The settings that these tests keep go to a file of their own, not to the one that Ladder uses
 const kept = joinpath(dir, "settings")
 @eval K settings_file() = $kept
 
@@ -73,7 +73,7 @@ const w = K.window!(e, size=(1000px, 800px))
 frames(n=2) = foreach(_ -> frame(w), 1:n)
 e.panel = true   # the sidebar shows
 frames(3)
-shot(name, win=w) = haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(ENV["KAYDOWN_SHOTS"], name), win)
+shot(name, win=w) = haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], name), win)
 
 "Press the key `k` with the keys `held` down"
 key(k, held...) = begin

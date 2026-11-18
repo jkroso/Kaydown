@@ -19,7 +19,7 @@
 """
 What a web page says of itself. A text that the page doesn't give is empty.
 `page` is false when what's at the address turned out to be something other
-than a web page, like a picture. Until Kaydown knows, it's true.
+than a web page, like a picture. Until Ladder knows, it's true.
 """
 struct Card
   url::String           # the address of the page
@@ -202,7 +202,7 @@ source(c::Card) = begin
 end
 
 """
-The words at the top of a card: the page's title. While Kaydown has no title,
+The words at the top of a card: the page's title. While Ladder has no title,
 they're `words`, the words that the line of the document has for the card,
 or the address when the line has none.
 """
@@ -260,7 +260,7 @@ end
 const PAGE_BYTES = 200_000        # how much of a page is read: its <head> is at its start
 const PICTURE_BYTES = 8_000_000   # a picture that's bigger than this isn't kept
 const SECONDS = 20                # how long a page or a picture can take to come
-const RETRY = 300.0               # seconds after a page couldn't be had before Kaydown asks for it again
+const RETRY = 300.0               # seconds after a page couldn't be had before Ladder asks for it again
 const SOON = 10.0                 # and after the first time, because a site that's busy says no for a moment
 # Many sites give a page only to a program that says it's a browser
 const AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
@@ -289,14 +289,14 @@ const tries = Dict{String,Int}()
 "Note that `file` couldn't be had just now"
 failed!(file) = (tries[file] = get(tries, file, 0) + 1; jobs[file] = time(); :failed)
 
-"How many seconds Kaydown waits before it asks again for a file that couldn't be had"
+"How many seconds Ladder waits before it asks again for a file that couldn't be had"
 patience(file) = get(tries, file, 1) <= 1 ? SOON : RETRY
 
 """
 Get what's at the web address `url` into `file`, unless it's there or on its
 way. It's `:there` once the file is whole, and `:coming` while it's on its
-way. The first time it can't be had, it's still `:coming`, and Kaydown asks
-again `SOON` seconds later. After that it's `:failed`, and Kaydown asks again
+way. The first time it can't be had, it's still `:coming`, and Ladder asks
+again `SOON` seconds later. After that it's `:failed`, and Ladder asks again
 each `RETRY` seconds. It never waits.
 Without `ask` it starts nothing, and a file that isn't there or on its way
 counts as one that couldn't be had.
@@ -329,10 +329,10 @@ const cards = Dict{Tuple{String,String},Card}()
 keep!(dir, c::Card) = cards[(String(dir), c.url)] = c
 
 """
-The card of the page at the address `url`, and true while Kaydown is still
+The card of the page at the address `url`, and true while Ladder is still
 getting the page. `dir` is the folder that keeps the cards. Until the page has
 come, and when it can't be had, the card has only the address. Without `ask`,
-Kaydown asks the web for nothing, and the card is what the folder keeps. It
+Ladder asks the web for nothing, and the card is what the folder keeps. It
 never waits and never throws.
 """
 lookup!(url::AbstractString, dir::AbstractString; ask::Bool=true) = begin
@@ -357,8 +357,8 @@ end
 
 """
 The file in the folder `dir` that keeps the picture at the web address `url`,
-and true while Kaydown is still getting it. The file is nothing until the
-picture has come, and when it can't be had. Without `ask`, Kaydown asks the
+and true while Ladder is still getting it. The file is nothing until the
+picture has come, and when it can't be had. Without `ask`, Ladder asks the
 web for nothing.
 """
 picture!(url::AbstractString, dir::AbstractString; ask::Bool=true) = begin

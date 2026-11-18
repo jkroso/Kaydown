@@ -33,7 +33,7 @@
 # no HTML. `page` doesn't write files. It calls `keep(name, bytes, picture)`
 # for each attachment and each picture, and `keep` gives the path that the page
 # links to, or nothing to leave the file out. A path is written the way
-# Kaydown writes the path of a file that's dropped on a page: a space is %20,
+# Ladder writes the path of a file that's dropped on a page: a space is %20,
 # and ( and ) are %28 and %29.
 #
 # An email that breaks the rules is read as well as it can be. Nothing here
@@ -515,7 +515,7 @@ stamp(seconds::Real) = replace(Libc.strftime("%-d %b %Y, %-I:%M %p", seconds), "
 # --- HTML as Markdown -------------------------------------------------------------
 #
 # The HTML of an email is read as a row of tags and text, and written as lines
-# of Markdown. Kaydown shows each line of a file as a line of its own, so a
+# of Markdown. Ladder shows each line of a file as a line of its own, so a
 # paragraph is one line, and an empty line is between two blocks. Most tables
 # in email only put things beside each other, so a table becomes its cells, one
 # after another. A table with headings becomes a Markdown table.
@@ -885,7 +885,7 @@ end
 
 """
 A picture. One that the email holds goes on a line of its own. One on the web
-isn't shown: Kaydown gets nothing from the web for an email, so that a sender
+isn't shown: Ladder gets nothing from the web for an email, so that a sender
 can't tell when you read it. In a line of text, such a picture becomes the
 words that it has for those who can't see it. In a link, those words are the
 link's text. A line with nothing but such pictures is left out.

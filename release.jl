@@ -1,6 +1,6 @@
-# Make a release of Kaydown: an app that other Macs open, in a zip file.
+# Make a release of Ladder: an app that other Macs open, in a zip file.
 #
-#     julia --project=. release.jl             builds build/Kaydown-<version>.zip
+#     julia --project=. release.jl             builds build/Ladder-<version>.zip
 #     julia --project=. release.jl --publish   then puts it on GitHub as a release
 #
 # The version comes from the VERSION file. Change it before each release.
@@ -16,7 +16,8 @@
 # minutes. A Mac opens a notarised app without a warning.
 #
 # Before the first release, give `notarytool` your Apple account once. It keeps
-# it in your keychain under the name "kaydown":
+# it in your keychain under the name "kaydown", which was the app's name when
+# the first release was made:
 #
 #     xcrun notarytool store-credentials kaydown --apple-id <your Apple ID> --team-id <your team ID>
 #
@@ -35,7 +36,7 @@ const publish = "--publish" in ARGS
 const profile = get(ENV, "NOTARY_PROFILE", "kaydown")
 haskey(ENV, "APP_SIGN") || (ENV["APP_SIGN"] = "Developer ID Application")
 
-"Run `cmd` in Kaydown's folder and give back what it prints"
+"Run `cmd` in Ladder's folder and give back what it prints"
 output(cmd) = readchomp(setenv(cmd, dir=@__DIR__))
 ok(cmd) = success(pipeline(setenv(cmd, dir=@__DIR__), stdout=devnull, stderr=devnull))
 
@@ -63,7 +64,7 @@ end
 
 include("app/build.jl")   # builds the app, and defines `app` and `version`
 
-const zip = joinpath(out, "Kaydown-$version.zip")
+const zip = joinpath(out, "Ladder-$version.zip")
 pack() = (rm(zip, force=true); run(`ditto -c -k --keepParent $app $zip`))
 
 pack()
@@ -88,9 +89,9 @@ if publish
   run(setenv(`git push origin $tag`, dir=@__DIR__))
   # GitHub writes the notes from the commits when the release is in the repo of the source
   ours = endswith(replace(output(`git remote get-url origin`), r"\.git$" => ""), "/" * repo)
-  notes = ours ? `--generate-notes` : `--notes $("Kaydown $version")`
+  notes = ours ? `--generate-notes` : `--notes $("Ladder $version")`
   # GitHub shows the release only once both files are there, so latest.txt never names a file that isn't
-  run(`gh release create $tag $zip $latest --repo $repo --title "Kaydown $version" $notes`)
+  run(`gh release create $tag $zip $latest --repo $repo --title "Ladder $version" $notes`)
   println("Published ", tag, " on github.com/", repo, ". Each copy of the app gets it within a day.")
 else
   println("Run it again with --publish to put it on GitHub as release ", tag, ".")

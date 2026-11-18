@@ -1,4 +1,4 @@
-# Builds Kaydown as a standalone Mac app with JuliaC. build.jl includes this
+# Builds Ladder as a standalone Mac app with JuliaC. build.jl includes this
 # file and calls `build_app`:
 #
 #     julia --project=. app/build.jl
@@ -22,7 +22,7 @@
 #                        the code the app doesn't use. The app is first run with
 #                        `--record`, and opens its window for a few seconds. See record.jl.
 #   APP_PRUNE=1          delete the native libraries the self-test didn't load.
-#   APP_PROJECT=path     the Julia project to build from, if not Kaydown's own.
+#   APP_PROJECT=path     the Julia project to build from, if not Ladder's own.
 #
 # The app's entry point is app.jl, which starts with start.jl.
 
@@ -40,7 +40,7 @@ const signer = option("SIGN", "-")
 
 """
 A new folder with a copy of `dir`'s project files and nothing else. JuliaC
-copies all of the project folder it's given, and Kaydown's holds build/, where
+copies all of the project folder it's given, and Ladder's holds build/, where
 the app is.
 """
 project_files(dir) = begin
@@ -55,7 +55,7 @@ const project = project_files(option("PROJECT", root))
 
 # --- the packages Kip gets from GitHub ------------------------------------------
 #
-# Kaydown names UI.jl and other packages by their GitHub paths. When Kaydown
+# Ladder names UI.jl and other packages by their GitHub paths. When Ladder
 # runs from its source, Kip loads a linked package from its folder if the
 # folder has changes that aren't committed, and from a copy of its last commit
 # if not. While Julia builds an app, Kip can't ask Git which of those to use,
@@ -74,7 +74,7 @@ source_files(dir) = begin
 end
 
 """
-Where a normal run finds each GitHub package that Kaydown's code names, or that
+Where a normal run finds each GitHub package that Ladder's code names, or that
 one of those packages names. Each key is a `(user, repo)`.
 """
 find_packages() = begin
@@ -270,7 +270,7 @@ end
 
 """
 Run the app's self-test, and return the libraries it loaded. The test runs in a
-sandbox that can't read ~/.julia, ~/.kip, Kaydown's own files or UI.jl's, as on a Mac
+sandbox that can't read ~/.julia, ~/.kip, Ladder's own files or UI.jl's, as on a Mac
 without them. Without that, the app would find the libraries it wraps in
 ~/.julia, or icons in UI.jl's folder, and a missing one inside the app would go
 unnoticed.
@@ -281,8 +281,8 @@ Each of those gets an empty folder of the name it looks for.
 """
 self_test(contents, executable) = begin
   depot = joinpath(contents, "share", "julia")
-  # The app can still look at Kaydown's folders, since it sits inside one, but it
-  # can't read what's in them, or in a copy of UI.jl beside Kaydown
+  # The app can still look at Ladder's folders, since it sits inside one, but it
+  # can't read what's in them, or in a copy of UI.jl beside Ladder
   sandbox = """(version 1)(allow default)
     (deny file-read* (subpath "$(joinpath(homedir(), ".julia"))") (subpath "$(joinpath(homedir(), ".kip"))"))
     (deny file-read-data (subpath "$(rstrip(root, '/'))") (subpath "$(joinpath(dirname(rstrip(root, '/')), "UI.jl"))"))

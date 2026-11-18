@@ -2,7 +2,7 @@
 # button that starts and stops the clock. Run them with
 # `julia -O0 --project=. test/timelog_view_test.jl`. They click and type in a
 # window that isn't on the screen. The test gives the time now, so nothing
-# here depends on the clock. Set `KAYDOWN_SHOTS` to a folder, and they save
+# here depends on the clock. Set `LADDER_SHOTS` to a folder, and they save
 # pictures of the page there.
 
 @use Test: @test, @testset
@@ -52,7 +52,7 @@ const w = Window(e, size=(1000px, 1300px))
 frames(n=2) = foreach(_ -> frame(w), 1:n)
 frames()
 log(n=1) = e.nodes[(:block, K.TIMELOG, page, n)]
-shot(name) = haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(ENV["KAYDOWN_SHOTS"], name), w)
+shot(name) = haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], name), w)
 
 at((x, y)) = (w.mouse = typeof(w.mouse)(px(x), px(y)); onmouse(w, MouseMove(Vec2{px}(px(x), px(y)), w)); frames(1))
 press(place) = (at(place); w.keys |= Keys.mouse_left; onkey(w, KeyPress{Keys.mouse_left}(0, w)))
@@ -240,6 +240,6 @@ close(w)
   # Each row is inside the block
   r, c = rect(v), rect(v.parts[(:cell, 1, :task)])
   @test c.left + c.width <= r.left + r.width && c.width > 40px
-  haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(ENV["KAYDOWN_SHOTS"], "timelog-narrow.png"), small)
+  haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], "timelog-narrow.png"), small)
   close(small)
 end

@@ -13,7 +13,7 @@ const px = K.px
 const cmd, ctrl, opt, shift = Keys.cmd, Keys.ctrl, Keys.opt, Keys.shft
 
 const dir = mktempdir()
-# The settings that these tests keep go to a file of their own, not to the one that Kaydown uses
+# The settings that these tests keep go to a file of their own, not to the one that Ladder uses
 @eval K settings_file() = $(joinpath(dir, "settings"))
 # A file that goes to the Trash here is only removed
 K.trasher[] = path -> (rm(path); true)
@@ -64,8 +64,8 @@ showing(e) = basename(e.buf.path)
 
 @testset "⌘⌥← goes back to the file that showed before, and ⌘⌥→ goes forward again" begin
   e, w, _ = window("a.md", "b.md", "c.md")
-  @test K.caps(first(K.bundle_keys("Kaydown")[:back])) == "⌘⌥←"
-  @test K.caps(first(K.bundle_keys("Kaydown")[:forward])) == "⌘⌥→"
+  @test K.caps(first(K.bundle_keys("Ladder")[:back])) == "⌘⌥←"
+  @test K.caps(first(K.bundle_keys("Ladder")[:forward])) == "⌘⌥→"
   K.follow!(e, "b.md"); frames(w)
   K.follow!(e, "c.md"); frames(w)
   @test showing(e) == "c.md"
@@ -187,7 +187,7 @@ end
 end
 
 @testset "⌘[ and ⌘] still belong to the email commands" begin
-  of = K.bundle_keys("Kaydown")
+  of = K.bundle_keys("Ladder")
   @test K.caps(first(of[:mail_last])) == "⌘[" && K.caps(first(of[:mail_next])) == "⌘]"
   e, w, _ = window("a.md", "b.md")
   K.follow!(e, "b.md"); frames(w)

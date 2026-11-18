@@ -1,6 +1,6 @@
 // Writes down what's said in a sound file, or in the sound of a video file,
 // with the speech recognition that's part of macOS 26 and later. macOS only
-// offers it to Swift, so this is a program of its own, and Kaydown runs it. See
+// offers it to Swift, so this is a program of its own, and Ladder runs it. See
 // transcribe.jl.
 //
 //     transcribe memo.m4a

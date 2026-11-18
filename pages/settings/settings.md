@@ -1,6 +1,6 @@
 # Settings
 
-Kaydown keeps these choices, and uses them the next time it opens. Each one changes every window as you choose it. Press ⌘W to close this window.
+Ladder keeps these choices, and uses them the next time it opens. Each one changes every window as you choose it. Press ⌘W to close this window.
 
 Three more pages have the rest of the settings. Hold ⌘ and click a link to go there. To come back, press ⌘⌥←.
 
@@ -43,7 +43,7 @@ length(weights) < 2 ? Text("$(page_font()) has one weight for text: $(page_weigh
 
 The list has the weights that the font has, up to Semibold, by the names that the font gives them. Bold text and headings are heavier than the rest. Most of the fonts above have one weight for text. Helvetica Neue has five, from UltraLight to Medium.
 
-If you choose a font that doesn't have your weight, the text shows the font's nearest weight. Kaydown keeps your choice for the next font that has it.
+If you choose a font that doesn't have your weight, the text shows the font's nearest weight. Ladder keeps your choice for the next font that has it.
 
 ## Text size
 
@@ -87,18 +87,18 @@ With this on, a word that the Mac's dictionary doesn't have gets a line of red d
 Checkbox(label="Save a page when I leave its window", checked=page_autosave(), onchange=box -> page_autosave!(box.checked))
 ```
 
-Kaydown writes a page to its file when you press ⌘S. With this on, it also writes the pages of a window when you click another window or change to another app. A page that has no file yet stays as it is.
+Ladder writes a page to its file when you press ⌘S. With this on, it also writes the pages of a window when you click another window or change to another app. A page that has no file yet stays as it is.
 
 ## Default app
 
 ```ui
 app = markdown_app()
 say(text) = Text(text, size=page_text_size() * 1px)
-app == "Kaydown" ? say("Kaydown opens the Markdown files on this Mac.") :
-!app_installed() ? say("Put the Kaydown app in your Applications folder, then come back to this page.") :
+app == "Ladder" ? say("Ladder opens the Markdown files on this Mac.") :
+!app_installed() ? say("Put the Ladder app in your Applications folder, then come back to this page.") :
   Column(Alignment.Start, child_gap=12px,
          say(isempty(app) ? "No app is set to open Markdown files." : "$app opens the Markdown files on this Mac now."),
-         Button(label="Make Kaydown the default app", onclick=button -> default_app!()))
+         Button(label="Make Ladder the default app", onclick=button -> default_app!()))
 ```
 
 The default app is the one that opens a Markdown file when you double-click it in the Finder. macOS asks you to confirm the change.
@@ -106,7 +106,7 @@ The default app is the one that opens a Markdown file when you double-click it i
 ## Updates
 
 ```ui
-Checkbox(label="Update Kaydown automatically", checked=app_updates(), onchange=box -> app_updates!(box.checked))
+Checkbox(label="Update Ladder automatically", checked=app_updates(), onchange=box -> app_updates!(box.checked))
 ```
 
 ```ui
@@ -116,8 +116,8 @@ isempty(offer) ? say(update_news()) :
   Column(Alignment.Start, child_gap=12px, say(update_news()), Button(label=offer, onclick=button -> update!()))
 ```
 
-With this on, Kaydown looks for a newer version when it opens, and once a day after that. It gets the new version while you work. The new version takes the place of this one when you quit Kaydown. To look for one, Kaydown asks GitHub which version is the newest. It sends nothing about you or your files.
+With this on, Ladder looks for a newer version when it opens, and once a day after that. It gets the new version while you work. The new version takes the place of this one when you quit Ladder. To look for one, Ladder asks GitHub which version is the newest. It sends nothing about you or your files.
 
 ---
 
-This page is a Markdown file, like any other in Kaydown. To see the code of a setting, hold ⌥ and click it.
+This page is a Markdown file, like any other in Ladder. To see the code of a setting, hold ⌥ and click it.

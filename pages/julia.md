@@ -110,6 +110,17 @@ end
 Room([Wall(4.2, "north"), Wall(3.0, "east")], Wall(0.9, "door"))
 ```
 
+## Under the value
+
+Each block of code has levels under the value of what it runs. Put the caret in the block below and run its two lines. Then hold the mouse over the ladder at the top right. It opens into a slider with four stops. At the top stop, a box shows the value. One stop down, it shows the code as Julia infers it, with the type of each step. Under that it shows the LLVM code, and under that the assembly. ⌘E goes between the value and the inferred code.
+
+```julia
+half(x) = x / 2
+half(9)
+```
+
+Each block keeps its own level, and the slider is about the block that the caret is in. With the caret in the text of the page, the slider is the page's again.
+
 ## The whole block, a selection and a node
 
 Put the caret in the line that opens a block, the one with the three backticks, and ⌘Return runs every line of the block. Select part of a line, like `1:6` in the grid above, and ⌘Return runs that part alone.

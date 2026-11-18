@@ -1,6 +1,7 @@
 # Tests for the levels of a file of Julia code: what its code comes to shows as
-# a value, as inferred code, as LLVM code or as assembly. See "what a file of
-# Julia code ran, down a level" in main.jl. Run them with
+# a value, as inferred code, as LLVM code or as assembly. See "what Julia code
+# ran, down a level" in main.jl. test/julia_block_levels_test.jl has the
+# levels of a `julia` code block of a page. Run them with
 # `julia -O0 --project=. test/julia_levels_test.jl`. They write a file of code
 # into a temporary folder, and press keys in a window that isn't on the
 # screen. Set `LADDER_SHOTS` to a folder, and they save pictures there.
@@ -54,11 +55,15 @@ run(r) = (o = K.outcome!(e, r); frames(); o)
 text(o, i) = join(first.(o.low.rows[i]))
 "All the lines that the box `o` shows a level down, as one text"
 all_text(o) = join((text(o, i) for i in eachindex(o.low.rows)), "\n")
+"How many levels down the file's code shows what it comes to"
+depth() = K.julia_part(e, 1).depth
 "True when each line of the file shows as a line of code"
 ascode() = all(it -> it.content isa K.Flow && it.first == it.last, e.layout)
 
 @testset "a file of Julia code has four levels, of what its code comes to" begin
   @test b.view == :code && K.julia_file(b) && K.levels(e) == K.CODE_LEVELS && length(K.CODE_LEVELS) == 4
+  # The file's code is the part that answers, wherever the caret is
+  @test K.level_part(e) === K.julia_part(e, 1) && K.level_part(e) isa K.JuliaCode && K.level_part(e).n == 0
   @test K.level(e) == 4 && !K.low(e) && !isempty(K.mode_part(e))
   @test K.stop_tip(e, 4) == "Go down a level, to the inferred code of what you run  ⌘E"
   @test K.stop_tip(e, 2) == "Go down 2 levels, to the LLVM code of what you run"
@@ -81,7 +86,7 @@ end
 
 @testset "a level down, a box shows the inferred code of what ran" begin
   other()
-  @test b.depth == 1 && K.level(e) == 3 && K.low(e)
+  @test depth() == 1 && K.level(e) == 3 && K.low(e)
   # The file's code shows as it's written, and the caret goes anywhere in it
   @test ascode()
   K.move!(e, (9, 4), false); frames()
@@ -101,7 +106,7 @@ end
 
 @testset "two levels down, a box shows LLVM code" begin
   K.level!(e, 2); frames()
-  @test b.depth == 2 && K.level(e) == 2
+  @test depth() == 2 && K.level(e) == 2
   @test called.low.title == "LLVM code" && defined.low.title == "total(xs::Vector{Int64})"
   rows = [text(defined, i) for i in eachindex(defined.low.rows)]
   @test any(startswith("define "), rows) && any(l -> occursin(r"^\s*ret ", l), rows) && last(rows) == "}"
@@ -117,7 +122,7 @@ end
 
 @testset "three levels down, a box shows assembly with its machine code" begin
   K.level!(e, 1); frames()
-  @test b.depth == 3 && K.level(e) == 1
+  @test depth() == 3 && K.level(e) == 1
   @test occursin(r"^total\(xs::Vector\{Int64\}\)  [\d,]+ bytes$", defined.low.title) && occursin(r"^[\d,]+ bytes$", called.low.title)
   # An instruction has its place, its machine code, its name and what it works on
   steps = [r for r in defined.low.rows if length(r) == 4]
@@ -166,12 +171,12 @@ end
   again = run(15:15)
   @test again.open && again.low.title == "::Int64"
   other()
-  @test b.depth == 0 && K.level(e) == 4
+  @test depth() == 0 && K.level(e) == 4
   @test again.low === nothing && again.shown == "18" && defined.low === nothing
   other()
-  @test b.depth == 1 && again.low.title == "::Int64"
+  @test depth() == 1 && again.low.title == "::Int64"
   other()
-  @test b.depth == 0
+  @test depth() == 0
 end
 
 close(w)

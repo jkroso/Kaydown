@@ -83,6 +83,9 @@
 #     again, or a click on the snake, goes back up. While the mouse is over
 #     the ladder, it opens into a slider with the snake at one end and the
 #     ladder at the other, and a stop for each level that the window can show at.
+#     The levels are those of the part that the caret is in. In a `julia` code
+#     block, they're the value of what you run, its inferred code, its LLVM
+#     code and its assembly.
 #   - Move the caret down the page onto a form, a diagram or a picture. A
 #     line goes round it. Return gives it the keyboard, ⌫ takes it away, and
 #     ↑ and ↓ go on to the lines beside it.
@@ -680,9 +683,6 @@ Base.@kwdef mutable struct Buffer
   # The text as an agent last knew it: what you last sent it, with every change that was made to the file from outside since
   told::Vector{String} = [""]
   sent::Vector{String} = [""]           # the text as it was when you last sent it to an agent, or when the file was opened
-  # How many levels down a file of Julia code shows what its code comes to: 0 for the value, 1 for inferred code,
-  # 2 for LLVM code, 3 for assembly. See "what a file of Julia code ran, down a level".
-  depth::Int = 0
 end
 
 "True when the file is only shown. Ladder changes Markdown files and the files of code in `CODE_FILES`, and no others."
@@ -1016,6 +1016,15 @@ end
 @def mutable struct Stop <: SemanticUI
   level::Int = 1
   quiet::Bool = false          # clicked, so no tooltip until the mouse leaves it
+end
+"""
+The Julia code of a `julia` code block of a page, or of a whole file of Julia
+code. It's the part of the page that answers for the levels of what its code
+comes to. See "what Julia code ran, down a level".
+"""
+@def mutable struct JuliaCode <: SemanticUI
+  n::Int = 0       # its place among the `julia` code blocks of its page, or 0 for a file of Julia code
+  depth::Int = 0   # how many levels down it shows what its code comes to: 0 for the value, 1 for inferred code, 2 for LLVM code, 3 for assembly
 end
 "The file's name in the middle of the top bar. A right-click on it shows the file's menu."
 @def mutable struct Title <: SemanticUI end
@@ -4051,9 +4060,10 @@ end
 # type in it as in a `julia` code block of a page: ⌘Return runs the expression
 # that the caret is in, a list offers names, a bracket comes with the bracket
 # that closes it, and ⌘S writes the file. What its code comes to has three
-# levels under the value: with the slider in the top bar, the box after a piece
-# of code shows the code as Julia infers it, its LLVM code or its assembly.
-# "what a file of Julia code ran, down a level" says more.
+# levels under the value, as it has in a `julia` code block: with the slider in
+# the top bar, the box after a piece of code shows the code as Julia infers it,
+# its LLVM code or its assembly.
+# "what Julia code ran, down a level" says more.
 #
 #   - A file of text shows its text. A file of code has the colours that a code
 #     block has. You can select the text, copy it and find words in it.
@@ -4705,22 +4715,28 @@ line_of_byte(b::Buffer, at::Int) = begin
   n
 end
 
-# --- what a file of Julia code ran, down a level -----------------------------------------------
+# --- what Julia code ran, down a level -----------------------------------------------------------
 #
-# A file of Julia code has four levels, and they're levels of what its code
-# comes to when it runs. At the highest, the box after a piece of code shows
-# the value that the code came to. "what a line of Julia code came to" says
-# how. A level down, the box shows the code as Julia infers it: each step,
-# with the type that Julia worked out for it. Under that it shows the LLVM
-# code that Julia makes of those steps, and under that the assembly that LLVM
-# compiles them to, with the machine code of each instruction beside it.
+# Julia code has four levels, and they're levels of what the code comes to
+# when it runs. At the highest, the box after a piece of code shows the value
+# that the code came to. "code that runs where it is" says how. A level
+# down, the box shows the code as Julia infers it: each step, with the type
+# that Julia worked out for it. Under that it shows the LLVM code that Julia
+# makes of those steps, and under that the assembly that LLVM compiles them
+# to, with the machine code of each instruction beside it.
 #
-# The code of the file shows as it's written at every level, and you type in
-# it as always. The slider in the top bar goes to each level, and ⌘E goes
-# between the value and the inferred code. The boxes that are on the page
-# change with the level, so you can take one piece of code from its value down
-# to its machine code. Code that runs while the file is down a level has its
-# box open.
+# The levels belong to a block of code, not to the window. Each `julia` code
+# block of a page has a level of its own, and a file of Julia code, which is
+# one block, has one. While the caret is in a block, the slider in the top bar
+# is that block's: the top bar asks the part of the page that the caret is in
+# for its levels, and the block answers. See "the slider of the levels". The
+# slider goes to each level, and ⌘E goes between the value and the inferred
+# code. With the caret in the page's text, the slider is the page's again.
+#
+# The code shows as it's written at every level, and you type in it as
+# always. The boxes of the block change with its level, so you can take one
+# piece of code from its value down to its machine code. Code that runs while
+# its block is down a level has its box open.
 #
 # What a box shows is the code of what ran. For the definition of a function,
 # that's the function's code for the types that it has been called with since,
@@ -4740,15 +4756,43 @@ const CODE_LEVELS = ("the assembly of what you run", "the LLVM code of what you 
 const MOST_LOWERED = 4000    # lines. The inferred code, the LLVM code or the assembly of longer code stops there.
 const MOST_FORMS = 12        # the most methods and sets of types that a function offers
 
-"True when the page shows a file of Julia code that you change, whose results have levels under their values"
+"True when the page shows a file of Julia code that you change. The whole file is one block of Julia code."
 julia_file(b::Buffer) = b.view == :code && lowercase(splitext(b.path)[2]) == ".jl"
 
-"Show what the code of a file of Julia code comes to `depth` levels down: 0 for the value, 1 for inferred code, 2 for LLVM code and 3 for assembly"
-code_level!(e, depth::Int) = begin
+"The place of the `julia` code block that opens on line `s` among the `julia` code blocks of `b`"
+julia_place(b::Buffer, s::Int) = (ks = kinds(b); count(i -> ks[i].kind == Kind.fence && ks[i].level == 0 && lowercase(ks[i].lang) in JULIA, 1:s))
+
+"""
+The Julia code that line `i` is in, as the part of the page that has levels: a
+`julia` code block of a page, or the whole of a file of Julia code. It's
+nothing when the line isn't in Julia code. With `make` false, it's also
+nothing for code that was never asked for, which is at its highest level.
+"""
+julia_part(e, i::Int; make=true) = begin
   b = e.buf
-  julia_file(b) && (b.depth = clamp(depth, 0, length(CODE_LEVELS) - 1))
-  e
+  n = 0   # a file of Julia code is one block
+  if !julia_file(b)
+    (b.view == :markdown && 1 <= i <= length(b.lines)) || return nothing
+    found = julia_code(b, i)
+    found === nothing && return nothing
+    n = julia_place(b, found[1] - 1)
+  end
+  key = (:julia, b.path, n)
+  make || return get(e.nodes, key, nothing)
+  get!(e.nodes, key) do
+    c = JuliaCode(n=n)
+    # It's a part of the document, so the document answers what it doesn't
+    setfield!(c, :parent, node!(Document, e, :document))
+    c
+  end
 end
+
+"How many levels down the Julia code that line `i` is in shows what it comes to: 0 for the value, 1 for inferred code, 2 for LLVM code and 3 for assembly"
+code_depth(e, i::Int) = (c = julia_part(e, i, make=false); c === nothing ? 0 : c.depth)
+
+levels(::JuliaCode) = CODE_LEVELS
+level(c::JuliaCode) = length(CODE_LEVELS) - c.depth
+level!(c::JuliaCode, i::Int) = (c.depth = clamp(length(CODE_LEVELS) - i, 0, length(CODE_LEVELS) - 1); c)
 
 "True when the code `lhs` is what a function's definition starts with, like `f(x)` or `f(x::T) where T`"
 calls(lhs) = Meta.isexpr(lhs, :call) || (Meta.isexpr(lhs, (:where, :(::))) && !isempty(lhs.args) && calls(lhs.args[1]))
@@ -4772,7 +4816,7 @@ end
 "A line of code that a box shows a level down: its pieces, each with the name of its colour"
 const CodeRow = Vector{Tuple{String,Symbol}}
 
-"What a box shows while its file is down a level: its top line, the lines under it, how wide the widest is, and how many methods and sets of types its function offers"
+"What a box shows while its code is down a level: its top line, the lines under it, how wide the widest is, and how many methods and sets of types its function offers"
 struct Lowered
   key::Any
   title::String
@@ -4789,9 +4833,9 @@ bare_code(code::AbstractString) = begin
 end
 
 """
-What the levels under the value show the code of, for `code` that ran in a
-file of Julia code and came to `value`. A definition gives its function, with
-the methods that the function got after `world`. Other code gives itself.
+What the levels under the value show the code of, for `code` that ran and
+came to `value`. A definition gives its function, with the methods that the
+function got after `world`. Other code gives itself.
 """
 source_of(code::AbstractString, value, world) = begin
   ex = try Meta.parse(bare_code(code), raise=false) catch; nothing end
@@ -4942,34 +4986,35 @@ assembly(tt) = begin
 end
 
 """
-What the box of `o` shows while its file of Julia code is down a level: the
-code of what ran, at the level of the file. It's nothing at the level of the
-value, and for code that has no lower level. The lines of a level are worked
-out once for each set of types.
+What the box of `o` shows while the Julia code that it's in is down a level:
+the code of what ran, at the level of that block or file. It's nothing at the
+level of the value, and for code that has no lower level. The lines of a level
+are worked out once for each set of types.
 """
 code_view(e, o) = begin
-  b = e.buf
-  (julia_file(b) && b.depth > 0 && !o.failed && o.source !== nothing) || return nothing
+  (o.failed || o.source === nothing) && return nothing
+  depth = code_depth(e, o.first)
+  depth > 0 || return nothing
   m = workspace(e)
   found = forms(o.source, m)
   isempty(found) && return nothing
   o.form = clamp(o.form, 1, length(found))
   tt = found[o.form]
-  key = (b.depth, tt)
+  key = (depth, tt)
   title, rows = get!(o.views, key) do
     name = call_words(o.source, m, tt)
     try
-      if b.depth == 1
+      if depth == 1
         rows, gives = inferred(m, tt)
         (name * "::" * type_name(m, gives), rows)
-      elseif b.depth == 2
+      elseif depth == 2
         (isempty(name) ? "LLVM code" : name, llvm(tt))
       else
         rows, bytes = assembly(tt)
         ((isempty(name) ? "" : name * "  ") * "$(commas(bytes)) bytes", rows)
       end
     catch err
-      what = ("infer", "make LLVM code of", "compile")[b.depth]
+      what = ("infer", "make LLVM code of", "compile")[depth]
       (isempty(name) ? "No code" : name, CodeRow[[("Julia couldn't $what this: " * Base.invokelatest(sprint, showerror, err), :dim)]])
     end
   end
@@ -4996,7 +5041,7 @@ onmouse(::FormPick, ::MouseMove) = handled
 onkey(p::FormPick, ::KeyPress{Keys.mouse_left}) = (o = p.of.of; o.low === nothing || (o.form = mod1(o.form + 1, o.low.forms)); handled)
 
 """
-The lines of code that the open box `d` shows while its file is down a level.
+The lines of code that the open box `d` shows while its code is down a level.
 A list that's taller than the room under the box shows that much of itself,
 and the wheel moves through the rest. Only the lines in sight are made.
 """
@@ -18431,7 +18476,7 @@ const COMMAND_GROUPS = [
     Command(:settings, "Show or hide the settings", :window, "cmd+comma", (e, w, _) -> toggle_settings!(e)),
     Command(:sidebar, "Show or hide the sidebar", :window, "cmd+backslash", (e, w, _) -> toggle_panel!(e)),
     Command(:sidebar_keys, "Give the sidebar the keyboard", :window, "cmd+shift+backslash", (e, w, _) -> focus_panel!(e)),
-    Command(:plain, "Go down a level, to the symbols at the caret, or up again", :window, "cmd+e", (e, w, _) -> level!(e)),
+    Command(:plain, "Go down a level in the part that the caret is in, or up again", :window, "cmd+e", (e, w, _) -> level!(e)),
     Command(:hidden_files, "Show or hide the hidden files in the sidebar", :window, "cmd+shift+period", (e, w, _) -> hidden!(e, !e.hidden)),
     Command(:bigger, "Make the text bigger", :window, "cmd+equal", (e, w, _) -> zoom!(e, zoom_for(text_size(e) + 1))),
     Command(:smaller, "Make the text smaller", :window, "cmd+minus", (e, w, _) -> zoom!(e, zoom_for(text_size(e) - 1))),
@@ -19546,10 +19591,12 @@ end
 # on it goes to the other level, and ⌘E does too. See "rich text and plain
 # text" above for what each level does. While a takeoff, a schedule or a
 # sketch fills the window, the click goes down to the lines that make it,
-# and those lines fill the window as text. See `level!`. A file of text
+# and those lines fill the window as text. See `page_level!`. A file of text
 # that's only shown has three levels, and a JSON file and a CSV file have
-# four. While the mouse is over the picture, it opens into a slider with a
-# stop for each level. See "the slider of the levels".
+# four. Julia code has four of its own, and while the caret is in a `julia`
+# code block the picture is about that block. While the mouse is over the
+# picture, it opens into a slider with a stop for each level. See "the slider
+# of the levels".
 
 const MODE_W = 30px   # the room that the picture takes in the top bar
 const TITLE_ROOM = 160px   # the least room that the file's name keeps in the top bar of a narrow window
@@ -19591,7 +19638,7 @@ onkey(m::Mode, ::KeyPress{Keys.mouse_left}) = (e = editor(m); level!(e); hush!(m
 # The tip says what a click does, as the count's tip does
 tip(m::Mode) = (e = editor(m); stop_tip(e, other_level(e)))
 
-"The snake or the ladder for the top bar. A document has one, and so have a file of text that's only shown and a file of Julia code."
+"The snake or the ladder for the top bar. A document has one, and so have a file of text that's only shown and a file of Julia code. It's about the part of the page that the caret is in: see `level_part`."
 mode_part(e) = e.buf.view == :markdown || !isempty(file_views(e.buf)) || julia_file(e.buf) ? (node!(Mode, e, :mode),) : ()
 
 # --- the slider of the levels --------------------------------------------------------------------
@@ -19599,9 +19646,9 @@ mode_part(e) = e.buf.view == :markdown || !isempty(file_views(e.buf)) || julia_f
 # What the window shows can have more than two levels. A file of text that's
 # only shown has three: its bits, its bytes in hexadecimal, and its text. A
 # JSON file has the tree of its values over those, and a CSV file has its
-# table. A file of Julia code has four, and they're levels of what its code
-# comes to when it runs: its assembly, its LLVM code, its inferred code, and
-# its value.
+# table. Julia code has four, in a file or in a `julia` code block of a page,
+# and they're levels of what the code comes to when it runs: its assembly,
+# its LLVM code, its inferred code, and its value.
 # So while the mouse is over the picture in the top bar, the picture opens out
 # into a slider. The snake is at the slider's low end and the ladder is at its
 # high end, and each is the stop of its level. Each level between those two
@@ -19614,6 +19661,18 @@ mode_part(e) = e.buf.view == :markdown || !isempty(file_views(e.buf)) || julia_f
 # So with two levels, a click on the picture still goes to the other level.
 # ⌘E goes one level down from the highest level, and to the highest level
 # from any other. The tip of a stop says what a click on it does.
+#
+# The levels belong to a part of the window, not to the window. The top bar
+# asks one part for them: the part that the caret is in. See `level_part`.
+# `levels`, `level` and `level!` are functions of a part. A part that has no
+# levels of its own passes each of them to the part that it's in, so the
+# nearest part up the tree answers. A block of Julia code answers for itself:
+# see "what Julia code ran, down a level". The document answers for every
+# other part of a page, for a block that fills the window, and for a file. So
+# with the caret in a `julia` code block, the slider has the four levels of
+# that block, and with the caret in the page's text it has the two of the
+# page. A part gets levels of its own with a method of each of the three
+# functions.
 
 const FILE_VIEWS = (:bits, :hex, :text, :file)   # the ways that a file with levels shows, from the lowest level
 const FILE_LEVELS = ("the file's bits", "the file's bytes in hexadecimal", "the file's text")   # and the tree or the table over them
@@ -19625,39 +19684,63 @@ const TRACK_W = 14px     # the line between the two ends, when there's no level 
 const OPENS_IN = 0.14    # seconds for the slider to open out from the picture
 
 """
-The levels of abstraction that the window can show at, from the lowest to the
-highest. Each is what the window shows there, as the tip of its stop says it.
+The part of the window that the top bar asks for its levels: the block of
+Julia code that the caret is in, or the document when the caret is in no such
+block. While a block fills the window, the caret is out of sight, and the
+document answers for that block.
 """
-levels(e) = begin
+level_part(e) = begin
   b = e.buf
-  julia_file(b) && return CODE_LEVELS
+  c = full_block(e) !== nothing ? nothing : julia_file(b) || !caretless(b) ? julia_part(e, b.caret[1]) : nothing
+  c === nothing ? node!(Document, e, :document) : c
+end
+
+"""
+The levels of abstraction that `node` can show at, from the lowest to the
+highest. Each is what shows there, as the tip of its stop says it. A part of
+the window with no levels of its own gives those of the part that it's in.
+"""
+levels(node::SemanticUI) = levels(node.parent)
+"The level that `node` shows at: its place in `levels(node)`"
+level(node::SemanticUI) = level(node.parent)
+"Show `node` at level `i` of `levels(node)`"
+level!(node::SemanticUI, i::Int) = level!(node.parent, i)
+
+# The window is at the top of the tree. It has no levels of its own, and answers with those of the part that the top bar asks.
+levels(e::Editor) = levels(level_part(e))
+level(e::Editor) = level(level_part(e))
+level!(e::Editor, i::Int) = (level!(level_part(e), i); e)
+
+# The document answers for a page, for a block that fills the window, and for a file with more than one way to show
+levels(d::Document) = begin
+  e = editor(d)
+  b = e.buf
   views = file_views(b)
   isempty(views) && return full_block(e) === nothing ? PAGE_LEVELS : BLOCK_LEVELS
   length(views) == 3 ? FILE_LEVELS : (FILE_LEVELS..., json_page(b) ? "the tree of the file's values" : "the file's table")
 end
 
-"The level that the window shows at: its place in `levels(e)`"
-level(e) = begin
-  julia_file(e.buf) && return length(CODE_LEVELS) - e.buf.depth
+level(d::Document) = begin
+  e = editor(d)
   views = file_views(e.buf)
   isempty(views) && return e.plain && full_block(e) === nothing ? 1 : 2
   something(findfirst(==(e.buf.view), views), length(views))
 end
 
-"The level that ⌘E goes to: one down from the highest level, and the highest level from any other"
-other_level(e) = (n = length(levels(e)); level(e) == n ? n - 1 : n)
-
-"The level that a click on the stop of level `i` goes to. A click on the end that the window is at goes one level in from it."
-click_level(e, i::Int) = (n = length(levels(e)); i != level(e) ? i : i == n ? n - 1 : i == 1 ? 2 : i)
-
-"Go to level `i` of `levels(e)`"
-level!(e, i::Int) = begin
-  i == level(e) && return e
-  # A page has two levels, so it goes to the other one
-  julia_file(e.buf) && return code_level!(e, length(CODE_LEVELS) - i)
+level!(d::Document, i::Int) = begin
+  e = editor(d)
+  i == level(d) && return d
   views = file_views(e.buf)
-  isempty(views) ? level!(e) : file_level!(e, views[i])
+  # A page has two levels, so it goes to the other one
+  isempty(views) ? page_level!(e) : file_level!(e, views[i])
+  d
 end
+
+"The level that ⌘E goes to: one down from the highest level, and the highest level from any other"
+other_level(node) = (n = length(levels(node)); level(node) == n ? n - 1 : n)
+
+"The level that a click on the stop of level `i` goes to. A click on the end that `node` is at goes one level in from it."
+click_level(node, i::Int) = (n = length(levels(node)); i != level(node) ? i : i == n ? n - 1 : i == 1 ? 2 : i)
 
 "What the tip of the stop of level `i` says: what a click on it does"
 stop_tip(e, i::Int) = begin
@@ -19668,7 +19751,7 @@ stop_tip(e, i::Int) = begin
   words = "Go $(to > now ? "up" : "down") $(steps == 1 ? "a level" : "$steps levels"), to $(ls[to])"
   to == other_level(e) || return words
   # An email goes between how it was sent and its words
-  full_block(e) === nothing && (words = something(sent_tip(e), words))
+  level_part(e) isa Document && full_block(e) === nothing && (words = something(sent_tip(e), words))
   words * hint(e, :plain)
 end
 
@@ -19797,8 +19880,8 @@ end
 # among the lines of the page, as it puts a block that fills the window back
 # in the page.
 
-"True when the window shows under its highest level: a page shows its symbols and no block fills the window, or a file shows its bytes, or its text when it has a tree or a table"
-low(e) = level(e) < length(levels(e))
+"True when `node` shows under its highest level. For the window, that's the part that the top bar asks: a page shows its symbols and no block fills the window, a file shows its bytes, or its text when it has a tree or a table, or the Julia code with the caret shows under the value of what ran."
+low(node) = level(node) < length(levels(node))
 
 "The language of the block that `v` is the view of, or nothing"
 block_lang(v) = v isa TakeoffView ? TAKEOFF : v isa ScheduleView ? SCHEDULE : findfirst(kind -> v isa kind.view, BLOCKS)
@@ -19806,10 +19889,11 @@ block_lang(v) = v isa TakeoffView ? TAKEOFF : v isa ScheduleView ? SCHEDULE : fi
 "The first and the last line of the block that `v` is the view of, or nothing"
 block_span(b::Buffer, v) = (lang = block_lang(v); lang === nothing ? nothing : block_lines(b, lang, v.n))
 
-"Go to the other level: down from graphics to the symbols that make them, or up again"
-level!(e) = begin
-  # A file goes between its highest level and the one under it
-  (isempty(file_views(e.buf)) && !julia_file(e.buf)) || return level!(e, other_level(e))
+"Go to the level that ⌘E goes to, of the part that the top bar asks: down from the highest level, or up to it again"
+level!(e::Editor) = level!(e, other_level(e))
+
+"Take a page to the other of its two levels: down from graphics to the symbols that make them, or up again"
+page_level!(e) = begin
   v = full_block(e)
   v === nothing || return lower!(e, v)
   e.plain || return plain!(e, true)
@@ -22978,7 +23062,7 @@ outcome_face(size, ink=colours.ink) = Face(codefont(), codestyle(), size, ink, f
   rest::String = ""                 # what shows under the box when it's open
   from::Int = 1                     # the line of `full` that `rest` starts at
   more::Bool = false                # there's more than the box shows
-  low::Any = nothing                # the Lowered that it shows while the file is down a level, or nothing at the level of the value
+  low::Any = nothing                # the Lowered that it shows while its code is down a level, or nothing at the level of the value
   size::px = 12px                   # of its text
   high::px = 20px
   across::px = 0px                  # how wide the box is while it's open
@@ -23278,8 +23362,8 @@ outcome!(e, r::UnitRange{Int}, code::String=join(e.buf.lines[r], "\n")) = begin
   was = b.lines[r]
   world = Base.get_world_counter()
   value, printed, failed = run_code(e, code)
-  # In a file of Julia code, the levels under the value show the code of what ran
-  source = !failed && julia_file(b) ? source_of(code, value, world) : nothing
+  # The levels under the value show the code of what ran
+  source = failed ? nothing : source_of(code, value, world)
   # Code that ends with a semicolon shows no value, as it does at Julia's prompt
   !failed && endswith(rstrip(code), ';') && (value = nothing)
   node = whole = nothing
@@ -23307,8 +23391,8 @@ outcome!(e, r::UnitRange{Int}, code::String=join(e.buf.lines[r], "\n")) = begin
                       full=full, printed=isempty(said) ? 0 : count('\n', said) + 1, failed=failed, node=node, subject=subject,
                       whole=whole, open=node !== nothing || whole isa Union{SemanticUI,GeometricUI}))
   o.source = source
-  # Code that runs while the file is down a level has its box open, since the code under it is what the level is for
-  source !== nothing && b.depth > 0 && (o.open = true)
+  # Code that runs while its block is down a level has its box open, since the code under it is what the level is for
+  source !== nothing && code_depth(e, first(r)) > 0 && (o.open = true)
   list = outcomes(e)
   # It takes the place of what any of those lines came to before
   Base.filter!(p -> p.last < o.first || p.first > o.last, list)
@@ -23412,7 +23496,7 @@ outcome_over(e) = begin
     left = x0 + xcol(vl, vl.to) + OUTCOME_GAP
     top = y0 + it.top + line_top(f, length(f.lines)) + (vl.high - high) / 2
     # A line that ends too near the edge of the window has the box under it
-    # While the file is down a level, the box shows the code of what ran, and not its value
+    # While its code is down a level, the box shows the code of what ran, and not its value
     o.low = code_view(e, o)
     brief = o.low === nothing ? o.brief : o.low.title
     fits(left) < min(length(brief), 16) && ((left, top) = (x0 + vl.x, top + vl.high))
@@ -23616,7 +23700,7 @@ onkey(::OutcomeBody, ::KeyPress{Keys.mouse_left}) = handled
 onmouse(::OutcomeBody, ::MouseMove) = handled
 # The wheel moves through the documentation and the table of a function or a module, not through the page under them
 onscroll(d::OutcomeBody, ev::MouseScroll) = begin
-  # The lines of code that a box shows while the file is down a level move as a list of parts does
+  # The lines of code that a box shows while its code is down a level move as a list of parts does
   low = d.of.low !== nothing
   low && d.scroll.content_height <= d.scroll.viewport && return nothing
   # A list of parts that all shows leaves the wheel to the page

@@ -182,6 +182,10 @@ end
 
 const sized_fonts = Dict{Float32,Ptr{Skia.sk_font_t}}()
 
+# A built app starts with the font that the build read, and the Skia objects of
+# that font are gone by then. So each start reads the font again.
+__init__() = (loaded[] = missing; empty!(sized_fonts); nothing)
+
 "The font at `size` px, to draw with"
 sized(f::MathFont, size) = begin
   length(sized_fonts) > 200 && (foreach(Skia.sk_font_delete, values(sized_fonts)); empty!(sized_fonts))

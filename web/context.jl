@@ -11,6 +11,10 @@
 # A script can start, stop and move a <video> too (`play()`, `pause()`,
 # `currentTime`): video.jl keeps how far each has got. A video makes no sound.
 #
+# What `start!` gives back is for live.jl, which tells the scripts when an
+# animation or a transition has ended (`animationend`, `transitionend`): the
+# event then names what ended.
+#
 # The drawing itself is canvas.jl, in Julia: the context of a script is a thin
 # object, and each of its functions calls one of the functions under "what a
 # script can ask". So a script that draws ten thousand shapes makes ten
@@ -471,8 +475,33 @@ Object.defineProperties(HTMLVideoElement.prototype, {
   canPlayType: {configurable: true, writable: true, value: function canPlayType(kind) { return /mp4|quicktime|m4v/i.test(String(kind)) ? 'maybe' : '' }},
 })
 
-Object.assign(global, {CanvasRenderingContext2D, CanvasGradient, CanvasPattern, Path2D, ImageData, ImageBitmap, OffscreenCanvas, createImageBitmap})
+// --- what ended ---------------------------------------------------------------------------
+
+// An animation or a change that takes time has ended: the event that says so names it, and says how long it took
+class AnimationEvent extends Event {
+  constructor(type, init = {}) { super(type, init); this.animationName = String(init.animationName ?? ''); this.elapsedTime = Number(init.elapsedTime ?? 0); this.pseudoElement = '' }
+}
+class TransitionEvent extends Event {
+  constructor(type, init = {}) { super(type, init); this.propertyName = String(init.propertyName ?? ''); this.elapsedTime = Number(init.elapsedTime ?? 0); this.pseudoElement = '' }
+}
+// Julia tells an event through window.jl, which makes a plain Event. What Julia says of it just before is put on the
+// event here, by a listener that hears it before any of the page's own.
+let ending = null
+for (const type of ['animationend', 'transitionend']) {
+  global.addEventListener(type, event => {
+    if (!ending || ending.type !== event.type || 'elapsedTime' in event) return
+    event[type === 'animationend' ? 'animationName' : 'propertyName'] = ending.name
+    event.elapsedTime = ending.elapsed
+    event.pseudoElement = ''
+    ending = null
+  }, true)
+}
+
+Object.assign(global, {CanvasRenderingContext2D, CanvasGradient, CanvasPattern, Path2D, ImageData, ImageBitmap, OffscreenCanvas, createImageBitmap, AnimationEvent, TransitionEvent})
 if (typeof global.DOMMatrix !== 'function') global.DOMMatrix = global.DOMMatrixReadOnly = DOMMatrix
+
+// What Julia calls just before it tells the page that an animation or a change has ended
+return (type, name, elapsed) => { ending = {type, name, elapsed} }
 })
 """
 
@@ -560,6 +589,11 @@ element that a script holds as that number. `load(address)` gives the bytes of
 a picture or a video that the page names, or nothing. `now()` gives how many
 seconds ago the page was first shown. `changed()` is called when a script
 starts, stops or moves a video, so that the page is laid out again.
+
+Gives a function of the script. Call it with "animationend" or
+"transitionend", the name of the animation or of the property, and how many
+seconds it took, just before that event is told to the page: the event then
+says those.
 """
 start!(js::Context; node, load=address -> nothing, now=() -> 0.0, changed=() -> nothing) = begin
   pictures = Pictures(load)
@@ -641,7 +675,6 @@ start!(js::Context; node, load=address -> nothing, now=() -> 0.0, changed=() -> 
     "seek" => (id, t) -> (e = node(id)::Element; reel(e); seek!(play(e), now(), t, haskey(e.attrs, "loop")); changed(); nothing),
   )
   evaluate(js, CONTEXT; name="canvas.js")(natives)
-  nothing
 end
 
 export start!

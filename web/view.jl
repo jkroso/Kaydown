@@ -11,8 +11,10 @@
 # The page is laid out again only when the HTML, the width or the zoom changes,
 # so a window that redraws often costs no more than the drawing.
 #
-# A page with an animation, or with a video that plays, is laid out again as
-# time passes, up to 30 times a second, for as long as something in it moves.
+# A page with an animation, a video that plays or a picture that moves (a
+# GIF) is laid out again as time passes, up to 30 times a second, for as long
+# as something in it moves. A page where only a GIF moves is laid out again
+# when the GIF shows its next picture.
 # All of the page is laid out each time, so a big page moves in fewer steps.
 # With `moves=false`, the page is drawn once, as it comes to rest.
 #
@@ -83,16 +85,18 @@ page!(v::View) = begin
     return v.page
   end
   # The page's time starts again for another page, and goes on for another width
+  began = time()
   key = (want[1], v.base)
   (v.showing === nothing || v.showing.key != key) && (v.showing = (; key, doc=document(v.html), clock=Clock(), since=time(), pictures=Web.Pictures(v.load)))
-  if v.made != want || Web.moving(v.page)
-    began = time()
+  at = max(0.0, began - v.showing.since)
+  if v.made != want || Web.due(v.page, at)
     v.page = Web.page(v.showing.doc; wide=want[2], zoom=v.zoom, fit=v.fit, css=v.css, load=v.load, pictures=v.showing.pictures, high=v.high, base=v.base,
-                      at=began - v.showing.since, v.showing.clock)
+                      at, v.showing.clock)
     v.made = want
-    # A window draws only when something asks. A page that takes long to lay out leaves as long again for the rest of the window.
-    Web.moving(v.page) && redraw_in!(v, max(FRAME, time() - began))
   end
+  # A window draws only when something asks. A page that takes long to lay out leaves as long again for the rest of the window,
+  # and a page where only a picture like a GIF moves waits for the picture's next change.
+  Web.moving(v.page) && redraw_in!(v, max(FRAME, time() - began, v.page.next - (time() - v.showing.since)))
   v.page
 end
 

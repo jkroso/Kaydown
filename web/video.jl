@@ -18,6 +18,14 @@
 #     play!(p, 12.5), pause!(p, 12.5), seek!(p, 12.5, 3.0)
 #
 # A video with `autoplay` plays from when its page is first shown.
+#
+# A picture file that moves is read here too: a GIF, and a PNG or a WebP with
+# several pictures in it. macOS reads those as well (ImageIO).
+#
+#     r = reel(bytes)                 # or nothing, for a file with one picture or one that can't be read
+#     r.wide, r.high, r.long          # how big its pictures are, and how many seconds one run of them takes
+#     r.runs                          # how many times it runs: Inf for one that never stops
+#     frame(r, 2.5)                   # the picture that it shows 2.5 seconds after it started
 
 @use Skia
 
@@ -148,6 +156,15 @@ frame(v::Video, seconds::Real) = begin
   v.shown !== nothing && v.at == t && return v.shown
   made = ccall((:objc_msgSend, OBJC), Object, (Object, Object, CMTime, Ptr{Cvoid}, Ptr{Cvoid}), v.maker, selector("copyCGImageAtTime:actualTime:error:"), cmtime(t), C_NULL, C_NULL)
   made == C_NULL && return nothing
+  shown = picture(made)
+  ccall((:CGImageRelease, GRAPHICS), Cvoid, (Object,), made)
+  shown === nothing && return nothing
+  v.at = t
+  v.shown = shown
+end
+
+"macOS's picture `made` as a `Frame`, or nothing when it has no pixels"
+picture(made::Object) = begin
   w = Int(ccall((:CGImageGetWidth, GRAPHICS), Csize_t, (Object,), made))
   h = Int(ccall((:CGImageGetHeight, GRAPHICS), Csize_t, (Object,), made))
   image = C_NULL
@@ -166,10 +183,7 @@ frame(v::Video, seconds::Real) = begin
     end
     ccall((:CGColorSpaceRelease, GRAPHICS), Cvoid, (Object,), space)
   end
-  ccall((:CGImageRelease, GRAPHICS), Cvoid, (Object,), made)
-  image == C_NULL && return nothing
-  v.at = t
-  v.shown = Frame(Ptr{Cvoid}(image), w, h)
+  image == C_NULL ? nothing : Frame(Ptr{Cvoid}(image), w, h)
 end
 
 # --- which videos play --------------------------------------------------------------------
@@ -219,4 +233,143 @@ seek!(p::Play, at, t, again::Bool=false) = begin
   _, going = spot(p, at, again)
   p.since, p.was, p.going = Float64(at), clamp(Float64(t), 0.0, p.long), going || (p.going && t < p.long)
   p
+end
+
+# --- pictures that move -------------------------------------------------------------------
+
+const IMAGEIO = "/System/Library/Frameworks/ImageIO.framework/ImageIO"
+
+"A picture file with several pictures that show one after the other: a GIF, or a PNG or a WebP that moves"
+mutable struct Reel
+  source::Object                        # macOS's CGImageSource, or C_NULL once it's closed
+  wide::Int
+  high::Int
+  starts::Vector{Float64}               # when each picture starts to show, in seconds from the start of a run
+  long::Float64                         # how many seconds one run takes
+  runs::Float64                         # how many times it runs: Inf for one that never stops
+  first::Frame                          # its first picture, which shows where nothing moves
+  frames::Vector{Union{Frame,Nothing}}  # the pictures that are read and kept
+  room::Int                             # how many bytes the kept pictures take
+end
+
+# The pictures of one file are kept up to this many bytes. Past that, a picture is read again each time it shows.
+const KEPT = 48_000_000
+
+"""
+True when `bytes` may be a picture file that moves: a GIF, a PNG with the
+part that says how its pictures follow each other, or a WebP that says it
+moves. It's a quick look at the start of the file, so that macOS is asked
+only for such a file.
+"""
+moves(bytes::Vector{UInt8}) = begin
+  n = length(bytes)
+  n > 12 || return false
+  bytes[1:4] == b"GIF8" && return true
+  starts(at, text) = at + length(text) - 1 <= n && view(bytes, at:at+length(text)-1) == codeunits(text)
+  # In a PNG that moves, `acTL` comes before the first pixels. In a WebP, `ANIM` comes near the start.
+  bytes[1:4] == UInt8[0x89, 0x50, 0x4e, 0x47] && return any(i -> starts(i, "acTL"), 1:min(n - 4, 4096))
+  starts(1, "RIFF") && starts(9, "WEBP") && return any(i -> starts(i, "ANIM"), 13:min(n - 4, 256))
+  false
+end
+
+"One of ImageIO's named values, or C_NULL where this macOS has none of that name"
+named(name::Symbol) = begin
+  at = Base.Libc.Libdl.dlsym(Base.Libc.Libdl.dlopen(IMAGEIO), name; throw_error=false)
+  at === nothing ? C_NULL : unsafe_load(Ptr{Object}(at))
+end
+
+"The number under `key` in one of macOS's dictionaries, or nothing"
+number(dict::Object, key::Object) = begin
+  (dict == C_NULL || key == C_NULL) && return nothing
+  found = ccall((:CFDictionaryGetValue, FOUNDATION), Object, (Object, Object), dict, key)
+  found == C_NULL && return nothing
+  out = Ref(0.0)
+  ccall((:CFNumberGetValue, FOUNDATION), Bool, (Object, Clong, Ref{Float64}), found, 13, out) ? out[] : nothing
+end
+
+# For each kind of file: the names that ImageIO keeps its part of a picture's facts under, how long the picture shows, and how many times the file runs
+const KINDS = ((:kCGImagePropertyGIFDictionary, :kCGImagePropertyGIFUnclampedDelayTime, :kCGImagePropertyGIFDelayTime, :kCGImagePropertyGIFLoopCount),
+               (:kCGImagePropertyPNGDictionary, :kCGImagePropertyAPNGUnclampedDelayTime, :kCGImagePropertyAPNGDelayTime, :kCGImagePropertyAPNGLoopCount),
+               (:kCGImagePropertyWebPDictionary, :kCGImagePropertyWebPUnclampedDelayTime, :kCGImagePropertyWebPDelayTime, :kCGImagePropertyWebPLoopCount))
+
+"What the facts `facts` of a picture, or of a file, say under the name `which` of the names in `KINDS`: 2 and 3 for how long a picture shows, 4 for how many times the file runs"
+fact(facts::Object, which) = begin
+  facts == C_NULL && return nothing
+  for kind in KINDS
+    part = ccall((:CFDictionaryGetValue, FOUNDATION), Object, (Object, Object), facts, named(kind[1]))
+    part == C_NULL && continue
+    for i in which
+      found = number(part, named(kind[i]))
+      found === nothing || return found
+    end
+  end
+  nothing
+end
+
+"""
+The pictures of the file `bytes`, when it's a picture file that moves, or
+nothing: for a file with one picture, and for one that macOS can't read.
+"""
+reel(bytes::Vector{UInt8}) = begin
+  (Sys.isapple() && moves(bytes)) || return nothing
+  data = ccall((:CFDataCreate, FOUNDATION), Object, (Object, Ptr{UInt8}, Clong), C_NULL, bytes, length(bytes))
+  source = ccall((:CGImageSourceCreateWithData, IMAGEIO), Object, (Object, Object), data, C_NULL)
+  ccall((:CFRelease, FOUNDATION), Cvoid, (Object,), data)
+  source == C_NULL && return nothing
+  n = Int(ccall((:CGImageSourceGetCount, IMAGEIO), Csize_t, (Object,), source))
+  made = n > 1 ? ccall((:CGImageSourceCreateImageAtIndex, IMAGEIO), Object, (Object, Csize_t, Object), source, 0, C_NULL) : C_NULL
+  first = made == C_NULL ? nothing : picture(made)
+  made == C_NULL || ccall((:CGImageRelease, GRAPHICS), Cvoid, (Object,), made)
+  first === nothing && (ccall((:CFRelease, FOUNDATION), Cvoid, (Object,), source); return nothing)
+  starts, at = Float64[], 0.0
+  for i in 0:n-1
+    facts = ccall((:CGImageSourceCopyPropertiesAtIndex, IMAGEIO), Object, (Object, Csize_t, Object), source, i, C_NULL)
+    shows = something(fact(facts, (2, 3)), 0.1)
+    facts == C_NULL || ccall((:CFRelease, FOUNDATION), Cvoid, (Object,), facts)
+    push!(starts, at)
+    # A picture that says it shows for next to no time shows for a tenth of a second, as in a browser
+    at += shows <= 0.011 ? 0.1 : shows
+  end
+  facts = ccall((:CGImageSourceCopyProperties, IMAGEIO), Object, (Object, Object), source, C_NULL)
+  # A file that says nothing of it runs once. One that says 0 never stops.
+  runs = something(fact(facts, (4,)), 1.0)
+  facts == C_NULL || ccall((:CFRelease, FOUNDATION), Cvoid, (Object,), facts)
+  kept = Vector{Union{Frame,Nothing}}(nothing, n)
+  kept[1] = first
+  finalizer(close, Reel(source, first.wide, first.high, starts, at, runs <= 0 ? Inf : runs, first, kept, 4 * first.wide * first.high))
+end
+
+Base.close(r::Reel) = begin
+  r.source == C_NULL && return
+  ccall((:CFRelease, FOUNDATION), Cvoid, (Object,), r.source)
+  r.source = C_NULL
+  nothing
+end
+
+"When the file stops moving, in seconds after it started: Inf for one that never stops"
+stops(r::Reel) = r.long * r.runs
+
+"When the file next shows another picture, in seconds after it started, for a time `seconds` after it started: Inf for one that has stopped"
+after(r::Reel, seconds::Real) = begin
+  t = max(0.0, Float64(seconds))
+  (r.long <= 0 || t >= stops(r)) && return Inf
+  run, within = fld(t, r.long), mod(t, r.long)
+  i = searchsortedlast(r.starts, within)
+  run * r.long + (i < length(r.starts) ? r.starts[i+1] : r.long)
+end
+
+"The picture that the file shows `seconds` after it started. One that has stopped shows its last picture."
+frame(r::Reel, seconds::Real) = begin
+  t = Float64(seconds)
+  i = t <= 0 || r.long <= 0 ? 1 : t >= stops(r) ? length(r.starts) : searchsortedlast(r.starts, mod(t, r.long))
+  kept = r.frames[i]
+  (kept !== nothing || r.source == C_NULL) && return something(kept, r.first)
+  made = ccall((:CGImageSourceCreateImageAtIndex, IMAGEIO), Object, (Object, Csize_t, Object), r.source, i - 1, C_NULL)
+  made == C_NULL && return r.first
+  shown = picture(made)
+  ccall((:CGImageRelease, GRAPHICS), Cvoid, (Object,), made)
+  shown === nothing && return r.first
+  size = 4 * shown.wide * shown.high
+  r.room + size <= KEPT && (r.frames[i] = shown; r.room += size)
+  shown
 end

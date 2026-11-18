@@ -33,9 +33,11 @@
 # that asks where an element is (`getBoundingClientRect`, `offsetWidth`) gets
 # the answer from a layout of the page as it is at that moment.
 #
-# An animation of the page's CSS runs too: while one does, `page!` lays the
-# page out again each time, as it is at that moment, and `moving(p)` is true
-# of the page that it gives.
+# An animation of the page's CSS runs too, and a style that a script changes
+# takes the time that its `transition` says. While something moves, `page!`
+# lays the page out again each time, as it is at that moment, and `moving(p)`
+# is true of the page that it gives. `step!` tells the scripts what has ended
+# (`animationend`, `transitionend`).
 #
 # All of a page is laid out again after any change. A script that changes the
 # page and then asks for a size, again and again in one loop, makes that many
@@ -45,10 +47,10 @@
 
 @use "./dom" Element Document document
 @use "./box" Box
-@use "./style" alpha Clock
+@use "./style" alpha Clock events!
 @use "./script" => JS
 @use "./script" Scripts ScriptError
-@use "./main" Page Pictures page moving retry!
+@use "./main" Page Pictures page moving due retry!
 
 "A page whose scripts run"
 mutable struct Live
@@ -98,7 +100,7 @@ page!(l::Live) = begin
   s = l.scripts
   # A page that moves is laid out again as time passes. A layout that takes long leaves three times as long for the
   # rest: a script that asks where things are, again and again, would else get a new layout each time.
-  (l.page === nothing || s.changed || (moving(l.page) && time() >= l.rest)) || return l.page
+  (l.page === nothing || s.changed || (due(l.page, time() - s.started) && time() >= l.rest)) || return l.page
   began = time()
   s.changed = false
   # A script can add a <style> or a <base>, and can put another <body> in the page
@@ -177,7 +179,18 @@ next frame. Gives how many seconds until the next timer is due, 0 when a
 script waits for the next frame, or nothing when nothing waits. Ask `page!`
 after it for the page as the scripts left it.
 """
-step!(l::Live) = JS.step!(l.scripts)
+step!(l::Live) = (tell!(l); JS.step!(l.scripts))
+
+"Tell the page's scripts of each animation and each change of a style that has ended since they were last told: `animationend` and `transitionend`"
+tell!(l::Live) = begin
+  for (who, type, name, long) in events!(l.options.clock)
+    who isa Element || continue   # a part of an element, like ::before, is no element
+    # The event says what ended and how long it took: see context.jl
+    JS.guarded(() -> l.scripts.hooks["ending"](type, name, long), l.scripts)
+    JS.fire!(l.scripts, who, type, Dict{String,Any}("bubbles" => true, "cancelable" => false))
+  end
+  nothing
+end
 
 "How many seconds until the next timer of the page is due, 0 when a script waits for the next frame, or nothing when nothing waits"
 waiting(l::Live) = JS.waiting(l.scripts)

@@ -32,12 +32,13 @@
 # down the page. Letters that join, as in Arabic, and an emoji that's made of
 # several characters. `::first-letter` and `::first-line`. `backdrop-filter`.
 # A picture as a border (`border-image: url(...)`). The page in an <iframe>.
-# A `transition`.
 #
 # What moves: with `at`, the page is drawn as it is that many seconds after
-# it was first shown. Each animation of its CSS is as far as it has got then,
-# and a <video> that plays by itself shows its picture of that time. A video
-# makes no sound. A <canvas> shows what the page's scripts drew on it: see
+# it was first shown. Each animation of its CSS is as far as it has got then.
+# A <video> that plays shows its picture of that time, and so does a picture
+# file that moves, like a GIF. A video makes no sound. With a `Clock` too, a
+# style that changes from one layout to the next takes the time that its
+# `transition` says. A <canvas> shows what the page's scripts drew on it: see
 # canvas.jl.
 #
 # The parts: dom.jl reads the HTML into a tree. css.jl reads CSS. style.jl
@@ -60,7 +61,7 @@
 @use "./svg" => Svg
 @use "./video" => Film
 @use "./box" boxes Box
-@use "./style" styles isauto ispercent Clock
+@use "./style" styles isauto ispercent Clock commit!
 @use "./layout" layout!
 @use "./paint" => Paint
 
@@ -139,13 +140,40 @@ inline_bytes(src) = begin
   end
 end
 
-(p::Pictures)(src::AbstractString) = begin
+"What the set has for the address `src`: a picture's size and Skia's picture, the `Reel` of a picture file that moves, or nothing"
+lookup(p::Pictures, src::AbstractString) = begin
   src = String(strip(src))
   isempty(src) && return nothing
   get!(p.found, src) do
     bytes = startswith(lowercase(src), "data:") ? inline_bytes(src) : p.load(src)
-    bytes === nothing ? nothing : decode(Vector{UInt8}(bytes))
+    bytes === nothing && return nothing
+    bytes = Vector{UInt8}(bytes)
+    # A GIF, or a PNG or a WebP that moves, is read one picture at a time: see video.jl
+    moving = Film.reel(bytes)
+    moving === nothing ? decode(bytes) : moving
   end
+end
+
+# Of a picture file that moves, this is its first picture
+(p::Pictures)(src::AbstractString) = begin
+  found = lookup(p, src)
+  found isa Film.Reel ? (found.wide, found.high, found.first.image) : found
+end
+
+"""
+The picture at the address `src` as it is `at` seconds after its page was
+first shown, and when it stops changing: 0 for a picture that doesn't move,
+and Inf for one that never stops. With no time, a picture that moves is its
+first picture. The third thing that it gives is when the picture next
+changes. `held` is given each picture of a moment that's handed out, so that
+Skia's picture lasts for as long as `held` does.
+"""
+moment(p::Pictures, src::AbstractString, at, held) = begin
+  found = lookup(p, src)
+  found isa Film.Reel || return (found, 0.0, Inf)
+  shown = at === nothing ? found.first : Film.frame(found, at)
+  push!(held, shown)
+  ((found.wide, found.high, shown.image), Film.stops(found), Film.after(found, something(at, 0.0)))
 end
 
 "The video at the address `src`, as video.jl reads it, or nothing"
@@ -160,7 +188,7 @@ end
 
 release(p::Pictures) = begin
   for found in values(p.found)
-    found === nothing || Skia.sk_image_unref(found[3])
+    found === nothing ? nothing : found isa Film.Reel ? close(found) : Skia.sk_image_unref(found[3])
   end
   empty!(p.found)
   foreach(v -> v === nothing || close(v), values(p.films))
@@ -179,10 +207,19 @@ struct Page
   root::Box       # the box of its <html> element, with the boxes of the rest in it
   at::Union{Float64,Nothing}   # how many seconds after it was first shown the page looks like this, or nothing for the page as it comes to rest
   until::Float64  # how many seconds after it was first shown the page stops changing: Inf when it never does, 0 when nothing in it moves
+  held::Vector{Any}   # the pictures of this moment that the page draws, of picture files that move: they last for as long as the page does
+  next::Float64   # when the page next looks different, in seconds after it was first shown: `at` itself while something changes all the time
 end
 
-"True when the page will look different a moment later: an animation of it runs, or a video in it plays"
+"True when the page will look different a moment later: an animation or a transition of it runs, a video in it plays, or a picture in it moves"
 moving(p::Page) = p.at !== nothing && p.at < p.until
+
+"""
+True when the page looks different `at` seconds after it was first shown
+than it's drawn: lay it out again then. A page whose only motion is a picture
+file like a GIF is due when that file shows its next picture.
+"""
+due(p::Page, at) = moving(p) && at >= p.next
 
 """
 Start or stop the <video> at the point `(x, y)` of the page, as a click on it
@@ -241,7 +278,9 @@ for a page that's as tall as its content. `base` is the address of the page.
 drawn as they are at that time. `moving(p)` says whether the page will look
 different a moment later, and `p.until` says when it stops changing. With no
 time, the page is drawn as it comes to rest. Give the same `clock`, a
-`Clock()`, each time that one document is laid out again as time passes.
+`Clock()`, each time that one document is laid out again as time passes: an
+animation that an element gets later starts then, and a style that changes
+takes the time that its `transition` says.
 """
 page(html::AbstractString; kw...) = page(document(html); kw...)
 
@@ -251,12 +290,17 @@ page(doc::Document; wide=700, zoom=1.0, load=src -> nothing, pictures=Pictures(l
   inner = wide / zoom
   window = high === nothing ? NaN : high / zoom
   seen = isnan(window) ? 800.0 : window   # what `100vh` is of, when there's no window
-  find = src -> pictures(resolve(from, src))
-  at === nothing || (at = Float64(at))
+  held, flicker, soon = Any[], 0.0, Inf   # the pictures of this moment, when the last picture file that moves stops, and when the first of them changes
+  find = src -> begin
+    found, stops, next = moment(pictures, resolve(from, src), at, held)
+    flicker, soon = max(flicker, stops), min(soon, next)
+    found
+  end
+  at === nothing || (at = max(0.0, Float64(at)))
   until = 0.0
   lay(across, extra) = begin
     make(containers) = begin
-      look = styles(doc, across; extra, high=seen, load=pictures.load, base=String(base), containers, at, clock)
+      look = styles(doc, across; extra, high=seen, load=pictures.load, base=String(base), containers, at, clock, commit=false)
       root = boxes(doc, look; pictures=find, films=src -> film(pictures, resolve(from, src)), at, wide=across, high=seen)
       until = look.until
       (look, root, layout!(root, across, doc.mode; high=window))
@@ -287,9 +331,12 @@ page(doc::Document; wide=700, zoom=1.0, load=src -> nothing, pictures=Pictures(l
       root, tall, l = lay(inner, css * FIT)
     end
   end
+  # The styles of the last time are the page's: the clock keeps what they noted
+  clock === nothing || commit!(clock)
   z(link::Paint.Link) = (left=link.left * zoom, top=link.top * zoom, wide=link.wide * zoom, tall=link.tall * zoom, url=link.url)
   z(w::Paint.Words) = (before=w.before, top=w.top * zoom, tall=w.tall * zoom, edges=w.edges .* zoom, letters=w.letters, from=w.from)
-  Page(ceil(inner * zoom), ceil(tall * zoom), Float64(zoom), l, zoom == 1 ? l.links : map(z, l.links), zoom == 1 ? l.words : map(z, l.words), pictures, root, at, until)
+  Page(ceil(inner * zoom), ceil(tall * zoom), Float64(zoom), l, zoom == 1 ? l.links : map(z, l.links), zoom == 1 ? l.words : map(z, l.words), pictures, root, at, max(until, flicker), held,
+       at === nothing ? Inf : at < until ? at : soon)
 end
 
 """

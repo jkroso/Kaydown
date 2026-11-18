@@ -1,7 +1,8 @@
 # Tests for a <canvas> that a page's scripts draw on: web/canvas.jl, which is
 # the surface and the drawing, and web/context.jl, which gives a script
 # `getContext('2d')`. Then a page with scripts that moves: an animation of its
-# CSS, and a video that a script starts. Run them with
+# CSS, a style that takes time to change, and a video that a script starts.
+# Run them with
 # `julia -O0 --project=. test/web_canvas_test.jl`. They use the fonts of this
 # Mac and no web. They run in the main task: see web/jsc.jl.
 
@@ -157,6 +158,27 @@ end
   @test Live.page!(l) !== first && 20 < left() < 100
   sleep(0.2)
   @test left() == 100 && !Web.moving(Live.page!(l)) && Live.page!(l) === Live.page!(l)
+  # The scripts are told when the animation is over, by its name
+  js("var ends = []; document.addEventListener('animationend', e => ends.push([e.target.id, e.animationName, e.elapsedTime, e instanceof Event].join()))")
+  Live.step!(l)
+  @test js("ends.join(';')") == "p,go,0.2,true"
+  Live.step!(l)
+  @test js("ends.length") == 1
+  # A style that a script changes takes the time that its `transition` says, and then the scripts are told
+  js("""var p = document.getElementById('p'); p.className = ''; p.style.transition = 'margin-left 0.2s linear'
+        p.ontransitionend = e => ends.push([e.propertyName, e.elapsedTime, e.bubbles].join())""")
+  @test left() == 100   # the animation is gone, and the margin takes its time to go back from where the animation left it
+  sleep(0.3)
+  @test left() == 0
+  js("p.style.marginLeft = '60px'")
+  first = Live.page!(l)
+  @test Web.moving(first) && first.words[1].edges[1] < 30
+  sleep(0.1)
+  @test 10 < left() < 60 && parse(Float64, replace(js("getComputedStyle(p).marginLeft"), "px" => "")) < 60
+  sleep(0.2)
+  @test left() == 60 && !Web.moving(Live.page!(l))
+  Live.step!(l)
+  @test js("ends.slice(1).join(';')") == "margin-left,0.2,true;margin-left,0.2,true" && js("new TransitionEvent('transitionend', {propertyName: 'x'}).propertyName") == "x"
   # A script starts, moves and stops a video, and draws its picture on a canvas
   @test js("[v.paused, v.duration, v.videoWidth, v.videoHeight, v.currentTime, v.readyState].join()") == "true,2,64,48,0,4"
   js("x.drawImage(v, 0, 0)")

@@ -115,7 +115,7 @@ Scripts(doc::Document; load=address -> nothing, base="", say=(level, text) -> no
   end
   JS.unhandled!(s.js, s.hooks["rejected"])
   # A <canvas> that a script can draw on: see context.jl
-  Drawing.start!(s.js; node=id -> element(s, id), load=address -> s.load(resolve(home(s), address)), now=() -> time() - s.started, changed=() -> (s.changed = true))
+  s.hooks["ending"] = Drawing.start!(s.js; node=id -> element(s, id), load=address -> s.load(resolve(home(s), address)), now=() -> time() - s.started, changed=() -> (s.changed = true))
   s
 end
 

@@ -20,8 +20,9 @@
 # that an element is in (@container), once `containers` says how big each is.
 # Fonts from the web (@font-face). Animations (@keyframes): with a time, each
 # element looks as its animations make it then. With none, an element shows
-# the end of an animation that stops and stays there. A `transition` does
-# nothing.
+# the end of an animation that stops and stays there. With a time and a
+# `Clock`, a style that changes from one layout to the next takes the time
+# that its `transition` says.
 
 @use "./dom" Element Text Document attr walk
 @use "./css" Declaration Rule Stylesheet Selector sheet read! declarations matches media container container_name pieces closing resolve selectors
@@ -2220,32 +2221,79 @@ struct Motion
   paused::Bool
 end
 
-"""
-When each animation of a page started. A page that's laid out again and again
-as time passes is given the same clock each time, so that an animation that an
-element gets later starts then, and not when the page did.
-"""
-struct Clock
-  began::IdDict{Any,Dict{String,Float64}}   # for an element, or an element and its part: when each of its animations was first seen
-  seen::IdDict{Any,Vector{String}}          # the ones that the styles being worked out have met
+"One change of an element's style that takes time: a `transition`"
+struct Run
+  field::Symbol      # the part of the style that changes
+  from::Any
+  to::Any
+  start::Float64     # how many seconds after the page was first shown the change was seen
+  long::Float64      # how many seconds it takes
+  delay::Float64     # how many seconds it waits first
+  ease::String       # how it speeds up and slows down, as CSS writes it
+  name::String       # the property, as CSS names it
 end
-Clock() = Clock(IdDict{Any,Dict{String,Float64}}(), IdDict{Any,Vector{String}}())
+const NO_RUNS = Run[]
 
-"When the animation `name` of `who` started: now, `at` seconds after the page was first shown, unless the clock has met it before"
-started!(k::Clock, who, name, at) = begin
-  push!(get!(() -> String[], k.seen, who), name)
-  get!(get!(() -> Dict{String,Float64}(), k.began, who), name, at)
+"What a clock keeps of an element from one time that its styles are worked out to the next"
+struct Shown
+  style::Any         # the element's style as it is with no change under way
+  runs::Vector{Run}  # the changes that are under way
+  busy::Bool         # an animation of the element was running
 end
 
-"Forget the animations that the page has no more, so that one that comes back starts again"
-sweep!(k::Clock) = begin
-  for (who, names) in collect(k.began)
-    seen = get(k.seen, who, nothing)
-    seen === nothing ? delete!(k.began, who) : filter!(kv -> kv.first in seen, names)
+"""
+What a page that changes with time keeps from one layout to the next: when
+each of its animations started, and each element's style the last time, with
+the changes of it that take time (`transition`). A page that's laid out again
+and again as time passes is given the same clock each time. So an animation
+that an element gets later starts then, and a style that changes takes the
+time that its `transition` says.
+
+The styles of a page can be worked out several times for one layout. What
+the clock keeps changes only when `commit!` is called, after the last time.
+`events!` gives what ended since it was last asked, for a page's scripts.
+"""
+mutable struct Clock
+  began::IdDict{Any,Dict{String,Tuple{Float64,Bool}}}   # for an element, or an element and its part: when each of its animations was first seen, and whether its end was told
+  shown::IdDict{Any,Shown}
+  ended::Vector{Tuple{Any,String,String,Float64}}       # what ended: the element, "animationend" or "transitionend", the animation's or the property's name, and how long it took
+  nextbegan::IdDict{Any,Dict{String,Tuple{Float64,Bool}}}   # what these three will be once the styles that are being worked out are the page's
+  nextshown::IdDict{Any,Shown}
+  nextended::Vector{Tuple{Any,String,String,Float64}}
+end
+Clock() = Clock(IdDict{Any,Dict{String,Tuple{Float64,Bool}}}(), IdDict{Any,Shown}(), Tuple{Any,String,String,Float64}[],
+                IdDict{Any,Dict{String,Tuple{Float64,Bool}}}(), IdDict{Any,Shown}(), Tuple{Any,String,String,Float64}[])
+
+"Start to work the styles out again: what the last time noted and didn't commit is dropped"
+again!(k::Clock) = (empty!(k.nextbegan); empty!(k.nextshown); empty!(k.nextended); k)
+
+"""
+When the animation `name` of `who` started: now, `at` seconds after the page
+was first shown, unless the clock has met it before. With `over`, the
+animation has ended, and that's noted for `events!` the first time.
+"""
+started!(k::Clock, who, name, at; over=NaN) = begin
+  start, told = get(get(k.began, who, NO_STARTS), name, (Float64(at), false))
+  if !isnan(over) && !told
+    told = true
+    push!(k.nextended, (who, "animationend", String(name), Float64(over)))
   end
-  empty!(k.seen)
+  get!(() -> Dict{String,Tuple{Float64,Bool}}(), k.nextbegan, who)[name] = (start, told)
+  start
+end
+const NO_STARTS = Dict{String,Tuple{Float64,Bool}}()
+
+"The styles that were just worked out are the page's: keep what they noted. An animation that the page has no more is forgotten, so one that comes back starts again."
+commit!(k::Clock) = begin
+  k.began, k.nextbegan = k.nextbegan, IdDict{Any,Dict{String,Tuple{Float64,Bool}}}()
+  k.shown, k.nextshown = k.nextshown, IdDict{Any,Shown}()
+  append!(k.ended, k.nextended)
+  empty!(k.nextended)
   k
 end
+
+"What ended since this was last asked: for each, the element, \"animationend\" or \"transitionend\", the animation's or the property's name, and how many seconds it took"
+events!(k::Clock) = (out = copy(k.ended); empty!(k.ended); out)
 
 const WAYS = Dict("normal" => :normal, "reverse" => :reverse, "alternate" => :alternate, "alternate-reverse" => :alternate_reverse)
 const FILLS = Dict("none" => :none, "forwards" => :forwards, "backwards" => :backwards, "both" => :both)
@@ -2572,20 +2620,189 @@ Give `s` what its animations make of it `at` seconds after the page was first
 shown, and say when the last of them stops: Inf for one that never does, and
 0 with none. With no time, an animation that ends and stays is shown as it
 ends, and the others show nothing: that's the page as it comes to rest.
-`start(name)` gives when an animation of the element started.
+`start(name, over)` gives when an animation of the element started, and is
+told how many seconds the animation took once it's over: NaN before that.
 """
 move!(s::Style, found::Vector{Found}, frames, c::Context, parent::Style, at, start) = begin
   until = 0.0
   for m in motions(found, s.vars)
     steps = get(frames, m.name, nothing)
     steps === nothing && continue
-    began = start(m.name)
-    m.paused || m.long <= 0 || (until = max(until, began + m.delay + m.long * m.count))
+    began = start(m.name, NaN)
+    stops = began + m.delay + m.long * m.count
+    m.paused || m.long <= 0 || (until = max(until, stops))
+    # An animation that's over is noted, for the page's scripts
+    at === nothing || m.paused || m.long <= 0 || at < stops || start(m.name, m.long * m.count)
     p = progress(m, at === nothing ? Inf : m.paused ? 0.0 : at - began)
     p === nothing || pose!(s, steps, p, m.ease, c, parent)
   end
   until
 end
+
+# --- changes that take time ---------------------------------------------------------------
+
+"What a `transition` says of one property: how long a change of it takes"
+struct Glide
+  what::String       # the property, or "all"
+  long::Float64
+  delay::Float64
+  ease::String
+end
+const NO_GLIDES = Glide[]
+
+"The transitions that the declarations `found` give an element. `vars` holds the element's variables."
+glides(found::Vector{Found}, vars) = begin
+  whats, longs, delays, eases = String[], Float64[], Float64[], String[]
+  said = false
+  list(v) = [String(strip(p)) for p in pieces(v, ',')]
+  for x in found
+    name = x[6]
+    (startswith(name, "transition") || startswith(name, "-webkit-transition")) || continue
+    name[1] == '-' && (name = name[9:end])
+    value = x[7]
+    occursin("var(", value) && (value = substitute(value, n -> get(vars, n, nothing)))
+    value === nothing && continue
+    said = true
+    if name == "transition"
+      foreach(empty!, (whats, longs, delays, eases))
+      for one in list(value)
+        what, times, ease = "all", Float64[], "ease"
+        for word in terms(one)
+          w = lowercase(word)
+          (t = seconds(w)) !== nothing ? push!(times, t) : iseasing(w) ? (ease = w) : (what = w)
+        end
+        push!(whats, what); push!(longs, get(times, 1, 0.0)); push!(delays, get(times, 2, 0.0)); push!(eases, ease)
+      end
+    elseif name == "transition-property"
+      whats = lowercase.(list(value))
+    elseif name == "transition-duration"
+      longs = [something(seconds(lowercase(v)), 0.0) for v in list(value)]
+    elseif name == "transition-delay"
+      delays = [something(seconds(lowercase(v)), 0.0) for v in list(value)]
+    elseif name == "transition-timing-function"
+      eases = [lowercase(v) for v in list(value)]
+    end
+  end
+  said || return NO_GLIDES
+  isempty(whats) && push!(whats, "all")
+  pick(v, i, default) = isempty(v) ? default : v[mod1(i, length(v))]
+  [Glide(w, pick(longs, i, 0.0), pick(delays, i, 0.0), pick(eases, i, "ease")) for (i, w) in enumerate(whats) if w != "none"]
+end
+
+# The parts of a style that a property with several parts changes, where `expand` can't say
+const SEVERAL = Dict("background" => [:background, :image, :bgposition, :bgsize], "border" => [:border, :bordercolor], "border-color" => [:bordercolor],
+                     "border-width" => [:border], "border-radius" => [:radius, :radiusv], "outline" => [:outline, :outlinecolor, :outlineoffset],
+                     "font" => [:size, :weight, :lineheight], "flex" => [:grow, :shrink, :basis], "text-decoration" => [:decocolor, :decothick],
+                     "inset" => [:inset], "margin" => [:margin], "padding" => [:padding], "gap" => [:gap])
+const EVERY_PART = Symbol[f for f in fieldnames(Style) if f != :vars]
+const PARTS = Dict{String,Vector{Symbol}}()
+
+"The parts of a style that the property `name` changes: all of them for `all`"
+parts_of(name::AbstractString) = name == "all" ? EVERY_PART : get!(PARTS, name) do
+  haskey(PROPS, name) && return Symbol[PROPS[name].field]
+  haskey(SEVERAL, name) && return SEVERAL[name]
+  longer = try longhands!(Pair{String,String}[], name, "initial") catch; Pair{String,String}[] end
+  unique!(Symbol[PROPS[n].field for (n, _) in longer if haskey(PROPS, n)])
+end
+
+"The name that CSS has for the part `field` of a style, for the side of it that differs between `old` and `new`"
+property(field::Symbol, old, new) = begin
+  side = old isa Tuple && new isa Tuple && length(old) == length(new) ? something(findfirst(i -> !same(old[i], new[i]), eachindex(old)), 0) : 0
+  names = sort!([n for (n, p) in PROPS if p.field == field && (p.side == 0 || p.side == side) && n[1] != '-']; by=n -> (length(n), n))
+  isempty(names) ? String(field) : names[1]
+end
+
+same(a, b) = a === b || isequal(a, b)
+
+"The value of a change that's under way, `t` seconds after it started to move"
+value(r::Run, t) = t <= 0 ? r.from : r.field == :visible ? (r.from || r.to) : mix(r.from, r.to, eased(r.ease, t / r.long))
+
+# The parts of a style that are the colour of the text when nothing else is said, and whether the value `v` of one is that colour
+const FOLLOWERS = (:bordercolor, :outlinecolor, :colrulecolor)
+follows(v, color) = v isa Tuple ? all(x -> x == color, v) : v == color
+
+# What says that every inherited part of a parent's style may be moving: the parent has an animation
+const EVERY = Symbol[:every]
+
+"""
+Give `s`, the style that was just worked out for `who`, the changes of it that
+take time, `at` seconds after the page was first shown. A part of the style
+that isn't what the clock `k` saw the last time starts to change when a
+`transition` of the element is for it, from what it looks like now. `found`
+holds the element's declarations, and `parent` is its parent's style as it
+looks now. `moving` names the parts of the parent's style that are changing:
+what an element only has from its parent is no change of its own. `busy` says
+that an animation of the element runs.
+
+Gives the parts that are changing for what's in the element, and when the last
+of the changes ends.
+"""
+change!(k::Clock, s::Style, parent::Style, found::Vector{Found}, who, moving, busy::Bool, at) = begin
+  before = get(k.shown, who, nothing)
+  runs = before === nothing ? NO_RUNS : before.runs
+  specs = any(x -> startswith(x[6], "transition") || startswith(x[6], "-webkit-transition"), found) ? glides(found, s.vars) : NO_GLIDES
+  if before !== nothing && before.style !== s && !(isempty(specs) && isempty(runs))
+    old = before.style::Style
+    # What an animation changes is no change that takes time: not while it runs, and not at the layout that first sees it over
+    still = busy || before.busy
+    kept = Run[]
+    # A change that's under way goes on while what it goes to is still the style
+    for r in runs
+      same(r.to, getfield(s, r.field)) && push!(kept, r)
+    end
+    if !still && !isempty(specs)
+      seen = Set{Symbol}()
+      for spec in Iterators.reverse(specs), f in parts_of(spec.what)
+        f in seen && continue   # of two that are for one property, the later one counts
+        push!(seen, f)
+        from, to = getfield(old, f), getfield(s, f)
+        same(from, to) && continue
+        # What the element only has from its parent changes with the parent
+        f in INHERITED && (moving === EVERY || f in moving) && same(to, getfield(parent, f)) && continue
+        # A border or a line in the colour of the text changes with the text
+        f in FOLLOWERS && s.color != old.color && follows(to, s.color) && follows(from, old.color) && continue
+        i = findfirst(r -> r.field == f, runs)
+        i === nothing || same(runs[i].to, to) && continue
+        spec.long > 0 || continue
+        # Two values with nothing between them change at once. Whether an element shows is the one that waits.
+        f == :visible || (mid = mix(from, to, 0.5); !same(mid, from) && !same(mid, to)) || continue
+        i === nothing || (from = value(runs[i], at - runs[i].start - runs[i].delay))
+        push!(kept, Run(f, from, to, at, spec.long, spec.delay, spec.ease, property(f, from, to)))
+      end
+    end
+    runs = kept
+  end
+  until = 0.0
+  target = s
+  going = moving
+  if !isempty(runs)
+    target = copy(s)
+    going = moving === EVERY ? EVERY : Symbol[moving; [r.field for r in runs]]
+    left = Run[]
+    for r in runs
+      t = at - r.start - r.delay
+      if t >= r.long
+        push!(k.nextended, (who, "transitionend", r.name, r.long))
+      else
+        setfield!(s, r.field, value(r, t))
+        until = max(until, r.start + r.delay + r.long)
+        push!(left, r)
+      end
+    end
+    runs = left
+    # A border or a line in the colour of the text has the colour that the text has now
+    if s.color != target.color
+      for f in FOLLOWERS
+        v = getfield(target, f)
+        follows(v, target.color) && setfield!(s, f, v isa Tuple ? map(_ -> s.color, v) : s.color)
+      end
+    end
+  end
+  busy && (going = EVERY)
+  k.nextshown[who] = Shown(target, runs, busy)
+  (going, until)
+end
+const NOT_MOVING = Symbol[]
 
 "The faces of a font that an @font-face of the page gives the family `name`: for each, what it says"
 faces_of(sheet::Stylesheet, name) = [f for f in sheet.faces if lowercase(strip(strip(get(f, "font-family", "")), ['"', '\''])) == lowercase(name)]
@@ -2650,9 +2867,13 @@ anything.
 `at` is how many seconds ago the page was first shown: each element looks as
 its animations make it then, and `look.until` says when the last of them
 stops. With no time, the page is as it comes to rest. `clock` is a `Clock`
-for a page whose styles are worked out again and again as time passes.
+for a page whose styles are worked out again and again as time passes: with
+one, a style that changes takes the time that its `transition` says. With
+`commit=false`, the clock keeps nothing of these styles until `commit!` is
+called: for the styles of one layout that are worked out several times.
 """
-styles(doc::Document, wide; extra="", high=800, load=address -> nothing, base="", containers=nothing, at=nothing, clock=nothing) = begin
+styles(doc::Document, wide; extra="", high=800, load=address -> nothing, base="", containers=nothing, at=nothing, clock=nothing, commit=true) = begin
+  clock === nothing || again!(clock)
   text(address) = begin
     found = load(address)
     found === nothing ? nothing : found isa AbstractString ? String(found) : String(copy(found))
@@ -2687,8 +2908,13 @@ styles(doc::Document, wide; extra="", high=800, load=address -> nothing, base=""
   # Give `s` the declarations `found`: the ones that win come last. It gives whether the top and the bottom margin are the browser's own.
   apply!(s::Style, found::Vector{Found}, c::Context, parent::Style, who) = begin
     sort!(found; alg=MergeSort, by=x -> x[1:5])
-    start(name) = clock === nothing ? 0.0 : started!(clock, who, name, something(at, 0.0))
-    move() = (look.until = max(look.until, move!(s, found, css.frames, c, parent, at, start)); nothing)
+    start(name, over) = clock === nothing ? 0.0 : started!(clock, who, name, something(at, 0.0); over)
+    move() = begin
+      stops = move!(s, found, css.frames, c, parent, at, start)
+      look.until = max(look.until, stops)
+      at !== nothing && at < stops && (animated[] = true)
+      nothing
+    end
     # `revert` takes away what the page says of a property, so that the browser's own stays
     for name in unique(x[6] for x in found if lowercase(strip(x[7])) == "revert")
       last = findlast(x -> x[6] == name, found)
@@ -2747,7 +2973,15 @@ styles(doc::Document, wide; extra="", high=800, load=address -> nothing, base=""
     (top, bottom)
   end
   found = Found[]
-  visit(e::Element, parent::Style) = begin
+  animated = Ref(false)   # an animation of the element whose style is being worked out runs
+  timed = clock !== nothing && at !== nothing
+  # Give the style `s` of `who` the changes of it that take time, and give the parts of it that are changing
+  glide(s, parent, declared, who, moving) = begin
+    going, stops = change!(clock, s, parent, declared, who, moving, animated[], at)
+    look.until = max(look.until, stops)
+    going
+  end
+  visit(e::Element, parent::Style, moving=NOT_MOVING) = begin
     c = Context(wide, rootsize[], quirks, high)
     s = child(parent)
     empty!(found)
@@ -2778,18 +3012,22 @@ styles(doc::Document, wide; extra="", high=800, load=address -> nothing, base=""
       # A variable that the page gives a first value has it from the top of the page down
       s.vars = merge(css.props, s.vars)
     end
+    animated[] = false
     top, bottom = apply!(s, found, c, parent, e)
     settle!(s, parent, e.tag)
     e.tag in LOOSE && (s.loose = (top, bottom))
     isempty(css.faces) || s.family === parent.family || (s.family = String[family(name) for name in s.family])
+    timed && (moving = glide(s, parent, found, e, moving))
     e.parent === nothing && (rootsize[] = s.size)
     look.styles[e] = s
     if parts !== nothing
       for (part, declared) in parts
         ps = child(s)
+        animated[] = false
         apply!(ps, declared, c, s, (e, part))
         settle!(ps, s)
         isempty(css.faces) || ps.family === s.family || (ps.family = String[family(name) for name in ps.family])
+        timed && glide(ps, s, declared, (e, part), moving)
         if part == :marker
           look.marker[e] = ps
         elseif !(lowercase(ps.content) in ("", "none", "normal")) && ps.display != :none
@@ -2798,7 +3036,7 @@ styles(doc::Document, wide; extra="", high=800, load=address -> nothing, base=""
       end
     end
     for k in e.children
-      k isa Element && visit(k, s)
+      k isa Element && visit(k, s, moving)
     end
   end
   visit(doc.root, Style())
@@ -2806,6 +3044,6 @@ styles(doc::Document, wide; extra="", high=800, load=address -> nothing, base=""
   top = look.styles[doc.root]
   top.overflow == :visible && haskey(look.styles, doc.body) && (look.styles[doc.body].overflow = :visible)
   top.overflow = :visible
-  clock === nothing || sweep!(clock)
+  clock === nothing || !commit || commit!(clock)
   look
 end

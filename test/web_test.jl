@@ -2,8 +2,8 @@
 # HTML and CSS, the style that each element gets, where layout puts each box,
 # and what the page's links and words are. The second half is the HTML and CSS
 # of today: flex boxes, grids, variables, what CSS makes, boxes with a place
-# of their own, forms and SVG. The last part is what moves: animations and
-# video. Run them with
+# of their own, forms and SVG. The last part is what moves: animations,
+# transitions, video and pictures that move. Run them with
 # `julia -O0 --project=. test/web_test.jl`. They use the fonts of this Mac and
 # no web.
 
@@ -18,6 +18,7 @@
 @use "../web" => Web
 @use "../web/paint" => Paint
 @use "../web/svg" => Svg
+@use "../web/video" => Film
 
 "The first element of `e`'s tree that `ok` is true of"
 function element(ok, e::Dom.Element)
@@ -539,6 +540,7 @@ end
   # The page says whether it still moves, and until when
   one(at) = Web.page("""<!DOCTYPE html><style>@keyframes go { to { margin-left: 100px } } p { margin: 0; animation: go 2s linear 0.5s forwards }</style><body style="margin:0"><p>x</p></body>"""; wide=300, at)
   @test one(1.5).until == 2.5 && Web.moving(one(1.5)) && one(1.5).words[1].edges[1] == 50 && !Web.moving(one(3.0)) && one(3.0).words[1].edges[1] == 100
+  @test one(1.5).next == 1.5 && Web.due(one(1.5), 1.6) && !Web.due(one(3.0), 4.0) && one(nothing).next == Inf   # an animation changes all the time
   @test one(nothing).until == 2.5 && !Web.moving(one(nothing)) && one(nothing).words[1].edges[1] == 100
   @test Styles.styles(doc, 400; at=0.0).until == Inf && Web.page("<p>still</p>"; at=1.0).until == 0
   # An animation that an element gets later starts then, when the same clock is given each time
@@ -584,4 +586,109 @@ end
   # A video that waits with a poster shows the poster
   poster = Web.page("""<!DOCTYPE html><body style="margin:0"><video src="clip.mp4" poster="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='20' height='10'><rect width='20' height='10' fill='lime'/></svg>"></video></body>"""; wide=300, load)
   @test poster.tall >= 10 && poster.tall < 48 && pixel(poster, 5, 5)[2] > 200
+end
+
+@testset "changes that take time" begin
+  # A style that changes from one layout to the next takes the time that its `transition` says
+  doc = Dom.document("""<!DOCTYPE html><style>
+    #a { width: 100px; opacity: 1; color: red; transition: width 1s linear, opacity 2s linear 0.5s } #a.on { width: 300px; opacity: 0; color: blue }
+    #b { transition: all 1s linear; margin-left: 0; display: block } #b.on { margin-left: 40px; visibility: hidden; background: #000; display: flex }
+    #c { color: black; border: 1px solid; transition: color 1s linear } #c.on { color: white } #k { transition: all 1s linear }
+    </style><body style="margin:0"><div id=a></div><div id=b></div><div id=c><span id=k>x</span></div></body>""")
+  clock = Styles.Clock()
+  look(at) = Styles.styles(doc, 400; at, clock)
+  s(at, id) = look(at)[named(doc, id)]
+  switch(on) = foreach(id -> on ? (named(doc, id).attrs["class"] = "on") : delete!(named(doc, id).attrs, "class"), ("a", "b", "c"))
+  told() = [(Dom.attr(e, "id"), type, name, long) for (e, type, name, long) in Styles.events!(clock)]
+  @test Styles.px(s(0.0, "a").width) == 100 && look(1.0).until == 0   # nothing changes at the first layout, or while the style stays
+  switch(true)
+  @test Styles.px(s(2.0, "a").width) == 100 && look(2.0).until == 4.5 && s(2.0, "a").color == 0xff0000ff   # it starts from what it was, and a property with no transition changes at once
+  a = s(2.25, "a")
+  @test Styles.px(a.width) == 150 && a.opacity == 1 && isempty(told())   # the opacity waits half a second first
+  # `all` is for every property with values between two. One with none changes at once.
+  b = s(2.5, "b")
+  @test b.display == :flex && Styles.px(b.margin[4]) == 20 && b.background == 0x80000000
+  @test s(3.5, "a").opacity == 0.5 && Styles.px(s(3.5, "a").width) == 300
+  # What ended is told once, with the property's name
+  ended = [("a", "transitionend", "width", 1.0), ("b", "transitionend", "background-color", 1.0), ("b", "transitionend", "margin-left", 1.0),
+           ("b", "transitionend", "visibility", 1.0), ("c", "transitionend", "color", 1.0)]
+  @test sort(told()) == ended && isempty(told())
+  # Back again, from where each has got to
+  switch(false)
+  b = s(4.0, "b")
+  @test Styles.px(b.margin[4]) == 40 && b.background == 0xff000000 && Styles.px(s(4.5, "b").margin[4]) == 20
+  @test s(4.5, "a").opacity == 0.25 && near(s(5.5, "a").opacity, 0.625) && Styles.px(s(5.5, "a").width) == 100
+  look(8.0)
+  @test sort(told()) == sort([ended; ("a", "transitionend", "opacity", 2.0)])   # the change of the opacity that never got to its end isn't told
+  # Whether an element shows changes last when it hides, and first when it shows
+  switch(true)
+  @test s(9.0, "b").visible && s(9.5, "b").visible && !s(10.0, "b").visible
+  switch(false)
+  @test !s(11.0, "b").visible && s(11.1, "b").visible
+  # What an element only has from its parent changes with the parent, and so does a border in the colour of the text
+  look(13.0)
+  told()
+  switch(true)
+  look(14.0)
+  mid = look(14.5)
+  @test mid[named(doc, "c")].color == 0xff808080 && mid[named(doc, "k")].color == 0xff808080 && mid[named(doc, "c")].bordercolor[1] == 0xff808080
+  look(16.0)
+  @test all(x -> x[1] != "k", told())
+  # The styles of one layout can be worked out several times: the clock keeps what the last time noted, once it's committed
+  switch(false)
+  Styles.styles(doc, 400; at=20.0, clock, commit=false)
+  @test Styles.px(Styles.styles(doc, 400; at=20.5, clock, commit=false)[named(doc, "a")].width) == 300
+  Styles.commit!(clock)
+  @test Styles.px(s(21.0, "a").width) == 200
+  # An animation's end is told once, and what an animation changes is no change that takes time
+  moves = Dom.document("""<!DOCTYPE html><style>@keyframes go { to { margin-left: 100px } } p { margin: 0; transition: all 1s linear; animation: go 1s linear forwards }</style><p id=p>x</p>""")
+  clock = Styles.Clock()
+  left(at) = Styles.px(Styles.styles(moves, 400; at, clock)[named(moves, "p")].margin[4])
+  @test left(0.0) == 0 && left(0.5) == 50 && left(1.5) == 100 && left(2.0) == 100
+  @test [(Dom.attr(e, "id"), type, name, long) for (e, type, name, long) in Styles.events!(clock)] == [("p", "animationend", "go", 1.0)] && isempty(Styles.events!(clock))
+  # A page keeps time with a clock, and a page with none changes at once
+  flip = Dom.document("""<!DOCTYPE html><style>p { margin: 0; transition: margin 1s linear } .on { margin-left: 80px }</style><body style="margin:0"><p id=p>x</p></body>""")
+  clock = Styles.Clock()
+  Web.page(flip; wide=300, at=0.0, clock)
+  named(flip, "p").attrs["class"] = "on"
+  p = Web.page(flip; wide=300, at=1.0, clock)
+  @test p.words[1].edges[1] == 0 && p.until == 2 && Web.moving(p) && Web.page(flip; wide=300, at=1.5, clock).words[1].edges[1] == 40
+  @test Web.page(flip; wide=300, at=1.5).words[1].edges[1] == 80 && Web.page(flip; wide=300).words[1].edges[1] == 80
+  # How a transition is written
+  found(css) = Styles.glides(Styles.Found[(false, 2, 0, (0, 0, 0), i, String(n), String(v)) for (i, (n, v)) in enumerate(css)], Dict{String,String}())
+  g = found(["transition" => "opacity .3s ease-in-out 100ms, transform 1s cubic-bezier(0.1, 0.7, 1, 0.1)"])
+  @test [(x.what, x.long, x.delay, x.ease) for x in g] == [("opacity", 0.3, 0.1, "ease-in-out"), ("transform", 1.0, 0.0, "cubic-bezier(0.1, 0.7, 1, 0.1)")]
+  g = found(["transition-property" => "width, height", "-webkit-transition-duration" => "2s"])
+  @test [(x.what, x.long) for x in g] == [("width", 2.0), ("height", 2.0)] && isempty(found(["transition" => "none"])) && found(["transition-duration" => "1s"])[1].what == "all"
+  @test Styles.parts_of("margin-left") == [:margin] && :bordercolor in Styles.parts_of("border") && Styles.property(:margin, Styles.sides(Styles.ZERO), (Styles.ZERO, Styles.ZERO, Styles.ZERO, Styles.Len(4))) == "margin-left"
+end
+
+@testset "pictures that move" begin
+  # The test's GIF is 40 by 20: a red square at the left, in the middle and at the right, for half a second each, again and again
+  gif, png = read(joinpath(@__DIR__, "web_moving.gif")), read(joinpath(@__DIR__, "web_moving.png"))
+  r = Film.reel(gif)
+  @test (r.wide, r.high) == (40, 20) && r.starts == [0.0, 0.5, 1.0] && r.long == 1.5 && r.runs == Inf && Film.stops(r) == Inf
+  @test Film.frame(r, 0.2) === r.first && Film.frame(r, 0.7) !== r.first && Film.frame(r, 0.7) === Film.frame(r, 0.9) && Film.frame(r, 1.7) === r.first
+  # The PNG shows the same, twice, and then it stops at its last picture
+  twice = Film.reel(png)
+  @test twice.runs == 2 && Film.stops(twice) == 3 && Film.frame(twice, 2.7) === Film.frame(twice, 99.0) && Film.frame(twice, 1.6) === twice.first
+  # A file with one picture is no such file, and neither is nonsense
+  @test Film.moves(gif) && Film.moves(png) && !Film.moves(Vector{UInt8}("<svg xmlns='http://www.w3.org/2000/svg'/>")) && Film.reel(Vector{UInt8}("GIF89a and then nonsense")) === nothing
+  # In a page, a picture that moves shows its picture of the page's time: as an <img>, and behind a box
+  load(src) = src == "m.gif" ? gif : src == "m.png" ? png : nothing
+  pictures = Web.Pictures(load)
+  html = """<!DOCTYPE html><body style="margin:0"><img src="m.gif" style="display:block"><div style="width:40px;height:20px;background:url(m.png)"></div></body>"""
+  red((r, g, b)) = r > 200 && g < 60
+  p = Web.page(html; wide=100, pictures, at=0.7)
+  @test p.tall == 40 && p.until == Inf && Web.moving(p) && red(pixel(p, 20, 10)) && !red(pixel(p, 5, 10)) && red(pixel(p, 20, 30)) && !red(pixel(p, 35, 30))
+  later = Web.page(html; wide=100, pictures, at=1.2)
+  @test red(pixel(later, 35, 10)) && red(pixel(later, 35, 30)) && red(pixel(p, 20, 10))   # the page of the earlier moment still draws its own pictures
+  # The page is due again when a picture changes, and not before
+  @test p.next == 1.0 && !Web.due(p, 0.9) && Web.due(p, 1.0) && Film.after(r, 1.2) == 1.5 && Film.after(twice, 2.7) == 3 && Film.after(twice, 3.5) == Inf
+  # With no time, it shows its first picture, and the page says that it would move
+  rest = Web.page(html; wide=100, pictures)
+  @test red(pixel(rest, 5, 10)) && !Web.moving(rest) && rest.until == Inf
+  # One that stops lets the page come to rest
+  once = Web.page("""<!DOCTYPE html><body style="margin:0"><img src="m.png"></body>"""; wide=100, pictures, at=5.0)
+  @test once.until == 3 && !Web.moving(once) && red(pixel(once, 35, 10))
 end

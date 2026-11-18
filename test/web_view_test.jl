@@ -130,4 +130,20 @@ end
   click!(fw, (r.left + 20px, r.top + 20px))
   frame(fw)
   @test !Web.moving(film.page) && arrows() == 1
+  # A picture that moves, like a GIF, shows its next picture when that's due. The test's GIF changes each half second.
+  gif = read(joinpath(@__DIR__, "web_moving.gif"))
+  flick = View(html="""<!DOCTYPE html><body style="margin:0"><img src="m.gif"></body>""", wide=300px, load=src -> src == "m.gif" ? gif : nothing)
+  gw = Window(flick, size=(300px, 100px))
+  frame(gw)
+  @test Web.moving(flick.page) && flick.page.next == 0.5 && length(flick.page.held) == 1
+  # The first frame of a window takes long, so the test goes on from a moment that's well before the GIF's next change
+  now() = time() - flick.showing.since
+  frame(gw)
+  flick.page.next - now() < 0.2 && (sleep(0.25); frame(gw))
+  shown = flick.page
+  frame(gw)
+  @test flick.page === shown   # nothing has changed yet, so the page isn't laid out again
+  sleep(0.55)
+  frame(gw)
+  @test flick.page !== shown && flick.page.next == shown.next + 0.5 && flick.page.held[1] !== shown.held[1]
 end

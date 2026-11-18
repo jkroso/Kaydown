@@ -12,9 +12,15 @@
 #
 # These environment variables change how it's built:
 #
-#   APP_SIGN=-           who signs the app. `-` signs it for this Mac only. The name of a
-#                        certificate in your keychain, like "Developer ID Application",
-#                        signs it so that other Macs open it. release.jl sets this.
+#   APP_SIGN=...         who signs the app: the name of a certificate in your keychain, like
+#                        "Developer ID Application". It's your Developer ID certificate if
+#                        your keychain has one. `-` signs it for this Mac only, and each
+#                        build is then a new app to macOS, so the Keychain asks for your
+#                        password again before the app can read its email passwords.
+#   APP_RELEASE=0        1 signs each program and library with a time stamp and the hardened
+#                        runtime, as Apple needs before it notarises the app. release.jl sets
+#                        this. Without it, the app is marked as built on this Mac, and it
+#                        doesn't update itself. See update.jl.
 #   APP_CPU=apple-m1     the CPUs to compile for. apple-m1 runs on every Apple Silicon Mac.
 #   APP_STRIP=metadata   leave out docstrings and line numbers. Add `ir` to leave out the
 #                        code Julia would need to compile anything new while the app runs.
@@ -36,7 +42,16 @@ const cpu = option("CPU", "apple-m1")
 const strips = split(option("STRIP", "metadata"), ',', keepempty=false)
 const trim = option("TRIM", "no")
 const prune = option("PRUNE", "1") == "1"
-const signer = option("SIGN", "-")
+
+"The name of the Developer ID certificate in your keychain, or `-` when there's none"
+developer_id() = try
+  m = match(r"\"(Developer ID Application: [^\"]+)\"", read(`security find-identity -v -p codesigning`, String))
+  m === nothing ? "-" : String(m[1])
+catch
+  "-"
+end
+const signer = option("SIGN", developer_id())
+const releasing = option("RELEASE", "0") == "1"
 
 """
 A new folder with a copy of `dir`'s project files and nothing else. JuliaC
@@ -211,6 +226,12 @@ notarised it. Apple only notarises an app if each program and library in it is
 signed, with a time stamp and the hardened runtime. entitlements.plist lists
 what the hardened runtime must still allow: Julia compiles code while the app
 runs, and the app records from the microphone.
+
+A build that isn't for a release gets no time stamp or hardened runtime, as only
+Apple checks those. Its certificate still matters here: the Keychain and macOS's
+privacy settings know an app by its signature. A certificate's signature names
+the app and its developer, so each new build is the same app to them. A build
+signed with `-` is known only by its own contents, so each one is a new app.
 """
 sign(app) = begin
   signer == "-" && return run(`codesign --force --deep --sign - $app`)
@@ -219,7 +240,8 @@ sign(app) = begin
     link = joinpath(dir, name)
     islink(link) && !ispath(link) && rm(link)
   end
-  how = `--force --timestamp --options runtime --entitlements $(joinpath(@__DIR__, "entitlements.plist")) --sign $signer`
+  how = releasing ? `--force --timestamp --options runtime --entitlements $(joinpath(@__DIR__, "entitlements.plist")) --sign $signer` :
+                    `--force --timestamp=none --sign $signer`
   parts = filter(compiled, files_in(joinpath(app, "Contents")))
   println("Signing ", length(parts), " programs and libraries as ", signer)
   # The deepest first, since a folder's signature covers what's in it

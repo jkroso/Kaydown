@@ -328,6 +328,19 @@ end
   @test Update.rule(local_build) == ""
   @test startswith(Update.says(local_build), "This copy of Ladder was built on this Mac.")
   @test Update.tick!(local_build) == Inf
+  # An app that app/build.jl built here with a certificate: its rule names the developer, but the mark in its Info.plist keeps a release out
+  marked = installed("1.0.0", feed)
+  plist = joinpath(marked.app, "Contents", "Info.plist")
+  signed_by_name() = run(pipeline(`codesign --force --sign - --identifier $NAME -r=$("designated => $RULE") $(marked.app)`, stderr=devnull))
+  signed_by_name()
+  marked.rule = nothing
+  @test Update.rule(marked) == RULE
+  run(`plutil -insert LadderBuiltHere -bool true $plist`)
+  signed_by_name()
+  marked.rule = nothing
+  @test Update.rule(marked) == ""
+  @test startswith(Update.says(marked), "This copy of Ladder was built on this Mac.")
+  @test Update.tick!(marked) == Inf
   # An app whose developer signed it has a rule that says who that is
   @test Update.rule(Update.Updater("/System/Applications/Calculator.app", v"1")) == "identifier \"com.apple.calculator\" and anchor apple"
   # An app in a folder that Ladder can't change

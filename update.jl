@@ -20,9 +20,10 @@
 # `macos` is the oldest macOS that the version runs on. The zip file holds
 # Ladder.app. release.jl makes both files, and publishes them in `REPO`.
 #
-# Only the Ladder app updates itself, and only a copy that was signed with a
-# Developer ID certificate, as release.jl signs it. Ladder run from its
-# source doesn't, and nor does an app that app/build.jl signed for one Mac.
+# Only the Ladder app updates itself, and only a copy that release.jl made.
+# Ladder run from its source doesn't, and nor does an app that app/build.jl
+# built on this Mac. That one has `LadderBuiltHere` in its Info.plist, or is
+# signed for one Mac.
 #
 # A new version must pass the designated requirement of the app that's
 # running. That is the rule that macOS reads from an app's signature, and it
@@ -108,19 +109,23 @@ end
 
 """
 The rule that a new version's signature must pass: the designated requirement
-of the app that's running. It's an empty string for an app that's signed for
-one Mac. The rule of such an app names that one build, so no other build
-passes it.
+of the app that's running. It's an empty string for an app that app/build.jl
+built on this Mac, so that a release doesn't take the place of the newer code
+in it. It's an empty string for an app that's signed for one Mac too. The rule
+of such an app names that one build, so no other build passes it.
 """
 rule(u::Updater) = begin
   u.rule === nothing || return u.rule
   u.rule = try
     m = match(r"^designated => (.+)$"m, read(pipeline(`/usr/bin/codesign -d -r- $(u.app)`, stderr=devnull), String))
-    (m === nothing || startswith(m[1], "cdhash")) ? "" : String(m[1])
+    (m === nothing || startswith(m[1], "cdhash") || built_here(u.app)) ? "" : String(m[1])
   catch
     ""
   end
 end
+
+"True when app/build.jl built the app at `app` on this Mac, and not for a release"
+built_here(app) = success(pipeline(`plutil -extract LadderBuiltHere raw $(joinpath(app, "Contents", "Info.plist"))`, stdout=devnull, stderr=devnull))
 
 "True when Ladder can change the file or folder at `path`"
 writable(path) = ccall(:access, Cint, (Cstring, Cint), path, 2) == 0

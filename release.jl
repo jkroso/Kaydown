@@ -35,6 +35,7 @@
 const publish = "--publish" in ARGS
 const profile = get(ENV, "NOTARY_PROFILE", "kaydown")
 haskey(ENV, "APP_SIGN") || (ENV["APP_SIGN"] = "Developer ID Application")
+ENV["APP_RELEASE"] = "1"   # sign it the way Apple needs, and don't mark it as built on this Mac
 
 "Run `cmd` in Ladder's folder and give back what it prints"
 output(cmd) = readchomp(setenv(cmd, dir=@__DIR__))

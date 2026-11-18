@@ -2,8 +2,8 @@
 #
 #     julia --project=. app/build.jl
 #
-# It writes build/Ladder.app, signed for this Mac only. Add `--install` to copy
-# it into /Applications too. See bundle.jl for what the build needs and the
+# It writes build/Ladder.app, signed with your Developer ID certificate if your
+# keychain has one. Add `--install` to copy it into /Applications too. See bundle.jl for what the build needs and the
 # settings it takes. To make a release that other Macs open, run release.jl.
 #
 # Leave APP_TRIM at no. A sheet and a live block run Julia code that the app
@@ -48,4 +48,5 @@ const app = build_app(name="Ladder", program="ladder", id="com.jkroso.ladder", v
                 <array><string>net.daringfireball.markdown</string></array>
               </dict>
             </array>
+          $(releasing ? "" : "<key>LadderBuiltHere</key><true/>")
           """)

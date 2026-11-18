@@ -14,7 +14,8 @@
 #
 # The first row has the names of the columns. A line with nothing on it is no
 # row. A table keeps the first `MOST_COLUMNS` columns and the first `MOST_ROWS`
-# rows under the names, and a file is read as far as `MOST_BYTES`.
+# rows under the names, and a file is read as far as `MOST_BYTES`. The page
+# that shows a whole CSV file asks for more rows and more of the file.
 #
 # This file reads the rows, and says which columns hold numbers. It draws nothing.
 
@@ -107,13 +108,13 @@ numbers(rows) = begin
   end
 end
 
-"The table that `text` holds, which is the text of a CSV file. Each row has a cell for each column."
-table(text::AbstractString) = begin
+"The table that `text` holds, which is the text of a CSV file. Each row has a cell for each column. It keeps `most` rows under the names."
+table(text::AbstractString; most=MOST_ROWS) = begin
   text = replace(text, "\r\n" => "\n", '\r' => '\n')
   startswith(text, '﻿') && (text = chop(text, head=1, tail=0))   # the mark that some apps start a file with
-  lines = records(text, most=MOST_ROWS + 2)
+  lines = records(text, most=most + 2)
   isempty(lines) && return Table(Vector{String}[], Bool[], false, "")
-  more = length(lines) > MOST_ROWS + 1
+  more = length(lines) > most + 1
   more && pop!(lines)
   between = mark(lines[1])
   # The spaces around a cell's text aren't part of it
@@ -124,26 +125,27 @@ table(text::AbstractString) = begin
 end
 
 """
-The table in the file at `path`. When the file isn't there, isn't text or has
-no rows, the table has no rows, and its `problem` says why in words for the
-page. It never throws.
+The table in the file at `path`, with no more than `most` rows under the names
+and from no more than `upto` bytes of the file. When the file isn't there,
+isn't text or has no rows, the table has no rows, and its `problem` says why in
+words for the page. It never throws.
 """
-load(path) = begin
+load(path; most=MOST_ROWS, upto=MOST_BYTES) = begin
   name = basename(path)
   isfile(path) || return nothing_to_show("Ladder can't find the file $name.")
   try
-    bytes = open(io -> read(io, MOST_BYTES + 1), path)
-    more = length(bytes) > MOST_BYTES
+    bytes = open(io -> read(io, upto + 1), path)
+    more = length(bytes) > upto
     if more
       # A file that was cut short can stop part way through a row, so it ends at its last whole line
-      stop = findlast(==(0x0a), @view bytes[1:MOST_BYTES])
+      stop = findlast(==(0x0a), @view bytes[1:upto])
       stop === nothing && return nothing_to_show("Ladder can't read $name as a table.")
       resize!(bytes, stop)
     end
     0x00 in view(bytes, 1:min(length(bytes), 4000)) && return nothing_to_show("Ladder can't read $name as a table. It isn't a file of text.")
     text = String(bytes)
     isvalid(text) || return nothing_to_show("Ladder can't read $name as a table. It isn't a file of text.")
-    t = table(text)
+    t = table(text, most=most)
     isempty(t.rows) && return nothing_to_show("The file $name has no rows yet.")
     Table(t.rows, t.numbers, t.more || more, "")
   catch

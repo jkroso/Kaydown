@@ -1,0 +1,494 @@
+# Runs the scripts of a page, and gives them the page: `document`, its
+# elements, events and timers.
+#
+#     doc = document(html)
+#     s = Scripts(doc; load, base)     # a JavaScript world for the page, with `window` and `document` in it
+#     start!(s)                        # run each <script> of the page in its order, then say that the page is read
+#     s.changed                        # a script has changed the tree of `doc` since this was last set to false
+#     step!(s)                         # run the timers that are due. Gives how many seconds until the next, or nothing.
+#     click!(s, element, x, y)         # tell the scripts of a click. False when a script said to do no more.
+#     fire!(s, element, "input")       # tell them of any other event
+#     s.log                            # what the scripts printed, and the errors that they threw
+#     evaluate(s, "document.title")    # run more JavaScript in the page
+#     close(s)
+#
+# The tree stays what dom.jl made: the same `Element` and `Text` objects that
+# the styles and the layout read. A script holds a node as a number, and the
+# functions under "what a script can ask" read and change the node of a number.
+# window.jl, which is JavaScript, makes the objects that a script sees from
+# those functions.
+#
+# A script that throws stops, and the page goes on: what it threw is in
+# `s.log` as an `:error`. `say(level, text)` is called with each line too.
+#
+# `load(address)` gives the bytes or the text of a file that the page names, or
+# nothing: a script with a `src`, and what a script asks for with `fetch` or
+# XMLHttpRequest. Nothing is asked of the web here.
+#
+# What a script can't do here:
+#
+# - `import` and `<script type="module">`. Such a script is left out, and the log says so.
+# - `document.write`. The page is read before its first script runs, so a
+#   script in the <head> sees the whole page.
+# - Send anything: `fetch` and XMLHttpRequest only get, through `load`.
+# - Workers, WebSocket, canvas drawing, shadow trees and custom elements.
+# - Scroll. The page is laid out whole, so `scrollY` is 0 and an element's
+#   rectangle is its place on the page.
+# - `getComputedStyle` knows only what `computed` gives: see live.jl.
+#
+# A list like `childNodes` or `children` is the nodes as they were when it was
+# asked for. It doesn't change when the page does.
+#
+# The page that the scripts changed is laid out by live.jl, which gives this
+# file the three things that need a layout: `place`, `at` and `computed`.
+
+@use Random: RandomDevice
+@use "./jsc" => JS
+@use "./jsc" Context Object ScriptError
+@use "./dom" Node Element Text Document document attr text VOID RAW
+@use "./css" selectors matches resolve media
+@use "./window" WINDOW
+
+"The scripts of a page, and what they need of it"
+mutable struct Scripts
+  js::Context
+  doc::Document
+  nodes::Dict{Int,Node}          # the nodes that a script may hold, by number
+  numbers::IdDict{Node,Int}
+  last::Int                      # the last number that was given
+  kept::Int                      # how many nodes had a number after the last sweep
+  changed::Bool                  # a script changed the tree since the page was laid out
+  log::Vector{Tuple{Symbol,String}}
+  say::Function                  # called with the level and the text of each line of the log
+  load::Function
+  base::String                   # the address of the page
+  place::Function                # the rectangles of an element's box on the page: (left, top, wide, tall) each
+  at::Function                   # the element at a point of the page, or nothing
+  computed::Function             # what the page's CSS gives an element for a property, as CSS writes it, or nothing
+  window::Function               # how wide and how high the window that the page is seen through is
+  hooks::Dict{String,Object}     # the functions of window.jl that Julia calls
+  ran::IdDict{Element,Bool}      # the <script> elements that have run
+  contents::IdDict{Element,Element}   # what's in each <template>: a fragment that's kept apart from the page
+  selectors::Dict{String,Any}    # each selector that a script has used, read
+  started::Float64
+end
+
+# No more lines than this are kept in the log: a script in a loop can print for ever
+const LINES = 1000
+
+"""
+A JavaScript world for the page of `doc`. `load(address)` gives the bytes or
+the text of a file, or nothing. `base` is the address of the page. `limit` is
+how many seconds a script may run before it's stopped.
+"""
+Scripts(doc::Document; load=address -> nothing, base="", say=(level, text) -> nothing, limit=10,
+        place=e -> NTuple{4,Float64}[], at=(x, y) -> nothing, computed=(e, name) -> nothing, window=() -> (1024.0, 768.0)) = begin
+  s = Scripts(Context(; limit), doc, Dict{Int,Node}(), IdDict{Node,Int}(), 0, 0, false, Tuple{Symbol,String}[], say, load, String(base),
+              place, at, computed, window, Dict{String,Object}(), IdDict{Element,Bool}(), IdDict{Element,Element}(), Dict{String,Any}(), time())
+  apart!(s, doc.root)
+  made = JS.evaluate(s.js, WINDOW; name="window.js")(natives(s))
+  for name in ("tick", "waiting", "click", "fire", "script", "ready", "alive", "rejected")
+    s.hooks[name] = made[name]
+  end
+  JS.unhandled!(s.js, s.hooks["rejected"])
+  s
+end
+
+Base.close(s::Scripts) = (empty!(s.hooks); close(s.js))
+Base.isopen(s::Scripts) = isopen(s.js)
+
+"Add a line to the log of `s`"
+note!(s::Scripts, level::Symbol, text::AbstractString) = begin
+  length(s.log) >= LINES && popfirst!(s.log)
+  push!(s.log, (level, String(text)))
+  s.say(level, String(text))
+  nothing
+end
+
+"Do `f`, which runs a script. What the script throws goes in the log, and `default` is given."
+guarded(f, s::Scripts, default=nothing) =
+  try
+    f()
+  catch e
+    e isa ScriptError || rethrow()
+    note!(s, :error, sprint(showerror, e))
+    default
+  end
+
+# --- nodes and their numbers --------------------------------------------------------------
+
+number(s::Scripts, ::Nothing) = 0
+number(s::Scripts, n::Node) = get!(s.numbers, n) do
+  s.nodes[s.last += 1] = n
+  s.last
+end
+
+node(s::Scripts, id) = get(() -> error("the node is gone"), s.nodes, Int(id))
+element(s::Scripts, id) = (n = node(s, id); n isa Element ? n : error("the node is not an element"))
+
+iscomment(n::Node) = n isa Element && n.tag == "#comment"
+isfragment(n::Node) = n isa Element && n.tag == "#fragment"
+kind(n::Node) = n isa Text ? 3 : iscomment(n) ? 8 : isfragment(n) ? 11 : 1
+
+"The address of the page, which the addresses in it are from"
+home(s::Scripts) = isempty(s.doc.base) ? s.base : resolve(s.base, s.doc.base)
+
+"True when `n` is in the page, and not in a tree that only a script holds"
+connected(s::Scripts, n::Node) = begin
+  while n.parent !== nothing
+    n = n.parent
+  end
+  n === s.doc.root
+end
+
+"Where `n` is among the children of its parent"
+index(n::Node) = findfirst(c -> c === n, n.parent.children)
+
+"Take `n` out of its parent"
+detach!(n::Node) = begin
+  n.parent === nothing && return n
+  deleteat!(n.parent.children, index(n))
+  n.parent = nothing
+  n
+end
+
+"A copy of `n`, and of what's in it when `deep`"
+clone(s::Scripts, n::Text, deep) = Text(n.text, nothing)
+clone(s::Scripts, e::Element, deep) = begin
+  made = Element(e.tag, copy(e.attrs))
+  deep && for c in e.children
+    k = clone(s, c, true)
+    k.parent = made
+    push!(made.children, k)
+  end
+  deep && haskey(s.contents, e) && (s.contents[made] = clone(s, s.contents[e], true))
+  made
+end
+
+"""
+Take what's in each <template> under `n` out of the tree, into a fragment of
+its own. As in a browser, it's no part of the page: a script gets it from the
+template's `content`, and no search of the page finds it.
+"""
+apart!(s::Scripts, n::Node) = begin
+  n isa Element || return n
+  if n.tag == "template" && !isempty(n.children)
+    refill!(get!(() -> Element("#fragment"), s.contents, n), copy(n.children))
+    empty!(n.children)
+    apart!(s, s.contents[n])
+  else
+    foreach(c -> apart!(s, c), n.children)
+  end
+  n
+end
+
+"-1 when `a` is before `b` in the page, 1 when it's after, and 0 when they aren't in one tree"
+order(a::Node, b::Node) = begin
+  trail(n) = begin
+    steps = Int[]
+    while n.parent !== nothing
+      pushfirst!(steps, index(n))
+      n = n.parent
+    end
+    (n, steps)
+  end
+  (ra, ta), (rb, tb) = trail(a), trail(b)
+  ra === rb ? cmp(ta, tb) : 0
+end
+
+# --- HTML from a tree, and a tree from HTML -----------------------------------------------
+
+escaped(s, quotes) = replace(s, '&' => "&amp;", '<' => "&lt;", '>' => "&gt;", (quotes ? ('"' => "&quot;",) : ())...)
+
+"Write the HTML of `n`. What's in a <template> is written from its fragment."
+html(io::IO, s::Scripts, n::Text) = print(io, n.parent !== nothing && n.parent.tag in RAW ? n.text : escaped(n.text, false))
+html(io::IO, s::Scripts, e::Element) = begin
+  iscomment(e) && return print(io, "<!--", attr(e, "data"), "-->")
+  isfragment(e) && return inner(io, s, e)
+  print(io, '<', e.tag)
+  for (name, value) in e.attrs
+    print(io, ' ', name, "=\"", escaped(value, true), '"')
+  end
+  print(io, '>')
+  e.tag in VOID && return
+  inner(io, s, e)
+  print(io, "</", e.tag, '>')
+end
+inner(io::IO, s::Scripts, e::Element) = foreach(c -> html(io, s, c), get(s.contents, e, e).children)
+
+# What the HTML of a part of a table has to be in, to be read as that part
+const AROUND = Dict("table" => ("<table>", 1), "thead" => ("<table><thead>", 2), "tbody" => ("<table><tbody>", 2), "tfoot" => ("<table><tfoot>", 2),
+                    "tr" => ("<table><tbody><tr>", 3), "colgroup" => ("<table><colgroup>", 2))
+
+"The nodes that `html` writes, as it would be read in an element with the tag `inside`. They're in no tree."
+parsed(s::Scripts, html::AbstractString, inside::AbstractString) = begin
+  open, deep = get(AROUND, inside, ("", 0))
+  doc = document((s.doc.mode == :quirks ? "" : "<!DOCTYPE html>") * "<body>" * open * html)
+  from = doc.body
+  for _ in 1:deep
+    i = findfirst(c -> c isa Element, from.children)
+    i === nothing && break
+    from = from.children[i]
+  end
+  nodes = copy(from.children)
+  empty!(from.children)
+  foreach(n -> n.parent = nothing, nodes)
+  foreach(n -> apart!(s, n), nodes)
+  nodes
+end
+
+"Put the nodes `new` in `e`, in place of what's in it"
+refill!(e::Element, new) = begin
+  foreach(c -> c.parent = nothing, e.children)
+  empty!(e.children)
+  for n in new
+    n.parent = e
+    push!(e.children, n)
+  end
+  e
+end
+
+# --- selectors ----------------------------------------------------------------------------
+
+"The selectors that `text` writes. A selector that can't be read is an error, which the script can catch."
+selected(s::Scripts, text::AbstractString) = get!(s.selectors, text) do
+  found = selectors(text)
+  found === nothing && error("'$text' is not a valid selector")
+  # A part of an element, like ::before, is no element
+  filter(x -> x.pseudo == :none, found)
+end
+
+fits(sels, e::Element) = any(x -> matches(x, e), sels)
+
+"The numbers of the elements under `top` that `ok` is true of, in the page's order: all of them, or only the first"
+under(ok, s::Scripts, top::Element, all::Bool; self=false) = begin
+  found = Int[]
+  visit(e) = begin
+    for c in e.children
+      c isa Element || continue
+      ok(c) && push!(found, number(s, c))
+      (!all && !isempty(found)) && return
+      visit(c)
+      (!all && !isempty(found)) && return
+    end
+  end
+  self && ok(top) && push!(found, number(s, top))
+  (all || isempty(found)) && visit(top)
+  found
+end
+
+"The element that the number `id` means for a search: the whole page when it's 0"
+top(s::Scripts, id) = id == 0 ? (s.doc.root, true) : (element(s, id), false)
+
+# --- what a script can ask ----------------------------------------------------------------
+
+"The Julia functions that window.jl calls, by name. Each takes and gives numbers, strings and lists of them."
+natives(s::Scripts) = begin
+  touched() = (s.changed = true; nothing)
+  Dict{String,Any}(
+    "root" => () -> number(s, s.doc.root),
+    "quirks" => () -> s.doc.mode == :quirks,
+    "kind" => id -> kind(node(s, id)),
+    "tag" => id -> element(s, id).tag,
+    "parent" => id -> number(s, node(s, id).parent),
+    "children" => id -> (n = node(s, id); n isa Element ? Int[number(s, c) for c in n.children] : Int[]),
+    "child" => (id, i) -> begin
+      n = node(s, id)
+      (n isa Element && !isempty(n.children)) ? number(s, i < 0 ? n.children[end] : n.children[1]) : 0
+    end,
+    "sibling" => (id, step) -> begin
+      n = node(s, id)
+      n.parent === nothing && return 0
+      i = index(n) + Int(step)
+      checkbounds(Bool, n.parent.children, i) ? number(s, n.parent.children[i]) : 0
+    end,
+    "connected" => id -> connected(s, node(s, id)),
+    "order" => (a, b) -> order(node(s, a), node(s, b)),
+
+    "text" => id -> (n = node(s, id); iscomment(n) ? attr(n, "data") : text(n)),
+    "setText" => (id, value) -> begin
+      e = element(s, id)
+      refill!(e, isempty(value) ? Node[] : Node[Text(value, nothing)])
+      touched()
+    end,
+    "data" => id -> (n = node(s, id); n isa Text ? n.text : attr(n, "data")),
+    "setData" => (id, value) -> begin
+      n = node(s, id)
+      n isa Text ? (n.text = value) : (n.attrs["data"] = value)
+      touched()
+    end,
+
+    "attr" => (id, name) -> get(element(s, id).attrs, name, nothing),
+    "setAttr" => (id, name, value) -> (element(s, id).attrs[name] = value; touched()),
+    "removeAttr" => (id, name) -> (delete!(element(s, id).attrs, name); touched()),
+    "attrs" => id -> (out = String[]; foreach(((k, v),) -> push!(out, k, v), element(s, id).attrs); out),
+
+    "create" => tag -> number(s, Element(String(tag))),
+    "createText" => value -> number(s, Text(String(value), nothing)),
+    "createComment" => value -> number(s, Element("#comment", Dict("data" => String(value)))),
+    "createFragment" => () -> number(s, Element("#fragment")),
+    "clone" => (id, deep) -> number(s, clone(s, node(s, id), deep)),
+    "content" => id -> number(s, get!(() -> Element("#fragment"), s.contents, element(s, id))),
+    "insert" => (parent, child, before) -> begin
+      p, c = element(s, parent), node(s, child)
+      detach!(c)
+      i = before == 0 ? length(p.children) + 1 : something(findfirst(k -> k === node(s, before), p.children), length(p.children) + 1)
+      c.parent = p
+      insert!(p.children, i, c)
+      touched()
+    end,
+    "remove" => id -> (detach!(node(s, id)); touched()),
+
+    "html" => id -> sprint(inner, s, element(s, id)),
+    "outer" => id -> sprint(html, s, element(s, id)),
+    "setHTML" => (id, value) -> begin
+      e = element(s, id)
+      refill!(e, parsed(s, value, e.tag))
+      touched()
+    end,
+    "parse" => (inside, value) -> begin
+      fragment = Element("#fragment")
+      refill!(fragment, parsed(s, value, inside == 0 ? "body" : element(s, inside).tag))
+      number(s, fragment)
+    end,
+
+    "query" => (id, selector, all) -> begin
+      sels = selected(s, selector)
+      from, self = top(s, id)
+      under(e -> fits(sels, e), s, from, all; self)
+    end,
+    "matches" => (id, selector) -> fits(selected(s, selector), element(s, id)),
+    "closest" => (id, selector) -> begin
+      sels = selected(s, selector)
+      e = element(s, id)
+      while e !== nothing && !isfragment(e)
+        fits(sels, e) && return number(s, e)
+        e = e.parent
+      end
+      0
+    end,
+    "tagged" => (id, tag) -> begin
+      from, self = top(s, id)
+      under(e -> e.tag == tag, s, from, true; self)
+    end,
+    "byId" => id -> (found = under(e -> get(e.attrs, "id", nothing) == id, s, s.doc.root, false; self=true); isempty(found) ? 0 : found[1]),
+
+    "rects" => id -> begin
+      e = node(s, id)
+      out = Float64[]
+      e isa Element && connected(s, e) && foreach(r -> append!(out, r), s.place(e))
+      out
+    end,
+    "hit" => (x, y) -> number(s, s.at(Float64(x), Float64(y))),
+    "window" => () -> collect(s.window()),
+    "computed" => (id, name) -> (e = element(s, id); connected(s, e) ? s.computed(e, String(name)) : nothing),
+    "media" => query -> (w = s.window(); media(query, w[1], w[2])),
+
+    "log" => (level, line) -> note!(s, Symbol(level), line),
+    "load" => address -> loaded(s, address),
+    "resolve" => address -> isempty(address) ? home(s) : resolve(home(s), address),
+    "join" => (base, address) -> resolve(base, address),
+    "now" => () -> 1000 * (time() - s.started),
+    "run" => id -> (run!(s, element(s, id)); nothing),
+    "random" => n -> Int.(rand(RandomDevice(), UInt8, Int(n))),
+  )
+end
+
+"The text of the file at `address`, which is from the page's address, or nothing"
+loaded(s::Scripts, address::AbstractString) = begin
+  found = s.load(resolve(home(s), address))
+  found === nothing ? nothing : found isa AbstractString ? String(found) : String(copy(found))
+end
+
+# --- running the page's scripts -----------------------------------------------------------
+
+# What a <script> says its type is, when it's JavaScript that runs here
+const SCRIPT = ("", "text/javascript", "application/javascript", "text/ecmascript", "application/ecmascript", "application/x-javascript", "text/jscript",
+                "text/javascript1.5", "text/livescript")
+
+"Run the script of the <script> element `e`, once"
+run!(s::Scripts, e::Element) = begin
+  haskey(s.ran, e) && return
+  s.ran[e] = true
+  type = lowercase(strip(attr(e, "type")))
+  if type == "module"
+    note!(s, :warn, "A <script type=\"module\"> was left out: this engine runs no modules")
+    return
+  end
+  type in SCRIPT || return   # data that the page keeps in a <script>, like JSON or a template
+  src = strip(attr(e, "src"))
+  code = isempty(src) ? text(e) : loaded(s, src)
+  id = number(s, e)
+  if code === nothing
+    note!(s, :error, "The script $src could not be loaded")
+    guarded(() -> s.hooks["fire"](id, "error"), s)
+    return
+  end
+  guarded(() -> s.hooks["script"](id), s)
+  guarded(() -> JS.evaluate(s.js, code; name=isempty(src) ? "" : resolve(home(s), src)), s)
+  guarded(() -> s.hooks["script"](0), s)
+  isempty(src) || guarded(() -> s.hooks["fire"](id, "load"), s)
+  nothing
+end
+
+"Run each <script> of the page, in the page's order, then tell the scripts that the page is read"
+start!(s::Scripts) = begin
+  found = Element[]
+  visit(e) = for c in e.children
+    c isa Element || continue
+    c.tag == "script" ? push!(found, c) : visit(c)
+  end
+  visit(s.doc.root)
+  # A script that an earlier script took out of the page doesn't run
+  foreach(e -> connected(s, e) && run!(s, e), found)
+  guarded(() -> s.hooks["ready"](), s)
+  s
+end
+
+"""
+Run the timers of the page that are due, and the scripts that wait for the
+next frame. Gives how many seconds until the next timer is due, 0 when a
+script waits for the next frame, or nothing when nothing waits.
+"""
+step!(s::Scripts) = begin
+  wait = guarded(() -> s.hooks["tick"](1000 * (time() - s.started)), s, -1.0)
+  length(s.nodes) > 2 * s.kept + 2000 && sweep!(s)
+  wait < 0 ? nothing : wait / 1000
+end
+
+"How many seconds until the next timer of the page is due, 0 when a script waits for the next frame, or nothing when nothing waits"
+waiting(s::Scripts) = begin
+  wait = guarded(() -> s.hooks["waiting"](), s, -1.0)
+  wait < 0 ? nothing : wait / 1000
+end
+
+"""
+Tell the page's scripts of a click on `e`, at the point `(x, y)` of the page.
+False when a script said that the click should do no more, as for a link that
+the script follows itself.
+"""
+click!(s::Scripts, e::Union{Element,Nothing}, x=0.0, y=0.0) = guarded(() -> s.hooks["click"](number(s, e), x, y), s, true)::Bool
+
+"Tell the page's scripts of an event of the kind `type` on `e`, or on the window with nothing. `init` is what the event says, like `Dict(\"key\" => \"a\")`."
+fire!(s::Scripts, e::Union{Element,Nothing}, type::AbstractString, init=Dict{String,Any}("bubbles" => true, "cancelable" => true)) =
+  guarded(() -> s.hooks["fire"](number(s, e), type, init), s, true)::Bool
+
+"Run `code` in the page, and give the value of its last statement. What the script throws is thrown here, as a `ScriptError`."
+evaluate(s::Scripts, code::AbstractString; kw...) = JS.evaluate(s.js, code; kw...)
+
+"Forget the number of each node that no script holds any more, so that Julia can free the nodes that left the page"
+sweep!(s::Scripts) = begin
+  JS.collect!(s.js)
+  alive = guarded(() -> s.hooks["alive"](), s)
+  alive === nothing && return
+  keep = Set{Int}(Int(id) for id in alive)
+  for (id, n) in s.nodes
+    id in keep && continue
+    delete!(s.nodes, id)
+    delete!(s.numbers, n)
+  end
+  s.kept = length(s.nodes)
+  nothing
+end
+
+export Scripts, ScriptError, start!, step!, waiting, click!, fire!, sweep!, evaluate

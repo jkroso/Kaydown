@@ -167,6 +167,8 @@ struct Unmove <: Item end
 
 const Link = @NamedTuple{left::Float64, top::Float64, wide::Float64, tall::Float64, url::String}
 const Words = @NamedTuple{before::String, top::Float64, tall::Float64, edges::Vector{Float64}, letters::Vector{Char}, from::Int}
+# Where the border of an element's box is on the page. An element in lines of text has one of these for each line that it's in.
+const Place = @NamedTuple{element::Element, left::Float64, top::Float64, wide::Float64, tall::Float64}
 
 "The boxes that are drawn apart from the text of the box that orders them: each piece with its band, its z-index and when it was met"
 mutable struct Order
@@ -196,6 +198,7 @@ mutable struct List
   matrix::NTuple{6,Float64}                   # how what's drawn now is moved
   met::Int
   base::String                                # the address of the page, which its links are from
+  places::Vector{Place}                       # where each element's box is, in the order that the boxes are met
   floats::Vector{Vector{Vector{Item}}}        # for each box that's drawn apart and is open, the floats in it: they're drawn over its text's boxes
 end
 
@@ -560,6 +563,13 @@ words!(l::List, line, q::Piece, x, top, tall) = begin
   l.before = ""
 end
 
+"Note where the border of the box `b` is, for the element that it's the box of"
+place!(l::List, b::Box, x, y, w, h) = begin
+  b.element === nothing && return
+  x, y, w, h = around(l, x, y, w, h)
+  push!(l.places, (element=b.element, left=x, top=y, wide=w, tall=h))
+end
+
 "Add a rectangle of the page that's a link"
 link!(l::List, url, x, y, w, h) = begin
   (isempty(url) || w <= 0 || h <= 0) && return
@@ -805,6 +815,7 @@ draw!(l::List, b::Box, ox, oy) = begin
     b.still[2] && (y = at[2])
   end
   w, h = b.width, b.height
+  place!(l, b, x, y, w, h)
   b.kind in (:block, :cell, :caption) && isempty(l.before) && (l.before = "\n")
   b.kind == :cell && b.col > 1 && l.before != "\t" && !isempty(l.words) && (l.before = "\t")
   # A cell with nothing in it has no border and no background when its style says
@@ -937,6 +948,7 @@ inside!(l::List, b::Box, x, y, cx, cy) = begin
       k = sp.box
       widths = (k.border[1], sp.last ? k.border[2] : 0.0, k.border[3], sp.first ? k.border[4] : 0.0)
       decorate!(l, k.style, cx + sp.left, cy + sp.top, sp.right - sp.left, sp.bottom - sp.top, widths)
+      place!(l, k, cx + sp.left, cy + sp.top, sp.right - sp.left, sp.bottom - sp.top)
       k.element !== nothing && k.element.tag == "a" && link!(l, k.link, cx + sp.left, cy + sp.top, sp.right - sp.left, sp.bottom - sp.top)
     end
     for q in line.pieces
@@ -982,7 +994,7 @@ address, as `boxes` takes it.
 """
 list(root::Box, wide, tall; pictures=src -> nothing, base="") = begin
   l = List(Item[], Link[], Words[], Float64(wide), Float64(tall), 0x00000000, pictures, "", nothing, nothing, Clip[], Order[], nothing, 0,
-           IdDict{Box,Tuple{Float64,Float64}}(), IdDict{Box,Tuple{Float64,Float64,Int}}(), SAME, 0, String(base), Vector{Vector{Item}}[])
+           IdDict{Box,Tuple{Float64,Float64}}(), IdDict{Box,Tuple{Float64,Float64,Int}}(), SAME, 0, String(base), Place[], Vector{Vector{Item}}[])
   # The background of the page is the <html> element's, or the <body>'s when that has none
   body = findfirst(k -> k.element !== nothing && k.element.tag == "body", root.children)
   from = alpha(root.style.background) > 0 || !isempty(root.style.image) || body === nothing ? root : root.children[body]

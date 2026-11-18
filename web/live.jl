@@ -1,0 +1,171 @@
+# A page whose scripts run.
+#
+#     l = live(html; wide=700, load, base)    # read the page and run its scripts
+#     p = page!(l)              # the page, laid out as it is now. It's laid out again only after a script changed it.
+#     draw(canvas, p)           # as any page of main.jl
+#     step!(l)                  # run the timers that are due. Gives how many seconds until the next, or nothing.
+#     click!(l, x, y)           # a click at a point of the page. False when a script said to do no more with it.
+#     resize!(l, 500)           # the page is 500 px wide now
+#     l.scripts.log             # what the scripts printed, and the errors that they threw
+#     evaluate(l, "document.title")
+#     close(l)
+#
+# `live` takes what `page` takes, and `limit`: how many seconds a script may
+# run before it's stopped. `say(level, text)` is called with each line that a
+# script prints.
+#
+# The scripts run in script.jl. This file lays the page out for them: a script
+# that asks where an element is (`getBoundingClientRect`, `offsetWidth`) gets
+# the answer from a layout of the page as it is at that moment.
+#
+# All of a page is laid out again after any change. A script that changes the
+# page and then asks for a size, again and again in one loop, makes that many
+# layouts.
+#
+# Use a live page from the main task only: see jsc.jl.
+
+@use "./dom" Element Document document
+@use "./box" Box
+@use "./style" alpha
+@use "./script" => JS
+@use "./script" Scripts ScriptError
+@use "./main" Page Pictures page
+
+"A page whose scripts run"
+mutable struct Live
+  doc::Document
+  scripts::Scripts
+  options::NamedTuple        # what `page` takes
+  pictures::Pictures
+  page::Union{Page,Nothing}  # the page as it was last laid out
+  places::IdDict{Element,Vector{NTuple{4,Float64}}}   # where the box of each element is in that page, in px before the zoom
+  boxes::IdDict{Element,Box}                          # and the first box of each element
+end
+
+# With scripts, what's for a reader with none isn't part of the page
+const WITH_SCRIPTS = "\nnoscript { display: none !important }\n"
+
+"""
+Read the page that `html` writes and run its scripts. Takes what `page`
+takes. `limit` is how many seconds a script may run before it's stopped, and
+`say(level, text)` is called with each line that a script prints.
+"""
+live(html::AbstractString; wide=700, zoom=1.0, load=src -> nothing, pictures=Pictures(load), css="", fit=false, widest=2000, high=nothing, base="",
+     limit=10, say=(level, text) -> nothing) = begin
+  doc = document(html)
+  options = (; wide, zoom, load, css=css * WITH_SCRIPTS, fit, widest, high, base)
+  l = Live(doc, Scripts(doc; load, base, say, limit), options, pictures, nothing, IdDict{Element,Vector{NTuple{4,Float64}}}(), IdDict{Element,Box}())
+  s = l.scripts
+  s.place = e -> (page!(l); get(l.places, e, NTuple{4,Float64}[]))
+  s.at = (x, y) -> at(l, x, y)
+  s.computed = (e, name) -> computed(l, e, name)
+  s.window = () -> (Float64(l.options.wide / l.options.zoom), Float64(something(l.options.high, 800) / l.options.zoom))
+  JS.start!(s)
+  l
+end
+
+Base.close(l::Live) = close(l.scripts)
+Base.isopen(l::Live) = isopen(l.scripts)
+
+"The page of `l`, laid out as its tree is now"
+page!(l::Live) = begin
+  s = l.scripts
+  (l.page === nothing || s.changed) || return l.page
+  s.changed = false
+  # A script can add a <style> or a <base>, and can put another <body> in the page
+  root = l.doc.root
+  i = findfirst(c -> c isa Element && c.tag == "body", root.children)
+  l.doc = s.doc = Document(root, i === nothing ? l.doc.body : root.children[i], l.doc.mode)
+  p = l.page = page(l.doc; l.options..., pictures=l.pictures)
+  empty!(l.places)
+  for q in p.list.places
+    push!(get!(() -> NTuple{4,Float64}[], l.places, q.element), (q.left, q.top, q.wide, q.tall))
+  end
+  empty!(l.boxes)
+  note(b::Box) = begin
+    b.element === nothing || get!(l.boxes, b.element, b)
+    foreach(note, b.children)
+    foreach(note, b.over)
+  end
+  note(p.root)
+  p
+end
+
+"The element at the point `(x, y)` of the page, in px before the zoom, or nothing. Of the boxes there, it's the one that the page has last."
+at(l::Live, x, y) = begin
+  places = page!(l).list.places
+  i = findlast(q -> q.left <= x < q.left + q.wide && q.top <= y < q.top + q.tall, places)
+  i === nothing ? nothing : places[i].element
+end
+
+rgb(c::UInt32) = begin
+  r, g, b = (c >> 16) & 0xff, (c >> 8) & 0xff, c & 0xff
+  alpha(c) == 1 ? "rgb($r, $g, $b)" : "rgba($r, $g, $b, $(round(alpha(c), digits=3)))"
+end
+
+pixels(x) = string(round(x, digits=3), "px") |> t -> replace(t, r"\.0px$" => "px")
+
+"""
+What the page's CSS gives the element `e` for the property `name`, as CSS
+writes it, or nothing for a property that isn't known here. This is what
+`getComputedStyle` in a script reads. The few properties here are the ones
+that scripts ask for most.
+"""
+computed(l::Live, e::Element, name::AbstractString) = begin
+  page!(l)
+  b = get(l.boxes, e, nothing)
+  b === nothing && return name == "display" ? "none" : nothing
+  s = b.style
+  name == "display" ? replace(string(s.display), '_' => '-') :
+  name == "position" ? string(s.position) :
+  name == "visibility" ? (s.visible ? "visible" : "hidden") :
+  name == "opacity" ? string(s.opacity) :
+  name == "float" ? string(s.float) :
+  name == "color" ? rgb(s.color) :
+  name == "background-color" ? rgb(s.background) :
+  name == "font-size" ? pixels(s.size) :
+  name == "font-weight" ? string(s.weight) :
+  name == "width" ? pixels(b.width - b.padding[2] - b.padding[4] - b.border[2] - b.border[4]) :
+  name == "height" ? pixels(b.height - b.padding[1] - b.padding[3] - b.border[1] - b.border[3]) :
+  (m = match(r"^(margin|padding|border)-(top|right|bottom|left)(-width)?$", name)) !== nothing && (m[1] == "border") == (m[3] !== nothing) ?
+    pixels(getfield(b, Symbol(m[1]))[findfirst(==(m[2]), ("top", "right", "bottom", "left"))]) :
+  nothing
+end
+
+"""
+Run the timers of the page that are due, and the scripts that wait for the
+next frame. Gives how many seconds until the next timer is due, 0 when a
+script waits for the next frame, or nothing when nothing waits. Ask `page!`
+after it for the page as the scripts left it.
+"""
+step!(l::Live) = JS.step!(l.scripts)
+
+"How many seconds until the next timer of the page is due, 0 when a script waits for the next frame, or nothing when nothing waits"
+waiting(l::Live) = JS.waiting(l.scripts)
+
+"""
+A click at the point `(x, y)` of the page, as `link(p, x, y)` takes it. The
+page's scripts hear it on the element there. False when a script said that
+the click should do no more: then the caller doesn't open the link there.
+"""
+click!(l::Live, x, y) = begin
+  z = l.options.zoom
+  JS.click!(l.scripts, at(l, x / z, y / z), x / z, y / z)
+end
+
+"Tell the page's scripts of an event on the window, like \"resize\", or on the element `e`"
+fire!(l::Live, type::AbstractString, e::Union{Element,Nothing}=nothing) = JS.fire!(l.scripts, e, type)
+
+"Lay the page out `wide` px wide from now on, and tell its scripts that the window changed"
+Base.resize!(l::Live, wide; high=l.options.high, zoom=l.options.zoom) = begin
+  (wide == l.options.wide && high == l.options.high && zoom == l.options.zoom) && return l
+  l.options = merge(l.options, (; wide, high, zoom))
+  l.page = nothing
+  fire!(l, "resize")
+  l
+end
+
+"Run `code` in the page, and give the value of its last statement. What the script throws is thrown here, as a `ScriptError`."
+evaluate(l::Live, code::AbstractString; kw...) = JS.evaluate(l.scripts, code; kw...)
+
+export Live, ScriptError, live, page!, step!, waiting, click!, fire!, evaluate

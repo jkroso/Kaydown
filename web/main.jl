@@ -13,7 +13,8 @@
 # `zoom` makes everything in the page that much bigger, as a browser's zoom
 # does. The page is still `wide` px wide.
 #
-# The page runs no script and asks the web for nothing. A picture that's
+# The page runs no script here: `live` in live.jl makes a page whose scripts
+# run. The page asks the web for nothing. A picture that's
 # written into the page (`src="data:..."`) is drawn. For any other picture,
 # and for a sheet of CSS or a font that the page names, `load(address)` is
 # asked for the bytes of its file, or nothing. With none, a picture is an
@@ -38,11 +39,13 @@
 # The parts: dom.jl reads the HTML into a tree. css.jl reads CSS. style.jl
 # works out the style of each element. box.jl makes the boxes. layout.jl gives
 # each its size and place. paint.jl draws them. svg.jl draws an SVG. text.jl
-# finds fonts and measures text.
+# finds fonts and measures text. For a page with scripts: jsc.jl runs
+# JavaScript, script.jl and window.jl give a script the page, and live.jl lays
+# the page out again after a script changes it.
 
 @use Skia
 @use Base64: base64decode
-@use "./dom" document
+@use "./dom" document Document
 @use "./css" resolve
 @use "./svg" => Svg
 @use "./box" boxes Box
@@ -145,6 +148,7 @@ struct Page
   links::Vector{Paint.Link}
   words::Vector{Paint.Words}
   pictures::Pictures
+  root::Box       # the box of its <html> element, with the boxes of the rest in it
 end
 
 # What lets a page that's wider than its window be as narrow as the window: a table, a picture or a block of code
@@ -184,8 +188,10 @@ whose content still can't be that narrow is as wide as its content, up to
 `high` is how high the window that the page is seen through is, or nothing
 for a page that's as tall as its content. `base` is the address of the page.
 """
-page(html::AbstractString; wide=700, zoom=1.0, load=src -> nothing, pictures=Pictures(load), css="", fit=false, widest=2000, high=nothing, base="") = begin
-  doc = document(html)
+page(html::AbstractString; kw...) = page(document(html); kw...)
+
+"Lay out the page of a document that's read already. live.jl lays a page out again with this after a script changes its document."
+page(doc::Document; wide=700, zoom=1.0, load=src -> nothing, pictures=Pictures(load), css="", fit=false, widest=2000, high=nothing, base="") = begin
   from = isempty(doc.base) ? String(base) : resolve(base, doc.base)
   inner = wide / zoom
   window = high === nothing ? NaN : high / zoom
@@ -225,7 +231,7 @@ page(html::AbstractString; wide=700, zoom=1.0, load=src -> nothing, pictures=Pic
   end
   z(link::Paint.Link) = (left=link.left * zoom, top=link.top * zoom, wide=link.wide * zoom, tall=link.tall * zoom, url=link.url)
   z(w::Paint.Words) = (before=w.before, top=w.top * zoom, tall=w.tall * zoom, edges=w.edges .* zoom, letters=w.letters, from=w.from)
-  Page(ceil(inner * zoom), ceil(tall * zoom), Float64(zoom), l, zoom == 1 ? l.links : map(z, l.links), zoom == 1 ? l.words : map(z, l.words), pictures)
+  Page(ceil(inner * zoom), ceil(tall * zoom), Float64(zoom), l, zoom == 1 ? l.links : map(z, l.links), zoom == 1 ? l.words : map(z, l.words), pictures, root)
 end
 
 """

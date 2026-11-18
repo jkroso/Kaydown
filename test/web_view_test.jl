@@ -41,3 +41,48 @@ const HTML = """<!DOCTYPE html><body style="margin:20px;font:16px/20px Helvetica
   frame(w)
   @test v.page !== page && rect(v).width == 300px
 end
+
+@testset "a page with scripts in a window" begin
+  opened = String[]
+  said = String[]
+  html = """<!DOCTYPE html><body style="margin:0;font:16px/20px Helvetica;background:white">
+    <button id=b style="display:block;width:100px;height:30px">Add</button>
+    <a id=stay href="https://example.com/stay" style="display:block;height:20px">stay</a>
+    <a href="https://example.com/go" style="display:block;height:20px">go</a>
+    <ul id=list style="margin:0"></ul>
+    <script>
+      var list = document.getElementById('list')
+      document.getElementById('b').addEventListener('click', () => { list.appendChild(document.createElement('li')).textContent = 'item ' + list.children.length })
+      document.getElementById('stay').addEventListener('click', e => { e.preventDefault(); console.log('stayed') })
+      var go = false
+      var timer = setInterval(() => { if (go) { clearInterval(timer); list.appendChild(document.createElement('li')).textContent = 'from a timer' } }, 10)
+    </script></body>"""
+  v = View(html=html, wide=300px, scripts=true, open=url -> push!(opened, url), say=(level, text) -> push!(said, text))
+  w = Window(v, size=(300px, 300px))
+  frame(w)
+  r = rect(v)
+  @test v.page.tall == 70 && r.height == 70px
+  # A click that a script hears changes the page, and the window is as tall as the page is now
+  click!(w, (r.left + 20px, r.top + 10px))
+  frame(w)
+  @test v.page.tall == 90 && rect(v).height == 90px
+  # A link opens, unless a script said to do no more with the click
+  click!(w, (r.left + 20px, r.top + 40px))
+  @test isempty(opened) && said == ["stayed"]
+  click!(w, (r.left + 20px, r.top + 60px))
+  @test opened == ["https://example.com/go"]
+  # The page's timer runs when it's due
+  v.live.scripts.js["go"] = true
+  sleep(0.05)
+  frame(w)
+  @test v.page.tall == 110
+  haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], "web-view-scripts.png"), w)
+  # The scripts go on when the window is narrower, and they stop when the page is another
+  live = v.live
+  v.wide = 200px
+  frame(w)
+  @test v.live === live && v.page.wide == 200 && v.live.scripts.js["innerWidth"] == 200
+  v.html = "<p>another</p>"
+  frame(w)
+  @test v.live !== live && !isopen(live)
+end

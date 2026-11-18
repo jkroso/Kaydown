@@ -216,7 +216,6 @@ document(html::AbstractString) = begin
   root = Element("html")
   head = body = nothing
   stack = Element[root]
-  sheets = Tuple{String,String}[]
   doctype = nothing
   top() = stack[end]
   open_in(tag) = findlast(e -> e.tag == tag, stack)
@@ -359,6 +358,16 @@ document(html::AbstractString) = begin
     end
   end
   body === nothing && (body = push_child!(root, Element("body")))
+  Document(root, body, doctype === nothing ? :quirks : mode(doctype))
+end
+
+"""
+The document of the tree under `root`, as the tree is now: its sheets and its
+base are found in it. A tree that has changed since it was read, as a script
+changes it, gets its document again with this.
+"""
+Document(root::Element, body::Element, mode::Symbol) = begin
+  sheets = Tuple{String,String}[]
   base = ""
   # Sheets with a title are a set that the reader can choose. The page's own choice is the set of its first <style> that has a
   # title, as in WebKit, where a <style> is read before any sheet that's fetched. With none, it's the set of its first <link>.
@@ -379,7 +388,7 @@ document(html::AbstractString) = begin
     end
     e.tag == "base" && isempty(base) && (base = String(strip(attr(e, "href"))))
   end
-  Document(root, body, doctype === nothing ? :quirks : mode(doctype), sheets, base)
+  Document(root, body, mode, sheets, base)
 end
 
 "Call `f` with each element of the tree under `e`, and with `e`, in the page's order"

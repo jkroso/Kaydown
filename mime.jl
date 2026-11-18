@@ -1348,6 +1348,25 @@ page(p::Part; keep=(name, bytes, picture) -> nothing, at=nothing) = begin
   lines
 end
 
+"""
+The HTML of an email, as its sender wrote it, for a browser to draw. It's ""
+for an email with no HTML. The page needs no other file: each picture that
+came inside the email, which the HTML names like `cid:logo`, is written into
+the page itself. A picture that the HTML has from a web site keeps its web
+address. Text of the email that isn't HTML is in the page as it was typed.
+"""
+webpage(p::Part) = begin
+  found = gather!(Found(), p)
+  any(t -> t.type == "text/html", found.texts) || return ""
+  cids = Dict(lowercase(f.id) => f for f in reverse(found.files) if !isempty(f.id))
+  inside(m) = begin
+    f = get(cids, lowercase(String(chopprefix(lowercase(m), "cid:"))), nothing)
+    f === nothing ? String(m) : "data:$(f.type);base64,$(base64encode(f.body))"
+  end
+  typed(s) = "<pre style=\"white-space: pre-wrap; font: inherit\">" * replace(s, '&' => "&amp;", '<' => "&lt;", '>' => "&gt;") * "</pre>"
+  join((t.type == "text/html" ? replace(text(t), r"(?<=[\"'=(\s])cid:[^\s\"'<>)]+"i => inside) : typed(text(t)) for t in found.texts), "\n")
+end
+
 # --- an email to send -------------------------------------------------------------
 
 "`s` in pieces of no more than `most` bytes, none cut in the middle of a character"

@@ -281,6 +281,48 @@ end
   @test kept == ["attachment.jpg" => true, "-..-notes- -1-.txt" => false]
 end
 
+@testset "the HTML of an email, for a browser to draw" begin
+  # The HTML as it was sent, with the picture that came inside the email written into it
+  @test M.webpage(M.message(QUOTE)) ==
+        "<html><body><p>Hi Jake,</p><p>The quote is <b>attached</b>.</p><img src=\"data:image/png;base64,iVBORw0KGgo=\" alt=\"Logo\"></body></html>"
+  # An email with no HTML has none, whatever else it has
+  @test M.webpage(M.message("Subject: Hi\r\n\r\nPlain text with <b>no</b> HTML.")) == ""
+  @test M.webpage(M.message("Subject: Hi\r\nContent-Type: application/pdf\r\n\r\n%PDF")) == "" && M.webpage(M.message("")) == ""
+  # A picture from a web site keeps its address, and so does a cid: that names no part of the email. The name of a part is read in any case.
+  m = M.message(crlf("""
+    Content-Type: multipart/related; boundary=r
+
+    --r
+    Content-Type: text/html; charset=iso-8859-1
+
+    <p>Caf\xe9 <img src='CID:A@B'><img src=cid:gone><img src="https://example.com/logo.png?cid:a@b"></p>
+    --r
+    Content-Type: image/gif
+    Content-ID: <a@b>
+    Content-Transfer-Encoding: base64
+
+    R0lGODlh
+    --r--
+    """))
+  @test M.webpage(m) == "<p>Café <img src='data:image/gif;base64,R0lGODlh'><img src=cid:gone><img src=\"https://example.com/logo.png?cid:a@b\"></p>"
+  # Text that came beside the HTML, and isn't another way to say it, is in the page as it was typed
+  m = M.message(crlf("""
+    Content-Type: multipart/mixed; boundary=m
+
+    --m
+    Content-Type: text/plain
+
+    1 < 2 & 3 > 2
+      kept as typed
+    --m
+    Content-Type: text/html
+
+    <p>Then <b>HTML</b></p>
+    --m--
+    """))
+  @test M.webpage(m) == "<pre style=\"white-space: pre-wrap; font: inherit\">1 &lt; 2 &amp; 3 &gt; 2\r\n  kept as typed</pre>\n<p>Then <b>HTML</b></p>"
+end
+
 @testset "broken emails" begin
   # No empty line between the headers and the text
   m = M.message("Subject: Hi\nFrom: a@example.com\nHello there\nSecond line")

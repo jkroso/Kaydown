@@ -169,6 +169,9 @@
 #     and the top bar of an email has buttons that answer it, archive it and
 #     delete it. ⌘⇧N starts a new email, which is a page like any other, and
 #     ⌘⇧Return sends it. mail.jl says how it works.
+#   - An email shows as it was sent, with its sender's colours, layout and
+#     buttons. ⌘E goes down a level, to its words as a page, and up again.
+#     It asks the web for nothing until you click Load pictures.
 #   - The Ladder app updates itself. It gets a newer version while you work,
 #     and the new version takes its place when you quit. A box in the settings
 #     turns that off. update.jl says how it works.
@@ -253,6 +256,7 @@
 @use "./centient" => Centient
 @use "./update" => Update
 @use "./mail" => Mail
+@use "./webpage" => Webpages
 @use "./slides" => Slides
 @use "github.com/jkroso/UI.jl/Interface/draw" Bubble
 @use "github.com/jkroso/URI.jl/FSPath" FSPath
@@ -15589,6 +15593,9 @@ layout!(e, width=text_width(e)) = begin
   # The lines of a block that went down a level from the window it filled show by themselves
   span = lowered(e)
   span === nothing || ((i, n) = span)
+  # The email as it was sent, with the lines that it stands for, or nothing when the page shows its lines
+  sent = span === nothing ? sent_email(e) : nothing
+  sent === nothing || (lines = sent_lines(e); sent = lines === nothing ? nothing : (sent, lines))
   plans = 0   # how many takeoff blocks there have been so far
   schedules = 0   # and how many schedules
   seen = Dict{String,Int}()   # and how many blocks in each of the languages of `BLOCKS`
@@ -15611,6 +15618,14 @@ layout!(e, width=text_width(e)) = begin
         i = t + 1
         continue
       end
+    end
+    # An email shows as it was sent, in place of the lines that were made of it, once its pictures are there
+    if sent !== nothing && i == sent[2][1]
+      content = sent_item(e, sent[1])
+      push!(items, Item(i, sent[2][2], top, content.tall, content))
+      top += content.tall
+      i = sent[2][2] + 1
+      continue
     end
     # A `takeoff` code block shows its plan and its measures, unless the caret is in it
     if ks[i].kind == Kind.fence && ks[i].level == 0 && ks[i].lang == TAKEOFF
@@ -18894,6 +18909,8 @@ tip(m::Mode) = begin
           low(e) ? "Go up a level, to the graphics that the symbols make" :
           full_block(e) === nothing ? "Go down a level, to the symbols of the part with the caret" :
                                       "Go down a level, to the symbols that make this"
+  # An email goes between how it was sent and its words
+  full_block(e) === nothing && (words = something(sent_tip(e), words))
   words * hint(e, :plain)
 end
 
@@ -24358,6 +24375,253 @@ callbox(e) = begin
   box = Column(fixed(wide), Alignment.Start, padding(10px, 5px), radius(7px), background(colours.float), border(1px, :solid, colours.line), lifted,
     name="Call", map(last, listed)..., under...)
   (Row(width(grow=grow), height(grow=grow), Alignment.Start, padding(top, 0px, 0px, left), box),)
+end
+
+# --- an email as it was sent --------------------------------------------------------------
+#
+# Most email is written as HTML, with its sender's colours, layout and buttons.
+# At the high level, where the top bar shows the ladder, an email shows that
+# way: webpage.jl has WebKit make pictures of the HTML, as wide as the page's
+# text, and the page shows them under the email's card, in place of the lines
+# that mail.jl made of the same HTML. The links to the files that came with
+# the email stay under the pictures. A click on a link of the email opens it,
+# and the mouse over a link says where it goes.
+#
+# Down a level, where the top bar shows the snake, the email shows its words
+# as a page, as an email with no HTML always does. So does an email whose
+# pictures can't be made, and any email while the find bar is open.
+#
+# Ladder asks the web for nothing to draw an email, so its sender can't tell
+# when you open it. A picture that the email has from a web site is an empty
+# box then, and a button over the email fetches those pictures. An email that
+# you asked that of once shows its pictures from then on.
+
+const SENT_EMPTY = 160px    # how tall the space of an email is while its first pictures are made
+const SENT_PATIENCE = 1.0   # seconds before that space says what it waits for
+const SENT_LINE = 1px       # how thick the line round an email is. The pictures are inside it.
+
+"An email as it was sent: the pictures that WebKit made of its HTML"
+@def mutable struct SentEmail <: SemanticUI
+  path::String = ""                          # the email's file
+  read::Float64 = -1.0                       # when the file had last changed, as its HTML was read
+  html::String = ""                          # the email's HTML, or "" for an email with none
+  remote::Bool = false                       # the HTML has pictures from a web site
+  pictures::Bool = false                     # and you asked for them
+  asked::Any = nothing                       # the width, the zoom and the pictures that the page needs now, and since when
+  got::Any = nothing                         # what `Webpages.picture!` last said of them
+  shown::Any = nothing                       # the pictures that show, and the width, the zoom and the pictures that they were made for
+  keys::Vector{String} = String[]            # the key, for an Image, of each strip of the pictures that show
+  since::Float64 = 0.0                       # when the email came to the window
+  parts::Dict{Any,Any} = Dict{Any,Any}()     # its button, and the part that shows the pictures
+end
+
+"The part of an email as it was sent that shows the pictures, and takes the mouse for the email's links"
+@def mutable struct SentPage <: SemanticUI
+  of::Any = nothing
+  said::Bool = false   # its tooltip shows, with where a link goes
+end
+
+"The folder that keeps the pictures of the email at `path`"
+sent_dir(path) = joinpath(media_dir(), "emails", string(hash(abspath(path)), base=16))
+
+"The file in the folder of an email's pictures that says you asked for its pictures from the web"
+sent_mark(path) = joinpath(sent_dir(path), ".pictures")
+
+"The page's email as it was sent, when the page is an email with HTML, or nothing. Its HTML is read here, once."
+sent_html(e) = begin
+  b = e.buf
+  (b.view == :markdown && Mail.isemail(b.path) && isfile(b.path)) || return nothing
+  v = node!(SentEmail, e, :sent_email)
+  at = mtime(b.path)
+  if v.path != b.path || v.read != at
+    v.path, v.read, v.html = b.path, at, Mail.webpage(b.path)
+    v.remote = Webpages.remote(v.html)
+    v.pictures = v.remote && isfile(sent_mark(b.path))
+    v.asked = v.got = v.shown = nothing
+    v.since = time()
+  end
+  isempty(v.html) ? nothing : v
+end
+
+"""
+The email that shows, as it was sent, or nothing while the page shows its
+words: at the low level, for an email with no HTML, and when its pictures
+can't be made. The pictures are asked for here. While the first ones are
+made, the email has an empty space, so that its words don't show for a
+moment and then go. While the find bar is open, the page shows the email's
+words, since those are what the bar finds and marks.
+"""
+sent_email(e) = begin
+  v = e.plain || finding(e) ? nothing : sent_html(e)
+  v === nothing && return nothing
+  sent_picture!(e, v)
+  v.shown !== nothing || v.got.state == :coming ? v : nothing
+end
+
+"""
+The pictures that the email needs now: as wide as the page's text, at the
+page's zoom. `Webpages.picture!` says what it gives. The program that makes
+them is started here, when they aren't kept. While the window changes size,
+the page has another width in each frame, so the program is only started once
+the width has stayed for a moment. Until then the pictures that were made
+for the width before show, as wide as the page is now.
+"""
+sent_picture!(e, v::SentEmail) = begin
+  # The pictures are made for the room inside the line round the email, so each of their pixels is one of the screen's
+  want = (round(Int, num(e.width - 2SENT_LINE)), round(Float64(e.zoom), digits=2), v.pictures)
+  v.shown !== nothing && v.shown.want == want && return v
+  (v.asked === nothing || v.asked[1] != want) && (v.asked = (want, v.shown === nothing ? 0.0 : time()))
+  rest = MAP_PAUSE - (time() - v.asked[2])
+  runs = on_screen(e) || Webpages.HELPER[] !== Webpages.run_program
+  folder = sent_dir(v.path)
+  ask(start) = Webpages.picture!(folder, v.html, want[1]; zoom=want[2], pictures=want[3], start)
+  p = ask(runs && rest <= 0)
+  if p.state == :there
+    shot = Webpages.shot(p.file)
+    keys = shot === nothing ? nothing : try sent_keys!(v, shot) catch; nothing end
+    if keys === nothing
+      # A file that was cut short is no picture. It's taken away, and made again later.
+      Maps.spoiled!(p.file)
+      p = ask(false)
+    else
+      v.shown, v.keys = (shot=shot, want=want), keys
+      Webpages.tidy!(folder, p.file)
+    end
+  end
+  # The window looks again when the program may have finished, and when the width has stayed
+  wait = min(p.wait, runs && rest > 0 ? rest : Inf)
+  isfinite(wait) && redraw_in!(e, max(wait, 0.05))
+  v.got = p
+  v
+end
+
+"""
+Read each strip of `shot`, and give the key that an Image draws each with.
+The strips of every email that this window shows have the same keys, one
+after another, so the window keeps the pictures of one email and no more.
+"""
+sent_keys!(v::SentEmail, shot) = map(enumerate(shot.strips)) do (n, (file, _))
+  key = "email as sent $(objectid(v)) strip $n"
+  was = has_image(key) ? image_source(key) : nothing
+  register_image(key, read(file))
+  was === nothing || Skia.sk_image_unref(was.raw)   # the picture that the key had isn't needed
+  key
+end
+
+"""
+What the tooltip of the ladder and the snake says for an email with HTML, or
+nothing for any other page. When the email can't show as it was sent, the
+tooltip says why.
+"""
+sent_tip(e) = begin
+  v = sent_html(e)
+  v === nothing && return nothing
+  e.plain && return "Go up a level, to the email as it was sent"
+  v.shown === nothing && v.got !== nothing && v.got.state == :failed && return v.got.problem
+  "Go down a level, to the email's words as a page"
+end
+
+"The lines of the page that the pictures of the email stand for: from the line after its card to the line before the links to its files"
+sent_lines(e) = begin
+  b = e.buf
+  first = front_matter(b.lines) + 1
+  last = get!(() -> Mail.attached(b.path, b.lines), e.flows, (:attached, b.path, b.version)) - 1
+  first <= last ? (first, last) : nothing
+end
+
+"What the email as it was sent shows on the page, with how tall it is"
+sent_item(e, v::SentEmail) = begin
+  own!(node!(Document, e, :document), v)
+  # Lay it out once to learn how tall it is
+  concrete = describe(Column(fixed(e.width), Alignment.Start, geometry(v)), (e.width, 99999px))
+  Live(v, concrete.height + 2LIVE_GAP)
+end
+
+describe(v::SentEmail) = begin
+  e = editor(v)
+  with_theme(component_theme(e.zoom)) do
+    words = "Get this email's pictures from the web. Its sender can then tell that you opened it."
+    bar = v.remote && !v.pictures && v.shown !== nothing ?
+      (Row(width(grow=grow), Alignment.Center, justify=Alignment.End, block_button!(v, :pictures, :pictures, words="Load pictures", icon="image", tip=words)),) : ()
+    # The links to the email's files are under it, with some room between
+    Column(width(grow=grow), Alignment.Start, child_gap=4px, name="Email as sent", bar..., block_part!(() -> SentPage(of=v), v, :page), Box(height(6px)))
+  end
+end
+
+describe(a::SentPage) = begin
+  v = a.of
+  e = editor(v)
+  wide = e.width
+  if v.shown === nothing
+    # The first pictures of an email take a moment. When they take longer, as when the program is compiled first, words say so.
+    waited = time() - v.since
+    waited < SENT_PATIENCE && redraw_in!(v, SENT_PATIENCE - waited)
+    return Box(fixed(wide), height(SENT_EMPTY), Alignment.Center, justify=Alignment.Center,
+               (waited < SENT_PATIENCE ? () : (Text("Drawing the email…", size=13px, family=SANS, color=colours.dim),))...)
+  end
+  shot = v.shown.shot
+  # The pictures are as wide as the page's text, also while new ones are made for a width that has just changed
+  inside = wide - 2SENT_LINE
+  by = num(inside) / shot.wide
+  Column(fixed(wide), Alignment.Start, radius(6px), border(SENT_LINE, :solid, colours.line), background(colorant"white"), clip=true,
+    (Image(key, fixed(inside), height(px(tall * by))) for (key, (_, tall)) in zip(v.keys, shot.strips))...)
+end
+
+"The link of the email that the mouse is over, as `Webpages.link` gives it, and its rectangle in the window, or nothing"
+sent_link(a::SentPage) = begin
+  w, v = window_of(a), a.of
+  (w === nothing || v.shown === nothing) && return nothing
+  r = rect(a)
+  r.width > 2SENT_LINE || return nothing
+  # The pictures start inside the line round the email
+  left, top = r.left + SENT_LINE, r.top + SENT_LINE
+  by = v.shown.shot.wide / num(r.width - 2SENT_LINE)
+  l = Webpages.link(v.shown.shot, num(w.mouse[1] - left) * by, num(w.mouse[2] - top) * by)
+  l === nothing ? nothing : (url=l.url, box=(left + px(l.left / by), top + px(l.top / by), px(l.wide / by), px(l.tall / by)))
+end
+
+cursor(::SentEmail) = :arrow
+cursor(a::SentPage) = sent_link(a) === nothing ? :arrow : :hand
+
+# The mouse over a link says where the link goes, since the words of a link can say anything
+onmouse(a::SentPage, ev::MouseMove) = begin
+  l = sent_link(a)
+  if l !== nothing
+    show_tooltip!(ev.window, tip_label(sent_address(l.url)), l.box..., placement=:bottom, gap=6px)
+  elseif a.said
+    hide_tooltip!(ev.window)
+  end
+  a.said = l !== nothing
+  nothing
+end
+
+"A web address as a tooltip says it: without mailto:, and with its middle left out when it's long"
+sent_address(url) = begin
+  url = String(chopprefix(url, r"^mailto:"i))
+  length(url) <= 90 ? url : first(url, 60) * "…" * last(url, 25)
+end
+
+# A click on a link of the email opens it in the app that the Mac uses for it. A click anywhere else is the page's.
+onkey(a::SentPage, ev::KeyPress{Keys.mouse_left}) = begin
+  l = sent_link(a)
+  (l === nothing || held(a, Keys.opt)) && return nothing
+  hide_tooltip!(ev.window)
+  a.said = false
+  Webpages.open_link(l.url)
+  handled
+end
+
+"Do what a button of the email does: get the email's pictures from the web, now and each time it shows"
+act!(v::SentEmail, action, w) = begin
+  action == :pictures || return handled
+  v.pictures = true
+  try
+    mkpath(sent_dir(v.path))
+    touch(sent_mark(v.path))
+  catch
+  end
+  redraw_in!(v, 0.0)
+  handled
 end
 
 # --- email --------------------------------------------------------------------------------

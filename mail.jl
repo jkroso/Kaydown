@@ -62,7 +62,7 @@
 @use NetworkOptions: ca_roots_path
 @use Dates: Dates, DateTime, datetime2unix
 @use Libdl
-@use "./mime" Part message header addresses sent page compose
+@use "./mime" Part message header addresses sent page compose webpage
 @use "./markdown" front_matter
 @use "./html" html
 
@@ -1188,6 +1188,9 @@ end
 "The folder that holds the files of the emails that were opened, like a PDF that came with one"
 cache() = isempty(place[]) ? joinpath(homedir(), "Library", "Caches", "Ladder", "email") : joinpath(place[], "cache")
 
+"The folder of Ladder's cache that keeps the files that came with the email at `path`"
+attachments(path) = joinpath(cache(), string(hash(abspath(path)), base=16))
+
 """
 The email in the file at `path` as the lines of a page, for a window to show:
 front matter that says who it's from and so on, then its text as Markdown,
@@ -1197,7 +1200,7 @@ file isn't changed.
 """
 render(path) = begin
   part = message(read(path))
-  dir = joinpath(cache(), string(hash(abspath(path)), base=16))
+  dir = attachments(path)
   keep(name, bytes, picture) = begin
     mkpath(dir)
     base, ext = splitext(clean(name, 80, 150))
@@ -1212,6 +1215,25 @@ render(path) = begin
   at = findfirst(startswith("from:"), lines)
   !isempty(answer) && at !== nothing && answer != from && insert!(lines, at + 1, "reply-to: " * flat(written(answer)))
   lines
+end
+
+"""
+The HTML of the email in the file at `path`, as its sender wrote it, for a
+browser to draw. It's "" for an email with no HTML, and for a file that
+can't be read. See `webpage` in mime.jl.
+"""
+webpage(path::AbstractString) = try webpage(message(read(path))) catch; "" end
+
+"""
+The first of the lines at the end of `lines` that link to the files that came
+with the email at `path`, where `lines` are what `render` gives for it. With
+no such line, it's one more than the number of lines.
+"""
+attached(path, lines) = begin
+  dir = escaped(attachments(path)) * "/"
+  i = length(lines) + 1
+  while i > 1 && occursin("](" * dir, lines[i-1]); i -= 1 end
+  i
 end
 
 "The lines of the file at `path`: of a page as it's written, and of an email as `render` gives them"

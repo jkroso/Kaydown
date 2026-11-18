@@ -457,6 +457,10 @@ Ladder can keep a folder on your Mac that holds every email of an account. It ca
 
 An `.eml` file holds the email exactly as the server sent it, with what was attached to it inside. Mail, Quick Look and Spotlight read it too. Ladder shows it as a page: the subject and who sent it at the top, then the email's text as Markdown, then a link to each attached file. You read that page, and you can't change it. Ladder marks each email file as read-only on your Mac, so no other app changes one by mistake. A click on a link in an email opens it, with no key held. Because the file is the whole email, a later Ladder can show it better with no new download.
 
+An email that was written as HTML shows as its sender made it, with its colours, its layout and its buttons. ⌘E, or a click on the ladder in the top bar, goes down a level: the email then shows its text as Markdown. The same key goes up again. While the find bar is open, the email shows its text, with a mark on each place that the bar found.
+
+Ladder asks the web for nothing to show an email, so its sender can't tell when you open it. A picture that the email has from a web site is an empty box. Click Load pictures, over the email, to get those pictures. That email shows its pictures from then on. The mouse over a link of an email says where the link goes.
+
 1. Press ⌘, and click the Email link.
 2. Type your email address, your name and your password, and click Connect.
 3. Press ⌘⇧I to show the inbox.
@@ -641,6 +645,8 @@ julia -O0 --project=. test/emails_view_test.jl    # the list of the emails with 
 julia -O0 --project=. test/timelog_test.jl        # how a time log is read and written, and how its hours and its money are added up
 julia -O0 --project=. test/timelog_view_test.jl   # the rows of a time log, the button that starts and stops the clock, and a time changed in its row
 julia -O0 --project=. test/mime_test.jl           # how an email becomes the page that a window shows, and a page an email
+julia -O0 --project=. test/webpage_test.jl        # the pictures that are made of an email's HTML: what's read of them, their links, and how they're asked for and kept
+julia -O0 --project=. test/webpage_view_test.jl   # an email as it was sent: its pictures in the page, its links, the Load pictures button, and its words a level down
 julia -O0 --project=. test/mail_test.jl           # the folder of emails that's kept in step with an email server, and sending
 julia -O0 --project=. test/mail_view_test.jl      # the list of emails, the buttons of an email and of a draft, and the Email page of the settings
 ```
@@ -676,6 +682,8 @@ Kip.link("/path/to/UI.jl")
 To write down what's said in a recording, Ladder runs `transcribe.swift`, which uses the speech recognition in macOS 26 and later. Run from the source, Ladder compiles it the first time, so it needs Swift, which comes with Xcode's command line tools. The app has it compiled already.
 
 To find the place of a map and to make its picture, Ladder runs `map.swift`, which uses MapKit, the maps that are part of macOS. It needs macOS 26 or later. Run from the source, Ladder compiles it the first time, as it does `transcribe.swift`. The app has it compiled already.
+
+To show an email as it was sent, Ladder runs `webpage.swift`, which uses WebKit, the part of macOS that draws web pages. It makes pictures of the email's HTML, and `webpage.jl` keeps them. Run from the source, Ladder compiles it the first time too. The app has it compiled already.
 
 UI.jl has a script that runs an app and reloads each file when you save it:
 

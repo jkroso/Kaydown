@@ -1,6 +1,6 @@
 # Ladder
 
-A Markdown editor for the Mac, made with [UI.jl](https://github.com/jkroso/UI.jl). It draws each line the way it will read, and you type in it. A line keeps that look while you type. ⌘E, or a click on the ladder at the top right, goes down a level: the part of the page that the caret is in shows its markup. A snake takes the ladder's place, and a click on it goes back up. While a block fills the window, like a takeoff or a schedule, ⌘E goes down to the lines of that block: they fill the window as text, with the caret in them. ⌘E again makes the block fill the window again, and Esc puts the lines back among the lines of the page.
+A Markdown editor for the Mac, made with [UI.jl](https://github.com/jkroso/UI.jl). It draws each line the way it will read, and you type in it. A line keeps that look while you type. ⌘E, or a click on the ladder at the top right, goes down a level: the part of the page that the caret is in shows its markup. A snake takes the ladder's place, and a click on it goes back up. Hold the mouse over the ladder and it opens into a slider, with the snake at its low end, the ladder at its high end, and a stop for each level that the window can show at. A page has two levels. A file of text that Ladder only shows has three: its bits, its bytes in hexadecimal, and its text. A JSON file has the tree of its values over those, and a CSV file has its table. In a file of Julia code, the levels are of what the code comes to when you run it with ⌘Return. At the highest level, the box after the code shows its value. A level down it shows the code as Julia infers it, with the type of each step. Under that it shows the LLVM code, and under that the assembly with the machine code of each instruction. The file's own code shows as it's written at every level. Click a stop, or drag along the slider, to go to a level. While a block fills the window, like a takeoff or a schedule, ⌘E goes down to the lines of that block: they fill the window as text, with the caret in them. ⌘E again makes the block fill the window again, and Esc puts the lines back among the lines of the page.
 
 A code block does more than show code. What it does depends on its language:
 
@@ -609,6 +609,8 @@ julia -O0 --project=. test/title_test.jl          # the menu of the file's name 
 julia -O0 --project=. test/back_test.jl           # going back to the file that showed before, and forward again
 julia -O0 --project=. test/selection_test.jl      # where the colour of the selection goes
 julia -O0 --project=. test/level_test.jl          # ⌘E, and a click on the ladder, while a schedule fills the window
+julia -O0 --project=. test/julia_levels_test.jl   # a file of Julia code down a level: the inferred code, the LLVM code and the assembly of what ran
+julia -O0 --project=. test/levels_test.jl         # the slider that the ladder opens into, and the levels of a JSON file, a CSV file and a file of text
 julia -O0 --project=. test/sketch_level_test.jl   # and while a sketch fills the window
 julia -O0 --project=. test/full_bar_test.jl       # the top bar has none of the sidebar's buttons while something fills the window
 julia -O0 --project=. test/slides_test.jl         # which lines of a page each slide shows, and how much bigger a slide's text is

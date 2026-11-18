@@ -17222,12 +17222,28 @@ follow_heading!(e, url) = begin
   true
 end
 
-"Open a link: a file on the Mac in this editor, like a page, or a file that came with an email, and anything else in the app the system picks for it"
+"True when the Finder shows the folder at `path` as one file, as it shows an app"
+ispackage(path) = with_pool() do
+  ccall((:objc_msgSend, libobjc), Bool, (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}),
+        msg(cls("NSWorkspace"), "sharedWorkspace"), sel("isFilePackageAtPath:"), nsstring(path))
+end
+
+"""
+Open a link. A file on the Mac shows in this editor, like a page, or a file
+that came with an email. A folder on the Mac shows in the sidebar, which opens
+if it's closed, and the page stays. Anything else opens in the app that the
+Mac uses for it. A path can start at the home folder, like `~/Mail`.
+"""
 follow!(e, url) = begin
   startswith(url, '^') && return follow_note!(e, url[2:end])
   occursin('#', url) && follow_heading!(e, url) && return e   # a heading of a page, like welcome.md#tables
-  path = abspath(docdir(e), unescaped(url))
-  isfile(path) ? open!(e, path) : open_url(url)
+  path = abspath(docdir(e), expanduser(unescaped(url)))
+  isfile(path) && return open!(e, path)
+  # A folder that the Finder shows as one file, like an app, opens as that file does
+  (isdir(path) && !ispackage(path)) || return open_url(isdir(path) ? path : url)
+  go_folder!(e, String(rstrip(path, '/')))
+  e.panel || toggle_panel!(e)
+  e
 end
 
 drag!(e, pos) = begin

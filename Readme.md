@@ -506,6 +506,8 @@ Ladder asks before it runs the code of a GitHub repository for the first time. T
 
 When you open Ladder without a file, it shows your startup page. The first time, Ladder writes that page, with links to the welcome page and the settings. After that the page is yours, and Ladder never writes to it. It is `startup.md`, in the folder `Home` of `~/Library/Application Support/Ladder`.
 
+A link to a folder, like `[Email](~/Mail)`, shows that folder in the sidebar, and the page stays. A path can start at your home folder with `~`. So the startup page can be the way to each folder that you work in. Hold ⌘ and click a link to go there.
+
 Each time Ladder starts, it also runs the Julia code of that page: each `julia` block, from the top, in one module. Julia does the same with its `startup.jl`. So the page is where you load code that adds to Ladder, and the words round each block can say what the code is for.
 
 ````
@@ -642,6 +644,7 @@ julia -O0 --project=. test/children_test.jl       # the parts of the page as the
 julia -O0 --project=. test/timelog_test.jl        # how a time log is read and written, and how its hours and its money are added up
 julia -O0 --project=. test/timelog_view_test.jl   # the rows of a time log, the button that starts and stops the clock, and a time changed in its row
 julia -O0 --project=. test/startup_test.jl        # the startup page: the page that Ladder writes the first time, its code that runs when Ladder starts, and what the window says when the code fails
+julia -O0 --project=. test/folder_link_test.jl    # a link to a folder, which shows the folder in the sidebar
 julia -O0 --project=. test/extend_test.jl         # what code from the startup page adds to Ladder: buttons, a list for the sidebar, commands, work in each frame
 julia -O0 --project=. test/eml_test.jl            # what Ladder shows of an email file: its page, its front matter, and the links to its files
 julia -O0 --project=. test/mime_test.jl           # how an email becomes the page that a window shows, and a page an email

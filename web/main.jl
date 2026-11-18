@@ -15,17 +15,36 @@
 #
 # The page runs no script and asks the web for nothing. A picture that's
 # written into the page (`src="data:..."`) is drawn. For any other picture,
-# `load(address)` is asked for the bytes of its file, or nothing. With none, a
-# picture is an empty box.
+# and for a sheet of CSS or a font that the page names, `load(address)` is
+# asked for the bytes of its file, or nothing. With none, a picture is an
+# empty box. `base` is the address of the page, which the addresses in it are
+# from.
+#
+# With `high`, the page is seen through a window that high, as in a browser:
+# `height: 100%` of the page and `100vh` are that high, and a box that's fixed
+# is placed in it. With none, the page is as tall as its content.
+#
+# What it draws: the HTML and the CSS of today, without what needs a script or
+# the passing of time. See the top of each file for what that file knows.
+#
+# What it doesn't draw yet: text from right to left in its own order, and text
+# down the page. Letters that join, as in Arabic, and an emoji that's made of
+# several characters. `::first-letter` and `::first-line`. `backdrop-filter`.
+# A picture as a border (`border-image: url(...)`). The page in an <iframe>,
+# and what a <canvas> or a <video> shows. What moves: a `transition`, and an
+# `animation` that doesn't end. An animation that ends and stays is drawn as
+# it ends.
 #
 # The parts: dom.jl reads the HTML into a tree. css.jl reads CSS. style.jl
 # works out the style of each element. box.jl makes the boxes. layout.jl gives
-# each its size and place. paint.jl draws them. text.jl finds fonts and
-# measures text.
+# each its size and place. paint.jl draws them. svg.jl draws an SVG. text.jl
+# finds fonts and measures text.
 
 @use Skia
 @use Base64: base64decode
 @use "./dom" document
+@use "./css" resolve
+@use "./svg" => Svg
 @use "./box" boxes Box
 @use "./style" styles isauto ispercent
 @use "./layout" layout!
@@ -62,7 +81,8 @@ decode(bytes::Vector{UInt8}) = begin
   data = Skia.sk_data_new_with_copy(bytes, Csize_t(length(bytes)))
   file = Skia.sk_image_new_from_encoded(data)
   Skia.sk_data_unref(data)
-  file == C_NULL && return nothing
+  # A drawing in SVG is drawn here, since Skia reads none
+  file == C_NULL && return occursin("<svg", String(bytes[1:min(end, 4096)])) ? Svg.image(bytes) : nothing
   w, h = Int(Skia.sk_image_get_width(file)), Int(Skia.sk_image_get_height(file))
   (w > 0 && h > 0) || (Skia.sk_image_unref(file); return nothing)
   k = min(1.0, MOST / max(w, h))
@@ -160,16 +180,38 @@ a picture or a block of code shrinks to the page. Outlook gives the table
 round an email the width of its sender's window, which can be 2000 px. A page
 whose content still can't be that narrow is as wide as its content, up to
 `widest` px, and `p.wide` says how wide that is.
+
+`high` is how high the window that the page is seen through is, or nothing
+for a page that's as tall as its content. `base` is the address of the page.
 """
-page(html::AbstractString; wide=700, zoom=1.0, load=src -> nothing, pictures=Pictures(load), css="", fit=false, widest=2000) = begin
+page(html::AbstractString; wide=700, zoom=1.0, load=src -> nothing, pictures=Pictures(load), css="", fit=false, widest=2000, high=nothing, base="") = begin
   doc = document(html)
+  from = isempty(doc.base) ? String(base) : resolve(base, doc.base)
   inner = wide / zoom
-  find = src -> pictures(src)
+  window = high === nothing ? NaN : high / zoom
+  seen = isnan(window) ? 800.0 : window   # what `100vh` is of, when there's no window
+  find = src -> pictures(resolve(from, src))
   lay(across, extra) = begin
-    look = styles(doc, across; extra)
-    root = boxes(doc, look; pictures=find)
-    tall = layout!(root, across, doc.mode)
-    (root, tall, Paint.list(root, across, tall; pictures=find))
+    make(containers) = begin
+      look = styles(doc, across; extra, high=seen, load=pictures.load, base=String(base), containers)
+      root = boxes(doc, look; pictures=find, wide=across, high=seen)
+      (look, root, layout!(root, across, doc.mode; high=window))
+    end
+    look, root, tall = make(nothing)
+    if look.contained
+      # Some rules ask how big the box that an element is in is. Now that each box has a size, the styles are worked out again.
+      sizes = IdDict{Any,Tuple{Float64,Float64,String}}()
+      note(b::Box) = begin
+        if b.element !== nothing && b.style.container != :none
+          sizes[b.element] = (b.width - b.padding[2] - b.padding[4] - b.border[2] - b.border[4], b.height - b.padding[1] - b.padding[3] - b.border[1] - b.border[3], b.style.containername)
+        end
+        foreach(note, b.children)
+        foreach(note, b.over)
+      end
+      note(root)
+      look, root, tall = make(sizes)
+    end
+    (root, tall, Paint.list(root, across, tall; pictures=find, base=from))
   end
   root, tall, l = lay(inner, css)
   if fit && Paint.right(l) > inner + 1

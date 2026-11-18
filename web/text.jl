@@ -47,8 +47,20 @@ const stand_ins = Dict{Tuple{Char,Int,Bool},Ptr{Skia.sk_typeface_t}}()
 const installed = Dict{String,Bool}()
 const spaces = Dict{Ptr{Skia.sk_font_t},Float64}()
 
+"A face of a font that a page gives with @font-face"
+mutable struct WebFace
+  weights::Tuple{Int,Int}                # the first and the last weight that it's for
+  italic::Bool
+  ranges::Vector{UnitRange{UInt32}}      # the letters that it's for, or none for all
+  sources::Vector{Any}                   # each the name of a font of this computer, or a function that gives the bytes of a file
+  face::Ptr{Skia.sk_typeface_t}          # C_NULL until its file is read
+end
+const web = Dict{String,Vector{WebFace}}()
+# Core Text's description of each face that came from a file, so that its text is measured with the file's own widths
+const described = Dict{Ptr{Skia.sk_typeface_t},Ptr{Cvoid}}()
+
 # What Skia made is gone when the process ends, so a compiled app starts with none of it
-__init__() = (manager[] = C_NULL; foreach(empty!, (fonts, faces, sized, glyphs, stand_ins, installed, spaces)))
+__init__() = (manager[] = C_NULL; foreach(empty!, (fonts, faces, sized, glyphs, stand_ins, installed, spaces, web, described)))
 
 "Skia's font manager. The faces of the system font are found when it's first asked for, while Skia is sure to find them."
 mgr() = begin
@@ -64,11 +76,76 @@ const SYSTEM = ".AppleSystemUIFont"
 # The fonts that Safari draws these names with
 const GENERIC = Dict("serif" => "Times", "sans-serif" => "Helvetica", "monospace" => "Courier", "cursive" => "Apple Chancery", "fantasy" => "Papyrus",
                      "system-ui" => SYSTEM, "-apple-system" => SYSTEM, "blinkmacsystemfont" => SYSTEM,
-                     "ui-sans-serif" => SYSTEM, "ui-rounded" => SYSTEM, "ui-serif" => "Times", "ui-monospace" => "Menlo")
+                     "ui-sans-serif" => SYSTEM, "ui-rounded" => SYSTEM, "ui-serif" => "Times", "ui-monospace" => "Menlo",
+                     "math" => "STIX Two Math", "emoji" => "Apple Color Emoji")
 const STANDARD = "Times"
 
+covers(f::WebFace, c::Char) = isempty(f.ranges) || any(r -> UInt32(c) in r, f.ranges)
+
+"Read the file of the face `f`, from the first of its sources that gives one"
+load!(f::WebFace) = begin
+  f.face == C_NULL || return f.face
+  for src in f.sources
+    if src isa AbstractString
+      has(src) || continue
+      st = style(100clamp(round(Int, sum(f.weights) / 200), 1, 9), f.italic)
+      f.face = Skia.sk_fontmgr_match_family_style(mgr(), String(src), st)
+      Skia.sk_fontstyle_delete(st)
+    else
+      bytes = try src() catch; nothing end
+      (bytes === nothing || isempty(bytes)) && continue
+      bytes = Vector{UInt8}(bytes)
+      data = Skia.sk_data_new_with_copy(bytes, Csize_t(length(bytes)))
+      f.face = Skia.sk_fontmgr_create_from_data(mgr(), data, Cint(0))
+      Skia.sk_data_unref(data)
+      f.face == C_NULL || describe!(f.face, bytes)
+    end
+    f.face == C_NULL || break
+  end
+  f.face
+end
+
+"Keep Core Text's description of the font in `bytes`, for the face that Skia made of them"
+describe!(face, bytes) = begin
+  Sys.isapple() || return
+  try
+    data = ccall((:CFDataCreate, CF), Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{UInt8}, Clong), C_NULL, bytes, length(bytes))
+    desc = ccall((:CTFontManagerCreateFontDescriptorFromData, CT), Ptr{Cvoid}, (Ptr{Cvoid},), data)
+    release(data)
+    desc == C_NULL || (described[face] = desc)
+  catch
+  end
+  nothing
+end
+
+"The face of the page's font `key` that's nearest the weight and the slant, of those that have the letter `c`, or C_NULL"
+pick(key, weight, italic, c::Char='A') = begin
+  far(f) = (f.italic != italic, f.weights[1] <= weight <= f.weights[2] ? 0 : min(abs(weight - f.weights[1]), abs(weight - f.weights[2])))
+  for f in sort(filter(f -> covers(f, c), web[key]); by=far)
+    load!(f) == C_NULL || return f.face
+  end
+  Ptr{Skia.sk_typeface_t}(C_NULL)
+end
+
+"""
+Note the faces that a page's @font-face rules give a font, under the name
+`key`. Each is its weights, whether it's italic, the letters that it's for
+and its sources. It's true when a face for plain text can be read, so that
+`key` can be used as a family.
+"""
+web!(key::String, faces) = begin
+  found = get!(web, key) do
+    [WebFace(w, italic, ranges, sources, C_NULL) for (w, italic, ranges, sources) in faces]
+  end
+  # The sources of a font that couldn't be read are asked again: a file may have come from the web since
+  for (f, (_, _, _, sources)) in zip(found, faces)
+    f.face == C_NULL && (f.sources = sources)
+  end
+  pick(key, 400, false) != C_NULL
+end
+
 "True when this computer has a font of the family `name`"
-has(name::AbstractString) = get!(installed, name) do
+has(name::AbstractString) = haskey(web, name) || get!(installed, name) do
   set = Skia.sk_fontmgr_match_family(mgr(), name)
   set == C_NULL && return false
   n = Skia.sk_fontstyleset_get_count(set)
@@ -98,7 +175,7 @@ face(name::String, weight::Int, italic::Bool) = begin
   weight = 100clamp(round(Int, weight / 100), 1, 9)
   get!(faces, (name, weight, italic)) do
     st = style(weight, italic)
-    found = Skia.sk_fontmgr_match_family_style(mgr(), name, st)
+    found = haskey(web, name) ? pick(name, weight, italic) : Skia.sk_fontmgr_match_family_style(mgr(), name, st)
     # A family that has no such face, which shouldn't happen, is drawn in the font that every Mac has
     found == C_NULL && name != STANDARD && (found = Skia.sk_fontmgr_match_family_style(mgr(), STANDARD, st))
     Skia.sk_fontstyle_delete(st)
@@ -130,7 +207,9 @@ at(face::Ptr{Skia.sk_typeface_t}, size::Float64, name=family_name(face)) = get!(
   st = Skia.sk_typeface_get_fontstyle(face)
   weight, italic = Int(Skia.sk_fontstyle_get_weight(st)), Skia.sk_fontstyle_get_slant(st) != Skia.SK_FONT_STYLE_SLANT_UPRIGHT
   Skia.sk_fontstyle_delete(st)
-  Font(raw, face, name, size, ascent, descent, gap, m[].xHeight > 0 ? Float64(m[].xHeight) : size / 2, under, thick, core_font(name, weight, italic, size))
+  core = haskey(described, face) ? (size > 0 ? ccall((:CTFontCreateWithFontDescriptor, CT), Ptr{Cvoid}, (Ptr{Cvoid}, Float64, Ptr{Cvoid}), described[face], size, C_NULL) : C_NULL) :
+         haskey(web, name) ? C_NULL : core_font(name, weight, italic, size)
+  Font(raw, face, name, size, ascent, descent, gap, m[].xHeight > 0 ? Float64(m[].xHeight) : size / 2, under, thick, core)
 end
 
 "The font for text that asks for `families` in turn, `size` px tall, of a weight from 100 to 900"
@@ -171,6 +250,14 @@ end
 
 "A font of the size of `f` that has the letter `c`, which the system picks, or nothing"
 stand_in(f::Font, c::Char) = begin
+  if haskey(web, f.family)
+    # Another file of the page's font may have the letter: a font from the web comes in parts, each for some letters
+    st = Skia.sk_typeface_get_fontstyle(f.face)
+    weight, italic = Int(Skia.sk_fontstyle_get_weight(st)), Skia.sk_fontstyle_get_slant(st) != Skia.SK_FONT_STYLE_SLANT_UPRIGHT
+    Skia.sk_fontstyle_delete(st)
+    other = pick(f.family, weight, italic, c)
+    other != C_NULL && other != f.face && Skia.sk_font_unichar_to_glyph(at(other, f.size, f.family).raw, Int32(c)) != 0 && return at(other, f.size, f.family)
+  end
   found = get!(stand_ins, (c, 400, false)) do
     st = style(400, false)
     face = Skia.sk_fontmgr_match_family_style_character(mgr(), f.family, st, C_NULL, Int32(0), Int32(c))

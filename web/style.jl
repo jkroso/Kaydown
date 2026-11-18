@@ -7,86 +7,228 @@
 #     s = look[element]
 #     s.display, s.color, s.size   # :block, 0xff000000, 16.0
 #     px(s.width, 700)             # a length in px, where a percent is of 700
+#     look.before[element]         # the style of its `::before`, when it has one. Also `after` and `marker`.
 #
 # A length is a `Len`: so many px, a share of something that's known later
-# (the width of the box that the element is in), or `auto`.
-# A colour is a UInt32 like 0xAARRGGBB.
+# (the width of the box that the element is in), `auto`, or a word like
+# `min-content`. A colour is a UInt32 like 0xAARRGGBB.
+#
+# What's here: the cascade, with layers (@layer), `!important`, `inherit`,
+# `initial`, `unset` and `revert`. Variables (`--x`, `var(--x)`). Sums
+# (`calc()`, `min()`, `max()`, `clamp()`). Every way to write a colour. The
+# parts of an element (`::before`, `::after`, `::marker`). Rules for the box
+# that an element is in (@container), once `containers` says how big each is.
+# Fonts from the web (@font-face). An animation doesn't run: an element shows
+# the end of one that stops and stays there.
 
 @use "./dom" Element Text Document attr walk
-@use "./css" Declaration Rule sheet declarations matches media pieces
+@use "./css" Declaration Rule Stylesheet Selector sheet read! declarations matches media container container_name pieces closing resolve selectors
+@use "./text" => Fonts
 
-# --- lengths and colours ------------------------------------------------------------------
+# --- lengths ------------------------------------------------------------------------------
 
 struct Len
   px::Float64
   pct::Float64    # a share of what the length is a percent of: 0.5 for 50%
   em::Float64     # so many of the element's font size. It's px by the time the style is made.
   auto::Bool
+  how::Symbol     # :length, or a word in place of a length: :min_content, :max_content, :fit_content, :stretch, :content
+  math::Any       # nothing, or the `Math` of a length that's the least or the most of several
 end
 
-Len(px::Real) = Len(px, 0, 0, false)
+"A length that's worked out from others when what a percent is of is known: the least of them, the most, their sum, or one of them made bigger"
+struct Math
+  op::Symbol            # :min, :max, :add or :scale
+  args::Vector{Len}
+  k::Float64
+end
+
+Len(px::Real) = Len(px, 0, 0, false, :length, nothing)
+Len(px, pct, em, auto) = Len(px, pct, em, auto, :length, nothing)
+Len(m::Math) = Len(0, 0, 0, false, :length, m)
 const AUTO = Len(0, 0, 0, true)
 const ZERO = Len(0)
 percent(share) = Len(0, share, 0, false)
+"A word in place of a length, like `min-content`"
+word(how::Symbol) = Len(0, 0, 0, false, how, nothing)
+
+solve(m::Math, base) = m.op == :min ? minimum(a -> px(a, base), m.args) : m.op == :max ? maximum(a -> px(a, base), m.args) :
+                       m.op == :add ? sum(a -> px(a, base), m.args) : px(m.args[1], base) * m.k
 
 "`l` in px, where a percent is of `base`"
-px(l::Len, base=0.0) = l.px + l.pct * (isfinite(base) ? base : 0.0)
+px(l::Len, base=0.0) = l.math === nothing ? l.px + l.pct * (isfinite(base) ? base : 0.0) : solve(l.math::Math, base)
 isauto(l::Len) = l.auto
-ispercent(l::Len) = l.pct != 0
-Base.:+(a::Len, b::Len) = Len(a.px + b.px, a.pct + b.pct, a.em + b.em, false)
-Base.:-(a::Len, b::Len) = Len(a.px - b.px, a.pct - b.pct, a.em - b.em, false)
-Base.:*(a::Len, k::Real) = Len(a.px * k, a.pct * k, a.em * k, false)
+ispercent(l::Len) = l.math === nothing ? l.pct != 0 : any(ispercent, (l.math::Math).args)
+"True for a word in place of a length, like `min-content`"
+iskey(l::Len) = l.how != :length
+Base.:+(a::Len, b::Len) = a.math === nothing && b.math === nothing ? Len(a.px + b.px, a.pct + b.pct, a.em + b.em, false) : Len(Math(:add, [a, b], 1.0))
+Base.:*(a::Len, k::Real) = a.math === nothing ? Len(a.px * k, a.pct * k, a.em * k, false) : Len(Math(:scale, [a], Float64(k)))
+Base.:-(a::Len, b::Len) = a + b * -1
+
+"`l` with its ems as px, for a font `size` px tall"
+flat(l::Len, size) = begin
+  if l.math === nothing
+    return l.em == 0 ? l : Len(l.px + l.em * size, l.pct, 0, l.auto, l.how, nothing)
+  end
+  m = l.math::Math
+  out = Len(Math(m.op, Len[flat(a, size) for a in m.args], m.k))
+  ispercent(out) ? out : Len(px(out))
+end
 
 "What's known of the page while a style is worked out"
 struct Context
   wide::Float64     # how wide the page is, in px
   root::Float64     # the font size of the <html> element
   quirks::Bool      # a number with no unit is px
+  high::Float64     # how high the window that the page is seen through is
 end
+Context(wide, root, quirks) = Context(wide, root, quirks, 800.0)
 
 const UNITS = Dict("px" => 1.0, "pt" => 4 / 3, "pc" => 16.0, "in" => 96.0, "cm" => 96 / 2.54, "mm" => 96 / 25.4, "q" => 96 / 101.6)
 const NUMBER = r"^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)([a-z%]*)$"
+const ANGLES = Dict("deg" => π / 180, "rad" => 1.0, "grad" => π / 200, "turn" => 2π)
+
+"What the number `x` with the unit `unit` is: a length, or a plain number (an angle is in radians), or nothing"
+quantity(x, unit, c::Context) =
+  unit == "" ? x : unit == "%" ? Len(0, x / 100, 0, false) : unit == "px" ? Len(x) :
+  unit == "em" ? Len(0, 0, x, false) : unit in ("ex", "ch") ? Len(0, 0, x / 2, false) : unit == "cap" ? Len(0, 0, 0.7x, false) :
+  unit == "ic" ? Len(0, 0, x, false) : unit == "lh" ? Len(0, 0, 1.2x, false) : unit == "rlh" ? Len(1.2x * c.root) :
+  unit == "rem" ? Len(x * c.root) :
+  unit in ("vw", "svw", "lvw", "dvw", "vi", "cqw", "cqi") ? Len(x * c.wide / 100) :
+  unit in ("vh", "svh", "lvh", "dvh", "vb", "cqh", "cqb") ? Len(x * c.high / 100) :
+  unit in ("vmin", "svmin", "lvmin", "dvmin", "cqmin") ? Len(x * min(c.wide, c.high) / 100) :
+  unit in ("vmax", "svmax", "lvmax", "dvmax", "cqmax") ? Len(x * max(c.wide, c.high) / 100) :
+  haskey(UNITS, unit) ? Len(x * UNITS[unit]) : haskey(ANGLES, unit) ? x * ANGLES[unit] :
+  unit in ("s", "ms", "x", "dppx", "dpi", "hz") ? x : nothing
 
 "The length that `v` writes, or nothing. With `bare`, a number with no unit is px."
 len(v::AbstractString, c::Context; bare=c.quirks, percent=true) = begin
   v = lowercase(strip(v))
   v == "auto" && return AUTO
-  startswith(v, "calc(") && endswith(v, ")") && return calc(SubString(v, 6, lastindex(v) - 1), c)
   m = match(NUMBER, v)
+  if m !== nothing
+    x = tryparse(Float64, m[1])
+    x === nothing && return nothing
+    unit = m[2]
+    unit == "" && return x == 0 || bare ? Len(x) : nothing
+    unit == "%" && return percent ? Len(0, x / 100, 0, false) : nothing
+    l = quantity(x, unit, c)
+    return l isa Len ? l : nothing
+  end
+  occursin('(', v) || return nothing
+  x = math(v, c)
+  x isa Len ? (percent || !ispercent(x) ? x : nothing) : x isa Float64 && (x == 0 || bare) ? Len(x) : nothing
+end
+
+"The number that `v` writes, as it is or as a sum, or nothing"
+number(v::AbstractString, c::Context) = begin
+  x = tryparse(Float64, v)
+  x !== nothing && return x
+  occursin('(', v) || return nothing
+  x = math(v, c)
+  x isa Float64 ? x : nothing
+end
+
+"The angle that `v` writes, in radians, or nothing. A plain 0 is an angle."
+angle(v::AbstractString) = begin
+  m = match(r"^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)(deg|rad|grad|turn)?$", lowercase(strip(v)))
   m === nothing && return nothing
-  x = tryparse(Float64, m[1])
-  x === nothing && return nothing
-  unit = m[2]
-  unit == "" ? (x == 0 || bare ? Len(x) : nothing) :
-  unit == "%" ? (percent ? Len(0, x / 100, 0, false) : nothing) :
-  unit == "em" ? Len(0, 0, x, false) : unit in ("ex", "ch") ? Len(0, 0, x / 2, false) :
-  unit == "rem" ? Len(x * c.root) : unit == "vw" ? Len(x * c.wide / 100) : unit == "vh" ? Len(x * 8) :
-  haskey(UNITS, unit) ? Len(x * UNITS[unit]) : nothing
+  x = Base.parse(Float64, m[1])
+  m[2] === nothing ? (x == 0 ? 0.0 : nothing) : x * ANGLES[m[2]]
 end
 
 "True for a length that's less than nothing whatever it's a share of. A sum like `100% - 20px` isn't."
-negative(l::Len) = max(l.px, l.pct, l.em) <= 0 && min(l.px, l.pct, l.em) < 0
+negative(l::Len) = l.math === nothing && max(l.px, l.pct, l.em) <= 0 && min(l.px, l.pct, l.em) < 0
 
 "A length that isn't `auto` and isn't less than nothing"
 size_len(v, c; kw...) = (l = len(v, c; kw...); l === nothing || l.auto || negative(l) ? nothing : l)
 "A length that can be `auto`, and isn't less than nothing"
 box_len(v, c; kw...) = (l = len(v, c; kw...); l === nothing || negative(l) ? nothing : l)
 
-"What a sum in `calc()` comes to: lengths added and taken away, and made so many times bigger or smaller"
-calc(s::AbstractString, c::Context) = begin
-  tokens = [m.match for m in eachmatch(r"\(|\)|[*/]|[+-](?=\s)|[+-]?[0-9.]+[a-z%]*", s)]
+const MATH = r"[a-z][a-z0-9-]*\(|\(|\)|,|[*/]|[+-](?=\s)|[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?[a-z%]*|-?[a-z][a-z-]*"
+
+plain(a) = a isa Len && a.math === nothing && a.pct == 0 && a.em == 0 && !a.auto
+
+"What the function `name` of a sum makes of `args`: each is a length, a number or a word"
+apply(name, args) = begin
+  any(isnothing, args) && return nothing
+  nums = all(a -> a isa Float64, args)
+  if name == "calc"
+    length(args) == 1 ? args[1] : nothing
+  elseif name in ("min", "max")
+    isempty(args) && return nothing
+    f = name == "min" ? min : max
+    nums ? f(args...) : !all(a -> a isa Len, args) ? nothing : all(plain, args) ? Len(f((a.px for a in args)...)) : Len(Math(Symbol(name), Len[args...], 1.0))
+  elseif name == "clamp"
+    length(args) == 3 || return nothing
+    lo, mid, hi = args
+    top = hi isa Symbol ? mid : apply("min", Any[mid, hi])
+    lo isa Symbol ? top : apply("max", Any[lo, top])
+  elseif name == "abs" && length(args) == 1
+    nums ? abs(args[1]) : plain(args[1]) ? Len(abs(args[1].px)) : nothing
+  elseif name == "sign" && length(args) == 1
+    nums ? sign(args[1]) : plain(args[1]) ? sign(args[1].px) : nothing
+  elseif name == "round"
+    how = !isempty(args) && args[1] isa Symbol ? popfirst!(args) : :nearest
+    f = how == :up ? ceil : how == :down ? floor : how == :to_zero ? trunc : round
+    a = args[1]
+    b = length(args) > 1 ? args[2] : (a isa Len ? Len(1) : 1.0)
+    a isa Float64 && b isa Float64 ? (b == 0 ? NaN : f(a / b) * b) : plain(a) && plain(b) && b.px != 0 ? Len(f(a.px / b.px) * b.px) : nothing
+  elseif name in ("mod", "rem") && length(args) == 2
+    f = name == "mod" ? mod : rem
+    nums ? f(args...) : all(plain, args) && args[2].px != 0 ? Len(f(args[1].px, args[2].px)) : nothing
+  elseif name in ("sin", "cos", "tan", "asin", "acos", "atan", "sqrt", "exp") && length(args) == 1 && nums
+    name == "sin" ? sin(args[1]) : name == "cos" ? cos(args[1]) : name == "tan" ? tan(args[1]) : name == "asin" ? asin(clamp(args[1], -1, 1)) :
+    name == "acos" ? acos(clamp(args[1], -1, 1)) : name == "atan" ? atan(args[1]) : name == "sqrt" ? sqrt(max(0.0, args[1])) : exp(args[1])
+  elseif name == "pow" && length(args) == 2 && nums
+    Float64(args[1]^args[2])
+  elseif name == "atan2" && length(args) == 2
+    nums ? atan(args...) : all(plain, args) ? atan(args[1].px, args[2].px) : nothing
+  elseif name == "log" && nums && length(args) in (1, 2)
+    length(args) == 1 ? log(max(args[1], 0.0)) : log(args[2], max(args[1], 0.0))
+  elseif name == "hypot" && !isempty(args)
+    nums ? hypot(args...) : all(plain, args) ? Len(hypot((a.px for a in args)...)) : nothing
+  else
+    nothing
+  end
+end
+
+"""
+What a sum like `calc(100% - 2 * 10px)` or `clamp(1rem, 2.5vw, 2rem)` comes
+to: a length, a number, or nothing. `names` gives the numbers that words
+stand for, as in a colour that's worked out from another.
+"""
+math(s::AbstractString, c::Context; names=nothing) = begin
+  toks = [m.match for m in eachmatch(MATH, lowercase(s))]
   i = Ref(1)
-  peek() = i[] <= length(tokens) ? tokens[i[]] : ""
+  peek() = i[] <= length(toks) ? toks[i[]] : ""
   take() = (t = peek(); i[] += 1; t)
   value() = begin
     t = take()
     if t == "("
-      v = sum()
+      v = total()
       take()
       return v
+    elseif endswith(t, "(")
+      name = replace(t[1:end-1], r"^(webkit|moz)-" => "")
+      args = Any[]
+      if peek() != ")"
+        push!(args, total())
+        while peek() == ","
+          take()
+          push!(args, total())
+        end
+      end
+      take()
+      return apply(name, args)
     end
-    l = len(t, c; bare=false)
-    l !== nothing ? l : (x = tryparse(Float64, t)) === nothing ? nothing : x
+    m = match(NUMBER, t)
+    if m !== nothing
+      x = tryparse(Float64, m[1])
+      return x === nothing ? nothing : quantity(x, m[2], c)
+    end
+    names !== nothing && haskey(names, t) && return names[t]
+    t == "pi" ? Float64(π) : t == "e" ? Float64(ℯ) : t == "infinity" ? Inf : t == "-infinity" ? -Inf : t == "" ? nothing : Symbol(replace(t, '-' => '_'))
   end
   product() = begin
     a = value()
@@ -94,24 +236,28 @@ calc(s::AbstractString, c::Context) = begin
       op = take()
       b = value()
       (a === nothing || b === nothing) && return nothing
-      a = op == "*" ? (a isa Len && b isa Real ? a * b : a isa Real && b isa Len ? b * a : a isa Real && b isa Real ? a * b : nothing) :
-          b isa Real && b != 0 ? (a isa Len ? a * (1 / b) : a / b) : nothing
+      a = op == "*" ? (a isa Len && b isa Float64 ? a * b : a isa Float64 && b isa Len ? b * a : a isa Float64 && b isa Float64 ? a * b : nothing) :
+          b isa Float64 && b != 0 ? (a isa Len ? a * (1 / b) : a isa Float64 ? a / b : nothing) : nothing
     end
     a
   end
-  sum() = begin
+  total() = begin
     a = product()
     while peek() in ("+", "-")
       op = take()
       b = product()
-      (a isa Len && b isa Len) || return nothing
-      a = op == "+" ? a + b : a - b
+      a = a isa Len && b isa Len ? (op == "+" ? a + b : a - b) : a isa Float64 && b isa Float64 ? (op == "+" ? a + b : a - b) : nothing
     end
     a
   end
-  v = sum()
-  v isa Len ? v : nothing
+  v = total()
+  v isa Symbol ? nothing : v
 end
+
+"What `calc(...)` comes to as a length, or nothing: kept for the callers that have only what's in its brackets"
+calc(s::AbstractString, c::Context) = (v = math("calc(" * s * ")", c); v isa Len ? v : nothing)
+
+# --- colours ------------------------------------------------------------------------------
 
 const COLOURS = Dict{String,UInt32}(
   "black" => 0xff000000, "silver" => 0xffc0c0c0, "gray" => 0xff808080, "grey" => 0xff808080, "white" => 0xffffffff, "maroon" => 0xff800000,
@@ -144,10 +290,21 @@ const COLOURS = Dict{String,UInt32}(
   "slategray" => 0xff708090, "slategrey" => 0xff708090, "snow" => 0xfffffafa, "springgreen" => 0xff00ff7f, "steelblue" => 0xff4682b4,
   "tan" => 0xffd2b48c, "thistle" => 0xffd8bfd8, "tomato" => 0xffff6347, "turquoise" => 0xff40e0d0, "violet" => 0xffee82ee, "wheat" => 0xfff5deb3,
   "whitesmoke" => 0xfff5f5f5, "yellowgreen" => 0xff9acd32, "transparent" => 0x00000000,
-  "-webkit-link" => 0xff0000ee, "windowtext" => 0xff000000, "window" => 0xffffffff, "buttonface" => 0xffefefef, "buttontext" => 0xff000000)
+  # The colours of the system, as a light Mac has them
+  "-webkit-link" => 0xff0000ee, "linktext" => 0xff0000ee, "visitedtext" => 0xff551a8b, "activetext" => 0xffff0000, "-webkit-activelink" => 0xffff0000,
+  "windowtext" => 0xff000000, "window" => 0xffffffff, "canvas" => 0xffffffff, "canvastext" => 0xff000000, "buttonface" => 0xffefefef,
+  "buttontext" => 0xff000000, "buttonborder" => 0xff767676, "field" => 0xffffffff, "fieldtext" => 0xff000000, "highlight" => 0xffb3d7ff,
+  "highlighttext" => 0xff000000, "selecteditem" => 0xff0063e1, "selecteditemtext" => 0xffffffff, "mark" => 0xffffff00, "marktext" => 0xff000000,
+  "graytext" => 0xff808080, "accentcolor" => 0xff0a7aff, "accentcolortext" => 0xffffffff, "threedface" => 0xffefefef, "menu" => 0xffefefef,
+  "menutext" => 0xff000000, "infobackground" => 0xffffffe1, "infotext" => 0xff000000, "activeborder" => 0xff767676, "inactiveborder" => 0xff767676,
+  "threedshadow" => 0xff767676, "threeddarkshadow" => 0xff767676, "threedhighlight" => 0xffefefef, "threedlightshadow" => 0xffefefef,
+  "buttonhighlight" => 0xffefefef, "buttonshadow" => 0xff767676, "captiontext" => 0xff000000, "inactivecaptiontext" => 0xff808080,
+  "background" => 0xffffffff, "appworkspace" => 0xffffffff, "scrollbar" => 0xffffffff, "activecaption" => 0xffffffff, "inactivecaption" => 0xffffffff)
 
 argb(r, g, b, a=1.0) = UInt32(round(clamp(a, 0, 1) * 255)) << 24 | UInt32(round(clamp(r, 0, 255))) << 16 | UInt32(round(clamp(g, 0, 255))) << 8 | UInt32(round(clamp(b, 0, 255)))
 alpha(c::UInt32) = (c >> 24) / 255
+# In a style, this stands for the element's own text colour until that's known. It's a colour that draws nothing, which no page writes.
+const CURRENT = 0x00fffe01
 
 "The colour of six or eight hex digits, or of three or four"
 hex(h) = begin
@@ -162,36 +319,286 @@ end
 
 hue(p, q, t) = (t = mod(t, 1); t < 1 / 6 ? p + (q - p) * 6t : t < 1 / 2 ? q : t < 2 / 3 ? p + (q - p) * (2 / 3 - t) * 6 : p)
 
+# Each way to write a colour is a space. These turn a colour of a space into red, green and blue from 0 to 1, and back.
+lin(c) = abs(c) <= 0.04045 ? c / 12.92 : sign(c) * ((abs(c) + 0.055) / 1.055)^2.4
+gam(c) = abs(c) <= 0.0031308 ? 12.92c : sign(c) * (1.055 * abs(c)^(1 / 2.4) - 0.055)
+times(m, v) = (m[1] * v[1] + m[2] * v[2] + m[3] * v[3], m[4] * v[1] + m[5] * v[2] + m[6] * v[3], m[7] * v[1] + m[8] * v[2] + m[9] * v[3])
+const RGB_XYZ = (0.41239079926595934, 0.357584339383878, 0.1804807884018343, 0.21263900587151027, 0.715168678767756, 0.07219231536073371,
+                 0.01933081871559182, 0.11919477979462598, 0.9505321522496607)
+const XYZ_RGB = (3.2409699419045226, -1.537383177570094, -0.4986107602930034, -0.9692436362808796, 1.8759675015077202, 0.04155505740717559,
+                 0.05563007969699366, -0.20397695888897652, 1.0569715142428786)
+const P3_XYZ = (0.4865709486482162, 0.26566769316909306, 0.1982172852343625, 0.2289745640697488, 0.6917385218365064, 0.079286914093745,
+                0.0, 0.04511338185890264, 1.043944368900976)
+const XYZ_P3 = (2.493496911941425, -0.9313836179191239, -0.40271078445071684, -0.8294889695615747, 1.7626640603183463, 0.023624685841943577,
+                0.03584583024378447, -0.07617238926804182, 0.9568845240076872)
+const D65_D50 = (1.0479297925449969, 0.022946870601609652, -0.05019226628920524, 0.02962780877005599, 0.9904344267538799, -0.017073799063418826,
+                 -0.009243040646204504, 0.015055191490298152, 0.7518742814281371)
+const D50_D65 = (0.955473421488075, -0.02309845494876471, 0.06325924320057072, -0.0283697093338637, 1.0099953980813041, 0.021041441191917323,
+                 0.012314014864481998, -0.020507649298898964, 1.330365926242124)
+const WHITE = (0.3457 / 0.3585, 1.0, (1 - 0.3457 - 0.3585) / 0.3585)
+
+hsl_rgb(h, s, l) = begin
+  q = l < 0.5 ? l * (1 + s) : l + s - l * s
+  p = 2l - q
+  (hue(p, q, h / 360 + 1 / 3), hue(p, q, h / 360), hue(p, q, h / 360 - 1 / 3))
+end
+rgb_hsl(r, g, b) = begin
+  hi, lo = max(r, g, b), min(r, g, b)
+  l = (hi + lo) / 2
+  d = hi - lo
+  d == 0 && return (0.0, 0.0, l)
+  s = d / (1 - abs(2l - 1))
+  h = hi == r ? mod((g - b) / d, 6) : hi == g ? (b - r) / d + 2 : (r - g) / d + 4
+  (60h, s, l)
+end
+hwb_rgb(h, w, k) = begin
+  w + k >= 1 && return (w / (w + k), w / (w + k), w / (w + k))
+  map(x -> x * (1 - w - k) + w, hsl_rgb(h, 1.0, 0.5))
+end
+rgb_hwb(r, g, b) = (rgb_hsl(r, g, b)[1], min(r, g, b), 1 - max(r, g, b))
+oklab_rgb(L, a, b) = begin
+  l, m, s = (L + 0.3963377774a + 0.2158037573b)^3, (L - 0.1055613458a - 0.0638541728b)^3, (L - 0.0894841775a - 1.2914855480b)^3
+  map(gam, (4.0767416621l - 3.3077115913m + 0.2309699292s, -1.2684380046l + 2.6097574011m - 0.3413193965s, -0.0041960863l - 0.7034186147m + 1.7076147010s))
+end
+rgb_oklab(r, g, b) = begin
+  r, g, b = lin(r), lin(g), lin(b)
+  l, m, s = cbrt(0.4122214708r + 0.5363325363g + 0.0514459929b), cbrt(0.2119034982r + 0.6806995451g + 0.1073969566b), cbrt(0.0883024619r + 0.2817188376g + 0.6299787005b)
+  (0.2104542553l + 0.7936177850m - 0.0040720468s, 1.9779984951l - 2.4285922050m + 0.4505937099s, 0.0259040371l + 0.7827717662m - 0.8086757660s)
+end
+lab_rgb(L, a, b) = begin
+  e, k = 216 / 24389, 24389 / 27
+  fy = (L + 16) / 116
+  fx, fz = a / 500 + fy, fy - b / 200
+  xyz = ((fx^3 > e ? fx^3 : (116fx - 16) / k) * WHITE[1], (L > k * e ? fy^3 : L / k) * WHITE[2], (fz^3 > e ? fz^3 : (116fz - 16) / k) * WHITE[3])
+  map(gam, times(XYZ_RGB, times(D50_D65, xyz)))
+end
+rgb_lab(r, g, b) = begin
+  e, k = 216 / 24389, 24389 / 27
+  xyz = times(D65_D50, times(RGB_XYZ, (lin(r), lin(g), lin(b))))
+  f = map((v, w) -> (t = v / w; t > e ? cbrt(t) : (k * t + 16) / 116), xyz, WHITE)
+  (116f[2] - 16, 500 * (f[1] - f[2]), 200 * (f[2] - f[3]))
+end
+polar(l, a, b) = (l, hypot(a, b), mod(rad2deg(atan(b, a)), 360))
+square(l, c, h) = (l, c * cosd(h), c * sind(h))
+
+const ROUND = ("hsl", "hwb", "lch", "oklch")   # the spaces whose colours have a hue
+
+"The red, green and blue, from 0 to 1, of the colour with the channels `x`, `y` and `z` in `space`"
+from_space(space, x, y, z) =
+  space == "srgb" ? (x, y, z) : space == "srgb-linear" ? map(gam, (x, y, z)) : space == "hsl" ? hsl_rgb(x, y, z) : space == "hwb" ? hwb_rgb(x, y, z) :
+  space == "oklab" ? oklab_rgb(x, y, z) : space == "oklch" ? oklab_rgb(square(x, y, z)...) : space == "lab" ? lab_rgb(x, y, z) :
+  space == "lch" ? lab_rgb(square(x, y, z)...) : space in ("xyz", "xyz-d65") ? map(gam, times(XYZ_RGB, (x, y, z))) :
+  space == "xyz-d50" ? map(gam, times(XYZ_RGB, times(D50_D65, (x, y, z)))) :
+  space == "display-p3" ? map(gam, times(XYZ_RGB, times(P3_XYZ, map(lin, (x, y, z))))) : (x, y, z)
+
+"The channels in `space` of the colour with the red, green and blue `r`, `g` and `b`, from 0 to 1"
+to_space(space, r, g, b) =
+  space == "srgb" ? (r, g, b) : space == "srgb-linear" ? map(lin, (r, g, b)) : space == "hsl" ? rgb_hsl(r, g, b) : space == "hwb" ? rgb_hwb(r, g, b) :
+  space == "oklab" ? rgb_oklab(r, g, b) : space == "oklch" ? polar(rgb_oklab(r, g, b)...) : space == "lab" ? rgb_lab(r, g, b) :
+  space == "lch" ? polar(rgb_lab(r, g, b)...) : space in ("xyz", "xyz-d65") ? times(RGB_XYZ, map(lin, (r, g, b))) :
+  space == "xyz-d50" ? times(D65_D50, times(RGB_XYZ, map(lin, (r, g, b)))) :
+  space == "display-p3" ? map(gam, times(XYZ_P3, times(RGB_XYZ, map(lin, (r, g, b))))) : (r, g, b)
+
+unpack(c::UInt32) = (((c >> 16) & 0xff) / 255, ((c >> 8) & 0xff) / 255, (c & 0xff) / 255, (c >> 24) / 255)
+const PLAIN = Context(0.0, 16.0, false)
+
+"The words of what's in a colour's brackets: a comma or a space is between two, and a `/` is a word of its own"
+channels(inside) = begin
+  out = IOBuffer()
+  depth = 0
+  for ch in inside
+    ch == '(' ? (depth += 1) : ch == ')' ? (depth -= 1) : nothing
+    depth == 0 && ch == ',' ? print(out, ' ') : depth == 0 && ch == '/' ? print(out, " / ") : print(out, ch)
+  end
+  terms(String(take!(out)))
+end
+
+"The colour that `name(inside)` writes, like `oklch(60% 0.2 240 / 50%)`, or nothing"
+functional(name, inside) = begin
+  if name == "light-dark"
+    parts = pieces(inside, ',')
+    return isempty(parts) ? nothing : colour(parts[1])
+  elseif name == "color-mix"
+    parts = [strip(p) for p in pieces(inside, ',')]
+    length(parts) == 3 || return nothing
+    m = match(r"^in\s+([a-z0-9-]+)", parts[1])
+    m === nothing && return nothing
+    space = m[1]
+    one(p) = begin
+      ws = terms(p)
+      share = findfirst(w -> endswith(w, '%'), ws)
+      k = share === nothing ? nothing : tryparse(Float64, chop(ws[share]))
+      c = colour(join((ws[i] for i in eachindex(ws) if i != share), " "))
+      c isa UInt32 ? (c, k) : nothing
+    end
+    a, b = one(parts[2]), one(parts[3])
+    (a === nothing || b === nothing) && return nothing
+    pa, pb = a[2], b[2]
+    pa === nothing && pb === nothing && ((pa, pb) = (50.0, 50.0))
+    pa === nothing && (pa = 100 - pb)
+    pb === nothing && (pb = 100 - pa)
+    pa + pb <= 0 && return nothing
+    dim = min(1.0, (pa + pb) / 100)
+    t = pb / (pa + pb)
+    ra, rb = unpack(a[1]), unpack(b[1])
+    ca, cb = to_space(space, ra[1:3]...), to_space(space, rb[1:3]...)
+    al = ra[4] * (1 - t) + rb[4] * t
+    mixed = ntuple(3) do i
+      if (space in ROUND) && i == (space in ("hsl", "hwb") ? 1 : 3)
+        d = mod(cb[i] - ca[i] + 180, 360) - 180   # round the short way
+        return mod(ca[i] + d * t, 360)
+      end
+      # A see-through colour counts for less
+      al <= 0 ? ca[i] : (ca[i] * ra[4] * (1 - t) + cb[i] * rb[4] * t) / al
+    end
+    r, g, bl = from_space(space, mixed...)
+    return argb(255r, 255g, 255bl, al * dim)
+  end
+  haskey(SPACES, name) || name == "color" || return nothing
+  ws = channels(inside)
+  names = nothing
+  if !isempty(ws) && ws[1] == "from" && length(ws) > 2
+    origin = colour(ws[2])
+    origin isa UInt32 || return nothing
+    ws = ws[3:end]
+    r, g, b, a = unpack(origin)
+    space = name == "color" ? (isempty(ws) ? "srgb" : ws[1]) : SPACES[name][1]
+    x, y, z = to_space(space, r, g, b)
+    keys = name == "color" ? (occursin("xyz", space) ? ("x", "y", "z") : ("r", "g", "b")) : SPACES[name][2]
+    scale = name in ("rgb", "rgba") ? (255.0, 255.0, 255.0) : name in ("hsl", "hsla") ? (1.0, 100.0, 100.0) : name == "hwb" ? (1.0, 100.0, 100.0) : (1.0, 1.0, 1.0)
+    names = Dict{String,Any}(keys[1] => x * scale[1], keys[2] => y * scale[2], keys[3] => z * scale[3], "alpha" => a)
+  end
+  space = "srgb"
+  if name == "color"
+    isempty(ws) && return nothing
+    space = popfirst!(ws)
+  end
+  cut = findfirst(==("/"), ws)
+  comps = cut === nothing ? ws : ws[1:cut-1]
+  # The old way has the alpha as a fourth number
+  al = cut !== nothing && cut < length(ws) ? ws[cut+1] : length(comps) == 4 ? pop!(comps) : "1"
+  length(comps) == 3 || return nothing
+  # A channel: `full` is what 100% of it is, and `turn` is true for a hue
+  chan(t, full; turn=false) = begin
+    t == "none" && return 0.0
+    endswith(t, '%') && (x = tryparse(Float64, chop(t))) !== nothing && return x / 100 * full
+    turn && (x = angle(t)) !== nothing && return rad2deg(x)
+    (x = tryparse(Float64, t)) !== nothing && return x
+    x = math(t, PLAIN; names)
+    x isa Float64 ? x : nothing
+  end
+  a = chan(al, 1.0)
+  a === nothing && return nothing
+  rgb = if name in ("rgb", "rgba")
+    v = (chan(comps[1], 255.0), chan(comps[2], 255.0), chan(comps[3], 255.0))
+    any(isnothing, v) ? nothing : v ./ 255
+  elseif name in ("hsl", "hsla", "hwb")
+    # A plain number is a percent here
+    v = (chan(comps[1], 360.0; turn=true), chan(comps[2], 100.0), chan(comps[3], 100.0))
+    any(isnothing, v) ? nothing : (name == "hwb" ? hwb_rgb : hsl_rgb)(v[1], clamp(v[2] / 100, 0, 1), clamp(v[3] / 100, 0, 1))
+  elseif name in ("lab", "oklab")
+    v = (chan(comps[1], name == "lab" ? 100.0 : 1.0), chan(comps[2], name == "lab" ? 125.0 : 0.4), chan(comps[3], name == "lab" ? 125.0 : 0.4))
+    any(isnothing, v) ? nothing : from_space(name, v...)
+  elseif name in ("lch", "oklch")
+    v = (chan(comps[1], name == "lch" ? 100.0 : 1.0), chan(comps[2], name == "lch" ? 150.0 : 0.4), chan(comps[3], 360.0; turn=true))
+    any(isnothing, v) ? nothing : from_space(name, v...)
+  else
+    v = (chan(comps[1], 1.0), chan(comps[2], 1.0), chan(comps[3], 1.0))
+    any(isnothing, v) ? nothing : from_space(space, v...)
+  end
+  rgb === nothing ? nothing : argb(255rgb[1], 255rgb[2], 255rgb[3], a)
+end
+
+# Each way to write a colour with a word and brackets: its space, and the names of its channels
+const SPACES = Dict("rgb" => ("srgb", ("r", "g", "b")), "rgba" => ("srgb", ("r", "g", "b")), "hsl" => ("hsl", ("h", "s", "l")), "hsla" => ("hsl", ("h", "s", "l")),
+                    "hwb" => ("hwb", ("h", "w", "b")), "lab" => ("lab", ("l", "a", "b")), "lch" => ("lch", ("l", "c", "h")),
+                    "oklab" => ("oklab", ("l", "a", "b")), "oklch" => ("oklch", ("l", "c", "h")))
+
 """
-The colour that `v` writes, or nothing: a name, #rgb, #rrggbb, rgb(), rgba(),
-hsl() or hsla(). `currentcolor` is the symbol `:current`. With `loose`, as in
-a tag's `bgcolor`, the hex digits need no # before them.
+The colour that `v` writes, or nothing: a name, #rgb, #rrggbb, rgb(), hsl(),
+hwb(), lab(), lch(), oklab(), oklch(), color(), color-mix(), light-dark(), or
+one of these worked out from another (`rgb(from red r g b / 50%)`).
+`currentcolor` is the symbol `:current`. With `loose`, as in a tag's
+`bgcolor`, the hex digits need no # before them.
 """
 colour(v::AbstractString; loose=false) = begin
   v = lowercase(strip(v))
   haskey(COLOURS, v) && return COLOURS[v]
   v == "currentcolor" && return :current
   startswith(v, '#') && return hex(SubString(v, 2))
-  m = match(r"^(rgba?|hsla?)\(\s*([^)]*)\)$", v)
-  if m !== nothing
-    parts = split(replace(m[2], r"[,/]" => " "))
-    length(parts) in (3, 4) || return nothing
-    number(p, full) = endswith(p, '%') ? (x = tryparse(Float64, chop(p))) === nothing ? nothing : x / 100 * full : tryparse(Float64, replace(p, r"deg$" => ""))
-    a = length(parts) == 4 ? number(parts[4], 1.0) : 1.0
-    a === nothing && return nothing
-    if startswith(m[1], "rgb")
-      rgb = number.(parts[1:3], 255.0)
-      any(isnothing, rgb) && return nothing
-      return argb(rgb..., a)
-    end
-    h, s, l = number(parts[1], 360.0), number(parts[2], 1.0), number(parts[3], 1.0)
-    (h === nothing || s === nothing || l === nothing) && return nothing
-    q = l < 0.5 ? l * (1 + s) : l + s - l * s
-    p = 2l - q
-    return argb(255hue(p, q, h / 360 + 1 / 3), 255hue(p, q, h / 360), 255hue(p, q, h / 360 - 1 / 3), a)
-  end
+  m = match(r"^([a-z-]+)\((.*)\)$"s, v)
+  m !== nothing && return functional(m[1], m[2])
   loose && length(v) in (3, 6) ? hex(v) : nothing
 end
+
+"A colour for a style: the element's own text colour is `CURRENT` until it's known"
+paint(v) = (x = colour(v); x === :current ? CURRENT : x)
+
+# --- the parts of a style that hold several things ----------------------------------------
+
+"One step of a `transform`: a move by `x` and `y`, or a turn, a stretch or a slant with the numbers `n`"
+struct Turn
+  kind::Symbol            # :move, :matrix
+  x::Len
+  y::Len
+  n::NTuple{6,Float64}    # of a matrix: a, b, c, d, e, f, as CSS's matrix() has them
+end
+
+"One shadow of a box or of text. The colour is `CURRENT` for the element's own."
+struct Shade
+  dx::Float64
+  dy::Float64
+  blur::Float64
+  spread::Float64
+  color::UInt32
+  inset::Bool
+end
+
+"One step of a `filter`, like blur(4px) or brightness(1.2)"
+struct Effect
+  kind::Symbol
+  x::Float64
+  y::Float64
+  z::Float64
+  color::UInt32
+end
+
+"How big a track of a grid can be: a length, a share of what's left (`fr`), or as its content asks"
+struct Size
+  kind::Symbol     # :length, :fr, :auto, :min_content, :max_content or :fit (fit-content, no more than `len`)
+  len::Len
+  fr::Float64
+end
+struct Track
+  min::Size
+  max::Size
+end
+const ANY_TRACK = Track(Size(:auto, ZERO, 0.0), Size(:auto, ZERO, 0.0))
+
+"The columns or the rows that a grid's style gives it"
+struct Template
+  tracks::Vector{Track}             # the tracks, up to a `repeat(auto-fill, ...)`
+  again::Vector{Track}              # the tracks that are there as often as fits
+  after::Vector{Track}              # the tracks after those
+  fit::Bool                         # with `auto-fit`, a track that's there again and has nothing in it takes no room
+  names::Dict{String,Vector{Int}}   # the lines that have each name
+end
+const NO_TEMPLATE = Template(Track[], Track[], Track[], false, Dict{String,Vector{Int}}())
+
+const NO_STRINGS = String[]
+const NO_TURNS = Turn[]
+const NO_SHADES = Shade[]
+const NO_EFFECTS = Effect[]
+const NO_TRACKS = Track[]
+const NO_AREAS = Vector{String}[]
+const NO_VARS = Dict{String,String}()
+const ONE_REPEAT = [(:repeat, :repeat)]
+const ONE_PLACE = [(ZERO, ZERO)]
+const ONE_SIZE = Any[:auto]
+const ONE_CLIP = [:border]
+const ONE_ORIGIN = [:padding]
+# No z-index
+const NO_Z = typemin(Int)
 
 # --- a style ------------------------------------------------------------------------------
 
@@ -201,7 +608,7 @@ sides(x) = (x, x, x, x)
 "How an element looks. What a child gets from its parent is under the line."
 Base.@kwdef mutable struct Style
   display::Symbol = :inline
-  position::Symbol = :static
+  position::Symbol = :static                    # :static, :relative, :absolute, :fixed or :sticky
   float::Symbol = :none
   clear::Symbol = :none
   opacity::Float64 = 1.0
@@ -209,62 +616,150 @@ Base.@kwdef mutable struct Style
   borderbox::Bool = false                       # the width and the height are of the border, not of the content
   width::Len = AUTO
   height::Len = AUTO
-  minwidth::Len = ZERO
-  minheight::Len = ZERO
+  minwidth::Len = AUTO                          # `auto` is nothing, but for a thing in a flex box, where it's as narrow as the content can be
+  minheight::Len = AUTO
   maxwidth::Len = AUTO                          # `auto` for none
   maxheight::Len = AUTO
+  aspect::Tuple{Float64,Bool} = (NaN, false)    # the width over the height, and whether a picture's own shape comes first
   margin::Sides{Len} = sides(ZERO)
   padding::Sides{Len} = sides(ZERO)
   border::Sides{Len} = sides(Len(3))            # how thick each line is. It's nothing while its style is :none.
   borderstyle::Sides{Symbol} = sides(:none)
   bordercolor::Sides{Any} = sides(:current)
-  radius::Sides{Len} = sides(ZERO)              # of the top left corner, the top right, the bottom right and the bottom left
+  borderimage::String = ""
+  radius::Sides{Len} = sides(ZERO)              # of the top left corner, the top right, the bottom right and the bottom left: how far across
+  radiusv::Sides{Len} = sides(ZERO)             # and how far down
   inset::Sides{Len} = sides(AUTO)               # top, right, bottom and left, for an element with a position
+  zindex::Int = NO_Z
   background::UInt32 = 0x00000000
-  image::String = ""                            # the background's picture: `url(...)` or a gradient, as it's written
-  repeat::Symbol = :repeat                      # :repeat, :no_repeat, :repeat_x or :repeat_y
-  bgposition::Tuple{Len,Len} = (ZERO, ZERO)
-  bgsize::Any = :auto                           # :auto, :cover, :contain, or the width and the height
+  image::Vector{String} = NO_STRINGS            # the background's pictures, the top one first: each a `url(...)` or a gradient, as it's written
+  repeat::Vector{Tuple{Symbol,Symbol}} = ONE_REPEAT   # for each picture, across and down: :repeat, :no_repeat, :space or :round
+  bgposition::Vector{Tuple{Len,Len}} = ONE_PLACE
+  bgsize::Vector{Any} = ONE_SIZE                # for each: :auto, :cover, :contain, or the width and the height
+  bgclip::Vector{Symbol} = ONE_CLIP             # for each: :border, :padding, :content or :text
+  bgorigin::Vector{Symbol} = ONE_ORIGIN
   valign::Tuple{Symbol,Len} = (:baseline, ZERO)
   decoration::UInt8 = 0x00                      # the lines that this element asks for: 1 under, 2 through, 4 over
+  decostyle::Symbol = :solid
+  decocolor::UInt32 = CURRENT
+  decothick::Len = AUTO
   tablelayout::Symbol = :auto
-  shadow::String = ""
+  shadow::Vector{Shade} = NO_SHADES
+  outline::Len = Len(3)                         # the line round the box, outside its border
+  outlinestyle::Symbol = :none
+  outlinecolor::UInt32 = CURRENT
+  outlineoffset::Len = ZERO
   loose::Tuple{Bool,Bool} = (false, false)      # its top and its bottom margin are the ones that a browser gives its tag, which a page with no doctype drops at the edge of a cell
+  # A flex box and what's in one
+  flexdir::Symbol = :row
+  flexwrap::Symbol = :nowrap
+  justify::Symbol = :normal                     # justify-content
+  alignitems::Symbol = :normal
+  aligncontent::Symbol = :normal
+  justifyitems::Symbol = :normal
+  alignself::Symbol = :auto
+  justifyself::Symbol = :auto
+  grow::Float64 = 0.0
+  shrink::Float64 = 1.0
+  basis::Len = AUTO
+  order::Int = 0
+  gap::Tuple{Len,Len} = (AUTO, AUTO)            # between rows and between columns. `auto` is the usual gap.
+  # A grid and what's in one
+  gridcols::Template = NO_TEMPLATE
+  gridrows::Template = NO_TEMPLATE
+  autocols::Vector{Track} = NO_TRACKS
+  autorows::Vector{Track} = NO_TRACKS
+  autoflow::Symbol = :row                       # :row, :column, :row_dense or :column_dense
+  gridareas::Vector{Vector{String}} = NO_AREAS
+  gridplace::Sides{Any} = sides(:auto)          # the row it starts at, the column it starts at, the row it ends at and the column: a line, (:span, n), a name or :auto
+  # Columns of text
+  colcount::Int = 0
+  colwidth::Len = AUTO
+  colrule::Len = Len(3)
+  colrulestyle::Symbol = :none
+  colrulecolor::UInt32 = CURRENT
+  # A picture's place in its box
+  objectfit::Symbol = :fill
+  objectat::Tuple{Len,Len} = (percent(0.5), percent(0.5))
+  # What changes how the box is drawn
+  transform::Vector{Turn} = NO_TURNS
+  translate::Vector{Turn} = NO_TURNS
+  rotate::Vector{Turn} = NO_TURNS
+  scale::Vector{Turn} = NO_TURNS
+  origin::Tuple{Len,Len} = (percent(0.5), percent(0.5))
+  filter::Vector{Effect} = NO_EFFECTS
+  blend::Symbol = :normal
+  isolate::Bool = false
+  clippath::String = ""
+  mask::String = ""
+  # What a part of an element (`::before`) holds, and the counters
+  content::String = ""
+  counterreset::String = ""
+  counterincrement::String = ""
+  counterset::String = ""
+  textoverflow::Symbol = :clip
+  lineclamp::Int = 0
+  appearance::Symbol = :auto
+  container::Symbol = :none                     # :none, :inline_size or :size: rules can ask how big it is
+  containername::String = ""
   # ---------------------------------------------------------------------------------------
   visible::Bool = true
   color::UInt32 = 0xff000000
-  family::Vector{String} = String[]
+  family::Vector{String} = NO_STRINGS
   size::Float64 = 16.0
   weight::Int = 400
   italic::Bool = false
+  smallcaps::Bool = false
   lineheight::Tuple{Symbol,Float64} = (:normal, 0.0)   # :normal, :number (so many font sizes) or :px
-  align::Symbol = :start                        # :start, :left, :right, :center, :justify, and :wk_left, :wk_center, :wk_right, which move blocks too
-  transform::Symbol = :none
+  align::Symbol = :start                        # :start, :end, :left, :right, :center, :justify, and :wk_left, :wk_center, :wk_right, which move blocks too
+  alignlast::Symbol = :auto
+  direction::Symbol = :ltr
+  textcase::Symbol = :none                      # text-transform
   letterspacing::Len = ZERO
   wordspacing::Len = ZERO
   whitespace::Symbol = :normal                  # :normal, :nowrap, :pre, :pre_wrap or :pre_line
+  textwrap::Symbol = :auto                      # :auto, or :balance for lines of about one length
+  tabsize::Float64 = 8.0
   indent::Len = ZERO
   wrap::Symbol = :normal                        # :normal, :break_word (a long word breaks to fit), :anywhere (and its box can be that narrow) or :all (any word breaks)
   collapse::Bool = false                        # the borders of a table's cells are one line
   cellspacing::Tuple{Float64,Float64} = (0.0, 0.0)
+  emptycells::Bool = true
   listtype::Symbol = :disc
+  listtext::String = ""                         # what a list item shows before it, when the page gives the words
+  listimage::String = ""
   listinside::Bool = false
   captionbottom::Bool = false
+  quotes::String = "auto"
+  textshadow::Vector{Shade} = NO_SHADES
+  stroke::Len = ZERO                            # the line round each letter
+  strokecolor::UInt32 = CURRENT
+  textfill::UInt32 = CURRENT                    # the colour inside each letter, when it isn't the text's colour
+  underoffset::Len = AUTO
+  rendering::Symbol = :auto                     # :auto or :pixelated: how a picture is made bigger
+  accent::UInt32 = 0x00000000                   # the colour of a ticked box, or nothing for the system's
   lines::UInt8 = 0x00                           # the lines that its text is drawn with, from this element and the ones round it
   linecolor::UInt32 = 0xff000000
+  linestyle::Symbol = :solid
+  linethick::Float64 = 0.0                      # 0 for as thick as the font says
+  vars::Dict{String,String} = NO_VARS           # the page's variables (`--x`), and how an SVG shape is drawn (`fill`, `stroke`)
 end
 
-const INHERITED = (:visible, :color, :family, :size, :weight, :italic, :lineheight, :align, :transform, :letterspacing, :wordspacing, :whitespace,
-                   :indent, :wrap, :collapse, :cellspacing, :listtype, :listinside, :captionbottom, :lines, :linecolor)
+const INHERITED = (:visible, :color, :family, :size, :weight, :italic, :smallcaps, :lineheight, :align, :alignlast, :direction, :textcase,
+                   :letterspacing, :wordspacing, :whitespace, :textwrap, :tabsize, :indent, :wrap, :collapse, :cellspacing, :emptycells, :listtype,
+                   :listtext, :listimage, :listinside, :captionbottom, :quotes, :textshadow, :stroke, :strokecolor, :textfill, :underoffset,
+                   :rendering, :accent, :lines, :linecolor, :linestyle, :linethick, :vars)
 const DEFAULT = Style()
 
-"The style that a child of an element with the style `parent` starts with"
-child(parent::Style) = begin
-  s = Style()
-  for f in INHERITED
-    setfield!(s, f, getfield(parent, f))
+# The style that a child of an element with the style `parent` starts with. It's written out field by field, which is much
+# quicker than a loop over the names of the fields.
+@eval begin
+  "The style that a child of an element with the style `parent` starts with"
+  child(parent::Style) = begin
+    s = Style()
+    $((:(s.$f = parent.$f) for f in INHERITED)...)
+    s
   end
-  s
 end
 
 "How thick the border of side `i` is, in px"
@@ -279,87 +774,243 @@ struct Prop
   field::Symbol
   side::Int          # which of the four sides, or 0 for the whole field
   read::Function     # (value in lower case, value, Context, parent's Style) → what the field takes, or nothing
+  get::Function      # (Style) → what the field holds
+  set::Function      # (Style, value) → gives the field the value
 end
 
 const PROPS = Dict{String,Prop}()
-prop!(read, name, field, side=0) = PROPS[name] = Prop(field, side, read)
+# A function for each field that reads it, and one that gives it a value: these are quicker than a field that's named when the page is read
+const GETTERS = Dict{Symbol,Function}(f => @eval(s::Style -> s.$f) for f in fieldnames(Style))
+const SETTERS = Dict{Symbol,Function}(f => @eval((s::Style, v) -> (s.$f = v)) for f in fieldnames(Style))
+prop!(read, name, field, side=0) = PROPS[name] = Prop(field, side, read, GETTERS[field], SETTERS[field])
 "A property that takes one of `words`. Each is the symbol of its name, or what it's paired with."
 words!(name, field, words...) = begin
   table = Dict{String,Any}(w isa Pair ? w : w => Symbol(replace(w, '-' => '_')) for w in words)
   prop!((v, _, _, _) -> get(table, v, nothing), name, field)
 end
 
+"`v` cut at its spaces, with what's in brackets or quotes kept whole"
+terms(v) = filter(!isempty, strip.(pieces(replace(v, r"\s+" => " "), ' ')))
+
 const SIDE_NAMES = ("top", "right", "bottom", "left")
 const DISPLAYS = Dict("inline" => :inline, "block" => :block, "inline-block" => :inline_block, "none" => :none, "list-item" => :list_item,
   "table" => :table, "inline-table" => :inline_table, "table-row" => :table_row, "table-cell" => :table_cell, "table-row-group" => :table_row_group,
   "table-header-group" => :table_header_group, "table-footer-group" => :table_footer_group, "table-column" => :table_column,
   "table-column-group" => :table_column_group, "table-caption" => :table_caption, "flex" => :flex, "inline-flex" => :inline_flex,
-  "grid" => :block, "inline-grid" => :inline_block, "flow-root" => :flow_root, "contents" => :contents, "-webkit-box" => :flex, "-webkit-inline-box" => :inline_flex)
+  "grid" => :grid, "inline-grid" => :inline_grid, "flow-root" => :flow_root, "contents" => :contents, "-webkit-box" => :old_box,
+  "-webkit-inline-box" => :inline_flex, "-webkit-flex" => :flex, "-webkit-inline-flex" => :inline_flex, "-ms-flexbox" => :flex, "-ms-grid" => :grid,
+  "block flow" => :block, "inline flow" => :inline, "block flow-root" => :flow_root, "inline flow-root" => :inline_block, "block flex" => :flex,
+  "inline flex" => :inline_flex, "block grid" => :grid, "inline grid" => :inline_grid, "ruby" => :inline, "ruby-text" => :inline, "math" => :inline,
+  "run-in" => :inline)
 prop!((v, _, _, _) -> get(DISPLAYS, v, nothing), "display", :display)
-words!("position", :position, "static", "relative", "absolute", "fixed", "sticky" => :relative)
-words!("float", :float, "none", "left", "right")
-words!("clear", :clear, "none", "left", "right", "both")
-words!("overflow", :overflow, "visible", "hidden", "clip" => :hidden, "scroll" => :hidden, "auto" => :hidden)
+words!("position", :position, "static", "relative", "absolute", "fixed", "sticky", "-webkit-sticky" => :sticky)
+words!("float", :float, "none", "left", "right", "inline-start" => :left, "inline-end" => :right)
+words!("clear", :clear, "none", "left", "right", "both", "inline-start" => :left, "inline-end" => :right)
+# What overflows is cut off when it's cut off across or down: `overflow: hidden auto` says each
+prop!("overflow", :overflow) do v, _, _, _
+  ws = split(v)
+  (isempty(ws) || length(ws) > 2 || !all(w -> w in ("visible", "hidden", "clip", "scroll", "auto", "overlay"), ws)) && return nothing
+  all(==("visible"), ws) ? :visible : :hidden
+end
 words!("box-sizing", :borderbox, "border-box" => true, "content-box" => false)
 words!("visibility", :visible, "visible" => true, "hidden" => false, "collapse" => false)
-words!("background-repeat", :repeat, "repeat", "no-repeat", "repeat-x", "repeat-y")
 words!("table-layout", :tablelayout, "auto", "fixed")
 words!("font-style", :italic, "normal" => false, "italic" => true, "oblique" => true)
-words!("text-align", :align, "start", "left", "right", "center", "justify", "end" => :right, "-webkit-left" => :wk_left, "-webkit-right" => :wk_right,
-       "-webkit-center" => :wk_center, "-moz-center" => :wk_center, "-moz-left" => :wk_left, "-moz-right" => :wk_right, "match-parent" => :start)
-words!("text-transform", :transform, "none", "uppercase", "lowercase", "capitalize")
-words!("white-space", :whitespace, "normal", "nowrap", "pre", "pre-wrap", "pre-line", "break-spaces" => :pre_wrap)
+words!("text-align", :align, "start", "end", "left", "right", "center", "justify", "-webkit-left" => :wk_left, "-webkit-right" => :wk_right,
+       "-webkit-center" => :wk_center, "-moz-center" => :wk_center, "-moz-left" => :wk_left, "-moz-right" => :wk_right, "match-parent" => :start,
+       "-webkit-match-parent" => :start, "justify-all" => :justify)
+words!("text-align-last", :alignlast, "auto", "start", "end", "left", "right", "center", "justify")
+words!("direction", :direction, "ltr", "rtl")
+words!("text-transform", :textcase, "none", "uppercase", "lowercase", "capitalize", "full-width" => :none, "full-size-kana" => :none)
+words!("white-space", :whitespace, "normal", "nowrap", "pre", "pre-wrap", "pre-line", "break-spaces" => :pre_wrap, "-webkit-nowrap" => :nowrap)
+words!("white-space-collapse", :whitespace, "collapse" => :normal, "preserve" => :pre_wrap, "preserve-breaks" => :pre_line, "break-spaces" => :pre_wrap,
+       "preserve-spaces" => :pre_wrap)
+words!("text-wrap-style", :textwrap, "auto", "balance", "pretty" => :auto, "stable" => :auto)
 words!("border-collapse", :collapse, "collapse" => true, "separate" => false)
+words!("empty-cells", :emptycells, "show" => true, "hide" => false)
 words!("list-style-position", :listinside, "inside" => true, "outside" => false)
-words!("caption-side", :captionbottom, "bottom" => true, "top" => false)
-words!("list-style-type", :listtype, "disc", "circle", "square", "decimal", "none", "lower-alpha", "upper-alpha", "lower-roman", "upper-roman",
-       "lower-latin" => :lower_alpha, "upper-latin" => :upper_alpha, "decimal-leading-zero" => :decimal)
+words!("caption-side", :captionbottom, "bottom" => true, "top" => false, "block-end" => true, "block-start" => false)
+const LIST_TYPES = Dict{String,Symbol}(w => Symbol(replace(w, '-' => '_')) for w in
+  ("disc", "circle", "square", "decimal", "none", "lower-alpha", "upper-alpha", "lower-roman", "upper-roman", "lower-greek", "decimal-leading-zero",
+   "disclosure-open", "disclosure-closed"))
+merge!(LIST_TYPES, Dict("lower-latin" => :lower_alpha, "upper-latin" => :upper_alpha))
+prop!("list-style-type", :listtype) do v, _, _, _
+  haskey(LIST_TYPES, v) && return LIST_TYPES[v]
+  # Words in quotes are shown as they are. Any other way to count is 1, 2, 3.
+  startswith(v, '"') || startswith(v, '\'') ? :text : occursin(r"^[a-z-]+$", v) ? :decimal : nothing
+end
 words!("overflow-wrap", :wrap, "normal", "break-word", "anywhere")
 words!("word-wrap", :wrap, "normal", "break-word", "anywhere")
-words!("word-break", :wrap, "normal", "break-all" => :all, "break-word" => :anywhere, "keep-all" => :normal)
+words!("word-break", :wrap, "normal", "break-all" => :all, "break-word" => :anywhere, "keep-all" => :normal, "auto-phrase" => :normal)
+words!("line-break", :wrap, "anywhere" => :anywhere)
+words!("flex-direction", :flexdir, "row", "row-reverse", "column", "column-reverse")
+words!("flex-wrap", :flexwrap, "nowrap", "wrap", "wrap-reverse")
+words!("object-fit", :objectfit, "fill", "contain", "cover", "none", "scale-down")
+words!("text-overflow", :textoverflow, "clip", "ellipsis")
+words!("isolation", :isolate, "isolate" => true, "auto" => false)
+words!("image-rendering", :rendering, "auto", "pixelated", "crisp-edges" => :pixelated, "-webkit-optimize-contrast" => :auto, "smooth" => :auto,
+       "high-quality" => :auto, "optimizequality" => :auto, "optimizespeed" => :pixelated)
+words!("mix-blend-mode", :blend, "normal", "multiply", "screen", "overlay", "darken", "lighten", "color-dodge", "color-burn", "hard-light", "soft-light",
+       "difference", "exclusion", "hue", "saturation", "color", "luminosity", "plus-lighter" => :plus, "plus-darker" => :multiply)
+words!("text-decoration-style", :decostyle, "solid", "double", "dotted", "dashed", "wavy")
+words!("column-rule-style", :colrulestyle, "none", "hidden" => :none, "solid", "dashed", "dotted", "double", "groove" => :solid, "ridge" => :solid,
+       "inset" => :solid, "outset" => :solid)
+words!("container-type", :container, "normal" => :none, "size", "inline-size", "scroll-state" => :none)
+words!("grid-auto-flow", :autoflow, "row", "column", "dense" => :row_dense, "row dense" => :row_dense, "column dense" => :column_dense,
+       "dense row" => :row_dense, "dense column" => :column_dense)
+prop!((v, _, _, _) -> v == "none" ? :none : occursin(r"^[a-z-]+$", v) ? :auto : nothing, "appearance", :appearance)
+prop!((v, raw, _, _) -> v == "none" ? "" : String(strip(raw)), "container-name", :containername)
 
-prop!((v, _, _, _) -> (x = tryparse(Float64, endswith(v, '%') ? chop(v) : v)) === nothing ? nothing : clamp(endswith(v, '%') ? x / 100 : x, 0, 1), "opacity", :opacity)
-prop!((v, _, c, _) -> box_len(v, c), "width", :width)
-prop!((v, _, c, _) -> box_len(v, c), "height", :height)
-prop!((v, _, c, _) -> v == "auto" ? ZERO : size_len(v, c), "min-width", :minwidth)
-prop!((v, _, c, _) -> v == "auto" ? ZERO : size_len(v, c), "min-height", :minheight)
-prop!((v, _, c, _) -> v == "none" ? AUTO : size_len(v, c), "max-width", :maxwidth)
-prop!((v, _, c, _) -> v == "none" ? AUTO : size_len(v, c), "max-height", :maxheight)
+prop!((v, _, c, _) -> (x = endswith(v, '%') ? (y = tryparse(Float64, chop(v)); y === nothing ? nothing : y / 100) : number(v, c)) === nothing ? nothing : clamp(x, 0, 1), "opacity", :opacity)
+prop!((v, _, c, _) -> v == "auto" ? NO_Z : (x = number(v, c)) === nothing ? nothing : round(Int, x), "z-index", :zindex)
+prop!((v, _, c, _) -> (x = number(v, c)) === nothing ? nothing : round(Int, x), "order", :order)
+prop!((v, _, c, _) -> (x = number(v, c)) === nothing || x < 0 ? nothing : x, "flex-grow", :grow)
+prop!((v, _, c, _) -> (x = number(v, c)) === nothing || x < 0 ? nothing : x, "flex-shrink", :shrink)
+
+# The words that a width can be in place of a length
+const WIDTH_WORDS = Dict("min-content" => :min_content, "max-content" => :max_content, "fit-content" => :fit_content, "-webkit-fit-content" => :fit_content,
+                         "-moz-fit-content" => :fit_content, "-webkit-min-content" => :min_content, "-webkit-max-content" => :max_content,
+                         "-moz-min-content" => :min_content, "-moz-max-content" => :max_content, "stretch" => :stretch, "-webkit-fill-available" => :stretch,
+                         "-moz-available" => :stretch, "fill-available" => :stretch, "intrinsic" => :max_content, "min-intrinsic" => :min_content)
+"A width: a length, `auto`, or a word like `min-content`. `fit-content(200px)` is the length with the word."
+extent(v, c) = begin
+  haskey(WIDTH_WORDS, v) && return word(WIDTH_WORDS[v])
+  if startswith(v, "fit-content(") && endswith(v, ")")
+    l = size_len(v[13:end-1], c)
+    return l === nothing ? nothing : Len(l.px, l.pct, l.em, false, :fit_limit, nothing)
+  end
+  box_len(v, c)
+end
+prop!((v, _, c, _) -> extent(v, c), "width", :width)
+# A height that's a word is as tall as the content, which `auto` is too
+prop!((v, _, c, _) -> haskey(WIDTH_WORDS, v) || startswith(v, "fit-content(") ? AUTO : box_len(v, c), "height", :height)
+prop!((v, _, c, _) -> v == "auto" ? AUTO : extent(v, c), "min-width", :minwidth)
+prop!((v, _, c, _) -> v == "auto" || haskey(WIDTH_WORDS, v) ? AUTO : size_len(v, c), "min-height", :minheight)
+prop!((v, _, c, _) -> v == "none" ? AUTO : extent(v, c), "max-width", :maxwidth)
+prop!((v, _, c, _) -> v == "none" || haskey(WIDTH_WORDS, v) ? AUTO : size_len(v, c), "max-height", :maxheight)
+prop!((v, _, c, _) -> v == "content" ? word(:content) : extent(v, c), "flex-basis", :basis)
+prop!("aspect-ratio", :aspect) do v, _, c, _
+  v == "auto" && return (NaN, false)
+  own = occursin(r"(^|\s)auto(\s|$)", v)
+  parts = split(strip(replace(v, r"(^|\s)auto(\s|$)" => " ")), '/')
+  a = number(strip(parts[1]), c)
+  b = length(parts) > 1 ? number(strip(parts[2]), c) : 1.0
+  a === nothing || b === nothing || a <= 0 || b <= 0 ? nothing : (a / b, own)
+end
+
 const THICK = Dict("thin" => Len(1), "medium" => Len(3), "thick" => Len(5))
 const LINES = Dict(w => Symbol(w) for w in ("none", "hidden", "solid", "dashed", "dotted", "double", "groove", "ridge", "inset", "outset"))
+thick(v, c) = haskey(THICK, v) ? THICK[v] : size_len(v, c; percent=false)
 for (i, side) in enumerate(SIDE_NAMES)
   prop!((v, _, c, _) -> len(v, c), "margin-$side", :margin, i)
   prop!((v, _, c, _) -> size_len(v, c), "padding-$side", :padding, i)
-  prop!((v, _, c, _) -> haskey(THICK, v) ? THICK[v] : size_len(v, c; percent=false), "border-$side-width", :border, i)
+  prop!((v, _, c, _) -> thick(v, c), "border-$side-width", :border, i)
   prop!((v, _, _, _) -> get(LINES, v, nothing), "border-$side-style", :borderstyle, i)
   prop!((v, _, _, _) -> colour(v), "border-$side-color", :bordercolor, i)
   prop!((v, _, c, _) -> len(v, c), side, :inset, i)
 end
 for (i, corner) in enumerate(("top-left", "top-right", "bottom-right", "bottom-left"))
-  prop!((v, _, c, _) -> size_len(first(split(v)), c), "border-$corner-radius", :radius, i)
+  prop!((v, _, c, _) -> size_len(v, c), "border-$corner-radius-x", :radius, i)
+  prop!((v, _, c, _) -> size_len(v, c), "border-$corner-radius-y", :radiusv, i)
 end
+prop!((v, raw, _, _) -> v == "none" ? "" : String(strip(raw)), "border-image", :borderimage)
+prop!((v, raw, _, _) -> v == "none" ? "" : String(strip(raw)), "border-image-source", :borderimage)
+prop!((v, _, c, _) -> thick(v, c), "outline-width", :outline)
+prop!((v, _, _, _) -> v == "auto" ? :solid : get(LINES, v, nothing), "outline-style", :outlinestyle)
+prop!((v, _, _, _) -> v == "invert" ? CURRENT : paint(v), "outline-color", :outlinecolor)
+prop!((v, _, c, _) -> (l = len(v, c; percent=false)) === nothing || l.auto ? nothing : l, "outline-offset", :outlineoffset)
+prop!((v, _, c, _) -> thick(v, c), "column-rule-width", :colrule)
+prop!((v, _, _, _) -> paint(v), "column-rule-color", :colrulecolor)
+prop!((v, _, c, _) -> v == "auto" ? 0 : (x = number(v, c)) === nothing || x < 1 ? nothing : round(Int, x), "column-count", :colcount)
+prop!((v, _, c, _) -> v == "auto" ? AUTO : size_len(v, c; percent=false), "column-width", :colwidth)
+prop!((v, _, c, _) -> v == "normal" ? AUTO : size_len(v, c), "row-gap", :gap, 1)
+prop!((v, _, c, _) -> v == "normal" ? AUTO : size_len(v, c), "column-gap", :gap, 2)
+
 prop!((v, _, _, s) -> (x = colour(v)) === :current ? s.color : x, "color", :color)
-prop!((v, _, _, _) -> (x = colour(v)) isa UInt32 ? x : nothing, "background-color", :background)
-prop!((v, raw, _, _) -> v == "none" ? "" : startswith(v, "url(") || occursin("gradient(", v) ? String(raw) : nothing, "background-image", :image)
-prop!("background-position", :bgposition) do v, _, c, _
-  place(w, across) = w == "center" ? percent(0.5) : w in ("left", "top") ? ZERO : w in ("right", "bottom") ? percent(1) : len(w, c)
+prop!((v, _, _, _) -> paint(v), "background-color", :background)
+prop!((v, _, _, _) -> v == "auto" ? 0x00000000 : paint(v), "accent-color", :accent)
+prop!((v, _, _, _) -> paint(v), "text-decoration-color", :decocolor)
+prop!((v, _, c, _) -> v in ("auto", "from-font") ? AUTO : size_len(v, c), "text-decoration-thickness", :decothick)
+prop!((v, _, c, _) -> v == "auto" ? AUTO : (l = len(v, c)) === nothing ? nothing : l, "text-underline-offset", :underoffset)
+prop!((v, _, _, _) -> paint(v), "-webkit-text-fill-color", :textfill)
+prop!((v, _, _, _) -> paint(v), "-webkit-text-stroke-color", :strokecolor)
+prop!((v, _, c, _) -> thick(v, c), "-webkit-text-stroke-width", :stroke)
+
+"Each part of `v` between two commas that are in no brackets, as `one` reads it, or nothing when it reads one of them as nothing"
+several(one, v) = begin
+  out = [one(strip(p)) for p in pieces(v, ',')]
+  isempty(out) || any(isnothing, out) ? nothing : out
+end
+
+"True for a picture that CSS can write: an address or a gradient"
+picture(v) = startswith(v, "url(") || occursin("gradient(", v) || startswith(v, "image-set(") || startswith(v, "-webkit-image-set(") || startswith(v, "image(")
+prop!("background-image", :image) do v, raw, _, _
+  found = several(p -> lowercase(p) == "none" ? "" : picture(lowercase(p)) ? String(p) : nothing, raw)
+  found === nothing ? nothing : all(isempty, found) ? NO_STRINGS : Vector{String}(found)
+end
+const REPEATS = Dict("repeat" => :repeat, "no-repeat" => :no_repeat, "space" => :space, "round" => :round)
+prop!("background-repeat", :repeat) do v, _, _, _
+  found = several(v) do p
+    p == "repeat-x" && return (:repeat, :no_repeat)
+    p == "repeat-y" && return (:no_repeat, :repeat)
+    ws = split(p)
+    length(ws) in (1, 2) && all(w -> haskey(REPEATS, w), ws) ? (REPEATS[ws[1]], REPEATS[ws[end]]) : nothing
+  end
+  found === nothing ? nothing : Vector{Tuple{Symbol,Symbol}}(found)
+end
+
+"Where a picture goes in a box, as `center top` or `right 10px bottom 20%` writes it: how far across and how far down"
+place(v, c) = begin
   ws = split(v)
-  length(ws) == 1 && (ws = ws[1] in ("top", "bottom") ? ["center", ws[1]] : [ws[1], "center"])
-  length(ws) == 2 || return nothing
-  ws[1] in ("top", "bottom") || ws[2] in ("left", "right") ? reverse!(ws) : ws
-  x, y = place(ws[1], true), place(ws[2], false)
+  isempty(ws) && return nothing
+  edge(w) = w == "center" ? percent(0.5) : w in ("left", "top") ? ZERO : w in ("right", "bottom") ? percent(1) : nothing
+  x = y = nothing
+  if length(ws) <= 2
+    length(ws) == 1 && (ws = ws[1] in ("top", "bottom") ? ["center", ws[1]] : [ws[1], "center"])
+    (ws[1] in ("top", "bottom") || ws[2] in ("left", "right")) && (ws = reverse(ws))
+    x = something(edge(ws[1]), Some(len(ws[1], c)))
+    y = something(edge(ws[2]), Some(len(ws[2], c)))
+  else
+    # A side with how far in from it: `right 10px bottom 20%`
+    i = 1
+    while i <= length(ws)
+      w = ws[i]
+      off = i < length(ws) && edge(ws[i+1]) === nothing ? len(ws[i+1], c) : nothing
+      at = edge(w)
+      at === nothing && return nothing
+      off === nothing || (at = w in ("right", "bottom") ? percent(1) - off : off; i += 1)
+      w in ("left", "right") ? (x = at) : w in ("top", "bottom") ? (y = at) : x === nothing ? (x = at) : (y = at)
+      i += 1
+    end
+    x === nothing && (x = percent(0.5))
+    y === nothing && (y = percent(0.5))
+  end
   x === nothing || y === nothing || x.auto || y.auto ? nothing : (x, y)
 end
-prop!("background-size", :bgsize) do v, _, c, _
-  v in ("cover", "contain", "auto") && return Symbol(v)
+prop!((v, _, c, _) -> (found = several(p -> place(p, c), v); found === nothing ? nothing : Vector{Tuple{Len,Len}}(found)), "background-position", :bgposition)
+prop!((v, _, c, _) -> place(v, c), "object-position", :objectat)
+prop!("transform-origin", :origin) do v, _, c, _
   ws = split(v)
-  length(ws) in (1, 2) || return nothing
-  w = len(ws[1], c)
-  h = length(ws) == 2 ? len(ws[2], c) : AUTO
-  w === nothing || h === nothing ? nothing : (w, h)
+  place(join(ws[1:min(2, length(ws))], " "), c)
 end
+prop!("background-size", :bgsize) do v, _, c, _
+  found = several(v) do p
+    p in ("cover", "contain", "auto") && return Symbol(p)
+    ws = split(p)
+    length(ws) in (1, 2) || return nothing
+    w = len(ws[1], c)
+    h = length(ws) == 2 ? len(ws[2], c) : AUTO
+    w === nothing || h === nothing ? nothing : (w, h)
+  end
+  found === nothing ? nothing : Vector{Any}(found)
+end
+const BOXES = Dict("border-box" => :border, "padding-box" => :padding, "content-box" => :content, "text" => :text)
+prop!((v, _, _, _) -> (found = several(p -> get(BOXES, p, nothing), v); found === nothing ? nothing : Vector{Symbol}(found)), "background-clip", :bgclip)
+prop!((v, _, _, _) -> (found = several(p -> get(BOXES, p, nothing), v); found === nothing ? nothing : Vector{Symbol}(found)), "background-origin", :bgorigin)
+
 prop!("vertical-align", :valign) do v, _, c, _
   v in ("baseline", "top", "middle", "bottom", "sub", "super", "text-top", "text-bottom") && return (Symbol(replace(v, '-' => '_')), ZERO)
+  v == "-webkit-baseline-middle" && return (:middle, ZERO)
   l = len(v, c)
   l === nothing || l.auto ? nothing : (:length, l)
 end
@@ -367,13 +1018,188 @@ prop!("text-decoration-line", :decoration) do v, _, _, _
   v == "none" && return 0x00
   bits = 0x00
   for w in split(v)
-    bits |= w == "underline" ? 0x01 : w == "line-through" ? 0x02 : w == "overline" ? 0x04 : w == "blink" ? 0x00 : return nothing
+    bits |= w == "underline" ? 0x01 : w == "line-through" ? 0x02 : w == "overline" ? 0x04 : w in ("blink", "spelling-error", "grammar-error") ? 0x00 : return nothing
   end
   bits
 end
-prop!((v, raw, _, _) -> v == "none" ? "" : String(raw), "box-shadow", :shadow)
 
-const GENERIC = ("serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui", "ui-sans-serif", "ui-serif", "ui-monospace", "ui-rounded")
+"The shadows that `v` writes for a box or for text, where an em is `size` px"
+shades(v, c, size) = begin
+  lowercase(strip(v)) == "none" && return NO_SHADES
+  found = several(v) do one
+    nums = Float64[]
+    color = CURRENT
+    inset = false
+    for w in terms(one)
+      lw = lowercase(w)
+      if lw == "inset"
+        inset = true
+      elseif (l = len(lw, c; percent=false)) !== nothing && !l.auto
+        push!(nums, px(flat(l, size)))
+      elseif (x = paint(lw)) !== nothing
+        color = x
+      else
+        return nothing
+      end
+    end
+    length(nums) in 2:4 ? Shade(nums[1], nums[2], max(0.0, get(nums, 3, 0.0)), get(nums, 4, 0.0), color, inset) : nothing
+  end
+  found === nothing ? nothing : Vector{Shade}(found)
+end
+prop!((v, raw, c, parent) -> shades(raw, c, parent.size), "box-shadow", :shadow)
+prop!((v, raw, c, parent) -> shades(raw, c, parent.size), "text-shadow", :textshadow)
+
+"The words in the brackets of each function of `v`, like `rotate(45deg) scale(2, 3)`: its name, and what's between its commas or spaces"
+calls(v) = begin
+  out = Tuple{String,Vector{String}}[]
+  upto = 0
+  for m in eachmatch(r"([a-zA-Z0-9-]+)\(", v)
+    # A function in the brackets of another is part of it
+    m.offset <= upto && continue
+    open = m.offset + ncodeunits(m.match) - 1
+    stop = closing(v, open, '(', ')')
+    stop > lastindex(v) && break
+    upto = stop
+    inside = SubString(v, open + 1, prevind(v, stop))
+    args = occursin(',', inside) ? [String(strip(a)) for a in pieces(inside, ',')] : [String(a) for a in terms(inside)]
+    push!(out, (lowercase(m[1]), args))
+  end
+  out
+end
+
+matrix(a, b, c, d, e, f) = Turn(:matrix, ZERO, ZERO, (a, b, c, d, e, f))
+spin(r) = matrix(cos(r), sin(r), -sin(r), cos(r), 0.0, 0.0)
+
+"The steps of a `transform`, or nothing when one can't be read. One that turns out of the page is drawn as flat as it would look from the front."
+turns(v, c) = begin
+  lowercase(strip(v)) == "none" && return NO_TURNS
+  out = Turn[]
+  l(a) = (x = len(lowercase(a), c; bare=true); x === nothing || x.auto ? nothing : x)
+  n(a) = number(lowercase(a), c)
+  an(a) = (x = angle(a); x !== nothing ? x : (y = math(a, c); y isa Float64 ? y : nothing))
+  for (name, args) in calls(v)
+    isempty(args) && return nothing
+    step = if name == "translate" || name == "translate3d"
+      x, y = l(args[1]), length(args) > 1 ? l(args[2]) : ZERO
+      x === nothing || y === nothing ? nothing : Turn(:move, x, y, (0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+    elseif name == "translatex"
+      (x = l(args[1])) === nothing ? nothing : Turn(:move, x, ZERO, (0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+    elseif name == "translatey"
+      (y = l(args[1])) === nothing ? nothing : Turn(:move, ZERO, y, (0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+    elseif name == "scale" || name == "scale3d"
+      a = endswith(args[1], '%') ? something(tryparse(Float64, chop(args[1])), NaN) / 100 : n(args[1])
+      b = length(args) > 1 ? (endswith(args[2], '%') ? something(tryparse(Float64, chop(args[2])), NaN) / 100 : n(args[2])) : a
+      a === nothing || b === nothing ? nothing : matrix(a, 0.0, 0.0, b, 0.0, 0.0)
+    elseif name == "scalex"
+      (a = n(args[1])) === nothing ? nothing : matrix(a, 0.0, 0.0, 1.0, 0.0, 0.0)
+    elseif name == "scaley"
+      (a = n(args[1])) === nothing ? nothing : matrix(1.0, 0.0, 0.0, a, 0.0, 0.0)
+    elseif name in ("rotate", "rotatez")
+      (r = an(args[1])) === nothing ? nothing : spin(r)
+    elseif name == "rotate3d" && length(args) == 4
+      r = an(args[4])
+      axis = (n(args[1]), n(args[2]), n(args[3]))
+      r === nothing || any(isnothing, axis) ? nothing : axis[3] != 0 && axis[1] == 0 && axis[2] == 0 ? spin(r * sign(axis[3])) :
+        matrix(axis[2] != 0 ? cos(r) : 1.0, 0.0, 0.0, axis[1] != 0 ? cos(r) : 1.0, 0.0, 0.0)
+    elseif name == "rotatex"
+      (r = an(args[1])) === nothing ? nothing : matrix(1.0, 0.0, 0.0, cos(r), 0.0, 0.0)
+    elseif name == "rotatey"
+      (r = an(args[1])) === nothing ? nothing : matrix(cos(r), 0.0, 0.0, 1.0, 0.0, 0.0)
+    elseif name == "skew"
+      a, b = an(args[1]), length(args) > 1 ? an(args[2]) : 0.0
+      a === nothing || b === nothing ? nothing : matrix(1.0, tan(b), tan(a), 1.0, 0.0, 0.0)
+    elseif name == "skewx"
+      (a = an(args[1])) === nothing ? nothing : matrix(1.0, 0.0, tan(a), 1.0, 0.0, 0.0)
+    elseif name == "skewy"
+      (a = an(args[1])) === nothing ? nothing : matrix(1.0, tan(a), 0.0, 1.0, 0.0, 0.0)
+    elseif name == "matrix" && length(args) == 6
+      m = map(n, args)
+      any(isnothing, m) ? nothing : matrix(m...)
+    elseif name == "matrix3d" && length(args) == 16
+      m = map(n, args)
+      any(isnothing, m) ? nothing : matrix(m[1], m[2], m[5], m[6], m[13], m[14])
+    elseif name in ("translatez", "scalez", "perspective")
+      continue
+    else
+      nothing
+    end
+    step === nothing && return nothing
+    push!(out, step)
+  end
+  out
+end
+prop!((v, raw, c, _) -> turns(raw, c), "transform", :transform)
+prop!("translate", :translate) do v, _, c, _
+  v == "none" && return NO_TURNS
+  ws = split(v)
+  turns("translate(" * join(ws[1:min(2, length(ws))], ", ") * ")", c)
+end
+prop!("rotate", :rotate) do v, _, c, _
+  v == "none" && return NO_TURNS
+  ws = split(v)
+  length(ws) == 1 ? turns("rotate($(ws[1]))", c) : length(ws) == 2 && ws[1] in ("x", "y", "z") ? turns("rotate$(ws[1])($(ws[2]))", c) :
+  length(ws) == 2 && ws[2] in ("x", "y", "z") ? turns("rotate$(ws[2])($(ws[1]))", c) : length(ws) == 4 ? turns("rotate3d(" * join(ws, ", ") * ")", c) : nothing
+end
+prop!("scale", :scale) do v, _, c, _
+  v == "none" && return NO_TURNS
+  ws = split(v)
+  turns("scale(" * join(ws[1:min(2, length(ws))], ", ") * ")", c)
+end
+
+prop!("filter", :filter) do v, raw, c, parent
+  v == "none" && return NO_EFFECTS
+  out = Effect[]
+  for (name, args) in calls(raw)
+    amount(default) = isempty(args) ? default : endswith(args[1], '%') ? something(tryparse(Float64, chop(args[1])), NaN) / 100 : something(number(lowercase(args[1]), c), NaN)
+    e = if name == "blur"
+      l = isempty(args) ? ZERO : len(lowercase(args[1]), c; percent=false)
+      l === nothing ? nothing : Effect(:blur, px(flat(l, parent.size)), 0.0, 0.0, 0x00000000)
+    elseif name in ("brightness", "contrast", "grayscale", "invert", "opacity", "saturate", "sepia")
+      x = amount(1.0)
+      isnan(x) ? nothing : Effect(Symbol(name), max(0.0, x), 0.0, 0.0, 0x00000000)
+    elseif name == "hue-rotate"
+      r = isempty(args) ? 0.0 : angle(args[1])
+      r === nothing ? nothing : Effect(:hue, r, 0.0, 0.0, 0x00000000)
+    elseif name == "drop-shadow"
+      found = shades(join(args, " "), c, parent.size)
+      found === nothing || isempty(found) ? nothing : Effect(:shadow, found[1].dx, found[1].dy, found[1].blur, found[1].color)
+    elseif name == "url"
+      continue
+    else
+      nothing
+    end
+    e === nothing && return nothing
+    push!(out, e)
+  end
+  out
+end
+prop!((v, raw, _, _) -> v == "none" ? "" : String(strip(raw)), "clip-path", :clippath)
+prop!("mask-image", :mask) do v, raw, _, _
+  v == "none" && return ""
+  first = strip(pieces(raw, ',')[1])
+  picture(lowercase(first)) ? String(first) : nothing
+end
+
+prop!((v, raw, _, _) -> String(strip(raw)), "content", :content)
+prop!((v, raw, _, _) -> v == "none" ? "" : String(strip(raw)), "counter-reset", :counterreset)
+prop!((v, raw, _, _) -> v == "none" ? "" : String(strip(raw)), "counter-increment", :counterincrement)
+prop!((v, raw, _, _) -> v == "none" ? "" : String(strip(raw)), "counter-set", :counterset)
+prop!((v, raw, _, _) -> String(strip(raw)), "quotes", :quotes)
+prop!((v, raw, _, _) -> v == "none" ? "" : startswith(v, "url(") ? String(strip(raw)) : nothing, "list-style-image", :listimage)
+prop!((v, _, c, _) -> v == "none" ? 0 : (x = number(v, c)) === nothing || x < 1 ? nothing : round(Int, x), "-webkit-line-clamp", :lineclamp)
+prop!((v, _, c, _) -> v == "none" ? 0 : (x = number(first(split(v)), c)) === nothing || x < 1 ? nothing : round(Int, x), "line-clamp", :lineclamp)
+prop!("tab-size", :tabsize) do v, _, c, parent
+  (x = number(v, c)) !== nothing && return max(0.0, x)
+  l = size_len(v, c; percent=false)
+  l === nothing ? nothing : px(flat(l, parent.size)) / max(1.0, parent.size / 4)
+end
+prop!("font-variant-caps", :smallcaps) do v, _, _, _
+  v in ("small-caps", "all-small-caps", "petite-caps", "all-petite-caps") ? true : v in ("normal", "unicase", "titling-caps") ? false : nothing
+end
+prop!((v, _, _, _) -> occursin("small-caps", v) ? true : false, "font-variant", :smallcaps)
+
+const GENERIC = ("serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui", "ui-sans-serif", "ui-serif", "ui-monospace", "ui-rounded", "math",
+                 "emoji", "fangsong")
 prop!("font-family", :family) do v, raw, _, _
   names = [String(strip(strip(n), ['"', '\''])) for n in pieces(raw, ',')]
   names = filter(!isempty, map(n -> lowercase(n) in GENERIC ? lowercase(n) : n, names))
@@ -385,35 +1211,167 @@ prop!("font-size", :size) do v, _, c, parent
   haskey(SIZES, v) && return SIZES[v]
   v == "smaller" && return parent.size / 1.2
   v == "larger" && return parent.size * 1.2
+  v == "math" && return parent.size
   l = size_len(v, c)
-  l === nothing ? nothing : l.px + (l.pct + l.em) * parent.size
+  l === nothing ? nothing : px(flat(l, parent.size), parent.size)
 end
-prop!("font-weight", :weight) do v, _, _, parent
+prop!("font-weight", :weight) do v, _, c, parent
   v == "normal" ? 400 : v == "bold" ? 700 : v == "bolder" ? (parent.weight < 400 ? 400 : parent.weight < 600 ? 700 : 900) :
   v == "lighter" ? (parent.weight < 600 ? 100 : parent.weight < 800 ? 400 : 700) :
-  (x = tryparse(Float64, v)) !== nothing && 1 <= x <= 1000 ? round(Int, x) : nothing
+  (x = number(v, c)) !== nothing && 1 <= x <= 1000 ? round(Int, x) : nothing
 end
 prop!("line-height", :lineheight) do v, _, c, _
   v == "normal" && return (:normal, 0.0)
-  (x = tryparse(Float64, v)) !== nothing && return x >= 0 ? (:number, x) : nothing
+  (x = number(v, c)) !== nothing && return x >= 0 ? (:number, x) : nothing
   l = size_len(v, c)
   # A percent or an em is of this element's font size, which isn't known yet
-  l === nothing ? nothing : l.pct != 0 || l.em != 0 ? (:em, l.pct + l.em) : (:px, l.px)
+  l === nothing ? nothing : l.math !== nothing ? (:px, px(l, 16.0)) : l.pct != 0 || l.em != 0 ? (:em, l.pct + l.em + l.px / 16) : (:px, l.px)
 end
-spacing(v, c) = v == "normal" ? ZERO : (l = len(v, c; percent=false)) === nothing || l.auto ? nothing : l
+spacing(v, c) = v == "normal" ? ZERO : (l = len(v, c)) === nothing || l.auto ? nothing : ispercent(l) ? ZERO : l
 prop!((v, _, c, _) -> spacing(v, c), "letter-spacing", :letterspacing)
 prop!((v, _, c, _) -> spacing(v, c), "word-spacing", :wordspacing)
-prop!((v, _, c, _) -> (l = len(v, c)) === nothing || l.auto ? nothing : l, "text-indent", :indent)
+prop!((v, _, c, _) -> (l = len(first(terms(v)), c)) === nothing || l.auto ? nothing : l, "text-indent", :indent)
 prop!("border-spacing", :cellspacing) do v, _, c, _
   ls = [size_len(w, c; percent=false) for w in split(v)]
   (isempty(ls) || length(ls) > 2 || any(isnothing, ls)) && return nothing
   (ls[1].px, ls[end].px)
 end
 
-# --- properties that stand for several ----------------------------------------------------
+# How a thing is placed in the room that it has, as `justify-content`, `align-items` and the rest say
+const PLACES = Dict("normal" => :normal, "auto" => :auto, "stretch" => :stretch, "center" => :center, "start" => :start, "end" => :end,
+                    "flex-start" => :flex_start, "flex-end" => :flex_end, "self-start" => :start, "self-end" => :end, "left" => :start, "right" => :end,
+                    "baseline" => :baseline, "space-between" => :space_between, "space-around" => :space_around, "space-evenly" => :space_evenly,
+                    "anchor-center" => :center)
+placing(v) = begin
+  v = strip(replace(v, r"\b(safe|unsafe|legacy|first|last)\b" => ""))
+  get(PLACES, v, nothing)
+end
+for (name, field) in (("justify-content", :justify), ("align-items", :alignitems), ("align-content", :aligncontent), ("justify-items", :justifyitems),
+                      ("align-self", :alignself), ("justify-self", :justifyself))
+  prop!((v, _, _, _) -> placing(v), name, field)
+end
 
-"`v` cut at its spaces, with what's in brackets or quotes kept whole"
-terms(v) = filter(!isempty, strip.(pieces(replace(v, r"\s+" => " "), ' ')))
+# --- grids --------------------------------------------------------------------------------
+
+"How big a track of a grid can be, as `1fr`, `200px`, `auto` or `min-content` writes it, or nothing"
+track_size(v, c) = begin
+  v == "auto" && return Size(:auto, ZERO, 0.0)
+  v == "min-content" && return Size(:min_content, ZERO, 0.0)
+  v == "max-content" && return Size(:max_content, ZERO, 0.0)
+  if (m = match(r"^([0-9.]+)fr$", v)) !== nothing
+    x = tryparse(Float64, m[1])
+    return x === nothing ? nothing : Size(:fr, ZERO, x)
+  end
+  l = size_len(v, c)
+  l === nothing ? nothing : Size(:length, l, 0.0)
+end
+
+"The track that `v` writes: one size, `minmax(a, b)` or `fit-content(a)`, or nothing"
+track(v, c) = begin
+  v = lowercase(strip(v))
+  if startswith(v, "minmax(") && endswith(v, ")")
+    parts = pieces(v[8:end-1], ',')
+    length(parts) == 2 || return nothing
+    lo, hi = track_size(strip(parts[1]), c), track_size(strip(parts[2]), c)
+    (lo === nothing || hi === nothing) && return nothing
+    # A share of what's left is no least size
+    lo.kind == :fr && (lo = Size(:auto, ZERO, 0.0))
+    return Track(lo, hi)
+  elseif startswith(v, "fit-content(") && endswith(v, ")")
+    l = size_len(v[13:end-1], c)
+    return l === nothing ? nothing : Track(Size(:auto, ZERO, 0.0), Size(:fit, l, 0.0))
+  end
+  s = track_size(v, c)
+  s === nothing ? nothing : s.kind == :fr ? Track(Size(:auto, ZERO, 0.0), s) : Track(s, s)
+end
+
+"The tracks that a list like `100px 1fr minmax(0, 2fr)` writes, with no names, or nothing"
+track_list(v, c) = begin
+  out = Track[]
+  for w in terms(v)
+    startswith(w, '[') && continue
+    t = track(w, c)
+    t === nothing && return nothing
+    push!(out, t)
+  end
+  out
+end
+
+"The columns or the rows that `grid-template-columns: v` writes, or nothing"
+template(v, c) = begin
+  lowercase(strip(v)) in ("none", "subgrid", "masonry") && return NO_TEMPLATE
+  tracks, again, after = Track[], Track[], Track[]
+  names = Dict{String,Vector{Int}}()
+  fit = false
+  into = tracks
+  name!(w) = for n in split(strip(w, ['[', ']']))
+    # A name after the tracks that repeat is counted from the end, which isn't known here
+    into === tracks && push!(get!(() -> Int[], names, String(n)), length(tracks) + 1)
+  end
+  for w in terms(v)
+    lw = lowercase(w)
+    if startswith(w, '[')
+      name!(w)
+    elseif startswith(lw, "repeat(") && endswith(lw, ")")
+      parts = pieces(w[8:end-1], ',')
+      length(parts) >= 2 || return nothing
+      count = lowercase(strip(parts[1]))
+      inner = join(parts[2:end], ",")
+      if count in ("auto-fill", "auto-fit")
+        found = track_list(inner, c)
+        (found === nothing || !isempty(again)) && return nothing
+        again = found
+        fit = count == "auto-fit"
+        into = after
+      else
+        n = tryparse(Int, count)
+        (n === nothing || n < 1) && return nothing
+        for _ in 1:min(n, 1000), x in terms(inner)
+          if startswith(x, '[')
+            name!(x)
+          else
+            t = track(x, c)
+            t === nothing && return nothing
+            push!(into, t)
+          end
+        end
+      end
+    elseif lw == "subgrid"
+      continue
+    else
+      t = track(w, c)
+      t === nothing && return nothing
+      push!(into, t)
+    end
+  end
+  Template(tracks, again, after, fit, names)
+end
+prop!((v, raw, c, _) -> template(raw, c), "grid-template-columns", :gridcols)
+prop!((v, raw, c, _) -> template(raw, c), "grid-template-rows", :gridrows)
+prop!((v, raw, c, _) -> track_list(raw, c), "grid-auto-columns", :autocols)
+prop!((v, raw, c, _) -> track_list(raw, c), "grid-auto-rows", :autorows)
+prop!("grid-template-areas", :gridareas) do v, raw, _, _
+  v == "none" && return NO_AREAS
+  rows = [String.(split(m[1])) for m in eachmatch(r"[\"']([^\"']*)[\"']", raw)]
+  isempty(rows) || any(r -> length(r) != length(rows[1]), rows) ? nothing : rows
+end
+"Where a thing of a grid starts or ends: a line, `(:span, n)`, a name or :auto"
+grid_line(v, raw) = begin
+  v == "auto" && return :auto
+  ws = split(v)
+  if ws[1] == "span"
+    n = findfirst(w -> tryparse(Int, w) !== nothing, ws)
+    return (:span, n === nothing ? 1 : max(1, Base.parse(Int, ws[n])))
+  end
+  n = findfirst(w -> tryparse(Int, w) !== nothing, ws)
+  n !== nothing && return (x = Base.parse(Int, ws[n]); x == 0 ? nothing : x)
+  occursin(r"^[-_a-z0-9]+$"i, strip(raw)) ? String(strip(raw)) : nothing
+end
+for (i, name) in enumerate(("grid-row-start", "grid-column-start", "grid-row-end", "grid-column-end"))
+  prop!((v, raw, _, _) -> grid_line(v, raw), name, :gridplace, i)
+end
+
+# --- properties that stand for several ----------------------------------------------------
 
 "One to four values as the four sides: `1px 2px` is the top and bottom, then the right and left"
 four(ws) = length(ws) == 1 ? (ws[1], ws[1], ws[1], ws[1]) : length(ws) == 2 ? (ws[1], ws[2], ws[1], ws[2]) :
@@ -424,10 +1382,10 @@ border_parts(v) = begin
   width = style = color = nothing
   for w in terms(v)
     lw = lowercase(w)
-    if haskey(LINES, lw)
+    if haskey(LINES, lw) || lw == "auto"
       style === nothing || return nothing
       style = lw
-    elseif haskey(THICK, lw) || occursin(r"^[0-9.]", lw)
+    elseif haskey(THICK, lw) || occursin(r"^[0-9.]", lw) || occursin(r"^(calc|min|max|clamp)\(", lw)
       width === nothing || return nothing
       width = lw
     elseif colour(lw) !== nothing
@@ -440,14 +1398,68 @@ border_parts(v) = begin
   (something(width, "medium"), something(style, "none"), something(color, "currentcolor"))
 end
 
+"`v` with a space on each side of each `/` that's in no brackets and no quotes: the `/` of an address stays as it is"
+slashes(v) = begin
+  out = IOBuffer()
+  depth = 0
+  quoted = '\0'
+  for ch in v
+    quoted != '\0' ? (ch == quoted && (quoted = '\0')) : ch in ('"', '\'') ? (quoted = ch) : ch == '(' ? (depth += 1) : ch == ')' ? (depth -= 1) : nothing
+    ch == '/' && depth <= 0 && quoted == '\0' ? print(out, " / ") : print(out, ch)
+  end
+  String(take!(out))
+end
+
+"What one picture of a `background` value writes: its colour, picture, repeat, place, size, and the boxes that it starts from and is cut to. Each is as it's written, or nothing."
+background_layer(value) = begin
+  color = image = repeat = size = nothing
+  place, boxes = String[], String[]
+  ws = terms(slashes(value))
+  i = 1
+  while i <= length(ws)
+    w = ws[i]
+    lw = lowercase(w)
+    if lw == "/"
+      j = i + 1
+      while j <= length(ws) && j <= i + 2 && (lowercase(ws[j]) in ("cover", "contain", "auto") || occursin(r"^[0-9.]|^(calc|min|max|clamp)\(", lowercase(ws[j]))) j += 1 end
+      size = join(ws[i+1:j-1], " ")
+      i = j - 1
+    elseif picture(lw)
+      image = w
+    elseif lw in ("repeat", "no-repeat", "repeat-x", "repeat-y", "space", "round")
+      repeat = repeat === nothing ? lw : repeat * " " * lw
+    elseif lw in ("left", "right", "top", "bottom", "center") || occursin(r"^-?[0-9.]|^(calc|min|max|clamp)\(", lw)
+      push!(place, lw)
+    elseif lw in ("border-box", "padding-box", "content-box", "text")
+      push!(boxes, lw)
+    elseif lw in ("scroll", "fixed", "local", "none")
+    elseif colour(lw) !== nothing
+      color = lw
+    else
+      return nothing
+    end
+    i += 1
+  end
+  (color, image, repeat, isempty(place) ? nothing : join(place, " "), size, isempty(boxes) ? nothing : boxes[1], isempty(boxes) ? nothing : boxes[end])
+end
+
+# The sides that the words of a page that's read from left to right, top to bottom, stand for
+const FLOW_SIDES = Dict("block-start" => "top", "block-end" => "bottom", "inline-start" => "left", "inline-end" => "right")
+const FLOW_CORNERS = Dict("start-start" => "top-left", "start-end" => "top-right", "end-start" => "bottom-left", "end-end" => "bottom-right")
+const FLOW_SIZES = Dict("inline-size" => "width", "block-size" => "height", "min-inline-size" => "min-width", "min-block-size" => "min-height",
+                        "max-inline-size" => "max-width", "max-block-size" => "max-height", "overflow-inline" => "overflow", "overflow-block" => "overflow",
+                        "grid-row-gap" => "row-gap", "grid-column-gap" => "column-gap", "-webkit-appearance" => "appearance", "-moz-appearance" => "appearance",
+                        "-webkit-background-clip" => "background-clip", "-webkit-mask-image" => "mask-image", "text-wrap-mode" => "text-wrap-mode",
+                        "-webkit-box-flex" => "flex-grow", "-webkit-text-decoration-color" => "text-decoration-color", "font-stretch" => "font-width")
+
 "The longer names that the property `name` stands for, each with its value, or nothing when it stands for itself"
 expand(name, value) = begin
   out = Pair{String,String}[]
-  if name in ("margin", "padding")
+  if name in ("margin", "padding", "inset")
     vs = four(terms(value))
     vs === nothing && return out
     for (side, v) in zip(SIDE_NAMES, vs)
-      push!(out, "$name-$side" => v)
+      push!(out, (name == "inset" ? side : "$name-$side") => v)
     end
   elseif name in ("border-width", "border-style", "border-color")
     vs = four(terms(value))
@@ -462,83 +1474,203 @@ expand(name, value) = begin
     for side in (name == "border" ? SIDE_NAMES : (name[8:end],)), (kind, v) in zip(("width", "style", "color"), parts)
       push!(out, "border-$side-$kind" => v)
     end
+    name == "border" && push!(out, "border-image" => "none")
+  elseif (m = match(r"^(margin|padding|inset|border)-(inline|block)(?:-(start|end))?(?:-(width|style|color))?$", name)) !== nothing
+    # What's said of the start and the end of a line or a block is said of a side
+    what, axis, edge, kind = m[1], m[2], m[3], m[4]
+    names = edge === nothing ? (axis == "inline" ? ("left", "right") : ("top", "bottom")) : (FLOW_SIDES["$axis-$edge"],)
+    full(side) = what == "inset" ? side : kind === nothing ? "$what-$side" : "$what-$side-$kind"
+    if what == "border" && kind === nothing
+      foreach(side -> push!(out, "border-$side" => value), names)
+    else
+      ws = terms(value)
+      (isempty(ws) || length(ws) > length(names)) && return out
+      for (i, side) in enumerate(names)
+        push!(out, full(side) => ws[min(i, length(ws))])
+      end
+    end
   elseif name in ("border-radius", "-webkit-border-radius", "-moz-border-radius")
-    vs = four(terms(first(split(value, '/'))))
-    vs === nothing && return out
-    for (corner, v) in zip(("top-left", "top-right", "bottom-right", "bottom-left"), vs)
-      push!(out, "border-$corner-radius" => v)
+    halves = split(value, '/')
+    hs = four(terms(halves[1]))
+    vs = length(halves) > 1 ? four(terms(halves[2])) : hs
+    (hs === nothing || vs === nothing) && return out
+    for (corner, h, v) in zip(("top-left", "top-right", "bottom-right", "bottom-left"), hs, vs)
+      push!(out, "border-$corner-radius-x" => h, "border-$corner-radius-y" => v)
+    end
+  elseif (m = match(r"^border-(top-left|top-right|bottom-right|bottom-left|start-start|start-end|end-start|end-end)-radius$", name)) !== nothing
+    corner = get(FLOW_CORNERS, m[1], m[1])
+    ws = terms(value)
+    isempty(ws) && return out
+    push!(out, "border-$corner-radius-x" => ws[1], "border-$corner-radius-y" => ws[end])
+  elseif name == "outline"
+    parts = border_parts(value)
+    parts === nothing && return out
+    push!(out, "outline-width" => parts[1], "outline-style" => parts[2], "outline-color" => parts[3])
+  elseif name == "column-rule"
+    parts = border_parts(value)
+    parts === nothing && return out
+    push!(out, "column-rule-width" => parts[1], "column-rule-style" => parts[2], "column-rule-color" => parts[3])
+  elseif name == "columns"
+    push!(out, "column-count" => "auto", "column-width" => "auto")
+    for w in terms(value)
+      lowercase(w) == "auto" || push!(out, (occursin(r"^[0-9]+$", w) ? "column-count" : "column-width") => w)
     end
   elseif name == "background"
-    color, image, repeat, place, size = "transparent", "none", "repeat", String[], nothing
-    ws = terms(replace(value, r"\s*/\s*" => " / "))
-    i = 1
-    while i <= length(ws)
-      w = ws[i]
-      lw = lowercase(w)
-      if lw == "/"
-        j = i + 1
-        while j <= length(ws) && j <= i + 2 && (lowercase(ws[j]) in ("cover", "contain", "auto") || occursin(r"^[0-9.]", ws[j])) j += 1 end
-        size = join(ws[i+1:j-1], " ")
-        i = j - 1
-      elseif startswith(lw, "url(") || occursin("gradient(", lw)
-        image = w
-      elseif lw in ("repeat", "no-repeat", "repeat-x", "repeat-y")
-        repeat = lw
-      elseif lw in ("left", "right", "top", "bottom", "center") || occursin(r"^-?[0-9.]", lw)
-        push!(place, lw)
-      elseif lw in ("scroll", "fixed", "local", "border-box", "padding-box", "content-box", "none")
-      elseif colour(lw) isa UInt32
-        color = lw
-      else
-        return out
-      end
-      i += 1
-    end
-    push!(out, "background-color" => color, "background-image" => image, "background-repeat" => repeat,
-          "background-position" => (isempty(place) ? "0% 0%" : join(place, " ")), "background-size" => something(size, "auto"))
+    layers = [background_layer(p) for p in pieces(value, ',')]
+    (isempty(layers) || any(isnothing, layers)) && return out
+    col(i, default) = join((something(l[i], default) for l in layers), ", ")
+    push!(out, "background-color" => something(layers[end][1], "transparent"), "background-image" => col(2, "none"), "background-repeat" => col(3, "repeat"),
+          "background-position" => col(4, "0% 0%"), "background-size" => col(5, "auto"), "background-origin" => col(6, "padding-box"),
+          "background-clip" => col(7, "border-box"))
   elseif name == "font"
+    lv = lowercase(strip(value))
+    if lv in ("caption", "icon", "menu", "message-box", "small-caption", "status-bar")
+      push!(out, "font-style" => "normal", "font-weight" => "normal", "font-size" => "13px", "line-height" => "normal", "font-family" => "system-ui")
+      return out
+    end
     ws = terms(value)
     i = 1
-    style, weight = "normal", "normal"
-    while i <= length(ws) && !occursin(r"^[0-9.]", ws[i]) && !haskey(SIZES, lowercase(ws[i])) && !(lowercase(ws[i]) in ("smaller", "larger"))
+    style, weight, caps = "normal", "normal", "normal"
+    while i <= length(ws) && !occursin(r"^[0-9.]|^(calc|min|max|clamp|var)\(", lowercase(ws[i])) && !haskey(SIZES, lowercase(ws[i])) && !(lowercase(ws[i]) in ("smaller", "larger"))
       w = lowercase(ws[i])
-      w in ("italic", "oblique") ? (style = w) : w in ("bold", "bolder", "lighter") ? (weight = w) : nothing
+      w in ("italic", "oblique") ? (style = w) : w in ("bold", "bolder", "lighter") ? (weight = w) : w == "small-caps" ? (caps = w) : nothing
       i += 1
     end
     # A weight like 600 looks like a size: it's a weight when a size comes after it
-    if i < length(ws) && occursin(r"^[1-9]00$", ws[i]) && (occursin(r"^[0-9.]", ws[i+1]) || haskey(SIZES, lowercase(ws[i+1])))
+    if i < length(ws) && occursin(r"^[1-9]\d{0,2}$", ws[i]) && (occursin(r"^[0-9.]|^(calc|min|max|clamp)\(", lowercase(ws[i+1])) || haskey(SIZES, lowercase(ws[i+1])))
       weight = ws[i]
       i += 1
     end
     i < length(ws) || return out   # a size and a family are both needed
     size = split(ws[i], '/')
-    push!(out, "font-style" => style, "font-weight" => weight, "font-size" => size[1], "line-height" => (length(size) > 1 ? size[2] : "normal"),
+    height = length(size) > 1 ? size[2] : "normal"
+    # The line height can stand apart: `12px / 1.5`
+    i + 2 <= length(ws) && ws[i+1] == "/" && ((height, i) = (ws[i+2], i + 2))
+    push!(out, "font-style" => style, "font-weight" => weight, "font-variant-caps" => caps, "font-size" => size[1], "line-height" => height,
           "font-family" => join(ws[i+1:end], " "))
   elseif name == "list-style"
     for w in terms(value)
       lw = lowercase(w)
-      lw in ("inside", "outside") ? push!(out, "list-style-position" => lw) : startswith(lw, "url(") ? nothing : push!(out, "list-style-type" => lw)
+      lw in ("inside", "outside") ? push!(out, "list-style-position" => lw) : startswith(lw, "url(") ? push!(out, "list-style-image" => w) :
+      lw == "none" ? push!(out, "list-style-type" => "none", "list-style-image" => "none") : push!(out, "list-style-type" => w)
     end
-  elseif name == "text-decoration"
-    lines = filter(w -> lowercase(w) in ("none", "underline", "line-through", "overline"), terms(value))
+  elseif name in ("text-decoration", "-webkit-text-decoration")
+    lines = String[]
+    push!(out, "text-decoration-style" => "solid", "text-decoration-color" => "currentcolor", "text-decoration-thickness" => "auto")
+    for w in terms(value)
+      lw = lowercase(w)
+      lw in ("none", "underline", "line-through", "overline", "blink") ? push!(lines, lw) :
+      lw in ("solid", "double", "dotted", "dashed", "wavy") ? push!(out, "text-decoration-style" => lw) :
+      lw in ("auto", "from-font") || occursin(r"^[0-9.]", lw) ? push!(out, "text-decoration-thickness" => lw) :
+      colour(lw) !== nothing ? push!(out, "text-decoration-color" => lw) : nothing
+    end
     isempty(lines) || push!(out, "text-decoration-line" => join(lines, " "))
-  elseif name in ("overflow-x", "overflow-y")
-    push!(out, "overflow" => value)
-  elseif name == "overflow" && occursin(' ', strip(value))
-    push!(out, "overflow" => first(split(value)))
-  elseif name in ("padding-inline-start", "margin-inline-start")
-    push!(out, "$(name[1:end-13])-left" => value)
-  elseif name in ("padding-inline-end", "margin-inline-end")
-    push!(out, "$(name[1:end-11])-right" => value)
-  elseif name in ("margin-block-start", "padding-block-start")
-    push!(out, "$(name[1:end-12])-top" => value)
-  elseif name in ("margin-block-end", "padding-block-end")
-    push!(out, "$(name[1:end-10])-bottom" => value)
-  elseif name in ("margin-inline", "padding-inline", "margin-block", "padding-block")
+  elseif name == "flex"
+    ws = terms(lowercase(value))
+    grow, shrink, basis = "1", "1", "0%"
+    if ws == ["none"]
+      grow, shrink, basis = "0", "0", "auto"
+    elseif ws == ["auto"]
+      basis = "auto"
+    elseif ws == ["initial"]
+      grow, basis = "0", "auto"
+    else
+      nums = [w for w in ws if tryparse(Float64, w) !== nothing]
+      rest = [w for w in ws if tryparse(Float64, w) === nothing]
+      (length(rest) > 1 || length(nums) > 3 || isempty(ws)) && return out
+      length(nums) >= 1 && (grow = nums[1])
+      length(nums) >= 2 && (shrink = nums[2])
+      # A third number is a basis with no unit, which only 0 can be
+      length(nums) == 3 && (basis = nums[3] * "px")
+      isempty(rest) || (basis = rest[1])
+    end
+    push!(out, "flex-grow" => grow, "flex-shrink" => shrink, "flex-basis" => basis)
+  elseif name == "flex-flow"
+    for w in terms(lowercase(value))
+      push!(out, (w in ("nowrap", "wrap", "wrap-reverse") ? "flex-wrap" : "flex-direction") => w)
+    end
+  elseif name in ("gap", "grid-gap")
     ws = terms(value)
     length(ws) in (1, 2) || return out
-    a, b = endswith(name, "inline") ? ("left", "right") : ("top", "bottom")
-    push!(out, "$(first(split(name, '-')))-$a" => ws[1], "$(first(split(name, '-')))-$b" => ws[end])
+    push!(out, "row-gap" => ws[1], "column-gap" => ws[end])
+  elseif name in ("place-content", "place-items", "place-self")
+    ws = terms(replace(lowercase(value), r"\b(first|last|safe|unsafe)\s+" => ""))
+    length(ws) in (1, 2) || return out
+    kind = name[7:end]
+    push!(out, "align-$kind" => ws[1], "justify-$kind" => ws[end])
+  elseif name in ("grid-row", "grid-column")
+    parts = [strip(p) for p in split(value, '/')]
+    length(parts) in (1, 2) || return out
+    # With one name, the thing ends where the area of that name ends
+    stop = length(parts) == 2 ? parts[2] : occursin(r"^[-_a-z]+$"i, parts[1]) && !(lowercase(parts[1]) in ("auto", "span")) ? parts[1] : "auto"
+    push!(out, "$name-start" => parts[1], "$name-end" => stop)
+  elseif name == "grid-area"
+    parts = [String(strip(p)) for p in split(value, '/')]
+    length(parts) in 1:4 || return out
+    named(p) = occursin(r"^[-_a-z]+$"i, p) && !(lowercase(p) in ("auto", "span"))
+    col = length(parts) >= 2 ? parts[2] : named(parts[1]) ? parts[1] : "auto"
+    rowend = length(parts) >= 3 ? parts[3] : named(parts[1]) ? parts[1] : "auto"
+    colend = length(parts) == 4 ? parts[4] : named(col) ? col : "auto"
+    push!(out, "grid-row-start" => parts[1], "grid-column-start" => col, "grid-row-end" => rowend, "grid-column-end" => colend)
+  elseif name in ("grid-template", "grid")
+    lv = lowercase(strip(value))
+    if lv == "none"
+      push!(out, "grid-template-rows" => "none", "grid-template-columns" => "none", "grid-template-areas" => "none")
+    elseif occursin('"', value) || occursin('\'', value)
+      # Each row is its areas in quotes, with how tall it is after them. The columns come after a `/`.
+      halves = pieces(value, '/')
+      rows, areas = String[], String[]
+      for w in terms(halves[1])
+        if startswith(w, '"') || startswith(w, '\'')
+          length(areas) > length(rows) && push!(rows, "auto")
+          push!(areas, w)
+        elseif !startswith(w, '[')
+          push!(rows, w)
+        end
+      end
+      length(areas) > length(rows) && push!(rows, "auto")
+      push!(out, "grid-template-areas" => join(areas, " "), "grid-template-rows" => join(rows, " "))
+      length(halves) > 1 && push!(out, "grid-template-columns" => String(strip(halves[2])))
+    else
+      halves = [String(strip(p)) for p in pieces(value, '/')]
+      length(halves) == 2 || return out
+      flow(h) = occursin(r"\bauto-flow\b", lowercase(h))
+      tracks(h) = String(strip(replace(h, r"\b(auto-flow|dense)\b"i => "")))
+      if flow(halves[1])
+        push!(out, "grid-auto-flow" => (occursin("dense", lowercase(halves[1])) ? "row dense" : "row"), "grid-template-columns" => halves[2])
+        isempty(tracks(halves[1])) || push!(out, "grid-auto-rows" => tracks(halves[1]))
+      elseif flow(halves[2])
+        push!(out, "grid-auto-flow" => (occursin("dense", lowercase(halves[2])) ? "column dense" : "column"), "grid-template-rows" => halves[1])
+        isempty(tracks(halves[2])) || push!(out, "grid-auto-columns" => tracks(halves[2]))
+      else
+        push!(out, "grid-template-rows" => halves[1], "grid-template-columns" => halves[2])
+      end
+    end
+  elseif name in ("mask", "-webkit-mask")
+    found = [w for w in terms(pieces(value, ',')[1]) if picture(lowercase(w))]
+    push!(out, "mask-image" => (isempty(found) ? "none" : found[1]))
+  elseif name == "container"
+    parts = [strip(p) for p in split(value, '/')]
+    push!(out, "container-name" => parts[1])
+    length(parts) > 1 && push!(out, "container-type" => parts[2])
+  elseif name == "-webkit-text-stroke"
+    for w in terms(value)
+      push!(out, (colour(lowercase(w)) !== nothing ? "-webkit-text-stroke-color" : "-webkit-text-stroke-width") => w)
+    end
+  elseif name == "text-wrap"
+    for w in terms(lowercase(value))
+      push!(out, (w in ("wrap", "nowrap") ? "text-wrap-mode" : "text-wrap-style") => w)
+    end
+  elseif name == "-webkit-box-orient"
+    push!(out, "flex-direction" => (lowercase(strip(value)) == "vertical" ? "column" : "row"))
+  elseif name == "-webkit-box-pack"
+    v = lowercase(strip(value))
+    push!(out, "justify-content" => (v == "justify" ? "space-between" : v == "end" ? "flex-end" : v == "center" ? "center" : "flex-start"))
+  elseif name == "-webkit-box-align"
+    v = lowercase(strip(value))
+    push!(out, "align-items" => (v == "end" ? "flex-end" : v == "start" ? "flex-start" : v in ("center", "baseline", "stretch") ? v : "stretch"))
+  elseif haskey(FLOW_SIZES, name) && FLOW_SIZES[name] != name
+    push!(out, FLOW_SIZES[name] => value)
   elseif name in ("-webkit-box-sizing", "-moz-box-sizing")
     push!(out, "box-sizing" => value)
   elseif name in ("-webkit-box-shadow", "-moz-box-shadow")
@@ -549,57 +1681,209 @@ expand(name, value) = begin
   out
 end
 
-get_side(s::Style, p::Prop) = p.side == 0 ? getfield(s, p.field) : getfield(s, p.field)[p.side]
-set_side!(s::Style, p::Prop, v) = begin
-  T = fieldtype(Style, p.field)
-  p.side == 0 ? setfield!(s, p.field, convert(T, v)) : setfield!(s, p.field, convert(T, Base.setindex(getfield(s, p.field), v, p.side)))
+# How an SVG shape is drawn. A style keeps these with its variables: a child has its parent's.
+const SHAPE = Set(["fill", "fill-opacity", "fill-rule", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-dasharray",
+                   "stroke-dashoffset", "stroke-opacity", "stop-color", "stop-opacity", "clip-rule", "text-anchor", "dominant-baseline", "alignment-baseline",
+                   "paint-order", "vector-effect", "shape-rendering", "marker-start", "marker-mid", "marker-end", "flood-color", "flood-opacity"])
+
+# What's understood and changes nothing in a page that's drawn once: no mouse, no time, no printer
+const UNUSED = Set(["cursor", "pointer-events", "user-select", "resize", "caret-color", "touch-action", "will-change", "transition", "transition-property",
+                    "transition-duration", "transition-timing-function", "transition-delay", "transition-behavior", "animation", "animation-name",
+                    "animation-duration", "animation-timing-function", "animation-delay", "animation-iteration-count", "animation-direction",
+                    "animation-fill-mode", "animation-play-state", "animation-composition", "animation-timeline", "scroll-behavior", "scroll-snap-type",
+                    "scroll-snap-align", "scroll-snap-stop", "scroll-margin", "scroll-margin-top", "scroll-padding", "scroll-padding-top", "scrollbar-width",
+                    "scrollbar-color", "scrollbar-gutter", "overscroll-behavior", "overscroll-behavior-x", "overscroll-behavior-y", "contain",
+                    "content-visibility", "contain-intrinsic-size", "backface-visibility", "perspective", "perspective-origin", "transform-style",
+                    "transform-box", "font-kerning", "font-feature-settings", "font-variation-settings", "font-optical-sizing", "font-synthesis",
+                    "font-display", "font-width", "font-size-adjust", "font-variant-numeric", "font-variant-ligatures", "font-variant-east-asian",
+                    "font-variant-alternates", "font-variant-position", "font-palette", "font-language-override", "text-rendering", "-webkit-font-smoothing",
+                    "-moz-osx-font-smoothing", "text-size-adjust", "-webkit-tap-highlight-color", "-webkit-touch-callout", "hyphens", "hyphenate-character",
+                    "orphans", "widows", "page-break-before", "page-break-after", "page-break-inside", "break-before", "break-after", "break-inside",
+                    "unicode-bidi", "writing-mode", "text-orientation", "text-underline-position", "text-decoration-skip-ink", "text-decoration-skip",
+                    "hanging-punctuation", "color-scheme", "forced-color-adjust", "print-color-adjust", "-webkit-print-color-adjust",
+                    "background-attachment", "background-blend-mode", "backdrop-filter", "mask-size", "mask-position", "mask-repeat", "mask-mode",
+                    "mask-type", "mask-clip", "mask-origin", "mask-composite", "shape-outside", "shape-margin", "shape-image-threshold", "zoom",
+                    "box-decoration-break", "math-style", "math-depth", "view-transition-name", "anchor-name", "position-anchor", "position-area",
+                    "field-sizing", "interpolate-size", "overflow-anchor", "overflow-clip-margin", "text-emphasis", "text-emphasis-style",
+                    "text-emphasis-color", "text-emphasis-position", "ruby-position", "ruby-align", "column-fill", "column-span", "border-image-slice",
+                    "border-image-width", "border-image-outset", "border-image-repeat", "image-orientation", "speak", "speak-as", "timeline-scope",
+                    "view-timeline", "scroll-timeline", "offset", "offset-path", "offset-distance", "offset-rotate", "text-justify", "text-combine-upright",
+                    "initial-letter", "line-height-step", "block-ellipsis", "text-box", "text-box-trim", "text-box-edge", "text-spacing-trim", "text-autospace",
+                    "white-space-trim", "counter-style", "user-drag", "app-region", "all"])
+
+"True when `name: value` is a declaration that's understood: what an @supports asks"
+known(name, value) = begin
+  startswith(name, "--") && return true
+  p = get(PROPS, name, nothing)
+  if p !== nothing
+    v = lowercase(strip(value))
+    return v in ("inherit", "initial", "unset", "revert", "revert-layer") || occursin("var(", v) || try p.read(v, value, PLAIN, DEFAULT) !== nothing catch; false end
+  end
+  longer = expand(name, value)
+  longer !== nothing && return !isempty(longer) && all(((n, v),) -> n == name || known(n, v), longer)
+  (name in SHAPE || name in UNUSED) && return true
+  m = match(r"^-(?:webkit|moz|ms|o)-(.+)$", name)
+  m !== nothing && known(m[1], value)
+end
+
+get_side(s::Style, p::Prop) = p.side == 0 ? p.get(s) : p.get(s)[p.side]
+set_side!(s::Style, p::Prop, v) = (p.side == 0 ? p.set(s, v) : p.set(s, Base.setindex(p.get(s), v, p.side)); nothing)
+
+"""
+`value` with each `var(--x)` as what the variable holds, and each `env(...)`
+as nothing: no screen of a page that's drawn has a part cut off. `vars(name)`
+gives the value of a variable, or nothing. It's nothing when a variable that
+it needs has no value and no stand-in.
+"""
+substitute(value::AbstractString, vars::Function, depth=0) = begin
+  depth > 32 && return nothing
+  out = String(value)
+  while true
+    m = match(r"\b(var|env)\(", out)
+    m === nothing && return out
+    open = m.offset + ncodeunits(m.match) - 1
+    stop = closing(out, open, '(', ')')
+    stop > lastindex(out) && return nothing
+    inside = SubString(out, open + 1, prevind(out, stop))
+    comma = nothing
+    level = 0
+    for (i, ch) in pairs(inside)
+      ch == '(' ? (level += 1) : ch == ')' ? (level -= 1) : nothing
+      ch == ',' && level == 0 && (comma = i; break)
+    end
+    name = strip(comma === nothing ? inside : SubString(inside, firstindex(inside), prevind(inside, comma)))
+    spare = comma === nothing ? nothing : strip(SubString(inside, nextind(inside, comma)))
+    found = m[1] == "var" ? vars(String(name)) : nothing
+    with = found !== nothing ? substitute(found, vars, depth + 1) : spare !== nothing ? substitute(spare, vars, depth + 1) : m[1] == "env" ? "0px" : nothing
+    with === nothing && return nothing
+    out = out[1:prevind(out, m.offset)] * with * out[nextind(out, stop):end]
+  end
 end
 
 "Give the style `s` what `name: value` declares. A value that the property can't take changes nothing."
 set!(s::Style, name::AbstractString, value::AbstractString, c::Context, parent::Style) = begin
+  startswith(name, "--") && return nothing
+  if occursin("var(", value) || occursin("env(", value)
+    vars = s.vars
+    value = substitute(value, n -> get(vars, n, nothing))
+    value === nothing && return nothing
+  end
+  if name == "list-style-type" && occursin(r"^\s*[\"']", value)
+    # The words that stand for the bullet
+    s.listtype, s.listtext = :text, String(strip(strip(value), ['"', '\'']))
+    return nothing
+  end
   p = get(PROPS, name, nothing)
   if p === nothing
+    if name == "all"
+      # Every property starts again, but the variables stay
+      v = lowercase(strip(value))
+      v in ("initial", "unset", "inherit") || return nothing
+      from = v == "initial" ? DEFAULT : v == "unset" ? child(parent) : parent
+      for f in fieldnames(Style)
+        f in (:vars, :direction) || setfield!(s, f, getfield(from, f))
+      end
+      return nothing
+    elseif name in ("overflow-x", "overflow-y")
+      # What's cut off across or down is cut off: the other way then scrolls, which is cut off too
+      v = lowercase(strip(value))
+      v in ("hidden", "clip", "scroll", "auto", "overlay") ? (s.overflow = :hidden) : v == "inherit" ? (s.overflow = parent.overflow) : nothing
+      return nothing
+    elseif name == "text-wrap-mode"
+      v = lowercase(strip(value))
+      s.whitespace = v == "nowrap" ? (s.whitespace in (:pre, :pre_wrap) ? :pre : :nowrap) : v == "wrap" ? (s.whitespace == :nowrap ? :normal : s.whitespace == :pre ? :pre_wrap : s.whitespace) : s.whitespace
+      return nothing
+    elseif name in ("background-position-x", "background-position-y")
+      l = (w = lowercase(strip(first(pieces(value, ','))))) in ("left", "top") ? ZERO : w in ("right", "bottom") ? percent(1) : w == "center" ? percent(0.5) : len(w, c)
+      (l === nothing || l.auto) && return nothing
+      s.bgposition = [name[end] == 'x' ? (l, at[2]) : (at[1], l) for at in s.bgposition]
+      return nothing
+    end
     longer = expand(name, value)
-    longer === nothing && return
+    if longer === nothing
+      if name in SHAPE
+        s.vars === parent.vars && (s.vars = copy(s.vars))
+        lowercase(strip(value)) == "inherit" ? (haskey(parent.vars, name) ? (s.vars[name] = parent.vars[name]) : delete!(s.vars, name)) : (s.vars[name] = String(strip(value)))
+        return nothing
+      end
+      # A name with a browser's own start, like -webkit-transform, is the name without it
+      m = match(r"^-(?:webkit|moz|ms|o)-(.+)$", name)
+      m === nothing || set!(s, m[1], value, c, parent)
+      return nothing
+    end
     for (n, v) in longer
       set!(s, n, v, c, parent)
     end
-    return
+    return nothing
   end
   v = lowercase(strip(value))
-  got = v == "inherit" ? get_side(parent, p) : v in ("initial", "unset", "revert") ? get_side(p.field in INHERITED && v != "initial" ? parent : DEFAULT, p) :
-        p.read(v, value, c, parent)
+  # The words that every property takes all start with one of three letters
+  wide = !isempty(v) && v[1] in ('i', 'u', 'r')
+  got = wide && v == "inherit" ? get_side(parent, p) :
+        wide && v in ("initial", "unset", "revert", "revert-layer") ? get_side(p.field in INHERITED && v != "initial" ? parent : DEFAULT, p) : p.read(v, value, c, parent)
   got === nothing || set_side!(s, p, got)
   nothing
 end
+
+# Turn the ems of the plain lengths of a style into px: written out field by field, which is quicker than a loop over the names
+@eval flatten!(s::Style, size) = begin
+  $((:(s.$f = flat(s.$f, size)) for f in (:width, :height, :minwidth, :minheight, :maxwidth, :maxheight, :indent, :letterspacing, :wordspacing, :basis, :outline,
+                                          :outlineoffset, :colwidth, :colrule, :decothick, :underoffset, :stroke))...)
+  $((:(s.$f = map(l -> flat(l, size), s.$f)) for f in (:margin, :padding, :border, :radius, :radiusv, :inset))...)
+  nothing
+end
+
+const BLOCKS = Dict(:inline => :block, :inline_block => :block, :table_cell => :block, :table_row => :block, :table_row_group => :block,
+                    :table_header_group => :block, :table_footer_group => :block, :table_caption => :block, :table_column => :block,
+                    :table_column_group => :block, :inline_table => :table, :inline_flex => :flex, :inline_grid => :grid)
 
 "Turn the ems of the lengths of `s` into px, now that its font size is known, and work out what follows from its other values"
 settle!(s::Style, parent::Style, tag="") = begin
   # A table takes no centring from a tag's `align` round it: what's in it starts at the left again
   tag == "table" && s.align in (:wk_left, :wk_center, :wk_right) && (s.align = :start)
-  flat(l::Len) = l.em == 0 ? l : Len(l.px + l.em * s.size, l.pct, 0, l.auto)
-  for f in (:width, :height, :minwidth, :minheight, :maxwidth, :maxheight, :indent, :letterspacing, :wordspacing)
-    setfield!(s, f, flat(getfield(s, f)))
+  size = s.size
+  f(l::Len) = flat(l, size)
+  flatten!(s, size)
+  s.gap = map(f, s.gap)
+  s.origin = map(f, s.origin)
+  s.objectat = map(f, s.objectat)
+  s.bgposition === ONE_PLACE || (s.bgposition = [map(f, at) for at in s.bgposition])
+  s.bgsize === ONE_SIZE || (s.bgsize = Any[x isa Tuple ? map(f, x) : x for x in s.bgsize])
+  s.valign = (s.valign[1], f(s.valign[2]))
+  s.lineheight[1] == :em && (s.lineheight = (:px, s.lineheight[2] * size))
+  for name in (:transform, :translate)
+    ts = getfield(s, name)
+    isempty(ts) || any(t -> t.x.em != 0 || t.y.em != 0, ts) && setfield!(s, name, [Turn(t.kind, f(t.x), f(t.y), t.n) for t in ts])
   end
-  for f in (:margin, :padding, :border, :radius, :inset)
-    setfield!(s, f, map(flat, getfield(s, f)))
+  fs(x::Size) = x.len.em == 0 ? x : Size(x.kind, f(x.len), x.fr)
+  ft(ts) = isempty(ts) ? ts : [Track(fs(t.min), fs(t.max)) for t in ts]
+  for name in (:gridcols, :gridrows)
+    t = getfield(s, name)
+    t === NO_TEMPLATE || setfield!(s, name, Template(ft(t.tracks), ft(t.again), ft(t.after), t.fit, t.names))
   end
-  s.bgposition = map(flat, s.bgposition)
-  s.bgsize isa Tuple && (s.bgsize = map(flat, s.bgsize))
-  s.valign = (s.valign[1], flat(s.valign[2]))
-  s.lineheight[1] == :em && (s.lineheight = (:px, s.lineheight[2] * s.size))
+  s.autocols = ft(s.autocols)
+  s.autorows = ft(s.autorows)
+  # The colours that are the text's own
   s.bordercolor = map(c -> c === :current ? s.color : c, s.bordercolor)
-  # A float and an element with a place of its own are blocks
-  if s.display != :none && (s.float != :none || s.position in (:absolute, :fixed))
-    s.position in (:absolute, :fixed) && (s.float = :none)
-    s.display = s.display in (:inline, :inline_block, :table_cell, :table_row, :table_row_group, :table_header_group, :table_footer_group,
-                              :table_caption, :table_column, :table_column_group, :contents) ? :block :
-                s.display == :inline_table ? :table : s.display == :inline_flex ? :flex : s.display
+  s.background == CURRENT && (s.background = s.color)
+  s.outlinecolor == CURRENT && (s.outlinecolor = s.color)
+  s.colrulecolor == CURRENT && (s.colrulecolor = s.color)
+  # The old kind of flex box. One that cuts its text off after some lines is a plain block.
+  s.display == :old_box && (s.display = s.lineclamp > 0 ? :block : :flex)
+  # A float and an element with a place of its own are blocks, and so is a thing in a flex box or a grid
+  inside = parent.display in (:flex, :inline_flex, :grid, :inline_grid)
+  if s.display != :none && (s.float != :none || s.position in (:absolute, :fixed) || inside)
+    (s.position in (:absolute, :fixed) || inside) && (s.float = :none)
+    s.display = get(BLOCKS, s.display, s.display)
   end
   # The lines under and through text go on through the text of what's in the element, but not into a box of its own
-  apart = s.display in (:inline_block, :inline_table, :inline_flex) || s.float != :none || s.position in (:absolute, :fixed)
+  apart = s.display in (:inline_block, :inline_table, :inline_flex, :inline_grid) || s.float != :none || s.position in (:absolute, :fixed)
   s.lines = (apart ? 0x00 : parent.lines) | s.decoration
-  s.decoration != 0 && (s.linecolor = s.color)
+  if s.decoration != 0
+    s.linecolor = s.decocolor == CURRENT ? s.color : s.decocolor
+    s.linestyle = s.decostyle
+    s.linethick = isauto(s.decothick) ? 0.0 : px(s.decothick, size)
+  end
   s
 end
 
@@ -608,8 +1892,8 @@ end
 const BROWSER = sheet("""
 html, body, div, p, h1, h2, h3, h4, h5, h6, address, blockquote, center, dl, dt, dd, ol, ul, menu, dir, pre, listing, xmp, plaintext, hr, form,
 fieldset, legend, article, aside, footer, header, main, nav, section, figure, figcaption, details, summary, hgroup, optgroup, search { display: block }
-head, meta, title, link, style, script, base, template, area, param, datalist, noembed, noframes, iframe, object, embed, audio, video, canvas, svg, map,
-source, track, select, textarea, dialog, input[type=hidden], [hidden] { display: none }
+head, meta, title, link, style, script, base, template, area, param, datalist, noembed, noframes, map, source, track, rp, dialog:not([open]),
+audio:not([controls]), input[type=hidden], [popover], [hidden] { display: none }
 body { margin: 8px }
 p, dl { margin: 1em 0 }
 blockquote, figure { margin: 1em 40px }
@@ -623,6 +1907,7 @@ b, strong, th { font-weight: bold }
 i, em, cite, var, address, dfn { font-style: italic }
 u, ins { text-decoration: underline }
 s, strike, del { text-decoration: line-through }
+abbr[title], acronym[title] { text-decoration: underline dotted }
 a:any-link { color: -webkit-link; text-decoration: underline }
 big { font-size: larger }
 small { font-size: smaller }
@@ -650,12 +1935,53 @@ th { text-align: center }
 caption { display: table-caption; text-align: center }
 col { display: table-column }
 colgroup { display: table-column-group }
-img, input, button { display: inline-block }
-button { padding: 1px 6px; border: 2px outset buttonface; background-color: buttonface; color: buttontext; font-size: 13.33px; text-align: center }
-input { padding: 1px 2px; border: 2px inset gray; font-size: 13.33px; width: 150px; height: 15px }
-fieldset { border: 2px groove gray; margin: 0 2px; padding: 0.35em 0.75em 0.625em }
+img, input, button, select, textarea, svg, video, canvas, iframe, object, embed, audio, progress, meter, marquee { display: inline-block }
+button, input[type=submit], input[type=button], input[type=reset] { padding: 2px 8px 3px; border: 0 solid #c8c8c8; border-radius: 5px; background-color: #e9e9eb;
+  color: buttontext; font: 11px system-ui; text-align: center; white-space: pre; text-indent: 0; letter-spacing: normal; text-transform: none; box-sizing: border-box }
+input { padding: 3px 6px; border: 1px solid #c8c8c8; border-radius: 5px; font: 11px system-ui; width: 141px; background-color: field; color: fieldtext; white-space: pre;
+  overflow: hidden; text-indent: 0; letter-spacing: normal; text-transform: none; text-align: start }
+input[type=submit], input[type=button], input[type=reset], input[type=image] { width: auto; overflow: visible }
+input[type=checkbox], input[type=radio] { width: 12px; height: 12px; margin: 3px 3px 3px 4px; padding: 0; border: 0; background: none; box-sizing: border-box }
+input[type=range] { width: 129px; height: 16px; margin: 2px; padding: 0; border: 0; background: none }
+input[type=color] { width: 44px; height: 23px; padding: 1px 2px; box-sizing: border-box }
+input[type=file] { border: 0; padding: 0; background: none; width: 238px }
+input[type=image] { border: 0; padding: 0; background: none }
+textarea { padding: 2px; border: 1px solid #c8c8c8; border-radius: 5px; font: 11px monospace; background-color: field; color: fieldtext; white-space: pre-wrap;
+  overflow-wrap: break-word; overflow: hidden; text-indent: 0; letter-spacing: normal; text-transform: none; text-align: start; vertical-align: text-bottom }
+select { padding: 3px 26px 4px 12px; border: 0 solid #c8c8c8; border-radius: 5px; font: 11px system-ui; background-color: #e9e9eb; color: fieldtext; white-space: pre;
+  overflow: hidden; text-indent: 0; letter-spacing: normal; text-transform: none; text-align: start; box-sizing: border-box; line-height: 13px }
+select[multiple], select[size] { padding: 2px; border-width: 1px; background-color: field; white-space: pre }
+fieldset { border: 2px groove gray; margin: 0 2px; padding: 0.35em 0.75em 0.625em; min-width: min-content }
+legend { padding: 0 2px; width: fit-content }
 mark { background-color: yellow; color: black }
 nobr { white-space: nowrap }
+svg { overflow: hidden }
+iframe { border: 2px inset gray }
+progress { width: 10em }
+meter { width: 5em }
+progress, meter { height: 1em; vertical-align: -0.2em; box-sizing: border-box }
+details > summary { display: list-item; list-style: disclosure-closed inside }
+details[open] > summary { list-style-type: disclosure-open }
+details:not([open]) > :not(summary) { display: none }
+dialog { position: absolute; left: 0; right: 0; width: fit-content; height: fit-content; margin: auto; border: 3px solid; padding: 1em; background-color: canvas; color: canvastext }
+slot { display: contents }
+q::before { content: open-quote }
+q::after { content: close-quote }
+ruby { display: inline-flex; flex-direction: column-reverse; align-items: center; text-indent: 0; line-height: 1 }
+rt { display: block; font-size: 50%; line-height: 1; text-align: center; white-space: nowrap }
+bdo[dir=rtl] { direction: rtl }
+math { display: inline-block; font-family: math, serif; white-space: nowrap; text-indent: 0; letter-spacing: normal; line-height: normal }
+mi { font-style: italic }
+mfrac { display: inline-flex; flex-direction: column; align-items: center; vertical-align: middle; padding: 0 2px }
+mfrac > :first-child { border-bottom: 1px solid; padding: 0 2px }
+msup > :nth-child(2), msubsup > :nth-child(3), mover > :nth-child(2) { vertical-align: super; font-size: 70% }
+msub > :nth-child(2), msubsup > :nth-child(2), munder > :nth-child(2) { vertical-align: sub; font-size: 70% }
+msqrt::before { content: "√" }
+msqrt { border-top: 1px solid }
+mtable { display: inline-table; vertical-align: middle }
+mtr { display: table-row }
+mtd { display: table-cell; padding: 0.2em 0.4em; text-align: center }
+annotation, annotation-xml { display: none }
 """)
 
 # In a page with no doctype, a table doesn't take its text's size and weight from what it's in
@@ -696,6 +2022,12 @@ end
 "The address in a tag's `background`, as CSS writes a picture"
 url(v) = "url(\"" * replace(strip(v), '"' => "%22") * "\")"
 
+# The tags of an SVG drawing. What one says of how it's drawn (`fill="red"`) is a style that any CSS wins over.
+const SVG_TAGS = Set(["svg", "g", "path", "rect", "circle", "ellipse", "line", "polyline", "polygon", "text", "tspan", "textpath", "use", "defs", "symbol",
+                      "lineargradient", "radialgradient", "stop", "clippath", "mask", "pattern", "image", "marker", "switch", "foreignobject"])
+const SVG_LOOKS = ("opacity", "display", "visibility", "color", "font-size", "font-family", "font-weight", "font-style", "letter-spacing", "word-spacing",
+                   "text-decoration", "clip-path", "mask", "filter")
+
 "What the tag of `e` says about how it looks, as declarations, which any CSS for the element wins over"
 hints(e::Element) = begin
   out = Pair{String,String}[]
@@ -703,6 +2035,7 @@ hints(e::Element) = begin
   has(name) = haskey(e.attrs, name)
   say(name, v) = v === nothing || isempty(v) || push!(out, name => v)
   tag = e.tag
+  has("dir") && lowercase(a("dir")) in ("ltr", "rtl") && say("direction", lowercase(a("dir")))
   if tag == "body"
     say("background-color", a("bgcolor"))
     say("color", a("text"))
@@ -753,7 +2086,7 @@ hints(e::Element) = begin
     tag == "tr" && say("height", measure(a("height"); zero=false))
   elseif tag in ("col", "colgroup")
     say("width", measure(a("width"); zero=false))
-  elseif tag == "img"
+  elseif tag == "img" || (tag == "input" && lowercase(a("type")) == "image")
     say("width", measure(a("width")))
     say("height", measure(a("height")))
     if has("border") && (w = measure(a("border"))) !== nothing
@@ -766,6 +2099,10 @@ hints(e::Element) = begin
     align in ("absmiddle", "abscenter") && say("vertical-align", "middle")
     has("hspace") && (say("margin-left", measure(a("hspace"))); say("margin-right", measure(a("hspace"))))
     has("vspace") && (say("margin-top", measure(a("vspace"))); say("margin-bottom", measure(a("vspace"))))
+  elseif tag in ("video", "canvas", "iframe", "embed", "object")
+    say("width", measure(a("width")))
+    say("height", measure(a("height")))
+    tag == "iframe" && a("frameborder") in ("0", "no") && say("border-style", "none")
   elseif tag == "font"
     say("color", a("color"))
     say("font-family", a("face"))
@@ -793,6 +2130,21 @@ hints(e::Element) = begin
   elseif tag == "br"
     clear = lowercase(a("clear"))
     say("clear", clear == "all" ? "both" : clear)
+  elseif tag == "textarea"
+    cols = something(tryparse(Int, a("cols")), 20)
+    rows = something(tryparse(Int, a("rows")), 2)
+    # As wide as so many letters and the bar that scrolls it, and as tall as so many lines
+    say("width", "calc($(round(0.6 * cols, digits=2))em + 18px)")
+    say("height", "$(round(rows * 13 / 11, digits=3))em")
+  elseif tag == "input" && has("size") && (n = tryparse(Int, a("size"))) !== nothing && n > 0
+    say("width", "$(round(0.55 * n + 0.6, digits=2))em")
+  elseif tag in SVG_TAGS
+    # A length of an SVG has px when it has no unit
+    lenient(v) = occursin(r"^[0-9.]+$", v) ? v * "px" : v
+    tag == "svg" && (say("width", lenient(a("width"))); say("height", lenient(a("height"))))
+    for (name, v) in e.attrs
+      (name in SHAPE || name in SVG_LOOKS) && say(name, name == "font-size" ? lenient(strip(v)) : strip(v))
+    end
   end
   out
 end
@@ -800,15 +2152,15 @@ end
 # --- the style of each element ------------------------------------------------------------
 
 "The rules of a page, and which of them can be for an element, by what the last part of its selector asks"
-struct Sheet
+struct Index
   ids::Dict{String,Vector{Rule}}
   classes::Dict{String,Vector{Rule}}
   tags::Dict{String,Vector{Rule}}
   rest::Vector{Rule}
 end
 
-Sheet(rules) = begin
-  s = Sheet(Dict(), Dict(), Dict(), Rule[])
+Index(rules) = begin
+  s = Index(Dict(), Dict(), Dict(), Rule[])
   for r in rules
     part = r.selector.parts[1]
     into = !isempty(part.id) ? get!(() -> Rule[], s.ids, part.id) : !isempty(part.classes) ? get!(() -> Rule[], s.classes, part.classes[1]) :
@@ -818,8 +2170,8 @@ Sheet(rules) = begin
   s
 end
 
-"Call `f` with each rule of `s` that's for the element `e`"
-each_rule(f, s::Sheet, e::Element) = begin
+"Call `f` with each rule of `s` that's for the element `e`, or for a part of it"
+each_rule(f, s::Index, e::Element) = begin
   try_all(rules) = foreach(r -> matches(r.selector, e) && f(r), rules)
   id = attr(e, "id")
   isempty(id) || haskey(s.ids, id) && try_all(s.ids[id])
@@ -830,50 +2182,212 @@ each_rule(f, s::Sheet, e::Element) = begin
   try_all(s.rest)
 end
 
-const BROWSER_SHEET = Sheet(BROWSER)
-const QUIRKS_SHEET = Sheet(QUIRKS)
+const BROWSER_INDEX = Index(BROWSER)
+const QUIRKS_INDEX = Index(QUIRKS)
+
+"The style of each element of a page, and of the parts of an element that the page's CSS makes"
+struct Look
+  styles::IdDict{Element,Style}
+  before::IdDict{Element,Style}
+  after::IdDict{Element,Style}
+  marker::IdDict{Element,Style}
+  sheet::Stylesheet
+  contained::Bool                # some rule asks how big the box that an element is in is (@container)
+end
+Base.getindex(l::Look, e::Element) = l.styles[e]
+Base.haskey(l::Look, e::Element) = haskey(l.styles, e)
+Base.get(l::Look, e::Element, default) = get(l.styles, e, default)
+
+# One declaration that's for an element: whether it's !important, where it's from (0 the browser, 1 the tag, 2 the page, 3 the
+# element's own style, 4 an animation), its layer, how specific its rule is, its order, and what it declares
+const Found = Tuple{Bool,Int,Int,NTuple{3,Int},Int,String,String}
+
+const TIMING = Set(["ease", "linear", "ease-in", "ease-out", "ease-in-out", "step-start", "step-end", "infinite", "normal", "reverse", "alternate",
+                    "alternate-reverse", "none", "forwards", "backwards", "both", "running", "paused", "auto"])
 
 """
-The style of each element of `doc`, on a page `wide` px wide. `extra` is CSS
-that the page didn't write, which goes after the page's own.
+The declarations of the end of each animation that the declarations `found`
+give an element, when the animation stops and stays as it ends. An element
+that an animation makes show (`opacity: 0` to 1) is then drawn as shown.
 """
-styles(doc::Document, wide; extra="") = begin
-  rules = Rule[]
-  for (text, m) in doc.sheets
-    append!(rules, sheet(text; media=isempty(strip(m)) ? String[] : [m], order=length(rules)))
+ended(found::Vector{Found}, frames) = begin
+  out = Declaration[]
+  isempty(frames) && return out
+  last(name) = (i = findlast(x -> x[6] == name, found); i === nothing ? nothing : found[i][7])
+  short = last("animation")
+  names, fills, counts, ways = String[], String[], String[], String[]
+  if short !== nothing
+    for one in pieces(short, ',')
+      ws = terms(one)
+      name = findfirst(w -> !(lowercase(w) in TIMING) && !occursin(r"^[0-9.+-]|^(cubic-bezier|steps|linear)\(", lowercase(w)), ws)
+      push!(names, name === nothing ? "" : String(strip(ws[name], ['"', '\''])))
+      low = lowercase.(ws)
+      push!(fills, "forwards" in low || "both" in low ? "forwards" : "none")
+      push!(counts, "infinite" in low ? "infinite" : "1")
+      push!(ways, "reverse" in low ? "reverse" : "normal")
+    end
   end
-  isempty(extra) || append!(rules, sheet(extra; order=length(rules)))
-  filter!(r -> all(q -> media(q, wide), r.media), rules)
-  page = Sheet(rules)
-  out = IdDict{Element,Style}()
-  quirks = doc.mode == :quirks
-  rootsize = Ref(16.0)
-  found = Tuple{Bool,Int,NTuple{3,Int},Int,String,String}[]
-  visit(e::Element, parent::Style) = begin
-    c = Context(wide, rootsize[], quirks)
-    s = child(parent)
-    empty!(found)
-    add(origin, weight, order, name, value, important) = push!(found, (important, origin, weight, order, name, value))
-    from(sheet, origin) = each_rule(sheet, e) do r
-      for d in r.declarations
-        add(origin, r.selector.weight, r.order, d.name, d.value, d.important)
+  list(v) = [String(strip(strip(p), ['"', '\''])) for p in pieces(v, ',')]
+  (v = last("animation-name")) === nothing || (names = list(v))
+  (v = last("animation-fill-mode")) === nothing || (fills = lowercase.(list(v)))
+  (v = last("animation-iteration-count")) === nothing || (counts = lowercase.(list(v)))
+  (v = last("animation-direction")) === nothing || (ways = lowercase.(list(v)))
+  for (i, name) in enumerate(names)
+    steps = get(frames, name, nothing)
+    steps === nothing && continue
+    pick(v, default) = isempty(v) ? default : v[mod1(i, length(v))]
+    pick(fills, "none") in ("forwards", "both") || continue
+    pick(counts, "1") == "infinite" && continue
+    at = pick(ways, "normal") == "reverse" ? first(steps)[1] : Base.last(steps)[1]
+    for (when, declared) in steps
+      when == at && append!(out, declared)
+    end
+  end
+  out
+end
+
+"The faces of a font that an @font-face of the page gives the family `name`: for each, what it says"
+faces_of(sheet::Stylesheet, name) = [f for f in sheet.faces if lowercase(strip(strip(get(f, "font-family", "")), ['"', '\''])) == lowercase(name)]
+
+"The first and the last weight that an @font-face says its font is for"
+weights(v) = begin
+  ws = [w == "normal" ? 400 : w == "bold" ? 700 : something(tryparse(Float64, w), 400.0) for w in split(lowercase(v))]
+  isempty(ws) ? (400, 400) : (round(Int, minimum(ws)), round(Int, maximum(ws)))
+end
+
+"The ranges of letters that an @font-face's `unicode-range` names"
+ranges(v) = begin
+  out = UnitRange{UInt32}[]
+  for part in split(v, ',')
+    m = match(r"^u\+([0-9a-f?]+)(?:-([0-9a-f]+))?$", lowercase(strip(part)))
+    m === nothing && continue
+    lo = tryparse(UInt32, replace(m[1], '?' => '0'), base=16)
+    hi = m[2] !== nothing ? tryparse(UInt32, m[2], base=16) : tryparse(UInt32, replace(m[1], '?' => 'f'), base=16)
+    lo === nothing || hi === nothing || push!(out, lo:hi)
+  end
+  out
+end
+
+"""
+The name that text.jl knows the page's font `name` by, when the page gives it
+with @font-face and one of its files can be read, or `name`. `load(address)`
+gives the bytes of a file.
+"""
+web_family(sheet::Stylesheet, name, load) = begin
+  found = faces_of(sheet, name)
+  isempty(found) && return name
+  described = map(found) do f
+    sources = Any[]
+    for src in pieces(get(f, "src", ""), ',')
+      src = strip(src)
+      if (m = match(r"^local\(\s*[\"']?([^\"')]*)[\"']?\s*\)"i, src)) !== nothing
+        push!(sources, String(strip(m[1])))
+      elseif (m = match(r"^url\(\s*(?:\"([^\"]*)\"|'([^']*)'|([^)]*?))\s*\)(?:\s*format\(\s*[\"']?([^\"')]*)[\"']?\s*\))?"i, src)) !== nothing
+        kind = lowercase(something(m[4], ""))
+        address = String(strip(something(m[1], m[2], m[3])))
+        # Skia reads no font of these kinds
+        (kind in ("embedded-opentype", "svg") || occursin(r"\.(eot|svg)([?#]|$)"i, address)) && continue
+        push!(sources, () -> load(address))
       end
     end
-    from(BROWSER_SHEET, 0)
-    quirks && from(QUIRKS_SHEET, 0)
-    for (i, (name, value)) in enumerate(hints(e))
-      add(1, (0, 0, 0), i, name, value, false)
+    (weights(get(f, "font-weight", "400")), occursin(r"italic|oblique", lowercase(get(f, "font-style", "normal"))), ranges(get(f, "unicode-range", "")), sources,
+     get(f, "src", ""))
+  end
+  key = "web:" * string(hash((lowercase(name), [(d[1], d[2], d[5]) for d in described])), base=16)
+  Fonts.web!(key, [(d[1], d[2], d[3], d[4]) for d in described]) ? key : name
+end
+
+"""
+The style of each element of `doc`, on a page `wide` px wide in a window
+`high` px high. `extra` is CSS that the page didn't write, which goes after
+the page's own. `load(address)` gives the bytes or the text of a sheet or a
+font that the page names, or nothing. `base` is the address of the page.
+`containers` gives how wide and how high the box of an element is, and its
+names, for the rules that ask (@container): without it, no such rule is for
+anything.
+"""
+styles(doc::Document, wide; extra="", high=800, load=address -> nothing, base="", containers=nothing) = begin
+  text(address) = begin
+    found = load(address)
+    found === nothing ? nothing : found isa AbstractString ? String(found) : String(copy(found))
+  end
+  css = Stylesheet(load=text, supports=known)
+  css.wide, css.high = wide, high
+  from = isempty(doc.base) ? base : resolve(base, doc.base)
+  for (words, m) in doc.sheets
+    read!(css, words; media=isempty(strip(m)) ? String[] : [m], base=from)
+  end
+  isempty(extra) || read!(css, extra)
+  rules = filter(r -> all(q -> media(q, wide, high), r.media), css.rules)
+  page = Index(rules)
+  look = Look(IdDict{Element,Style}(), IdDict{Element,Style}(), IdDict{Element,Style}(), IdDict{Element,Style}(), css, any(r -> !isempty(r.container), css.rules))
+  quirks = doc.mode == :quirks
+  rootsize = Ref(16.0)
+  families = Dict{String,String}()
+  family(name) = get!(() -> web_family(css, name, address -> load(resolve(from, address))), families, name)
+  # A rule in a later layer wins. A rule in no layer wins over them all. With !important, it's the other way round.
+  rank(layer, important) = important ? (layer == 0 ? -typemax(Int) : -layer) : (layer == 0 ? typemax(Int) : layer)
+  # True when each @container round the rule `r` is so for the element `e`
+  inside(r::Rule, e::Element) = containers !== nothing && all(r.container) do q
+    name = container_name(q)
+    p = e.parent
+    while p !== nothing
+      box = get(containers, p, nothing)
+      box !== nothing && (isempty(name) || name in split(box[3])) && return container(q, box[1], box[2])
+      p = p.parent
     end
-    from(page, 2)
-    for (i, d) in enumerate(declarations(attr(e, "style")))
-      add(3, (0, 0, 0), i, d.name, d.value, d.important)
+    false
+  end
+  # Give `s` the declarations `found`: the ones that win come last. It gives whether the top and the bottom margin are the browser's own.
+  apply!(s::Style, found::Vector{Found}, c::Context, parent::Style) = begin
+    sort!(found; alg=MergeSort, by=x -> x[1:5])
+    # `revert` takes away what the page says of a property, so that the browser's own stays
+    for name in unique(x[6] for x in found if lowercase(strip(x[7])) == "revert")
+      last = findlast(x -> x[6] == name, found)
+      lowercase(strip(found[last][7])) == "revert" && filter!(x -> !(x[6] == name && x[2] >= 2), found)
     end
-    sort!(found; alg=MergeSort, by=x -> x[1:4])
+    # The variables first, since the rest can use them. A variable's value is worked out here, where it's declared.
+    own = nothing
+    for x in found
+      startswith(x[6], "--") || continue
+      own === nothing && (own = Dict{String,String}())
+      own[x[6]] = x[7]
+    end
+    if own !== nothing
+      before = s.vars
+      made = Dict{String,Union{String,Nothing}}()
+      busy = Set{String}()
+      value(name) = begin
+        haskey(own, name) || return get(before, name, nothing)
+        haskey(made, name) && return made[name]
+        name in busy && return nothing   # it needs itself
+        push!(busy, name)
+        raw = own[name]
+        v = lowercase(strip(raw)) in ("inherit", "unset", "revert") ? get(before, name, nothing) : lowercase(strip(raw)) == "initial" ? nothing :
+            occursin("var(", raw) ? substitute(raw, value) : raw
+        delete!(busy, name)
+        made[name] = v
+      end
+      vars = copy(before)
+      for name in keys(own)
+        v = value(name)
+        v === nothing ? delete!(vars, name) : (vars[name] = v)
+      end
+      s.vars = vars
+    end
     top = bottom = false
-    for (_, origin, _, _, name, value) in found
+    normal = true
+    for (i, (important, origin, _, _, _, name, value)) in enumerate(found)
+      # The end of an animation goes over what isn't !important
+      if normal && important
+        normal = false
+        foreach(d -> set!(s, d.name, d.value, c, parent), ended(found, css.frames))
+      end
       # Whether the margins that win are the browser's own
-      name in ("margin", "margin-top", "margin-block", "margin-block-start") && (top = origin == 0)
-      name in ("margin", "margin-bottom", "margin-block", "margin-block-end") && (bottom = origin == 0)
+      if startswith(name, "margin")
+        name in ("margin", "margin-top", "margin-block", "margin-block-start") && (top = origin == 0)
+        name in ("margin", "margin-bottom", "margin-block", "margin-block-end") && (bottom = origin == 0)
+      end
       # A tag's own lengths and colours are read more loosely than CSS
       if origin == 1
         value = name in ("background-color", "color", "border-color") && !(colour(value) isa UInt32) ?
@@ -881,14 +2395,68 @@ styles(doc::Document, wide; extra="") = begin
       end
       set!(s, name, value, c, parent)
     end
+    normal && !isempty(css.frames) && foreach(d -> set!(s, d.name, d.value, c, parent), ended(found, css.frames))
+    (top, bottom)
+  end
+  found = Found[]
+  visit(e::Element, parent::Style) = begin
+    c = Context(wide, rootsize[], quirks, high)
+    s = child(parent)
+    empty!(found)
+    parts = nothing   # the declarations for each part of the element: `::before` and the like
+    add(into, origin, layer, weight, order, name, value, important) = push!(into, (important, origin, rank(layer, important), weight, order, name, value))
+    from_index(index, origin) = each_rule(index, e) do r
+      isempty(r.container) || inside(r, e) || return
+      into = found
+      if r.selector.pseudo != :none
+        r.selector.pseudo in (:before, :after, :marker) || return
+        parts === nothing && (parts = Dict{Symbol,Vector{Found}}())
+        into = get!(() -> Found[], parts, r.selector.pseudo)
+      end
+      for d in r.declarations
+        add(into, origin, r.layer, r.selector.weight, r.order, d.name, d.value, d.important)
+      end
+    end
+    from_index(BROWSER_INDEX, 0)
+    quirks && from_index(QUIRKS_INDEX, 0)
+    for (i, (name, value)) in enumerate(hints(e))
+      add(found, 1, 0, (0, 0, 0), i, name, value, false)
+    end
+    from_index(page, 2)
+    for (i, d) in enumerate(declarations(attr(e, "style")))
+      add(found, 3, 0, (0, 0, 0), i, d.name, d.value, d.important)
+    end
+    if e.parent === nothing && !isempty(css.props)
+      # A variable that the page gives a first value has it from the top of the page down
+      s.vars = merge(css.props, s.vars)
+    end
+    top, bottom = apply!(s, found, c, parent)
     settle!(s, parent, e.tag)
     e.tag in LOOSE && (s.loose = (top, bottom))
+    isempty(css.faces) || s.family === parent.family || (s.family = String[family(name) for name in s.family])
     e.parent === nothing && (rootsize[] = s.size)
-    out[e] = s
+    look.styles[e] = s
+    if parts !== nothing
+      for (part, declared) in parts
+        ps = child(s)
+        apply!(ps, declared, c, s)
+        settle!(ps, s)
+        isempty(css.faces) || ps.family === s.family || (ps.family = String[family(name) for name in ps.family])
+        if part == :marker
+          look.marker[e] = ps
+        elseif !(lowercase(ps.content) in ("", "none", "normal")) && ps.display != :none
+          (part == :before ? look.before : look.after)[e] = ps
+        end
+      end
+    end
     for k in e.children
       k isa Element && visit(k, s)
     end
   end
   visit(doc.root, Style())
-  out
+  # What the page's <html> or <body> says of what overflows is for the window, which shows all of the page here
+  top = look.styles[doc.root]
+  top.overflow == :visible && haskey(look.styles, doc.body) && (look.styles[doc.body].overflow = :visible)
+  top.overflow = :visible
+  look
 end

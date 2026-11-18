@@ -4,7 +4,8 @@
 #     doc.root            # the <html> element
 #     doc.body            # the <body> element
 #     doc.mode            # :standards, :limited or :quirks, from the page's doctype
-#     doc.sheets          # the text of each <style> element, in the page's order
+#     doc.sheets          # the text of each <style> element, in the page's order. A <link> to a sheet is an @import of it.
+#     doc.base            # the address that the page's <base> gives, which its other addresses are from, or ""
 #
 # An `Element` has a `tag` in lower case, its `attrs`, its `children` and its
 # `parent`. A `Text` has its `text`, with each name like &amp; as its
@@ -14,7 +15,8 @@
 # email need: a <p> ends where a block starts, a <td> ends where the next
 # starts, a row with no <tbody> gets one, and what's in a table but not in a
 # cell goes before the table. Comments are left out. No script runs, so what's
-# in a <noscript> is part of the page.
+# in a <noscript> is part of the page. In an <svg> or a <math>, a tag that ends
+# with `/>` has nothing in it, as in XML.
 
 @use "./entities" entities
 
@@ -39,6 +41,7 @@ struct Document
   body::Element
   mode::Symbol
   sheets::Vector{Tuple{String,String}}   # the text of each <style>, with what its `media` says
+  base::String
 end
 
 "What `name` says in the tag of `e`, or `default`"
@@ -65,25 +68,32 @@ struct Token
   name::String                 # of a tag, in lower case
   attrs::Dict{String,String}
   text::String
+  closed::Bool                 # the tag ends with `/>`
 end
+Token(kind, name, attrs, text) = Token(kind, name, attrs, text, false)
 
 const NO_ATTRS = Dict{String,String}()
 iswhite(b::UInt8) = b == 0x20 || b == 0x09 || b == 0x0a || b == 0x0d || b == 0x0c
 
 """
 What a tag says after its name, from byte `i` of `html`: each `name=value`,
-with the names in lower case, and where the tag ends.
+with the names in lower case, where the tag ends, and whether it ends with `/>`.
 """
 attributes(html, i) = begin
   attrs = Dict{String,String}()
   b = codeunits(html)
   n = length(b)
+  slash = false
   while i <= n
-    if iswhite(b[i]) || b[i] == UInt8('/')
+    if iswhite(b[i])
+      i += 1
+    elseif b[i] == UInt8('/')
+      slash = true
       i += 1
     elseif b[i] == UInt8('>')
-      return (attrs, i + 1)
+      return (attrs, i + 1, slash)
     else
+      slash = false
       j = i
       while j <= n && !iswhite(b[j]) && b[j] != UInt8('=') && b[j] != UInt8('>') && (b[j] != UInt8('/') || j == i)
         j += 1
@@ -119,7 +129,7 @@ attributes(html, i) = begin
       haskey(attrs, name) || (attrs[name] = entities(value))
     end
   end
-  (attrs, n + 1)
+  (attrs, n + 1, false)
 end
 
 # What's in these is text as it's written: a < in it starts no tag
@@ -139,6 +149,12 @@ tokens(html::String) = begin
       # `<!-->` and `<!--->` are whole comments
       close = startswith(rest, "<!-->") ? (lt+4:lt+4) : startswith(rest, "<!--->") ? (lt+5:lt+5) : findnext("-->", html, lt + 4)
       i = close === nothing ? n + 1 : last(close) + 1
+    elseif startswith(rest, "<![CDATA[")
+      # Text as it's written, in an SVG
+      close = findnext("]]>", html, lt + 9)
+      stop = close === nothing ? n + 1 : first(close)
+      lt + 9 <= stop - 1 && push!(out, Token(:text, "", NO_ATTRS, html[lt+9:prevind(html, stop)]))
+      i = close === nothing ? n + 1 : last(close) + 1
     elseif startswith(rest, "<!") || startswith(rest, "<?")
       gt = findnext('>', html, lt)
       stop = gt === nothing ? n : gt
@@ -149,9 +165,9 @@ tokens(html::String) = begin
       i = lt + ncodeunits(m.match)
     elseif (m = match(r"^<([A-Za-z][^\s/>]*)", rest)) !== nothing
       name = lowercase(m[1])
-      attrs, i = attributes(html, lt + ncodeunits(m.match))
-      push!(out, Token(:open, name, attrs, ""))
-      if name in RAW
+      attrs, i, closed = attributes(html, lt + ncodeunits(m.match))
+      push!(out, Token(:open, name, attrs, "", closed))
+      if name in RAW && !closed
         close = findnext(Regex("</$name\\b[^>]*>?", "i"), html, min(i, n + 1))
         stop = close === nothing ? n + 1 : first(close)
         i <= stop - 1 && push!(out, Token(:text, "", NO_ATTRS, html[i:prevind(html, stop)]))
@@ -315,7 +331,8 @@ document(html::AbstractString) = begin
       e = Element(name, t.attrs)
       # A part of a table goes where the table has got to. Anything else that's not in a cell goes before the table.
       name in TABLE_PARTS ? push_child!(top(), e) : place!(e)
-      name in VOID || push!(stack, e)
+      # In an SVG, a tag that ends with `/>` has nothing in it
+      name in VOID || (t.closed && (name in ("svg", "math") || any(x -> x.tag in ("svg", "math"), stack))) || push!(stack, e)
     else # :close
       name = t.name
       name in ("html", "body") && continue
@@ -342,10 +359,27 @@ document(html::AbstractString) = begin
     end
   end
   body === nothing && (body = push_child!(root, Element("body")))
+  base = ""
+  # Sheets with a title are a set that the reader can choose. The page's own choice is the set of its first <style> that has a
+  # title, as in WebKit, where a <style> is read before any sheet that's fetched. With none, it's the set of its first <link>.
+  sheet(e) = e.tag == "link" && occursin(r"\bstylesheet\b"i, attr(e, "rel")) && !isempty(strip(attr(e, "href")))
+  titled = Element[]
+  walk(e -> (e.tag == "style" || sheet(e)) && !isempty(strip(attr(e, "title"))) && push!(titled, e), root)
+  first = findfirst(e -> e.tag == "style", titled)
+  first === nothing && (first = findfirst(e -> !occursin(r"\balternate\b"i, attr(e, "rel")), titled))
+  chosen = first === nothing ? "" : strip(attr(titled[first], "title"))
   walk(root) do e
-    e.tag == "style" && push!(sheets, (text(e), attr(e, "media")))
+    title = strip(attr(e, "title"))
+    if e.tag == "style"
+      (isempty(title) || title == chosen) && push!(sheets, (text(e), attr(e, "media")))
+    elseif sheet(e)
+      # A sheet that the page names is read as the sheet says to read another
+      (isempty(title) ? !occursin(r"\balternate\b"i, attr(e, "rel")) : title == chosen) &&
+        push!(sheets, ("@import url(\"" * replace(strip(attr(e, "href")), '"' => "%22") * "\");", attr(e, "media")))
+    end
+    e.tag == "base" && isempty(base) && (base = String(strip(attr(e, "href"))))
   end
-  Document(root, body, doctype === nothing ? :quirks : mode(doctype), sheets)
+  Document(root, body, doctype === nothing ? :quirks : mode(doctype), sheets, base)
 end
 
 "Call `f` with each element of the tree under `e`, and with `e`, in the page's order"

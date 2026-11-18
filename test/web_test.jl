@@ -1,6 +1,8 @@
 # Tests for web/, which draws a page of HTML with no browser: how it reads
 # HTML and CSS, the style that each element gets, where layout puts each box,
-# and what the page's links and words are. Run them with
+# and what the page's links and words are. The second half is the HTML and CSS
+# of today: flex boxes, grids, variables, what CSS makes, boxes with a place
+# of their own, forms and SVG. Run them with
 # `julia -O0 --project=. test/web_test.jl`. They use the fonts of this Mac and
 # no web.
 
@@ -11,6 +13,8 @@
 @use "../web/box" => Boxes
 @use "../web/layout" => Layout
 @use "../web" => Web
+@use "../web/paint" => Paint
+@use "../web/svg" => Svg
 
 "The first element of `e`'s tree that `ok` is true of"
 function element(ok, e::Dom.Element)
@@ -130,7 +134,7 @@ end
   @test all(i -> Styles.px(d.padding[i]) == 10 && Styles.border(d, i) == 1, 1:4)
   # A property that stands for several
   l = s("l")
-  @test l.background == 0xff0066cc && l.image == "url(x.png)" && l.repeat == :no_repeat && l.bgsize == :cover
+  @test l.background == 0xff0066cc && l.image == ["url(x.png)"] && l.repeat == [(:no_repeat, :no_repeat)] && l.bgsize == [:cover]
   @test l.weight == 700 && l.size == 14 && l.lineheight == (:number, 1.4) && l.family == ["Helvetica Neue", "Arial", "sans-serif"]
   @test map(x -> Styles.px(x), l.radius) == (4, 8, 4, 8) && Styles.border(l, 3) == 1 && l.bordercolor[1] == 0x80000000
   @test Styles.px(l.padding[1]) == 14 && l.width.pct == 1 && l.width.px == -28   # an em is 14 px here
@@ -265,4 +269,224 @@ end
   # A page that's wider than its window is made to fit, when that's asked for
   wide = """<!DOCTYPE html><body style="margin:0"><table width="900" cellspacing="0" cellpadding="0"><td><img width="900" height="300" style="display:block"></td></table></body>"""
   @test Web.page(wide; wide=300).tall == 300 && Web.page(wide; wide=300, fit=true).tall == 100 && Web.page(wide; wide=300, fit=true).wide == 300
+end
+
+near(a, b; by=0.01) = abs(a - b) <= by
+"The words of a page as they're copied"
+copied(p) = join(w.before * String(w.letters) for w in p.words)
+
+@testset "CSS of today" begin
+  # A rule in a rule, with & and without. The parts of an element. What a rule can ask of the elements round it.
+  css = Css.Stylesheet(supports=Styles.known)
+  Css.read!(css, """.card { color: red; &:first-child { margin: 0 } .title { color: blue } @media (width >= 500px) { padding: 1px } }
+    @layer base, top; @layer top { a { color: red } } @layer base { a { color: blue } }
+    li:nth-child(2 of .pick), p:is(.a, .b):not(.c), div:has(> img), :where(.x) b, h1::before, q::after { top: 0 }
+    @supports (display: grid) { .g { display: grid } } @supports (display: nonsense) { .n { top: 0 } } @supports not (color: light-dark(red, red)) { .o { top: 0 } }
+    @container side (min-width: 300px) { .c { top: 0 } } .q { quotes: "\\"" "'" } .after { top: 1px }
+    @font-face { font-family: F; src: url(f.woff2) } @keyframes show { from { opacity: 0 } to { opacity: 1 } } @property --p { syntax: "*"; inherits: false; initial-value: 4px }""")
+  texts = [(length(r.selector.parts), r.selector.weight, r.selector.pseudo) for r in css.rules]
+  @test count(r -> !isempty(r.media), css.rules) == 1 && css.layers == ["base", "top"] && length(css.faces) == 1 && haskey(css.frames, "show") && css.props["--p"] == "4px"
+  @test (1, (0, 0, 2), :before) in texts && (1, (0, 0, 2), :after) in texts && (2, (0, 0, 1), :none) in texts   # h1::before, q::after, :where(.x) b
+  @test any(r -> r.container == ["side (min-width: 300px)"], css.rules) && !any(r -> any(d -> d.name == "top" && r.selector.parts[1].classes == ["n"], r.declarations), css.rules)
+  @test any(r -> r.selector.parts[1].classes == ["after"], css.rules)   # a quote after a backslash ends no string
+  doc = Dom.document("""<div class="card" id="c1"><span class="title" id="t">x</span></div><div class="card" id="c2"><img></div>
+    <ul><li id="l1">a<li class="pick" id="l2">b<li class="pick" id="l3">c</ul><p class="a c" id="p1">x</p><p class="b" id="p2">y</p>""")
+  for (text, id, ok) in [(".card:first-child", "c1", true), (".card:first-child", "c2", false), (".card .title", "t", true), ("li:nth-child(2 of .pick)", "l3", true),
+                         ("li:nth-child(2 of .pick)", "l2", false), ("p:is(.a, .b):not(.c)", "p2", true), ("p:is(.a, .b):not(.c)", "p1", false), ("div:has(> img)", "c2", true),
+                         ("div:has(> img)", "c1", false), ("li:nth-last-of-type(1)", "l3", true), ("p:only-of-type", "p1", false), ("#c1:has(+ .card)", "c1", true)]
+    @test Css.matches(Css.selector(text), named(doc, id)) == ok
+  end
+  # What a rule asks of the window, in each way to write it
+  @test Css.media("(width >= 500px)", 600) && !Css.media("(width > 600px)", 600) && Css.media("(400px <= width < 700px)", 600) && Css.media("(width < calc(30rem + 200px))", 600)
+  @test Css.media("(min-width: 500px) and (max-height: 900px)", 600, 800) && !Css.media("(orientation: portrait)", 600, 400) && Css.media("not (hover: none)", 600) &&
+        Css.media("(prefers-reduced-motion: no-preference) or (width < 100px)", 600)
+  @test Css.container("side (min-width: 300px)", 320, 100) && !Css.container("(min-width: 300px)", 200, 100) && Css.container_name("side (min-width: 300px)") == "side"
+  @test Css.resolve("https://x.org/a/b.html", "../c/d.png?x=1") == "https://x.org/c/d.png?x=1" && Css.resolve("https://x.org/a/b.html", "//y.org/z") == "https://y.org/z" &&
+        Css.resolve("https://x.org/a/b.html", "e.css") == "https://x.org/a/e.css" && Css.resolve("", "e.css") == "e.css" && Css.resolve("https://x.org/a/", "data:x") == "data:x"
+end
+
+@testset "variables, sums and colours" begin
+  doc = Dom.document("""<!DOCTYPE html><style>:root { --gap: 8px; --brand: #06c; --twice: calc(var(--gap) * 2) } @layer low { p { color: red } } p { color: green }
+    #a { padding: var(--twice) var(--none, 3px); width: min(100%, 300px); margin-left: clamp(10px, 5vw, 20px); color: var(--brand); height: max(1em, 30px); border: 1px solid }
+    #b { --gap: 2px; margin: var(--gap); font-size: 20px; text-indent: calc(1em + 4px); color: color-mix(in srgb, red, blue) }
+    #c { animation: show 1s forwards; opacity: 0 } @keyframes show { to { opacity: 0.5 } } #d { all: unset; color: revert }
+    #e { inset: 1px 2px; margin-inline: 4px 6px; padding-block: 7px; inline-size: 50px; border-start-start-radius: 3px; overflow: hidden auto; flex: 2 1 10px; gap: 5px 9px }
+    </style><p id="a"></p><p id="b"></p><p id="c"></p><p id="d" style="margin:9px"></p><div id="e"></div>""")
+  look = Styles.styles(doc, 300; high=600)
+  s(id) = look[named(doc, id)]
+  a, b, e = s("a"), s("b"), s("e")
+  @test map(Styles.px, a.padding) == (16, 3, 16, 3) && Styles.px(a.width, 1000) == 300 && Styles.px(a.width, 200) == 200 && Styles.px(a.margin[4]) == 15 && Styles.px(a.height) == 30
+  @test a.color == 0xff0066cc && a.bordercolor[1] == 0xff0066cc    # the border takes the text's colour
+  @test Styles.px(b.margin[1]) == 2 && Styles.px(b.indent) == 24 && b.color == 0xff800080 && s("c").opacity == 0.5   # an animation that ends and stays is shown as it ends
+  @test s("d").display == :inline && Styles.px(s("d").margin[1]) == 9   # `all: unset` leaves the element's own style
+  @test map(Styles.px, e.inset) == (1, 2, 1, 2) && Styles.px(e.margin[4]) == 4 && Styles.px(e.margin[2]) == 6 && Styles.px(e.padding[1]) == 7 && Styles.px(e.width) == 50
+  @test Styles.px(e.radius[1]) == 3 && e.overflow == :hidden && (e.grow, e.shrink, Styles.px(e.basis)) == (2, 1, 10) && map(Styles.px, e.gap) == (5, 9)
+  @test s("a").color != 0xffff0000 && look[tagged(doc, "p")].color == 0xff0066cc   # a rule in no layer wins over one in a layer, and the id over both
+  for (text, want) in [("rgb(255 0 0 / 50%)", 0x80ff0000), ("hsl(120deg 100% 50%)", 0xff00ff00), ("hwb(0 0% 0%)", 0xffff0000), ("oklch(100% 0 0)", 0xffffffff),
+                       ("lab(0 0 0)", 0xff000000), ("color(srgb 0 0 1)", 0xff0000ff), ("light-dark(red, blue)", 0xffff0000), ("rgb(from blue r g 0)", 0xff000000),
+                       ("#0f08", 0x8800ff00), ("color-mix(in srgb, white 25%, black)", 0xff404040), ("canvastext", 0xff000000)]
+    @test Styles.colour(text) == want
+  end
+  c = Styles.Context(1000.0, 16.0, false, 500.0)
+  @test Styles.len("10vh", c).px == 50 && Styles.len("calc(2 * (1rem + 4px))", c).px == 40 && Styles.len("min(10px, 5px)", c).px == 5 && Styles.len("round(up, 13px, 5px)", c).px == 15
+  @test Styles.px(Styles.len("max(50%, 100px)", c), 400) == 200 && Styles.ispercent(Styles.len("clamp(1px, 50%, 9px)", c)) && Styles.len("fit-content", c) === nothing
+end
+
+@testset "flex boxes" begin
+  p = laid("""<!DOCTYPE html><body style="margin:0"><div id="f" style="display:flex;width:300px;gap:10px"><div id="a" style="width:50px;height:20px"></div>
+    <div id="b" style="flex:1;height:40px"></div><div id="c" style="flex:2"></div></div>
+    <div id="w" style="display:flex;flex-wrap:wrap;width:300px;gap:10px"><div style="width:120px;height:10px"></div><div style="width:120px;height:30px"></div><div id="w3" style="width:120px;height:10px"></div></div>
+    <div id="j" style="display:flex;justify-content:space-between;width:300px"><div style="width:50px;height:5px"></div><div id="j2" style="width:50px"></div><div id="j3" style="width:50px"></div></div>
+    <div id="m" style="display:flex;justify-content:center;align-items:center;width:300px;height:100px"><div id="m1" style="width:50px;height:20px"></div></div>
+    <div id="k" style="display:flex;flex-direction:column;width:300px;gap:4px;align-items:flex-end"><div style="height:20px;width:10px"></div><div id="k2" style="height:30px;width:40px"></div></div>
+    <div id="o" style="display:flex;width:300px"><div id="o1" style="width:40px;height:5px"></div><div id="o2" style="width:60px;order:-1"></div><div id="o3" style="width:20px;margin-left:auto"></div></div>
+    <div id="s" style="display:flex;width:300px"><div id="s1" style="flex:0 1 200px;height:5px"></div><div id="s2" style="flex:0 1 200px;align-self:flex-end;height:2px"></div></div>
+    <div id="r" style="display:flex;flex-direction:row-reverse;width:300px"><div id="r1" style="width:40px;height:5px"></div><div id="r2" style="width:60px"></div></div></body>""")
+  at(id) = place(p.root, p.box(id))
+  @test at("a") == (0, 0) && p.box("a").height == 20 && near(p.box("b").width, 230 / 3) && near(p.box("c").width, 460 / 3) && near(at("c")[1], 60 + 230 / 3 + 10)
+  @test p.box("c").height == 40 && p.box("f").height == 40                    # a thing with no height is as tall as its line
+  @test at("w3") == (0, at("w")[2] + 30 + 10) && p.box("w").height == 50        # what doesn't fit goes to the next line
+  @test at("j2")[1] == 125 && at("j3")[1] == 250 && at("m1") == (125, at("m")[2] + 40)
+  @test at("k2") == (260, at("k")[2] + 24) && p.box("k").height == 54
+  @test at("o2")[1] == 0 && at("o1")[1] == 60 && at("o3")[1] == 280             # `order` and a margin that's `auto`
+  @test p.box("s1").width == 150 && p.box("s2").width == 150 && at("s2")[2] == at("s")[2] + 3   # both shrink to fit
+  @test at("r1")[1] == 260 && at("r2")[1] == 200
+  # A flex box in a line of text is as wide as what's in it, and a box with a least height shares that height out
+  p = laid("""<!DOCTYPE html><body style="margin:0"><span id="i" style="display:inline-flex;gap:5px"><span style="width:20px;height:10px"></span><span style="width:30px"></span></span>
+    <div id="c" style="display:flex;flex-direction:column;min-height:200px"><div id="h" style="height:30px"></div><div id="g" style="flex:1"></div><div id="t" style="height:20px"></div></div></body>""")
+  @test p.box("i").width == 55 && p.box("g").height == 150 && place(p.root, p.box("t"))[2] == place(p.root, p.box("c"))[2] + 180
+end
+
+@testset "grids" begin
+  p = laid("""<!DOCTYPE html><body style="margin:0"><div id="g" style="display:grid;width:300px;grid-template-columns:100px 1fr 2fr;gap:10px">
+    <div id="a" style="height:20px"></div><div id="b"></div><div id="c"></div><div id="d" style="height:5px"></div></div>
+    <div id="f" style="display:grid;width:300px;grid-template-columns:repeat(auto-fill, minmax(90px, 1fr));gap:10px"><div id="f1" style="height:1px"></div><div></div><div></div><div id="f4"></div></div>
+    <div id="s" style="display:grid;width:300px;grid-template-columns:repeat(4, 1fr)"><div id="s1" style="grid-column:span 2;height:10px"></div><div id="s2" style="grid-column:2 / 5;grid-row:2;height:10px"></div>
+      <div id="s3" style="grid-area:1 / 4;height:1px"></div></div>
+    <div id="t" style="display:grid;width:300px;grid-template-columns:100px 1fr;grid-template-areas:'h h' 's m';gap:10px"><div id="tm" style="grid-area:m;height:30px"></div>
+      <div id="th" style="grid-area:h;height:20px"></div><div id="ts" style="grid-area:s"></div></div>
+    <div id="p" style="display:grid;width:300px;grid-template-columns:100px 100px;grid-auto-rows:50px;justify-content:center"><div id="p1" style="width:20px;height:10px;justify-self:end;align-self:center"></div></div>
+    <div id="x" style="display:grid;grid-auto-flow:column;grid-template-rows:10px 10px;width:300px"><div></div><div id="x2"></div><div id="x3"></div></div></body>""")
+  at(id) = place(p.root, p.box(id))
+  @test p.box("a").width == 100 && near(p.box("b").width, 60) && near(p.box("c").width, 120) && near(at("b")[1], 110) && near(at("c")[1], 180)
+  @test at("d") == (0, 30) && p.box("b").height == 20 && p.box("g").height == 35    # a thing fills its row, and the next row is under the gap
+  @test near(p.box("f1").width, 280 / 3) && at("f4")[1] == 0 && at("f4")[2] == at("f")[2] + 11
+  @test p.box("s1").width == 150 && at("s2")[1] == 75 && p.box("s2").width == 225 && at("s3")[1] == 225 && at("s2")[2] == at("s")[2] + 10
+  @test p.box("th").width == 300 && at("tm") == (110, at("t")[2] + 30) && at("ts")[1] == 0 && p.box("ts").height == 30
+  @test at("p1") == (50 + 80, at("p")[2] + 20)
+  @test at("x2") == (0, at("x")[2] + 10) && at("x3") == (150, at("x")[2])            # down the columns
+end
+
+@testset "boxes with a place of their own" begin
+  p = laid("""<!DOCTYPE html><body style="margin:0"><div id="r" style="position:relative;width:200px;height:100px">
+    <div id="a" style="position:absolute;right:10px;bottom:5px;width:30px;height:20px"></div><div id="b" style="position:absolute;inset:0;margin:auto;width:50px;height:20px"></div>
+    <div id="c" style="position:absolute;left:10px;right:10px;top:0;bottom:50%"></div><div id="d" style="position:absolute;left:50%;top:10px;width:10px;height:10px"></div></div>
+    <p style="margin:0;height:20px"></p><div id="s" style="position:absolute;width:5px;height:5px"></div></body>""")
+  at(id) = place(p.root, p.box(id))
+  @test at("a") == (160, 75) && at("b") == (75, 40) && (p.box("c").width, p.box("c").height) == (180, 50) && at("d") == (100, 10)
+  @test p.box("s").still == (true, true)                                         # with no side given, it stays where the text has it
+  # In a window, the page's height in percent is the window's, and a box that's fixed is placed in the window
+  html = """<!DOCTYPE html><html style="height:100%"><body style="height:100%;margin:0"><div style="height:50%;background:#010203"></div>
+    <div style="position:fixed;bottom:0;left:0;width:20px;height:10px;background:#040506"></div><div style="position:absolute;top:30px;width:1px;height:1px;background:#070809"></div></body></html>"""
+  fills(q) = [(i.color, i.y, i.h) for i in q.list.items if i isa Paint.Fill]
+  q = Web.page(html; wide=300, high=400)
+  @test q.tall == 400 && (0xff010203, 0.0, 200.0) in fills(q) && (0xff040506, 390.0, 10.0) in fills(q)
+  @test Web.page(html; wide=300).tall < 100                                        # with no window, the page is as tall as what's in it
+  @test Web.page("""<!DOCTYPE html><body style="margin:0;min-height:100vh"><div style="height:10px"></div></body>"""; wide=300, high=250).tall == 250
+  # What's drawn first: a z-index under 0, then the text's boxes, then the boxes with a place, by their z-index
+  q = Web.page("""<!DOCTYPE html><body style="margin:0"><div style="position:relative;height:40px"><div style="position:absolute;z-index:2;inset:0;background:#000002"></div>
+    <div style="position:absolute;z-index:-1;inset:0;background:#000001"></div><div style="height:10px;background:#000003"></div>
+    <div style="position:absolute;inset:0;background:#000004"></div><div style="float:left;width:5px;height:5px;background:#000005"></div></div></body>"""; wide=100)
+  @test [c & 0xff for (c, _, _) in fills(q)] == [1, 3, 5, 4, 2]
+  # A box that's see-through, turned or blurred is one piece: the list says so
+  q = Web.page("""<!DOCTYPE html><body style="margin:0"><div style="opacity:.5;transform:rotate(10deg);filter:blur(2px);width:50px;height:20px;background:red"><a href="https://x.org/">go</a></div>
+    <div style="clip-path:circle(40%);mask-image:linear-gradient(black, transparent);width:50px;height:20px;background:linear-gradient(red, blue)"></div></body>"""; wide=200)
+  kinds = [typeof(i).name.name for i in q.list.items]
+  @test :Move in kinds && :Layer in kinds && :Clip in kinds && :Backing in kinds && count(==(:Layer), kinds) == count(==(:Unlayer), kinds)
+  @test length(q.links) == 1 && q.links[1].wide > 5                              # a link that's turned is where it's drawn
+  @test filesize(Web.save(q, joinpath(mktempdir(), "pieces.png"))) > 500
+end
+
+@testset "what CSS makes" begin
+  p = Web.page("""<!DOCTYPE html><style>body { margin: 0; counter-reset: n } h2 { counter-increment: n; margin: 0 } h2::before { content: counter(n) ". " }
+    q { quotes: "<" ">" } .x::after { content: " [" attr(data-k) "]" } .u { text-transform: uppercase } li::marker { color: red }</style>
+    <h2>A</h2><h2 class="x" data-k="7">B</h2><p style="margin:0"><q>hi <q>in</q></q> <span class="u">up</span></p>
+    <details><summary>S</summary><p>hidden</p></details><details open><summary>T</summary>shown</details>"""; wide=300)
+  @test copied(p) == "1. A\n2. B [7]\n<hi <in>> UP\n▶ S\n▼ T\nshown"   # the last pair of quotes is for every level under it
+  l = laid("""<!DOCTYPE html><ol reversed><li id="a">x<li id="b">y</ol><ol type="i" start="3"><li id="c">z<li id="d" value="9">w</ol><ul style="list-style:'- '"><li id="e">v</ul>
+    <ol style="list-style-type:lower-greek"><li id="f">u</ol>""")
+  @test [l.box(id).marker for id in ("a", "b", "c", "d", "e", "f")] == ["2.", "1.", "iii.", "ix.", "- ", "α."]
+  # Small capitals are the big letters of a smaller size, and a picture can name a file for each kind of screen
+  l = laid("""<!DOCTYPE html><p id="p" style="font-variant:small-caps;font-size:20px">Ab</p>""")
+  @test [(k.text, k.style.size) for k in l.box("p").children] == [("A", 20.0), ("B", 14.0)]
+  asked = String[]
+  Web.page("""<!DOCTYPE html><picture><source srcset="big.webp" media="(min-width: 900px)"><img src="a.png" srcset="a.png 1x, b.png 2x"></picture>"""; wide=300,
+           load=src -> (push!(asked, src); nothing), base="https://x.org/dir/page.html")
+  @test asked == ["https://x.org/dir/b.png"]
+end
+
+@testset "text of today" begin
+  p = laid("""<!DOCTYPE html><body style="margin:0;font:16px/20px Helvetica"><p id="j" style="margin:0;width:200px;text-align:justify">one two three four five six seven eight nine ten</p>
+    <p id="e" style="margin:0;width:80px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">a line that is far too long</p>
+    <p id="c" style="margin:0;width:100px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">one two three four five six seven eight nine ten eleven</p>
+    <p id="t" style="margin:0;white-space:pre;tab-size:4;font-family:Menlo">a\tb\nlon\tc</p><p id="r" style="margin:0;direction:rtl">right</p>
+    <p id="b" style="margin:0;width:300px;text-wrap:balance">aaaa bbbb cccc dddd eeee ffff gggg hhhh i</p>
+    <p id="u" style="margin:0;width:300px">aaaa bbbb cccc dddd eeee ffff gggg hhhh i</p></body>""")
+  right(line) = (q = line.pieces[findlast(q -> q.kind == :text && !q.space, line.pieces)]; q.x + q.width)
+  lines = p.box("j").lines
+  @test length(lines) > 1 && all(l -> near(right(l), 200; by=0.5), lines[1:end-1]) && right(lines[end]) < 190
+  e = p.box("e").lines[1]
+  @test e.pieces[end].chars == ['…'] && right(e) <= 80.5
+  c = p.box("c")
+  @test length(c.lines) == 2 && c.height == 40 && c.lines[2].pieces[end].chars == ['…']
+  tab(i) = (q = p.box("t").lines[i].pieces; q[end].x + sum(q[end].widths[1:findlast(==(' '), q[end].chars)]))
+  @test near(tab(1), tab(2); by=0.1)                                              # the words after a tab start at one place
+  @test p.box("r").lines[1].pieces[1].x > 300
+  balanced, plain = p.box("b").lines, p.box("u").lines
+  @test length(balanced) == length(plain) == 2 && right(balanced[1]) < right(plain[1]) && right(balanced[2]) > right(plain[2])
+  # Text in columns: each column of the page is a piece of one tall column
+  p = laid("""<!DOCTYPE html><body style="margin:0;font:16px/20px Helvetica"><div id="c" style="columns:2;column-gap:20px;width:320px">$(repeat("word ", 60))</div></body>""")
+  cols = p.box("c").cols
+  @test cols.wide == 150 && length(cols.starts) == 2 && near(p.box("c").height, cols.ends[end] / 2; by=20) && p.box("c").height < cols.ends[end]
+end
+
+@testset "forms and drawings" begin
+  p = laid("""<!DOCTYPE html><body style="margin:0"><input id="t" value="v"><input id="c" type="checkbox" checked><select id="s"><option>one<option selected>two</select>
+    <button id="b">Go</button><textarea id="a" rows="3" cols="30"></textarea><progress id="p" value="0.25"></progress><input id="h" type="hidden">
+    <svg id="v" width="40" height="30"></svg><div style="width:200px"><svg id="w" viewBox="0 0 2 1"></svg></div><fieldset id="f"><legend id="l">L</legend>x</fieldset></body>""")
+  @test (p.box("t").width, p.box("t").height) == (155, 21) && p.box("t").children[1].text == "v"    # as big as Safari draws them
+  @test (p.box("c").width, p.box("c").height, p.box("c").widget, p.box("c").value) == (12, 12, :checkbox, 1.0)
+  @test p.box("s").children[1].text == "two" && p.box("s").widget == :select && p.box("b").height == 18 && p.box("a").width == 222 && near(p.box("a").height, 45; by=0.1)
+  @test p.box("p").value == 0.25 && p.box("p").width == 160 && p.box("h") === nothing
+  @test (p.box("v").width, p.box("v").height) == (40, 30) && (p.box("w").width, p.box("w").height) == (200, 100)   # a drawing with a shape and no size fills its box
+  @test p.box("l").y == 0 && p.box("f").notch[1] > 0                              # the legend is on the line of the fieldset's border
+  # A drawing in a file is a picture. One in the page is drawn with the page's styles.
+  found = Svg.image(Vector{UInt8}("""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 10" width="40"><defs><linearGradient id="g"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient></defs>
+    <rect width="20" height="10" fill="url(#g)"/><path d="M2 2 L8 8" stroke="#000"/><g transform="translate(5 5) rotate(45)"><circle r="2"/></g><text x="10" y="8" font-size="4" text-anchor="middle">Hi</text><use href="#g"/></svg>"""))
+  @test found !== nothing && (found[1], found[2]) == (40, 20) && found[3] != C_NULL
+  @test Svg.transform("translate(10 20) scale(2)") == (2.0, 0.0, 0.0, 2.0, 10.0, 20.0) && Svg.image(Vector{UInt8}("not a drawing")) === nothing
+  q = Web.page("""<!DOCTYPE html><style>.i { fill: none; stroke: currentColor }</style><p style="color:red"><svg class="i" width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>
+    <input type="range"><input type="radio"><meter value=".5"></meter><input type="color" value="#ff0000"><video width="80" height="40"></video><audio controls></audio><input type="file"></p>"""; wide=400)
+  @test count(i -> i isa Paint.Drawing, q.list.items) == 1 && count(i -> i isa Paint.Widget, q.list.items) == 6
+  @test filesize(Web.save(q, joinpath(mktempdir(), "forms.png"))) > 500
+end
+
+@testset "a page of the web" begin
+  # A sheet and a picture that the page names are asked for by their whole address, and a link goes to its whole address
+  asked = String[]
+  load(src) = (push!(asked, src); endswith(src, "s.css") ? "@import 'more/t.css'; p { margin: 0 0 0 30px }" : endswith(src, "t.css") ? "p { color: red; background: url(bg.png) }" : nothing)
+  p = Web.page("""<!DOCTYPE html><link rel="stylesheet" href="css/s.css"><link rel="stylesheet" media="print" href="print.css"><link rel="alternate stylesheet" title="Other" href="other.css">
+    <body style="margin:0"><p><a href="../up">link</a> <img src="/i.png" width="5" height="5"></p></body>"""; wide=300, load, base="https://x.org/a/b.html")
+  @test asked == ["https://x.org/a/css/s.css", "https://x.org/a/css/more/t.css", "https://x.org/i.png", "https://x.org/a/css/more/bg.png"]
+  @test p.links[1].url == "https://x.org/up" && p.links[1].left == 30
+  # A rule can ask how big the box that an element is in is
+  html(wide) = """<!DOCTYPE html><style>p { margin: 0 } .box { container-type: inline-size; width: $(wide)px } @container (min-width: 250px) { p { margin: 0 0 0 40px } }</style><body style="margin:0"><div class="box"><p>x</p></div></body>"""
+  @test Web.page(html(300); wide=400).words[1].edges[1] == 40 && Web.page(html(200); wide=400).words[1].edges[1] == 0
+  # A font that the page brings is read from its file
+  file = "/System/Library/Fonts/Supplemental/Arial.ttf"
+  if isfile(file)
+    page(family, css) = Web.page("""<!DOCTYPE html><style>$css p { font: 20px $family }</style><p>Some words to measure</p>"""; wide=400, load=src -> endswith(src, "mine.ttf") ? read(file) : nothing)
+    mine = page("Mine, Courier", "@font-face { font-family: Mine; src: url(mine.ttf) }")
+    @test near(mine.words[1].edges[end], page("Arial", "").words[1].edges[end]; by=0.5) && !near(mine.words[1].edges[end], page("Missing, Courier", "").words[1].edges[end]; by=5)
+  end
 end

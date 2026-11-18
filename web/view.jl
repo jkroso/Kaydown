@@ -4,9 +4,9 @@
 #
 # It's `wide` across and as tall as the page. The mouse is a hand over a link,
 # and a click on a link calls `open(url)`, which opens it in the browser unless
-# you give another function. `zoom`, `fit`, `load` and `css` are what `page` in
-# main.jl takes. `v.page` is the page that's laid out, with its links and its
-# words.
+# you give another function. `zoom`, `fit`, `load`, `css`, `high` and `base`
+# are what `page` in main.jl takes. `v.page` is the page that's laid out, with
+# its links and its words.
 #
 # The page is laid out again only when the HTML, the width or the zoom changes,
 # so a window that redraws often costs no more than the drawing.
@@ -28,15 +28,17 @@
   css::String = ""
   load::Any = src -> nothing
   open::Any = open_url
+  high::Any = nothing     # how high the window that the page is seen through is, or nothing for a page as tall as its content
+  base::String = ""       # the address of the page
   page::Any = nothing     # the page that's laid out
   made::Any = nothing     # what it was laid out for
 end
 
 "The page of `v`, laid out for its HTML, its width and its zoom as they are now"
 page!(v::View) = begin
-  want = (hash(v.html), Float64(flt(v.wide)), v.zoom, v.fit, v.css)
+  want = (hash(v.html), Float64(flt(v.wide)), v.zoom, v.fit, v.css, v.high, v.base)
   if v.made != want
-    v.page = Web.page(v.html; wide=want[2], zoom=v.zoom, fit=v.fit, css=v.css, load=v.load)
+    v.page = Web.page(v.html; wide=want[2], zoom=v.zoom, fit=v.fit, css=v.css, load=v.load, high=v.high, base=v.base)
     v.made = want
   end
   v.page

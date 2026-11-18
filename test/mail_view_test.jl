@@ -323,7 +323,13 @@ end
   shot("7-settings", sw)
   # While emails come, the form has a bar that fills, and says how many have come and how long the rest take.
   # The task here never starts, so the mailer looks busy and does nothing.
-  @test K.mail_progress(s, s.nodes[:mail_form], "you@example.com") == () && K.mail_status(s, s.nodes[:mail_form], "you@example.com") == "Connected."
+  @test K.mail_progress(s, s.nodes[:mail_form], "you@example.com") == ()
+  # The account is connected, so the button is grey and says so, and the words under it say nothing of that.
+  # A click on it doesn't connect again.
+  @test K.mail_connected(s, s.nodes[:mail_form]) && K.mail_status(s, s.nodes[:mail_form], "you@example.com") == ""
+  checked = m.checked
+  click(s.nodes[:mail_keep], sw)
+  @test m.checked == checked > 0
   m.task, m.total, m.left, m.began, m.doing = Task(() -> nothing), 22314, 21114, time() - 600, "Ladder is getting your email from Inbox."
   frames(sw, 2)
   @test length(K.mail_progress(s, s.nodes[:mail_form], "you@example.com")) == 2 && K.mail_progress(s, s.nodes[:mail_form], "jo@other.example") == ()
@@ -384,6 +390,7 @@ end
   @test sw.focus === s.nodes[(:mail_field, :name)]
   # The button keeps what the fields hold. The password goes to the Keychain, and out of the field.
   s.nodes[(:mail_field, :name)].text = "J. Example"
+  @test !K.mail_connected(s, s.nodes[:mail_form])   # a change makes the button Connect again
   s.nodes[(:mail_field, :password)].text = "new secret"
   # Return in a field does what the Connect button does
   click(s.nodes[(:mail_field, :password)], sw)

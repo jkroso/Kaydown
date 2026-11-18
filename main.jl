@@ -24642,8 +24642,27 @@ mail_status(e, f::MailForm, typed) = begin
   (m === nothing || !Mail.ready(m.account) || typed != m.account.address) && return ""
   isempty(m.problem) || return m.problem
   Mail.busy(m) && return isempty(m.doing) ? "Ladder is connecting." : m.doing
-  # The account got all that its company allows in a day, and the rest of its emails wait
-  m.held > 0 ? Mail.waiting(m) : m.checked > 0 ? "Connected." : ""
+  # The account got all that its company allows in a day, and the rest of its emails wait. That it's
+  # connected, the button says.
+  m.held > 0 ? Mail.waiting(m) : ""
+end
+
+"""
+True when the form holds the account just as Ladder connected it: each field
+is the account's, no password waits in its field, and Ladder signed in to the
+server. A click on Connect would do nothing new then, so the button is grey.
+A change to a field makes it Connect again.
+"""
+mail_connected(e, f::MailForm) = begin
+  m = mailer(e)
+  (m === nothing || !Mail.ready(m.account) || !isempty(f.note) || f.waits || !isempty(m.problem)) && return false
+  # Signed in: a look finished, or the work that's running is past the sign-in
+  m.checked > 0 || (Mail.busy(m) && !isempty(m.doing)) || return false
+  # A field that the form hasn't made yet holds what the account has
+  same(key, value) = (field = get(e.nodes, (:mail_field, key), nothing); field === nothing || strip(field.text) == value)
+  all(key -> same(key, getfield(m.account, key)), (:address, :name, :incoming, :outgoing)) && same(:password, "") || return false
+  place = get(e.nodes, :mail_place, nothing)
+  place === nothing || place.at == Mail.base(m.account)
 end
 
 """
@@ -24675,10 +24694,14 @@ cursor(::MailMore) = :hand
 onkey(l::MailMore, ::KeyPress{Keys.mouse_left}) = (f = node!(MailForm, editor(l), :mail_form); f.more = !f.more; handled)
 
 # The button is the one thing in the form that's filled with the accent colour, so it reads as what to do next.
-# It's as high as a text field. While the mouse button is down on it, it's darker.
+# It's as high as a text field. While the mouse button is down on it, it's darker. While the form holds the
+# account as it's connected, the button is grey and says so, and a click does nothing.
 describe(b::MailConnect) = begin
   e = editor(b)
   f = node!(MailForm, e, :mail_form)
+  mail_connected(e, f) &&
+    return Row(height(30px), padding(18px, 0px), radius(7px), background(colours.active), name="Connected",
+             Box(label("Connected", 13.5px, color=colours.dim, weight="Semibold")))
   m = mailer(e)
   # Ladder is on its way to the server. Once it's signed in, the words under the button say what it does.
   going = f.waits || (m !== nothing && Mail.ready(m.account) && Mail.busy(m) && isempty(m.doing) && m.checked == 0 && isempty(m.problem) && isempty(f.note))
@@ -24691,7 +24714,7 @@ end
 "The colour `c` with `part` of its light taken away"
 darker(c, part) = RGBA(Float64(c.r) * (1 - part), Float64(c.g) * (1 - part), Float64(c.b) * (1 - part), 1.0)
 
-cursor(::MailConnect) = :hand
+cursor(b::MailConnect) = (e = editor(b); mail_connected(e, node!(MailForm, e, :mail_form)) ? :arrow : :hand)
 onkey(b::MailConnect, ::KeyPress{Keys.mouse_left}) = (e = editor(b); mail_keep!(e, node!(MailForm, e, :mail_form)); handled)
 
 describe(c::MailChoose) =
@@ -24738,6 +24761,8 @@ server that's left empty is the one that the address's company has. The
 password goes to the Keychain, and the field is emptied.
 """
 mail_keep!(e, f::MailForm) = begin
+  # The grey button, and Return in a field, do nothing while the form holds the account as it's connected
+  mail_connected(e, f) && return nothing
   say(words) = (f.note = words; nothing)
   m = mailer(e)
   m === nothing && return say("This window has no email.")

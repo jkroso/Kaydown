@@ -1,6 +1,13 @@
-# Makes pictures of a page of HTML, as a browser draws it. Ladder shows an
-# email as it was sent with them: the email's own HTML, with its colours, its
-# layout and its buttons.
+# Makes pictures of a page of HTML, as a browser draws it, and finds the link
+# and the words at a point of a page.
+#
+# Ladder shows an email as it was sent with web/, which lays the email's HTML
+# out itself. The email view uses the second half of this file for that
+# page: `Shot`, `link`, `place`, `words`, `marks`, `word` and `paragraph`.
+#
+# The pictures are how Ladder showed an email before it had web/. They stay
+# as a way to check web/ against a browser: the text file that comes with
+# them says how big WebKit makes a page, and where it puts each letter.
 #
 # webpage.swift does the drawing, as a program of its own, because macOS only
 # offers WebKit, its part that draws web pages, to Swift. The pictures are
@@ -30,12 +37,11 @@
 # box. `remote(html)` is true for a page with such pictures, and
 # `picture!(...; pictures=true)` fetches them.
 #
-# The Ladder app has the program in it, beside its own program. When Ladder
-# runs from its source, it compiles webpage.swift the first time it's needed,
-# which takes a few seconds, and keeps the program in a folder of the Mac's
-# caches. That needs Swift, which comes with Xcode and its command line tools.
+# The Ladder app doesn't have the program in it. Run from its source, Ladder
+# compiles webpage.swift the first time it's needed, which takes a few
+# seconds, and keeps the program in a folder of the Mac's caches. That needs
+# Swift, which comes with Xcode and its command line tools.
 
-@use "github.com/jkroso/UI.jl/Interface/objc" cls msg nsstring jstring with_pool
 @use "./map" => Maps
 
 const SOURCE = joinpath(@__DIR__, "webpage.swift")
@@ -44,32 +50,18 @@ const SOURCE = joinpath(@__DIR__, "webpage.swift")
 const FAILED = "Ladder can't draw this email as it was sent."
 const NO_SWIFT = "Ladder needs Swift to draw an email as it was sent. It comes with Xcode's command line tools."
 
-"The program in the Ladder app, or nothing when Ladder runs from its source"
-bundled() = begin
-  Sys.isapple() || return nothing
-  path = with_pool() do
-    jstring(msg(msg(cls("NSBundle"), "mainBundle"), "pathForAuxiliaryExecutable:", nsstring("webpage")))
-  end
-  isfile(path) ? path : nothing
-end
-
 "What the program is compiled for: this Mac's kind of processor, and macOS 26, as Ladder's other programs are"
 target() = "$(Sys.ARCH == :aarch64 ? "arm64" : "x86_64")-apple-macos26.0"
-
-"Compile webpage.swift into the program at `out`. The app's build runs it."
-compile(out) = run(`swiftc -O -parse-as-library -target $(target()) $SOURCE -o $out`)
 
 "The folder of the Mac's caches that keeps the program that's compiled from the source"
 programs() = joinpath(homedir(), "Library", "Caches", "Ladder")
 
 """
-The command that runs the program with `args`: the program in the app, or the
-one compiled from the source, which is kept in the folder `dir`. If that isn't
-compiled yet, the command compiles it first.
+The command that runs the program with `args`. The program is compiled from
+the source, and kept in the folder `dir`. If it isn't compiled yet, the
+command compiles it first.
 """
 command(args; dir=programs()) = begin
-  app = bundled()
-  app === nothing || return `$app $args`
   # A change to the source makes a program of a new name
   program = joinpath(dir, "webpage-program-" * string(hash(read(SOURCE)), base=16))
   isfile(program) && return `$program $args`

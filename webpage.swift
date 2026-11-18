@@ -164,7 +164,8 @@ final class Painter: NSObject, WKNavigationDelegate {
     // Content that can't be as narrow as the page makes the page wider, and then it's measured again
     let needs = self.needs(first)
     let across = needs > self.wide + 1 ? needs.rounded(.up) : self.wide
-    self.web.frame = NSRect(x: 0, y: 0, width: across, height: 600)
+    // A page is never shorter than its window, so it's measured in a window 1 px tall. A short page is then as tall as its content.
+    self.web.frame = NSRect(x: 0, y: 0, width: across, height: 1)
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
       self.ask { found in
         let tall = min(tallest, max(1, (((found["tall"] as? Double) ?? 600) * self.zoom).rounded(.up)))

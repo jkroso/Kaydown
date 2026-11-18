@@ -153,8 +153,9 @@ remote(html) = occursin(r"<(img|link|input|video)\b[^>]*\b(src|href|poster)\s*=\
 How webpage.swift draws a page. Make it one more with a change to the program
 that changes its pictures, so that the pictures it made before are made again.
 2: a table that's wider than the page is let be as narrow as the page.
+3: a short page is as tall as its content, not 600 px.
 """
-const DRAWS = 2
+const DRAWS = 3
 
 "The text file in `folder` that says what was made of `html` on a page `wide` px wide"
 file(folder, html, wide, zoom, pictures) = joinpath(folder, string(hash((html, wide, zoom, pictures, DRAWS)), base=16) * ".txt")

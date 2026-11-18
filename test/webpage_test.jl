@@ -111,17 +111,18 @@ end
 # This one runs webpage.swift with WebKit, so it needs a Mac with Swift. The
 # first run compiles the program, which takes a while.
 if Sys.isapple() && Sys.which("swiftc") !== nothing
+  dir = mktempdir()
+  runs = Ref(0)
+  "What the program makes of `html` on a page 700 px wide"
+  drawn(html) = begin
+    n = runs[] += 1
+    source, out = joinpath(dir, "$n.html"), joinpath(dir, "$n.txt")
+    write(source, html)
+    wait(W.run_program(source, 700, 1.0, false, joinpath(dir, "$n"), out, joinpath(dir, "$n.err")))
+    W.shot(out)
+  end
+
   @testset "the program lets content with a width of its own be as narrow as the page" begin
-    dir = mktempdir()
-    runs = Ref(0)
-    "What the program makes of `html` on a page 700 px wide"
-    drawn(html) = begin
-      n = runs[] += 1
-      source, out = joinpath(dir, "$n.html"), joinpath(dir, "$n.txt")
-      write(source, html)
-      wait(W.run_program(source, 700, 1.0, false, joinpath(dir, "$n"), out, joinpath(dir, "$n.err")))
-      W.shot(out)
-    end
     # Outlook gives the table round an email the width of its sender's window. The words wrap at the page all the same.
     words = "Hi Jake, these words go on and on, as words in an email do, so that they need more than one line. " ^ 10
     outlook = """<table width="1938" style="width:1453.8pt"><tr><td width="1938" style="width:1453.8pt"><p>$words</p>
@@ -141,6 +142,12 @@ if Sys.isapple() && Sys.which("swiftc") !== nothing
     @test s.wide >= 1000
     # Content that fits is drawn as it is
     @test drawn("""<table width="600"><tr><td>Short</td></tr></table>""").wide == 700
+  end
+
+  @testset "the program makes a page as tall as its content" begin
+    # A page is never shorter than its window, and the program's window was 600 px tall
+    @test drawn("<p>One line.</p>").tall < 100
+    @test 1000 < drawn("<p>A line.</p>" ^ 60).tall < 3000
   end
 end
 

@@ -5,6 +5,7 @@
 #     p.wide, p.tall             # how big the page is, in px
 #     draw(canvas, p)            # draw it, with its top left corner at the canvas's
 #     draw(canvas, p; top=400, bottom=900)   # or only what's between two heights of it
+#     draw(canvas, p; at=2.5)    # with its GIFs as they are 2.5 seconds after it was first shown: `changes(p, 2.5)` says when to draw again
 #     save(p, "page.png")        # a picture of all of it
 #     p.links                    # each rectangle of the page that's a link, and where it goes
 #     p.words                    # its words in the order that the HTML has them, with where each letter is
@@ -207,7 +208,7 @@ struct Page
   root::Box       # the box of its <html> element, with the boxes of the rest in it
   at::Union{Float64,Nothing}   # how many seconds after it was first shown the page looks like this, or nothing for the page as it comes to rest
   until::Float64  # how many seconds after it was first shown the page stops changing: Inf when it never does, 0 when nothing in it moves
-  held::Vector{Any}   # the pictures of this moment that the page draws, of picture files that move: they last for as long as the page does
+  held::Vector{Any}   # the picture files that move, with their pictures of this moment that the page draws: they last for as long as the page does
   next::Float64   # when the page next looks different, in seconds after it was first shown: `at` itself while something changes all the time
 end
 
@@ -296,12 +297,19 @@ page(doc::Document; wide=700, zoom=1.0, load=src -> nothing, pictures=Pictures(l
     flicker, soon = max(flicker, stops), min(soon, next)
     found
   end
+  # A picture that moves is drawn as it is when the page is drawn: the page holds it, to say when it next changes
+  reels = src -> begin
+    found = lookup(pictures, resolve(from, src))
+    found isa Film.Reel || return nothing
+    any(x -> x === found, held) || push!(held, found)
+    found
+  end
   at === nothing || (at = max(0.0, Float64(at)))
   until = 0.0
   lay(across, extra) = begin
     make(containers) = begin
       look = styles(doc, across; extra, high=seen, load=pictures.load, base=String(base), containers, at, clock, commit=false)
-      root = boxes(doc, look; pictures=find, films=src -> film(pictures, resolve(from, src)), at, wide=across, high=seen)
+      root = boxes(doc, look; pictures=find, films=src -> film(pictures, resolve(from, src)), reels, at, wide=across, high=seen)
       until = look.until
       (look, root, layout!(root, across, doc.mode; high=window))
     end
@@ -319,7 +327,7 @@ page(doc::Document; wide=700, zoom=1.0, load=src -> nothing, pictures=Pictures(l
       note(root)
       look, root, tall = make(sizes)
     end
-    (root, tall, Paint.list(root, across, tall; pictures=find, base=from))
+    (root, tall, Paint.list(root, across, tall; pictures=find, base=from, at))
   end
   root, tall, l = lay(inner, css)
   if fit && Paint.right(l) > inner + 1
@@ -343,14 +351,28 @@ end
 Draw the page on a Skia canvas, with its top left corner at `(x, y)`. With
 `top` and `bottom`, only what's between those two heights of the page is
 drawn.
+
+With `at`, a picture of the page that moves, like a GIF, is drawn as it is
+that many seconds after the page was first shown, with no new layout:
+`changes(p, at)` says when to draw the page again. With none, it's drawn as
+it was when the page was laid out. Only a picture in an <img> does this: one
+behind a box, and all else that moves, needs a new layout.
 """
-draw(canvas, p::Page; x=0.0, y=0.0, top=-Inf, bottom=Inf) = begin
+draw(canvas, p::Page; x=0.0, y=0.0, top=-Inf, bottom=Inf, at=p.at) = begin
   Skia.sk_canvas_save(canvas)
   Skia.sk_canvas_translate(canvas, Float32(x), Float32(y))
   Skia.sk_canvas_scale(canvas, Float32(p.zoom), Float32(p.zoom))
-  Paint.draw(canvas, p.list; top=top / p.zoom, bottom=bottom / p.zoom)
+  Paint.draw(canvas, p.list; top=top / p.zoom, bottom=bottom / p.zoom, at)
   Skia.sk_canvas_restore(canvas)
 end
+
+"""
+When the page next draws differently with no new layout, in seconds after it
+was first shown, for a page that's drawn `at` seconds after that: when the
+first of its pictures that move shows its next picture. Inf with none, and
+when they have all stopped.
+"""
+changes(p::Page, at) = minimum(Float64[Film.after(r, at) for r in p.held if r isa Film.Reel]; init=Inf)
 
 "The link at the point `(x, y)` of the page, or nothing"
 link(p::Page, x, y) = begin

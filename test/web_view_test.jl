@@ -12,6 +12,7 @@
 @use "../web/view" View
 @use "../web" => Web
 @use "../web/paint" => Paint
+@use "../web/video" => Film
 
 const HTML = """<!DOCTYPE html><body style="margin:20px;font:16px/20px Helvetica;background:#f4f4f4">
   <div style="background:white;border-radius:8px;border:1px solid #ddd;padding:16px">
@@ -135,7 +136,7 @@ end
   flick = View(html="""<!DOCTYPE html><body style="margin:0"><img src="m.gif"></body>""", wide=300px, load=src -> src == "m.gif" ? gif : nothing)
   gw = Window(flick, size=(300px, 100px))
   frame(gw)
-  @test Web.moving(flick.page) && flick.page.next == 0.5 && length(flick.page.held) == 1
+  @test Web.moving(flick.page) && flick.page.next == 0.5 && count(x -> x isa Film.Reel, flick.page.held) == 1
   # The first frame of a window takes long, so the test goes on from a moment that's well before the GIF's next change
   now() = time() - flick.showing.since
   frame(gw)
@@ -145,5 +146,5 @@ end
   @test flick.page === shown   # nothing has changed yet, so the page isn't laid out again
   sleep(0.55)
   frame(gw)
-  @test flick.page !== shown && flick.page.next == shown.next + 0.5 && flick.page.held[1] !== shown.held[1]
+  @test flick.page !== shown && flick.page.next == shown.next + 0.5 && flick.page.at >= shown.next
 end

@@ -25872,10 +25872,15 @@ end
 # when you open it. A picture that the email has from a web site is an empty
 # box then, and a button over the email fetches those pictures. An email that
 # you asked that of once shows its pictures from then on.
+#
+# A picture of the email that moves, like a GIF, moves here too. The email is
+# laid out once, and the window is drawn again each time such a picture shows
+# its next picture, up to 30 times a second.
 
 const SENT_LINE = 1px       # how thick the line round an email is. The email is drawn inside it.
 const SENT_QUICK = 0.02     # an email that takes longer than this many seconds to lay out waits until the window's width has stayed
 const SENT_FAILED = "Ladder can't draw this email as it was sent."
+const SENT_FRAME = 1 / 30   # an email with a picture that moves is drawn again no sooner than this many seconds after the last time
 
 "The function that lays an email out, as `Web.page` does. A test puts a function of its own here."
 const SENT_PAGE = Ref{Any}(Web.page)
@@ -25893,6 +25898,7 @@ const SENT_PAGE = Ref{Any}(Web.page)
   arrived::Int = 0                           # and how many had when the page was last asked for
   asked::Any = nothing                       # the width, the zoom and the pictures that the page needs now, and since when
   shown::Any = nothing                       # the page that shows, its links and words, what it was laid out for, when, and how long that took
+  since::Float64 = 0.0                       # when the email first showed: its pictures that move, like a GIF, started then
   failed::Any = nothing                      # what the page couldn't be laid out for
   parts::Dict{Any,Any} = Dict{Any,Any}()     # its button, and the part that shows the page
 end
@@ -25931,6 +25937,7 @@ sent_html(e) = begin
     v.remote = Webpages.remote(v.html)
     v.pictures = v.remote && isfile(sent_mark(b.path))
     v.asked = v.shown = v.failed = v.store = nothing
+    v.since = time()
     empty!(v.waiting)
     v.landed = v.arrived = 0
     # Nothing of the email that showed before stays selected
@@ -26071,6 +26078,10 @@ describe(a::SentPage) = begin
   shot = v.shown.shot
   # The email is as wide as the page's text, also while it waits to be laid out for a width that has just changed
   inside = wide - 2SENT_LINE
+  # A picture of the email that moves, like a GIF, shows its next picture when that's due: the window is drawn again then
+  at = time() - v.since
+  next = Web.changes(v.shown.page, at)
+  isfinite(next) && redraw_in!(a, max(SENT_FRAME, next - at))
   Column(fixed(wide), Alignment.Start, radius(6px), border(SENT_LINE, :solid, colours.line), background(colorant"white"),
     Box(fixed(inside), height(px(shot.tall * num(inside) / shot.wide))))
 end
@@ -26090,7 +26101,8 @@ draw(ctx, size, ui::ConcreteRect, a::SentPage) = begin
     Skia.sk_canvas_save(ctx)
     Skia.sk_canvas_translate(ctx, Float32(num(left)), Float32(num(top)))
     Skia.sk_canvas_scale(ctx, Float32(by), Float32(by))
-    Web.draw(ctx, shown.page)
+    # Its pictures that move are drawn as they are now, this long after the email first showed
+    Web.draw(ctx, shown.page; at=time() - a.of.since)
     for (x, y, across, high) in marks
       rectangle(ctx, x, y, across, high, background=colours.select)
     end

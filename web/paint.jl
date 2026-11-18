@@ -6,6 +6,7 @@
 #     list.words           # the page's words in the order that the HTML has them, with where each letter is
 #     draw(canvas, list)                           # draw all of it, with the page's corner at the canvas's
 #     draw(canvas, list; top=400, bottom=900)      # or only what's between two heights of the page
+#     draw(canvas, list; at=2.5)                   # with its pictures that move, like a GIF, as they are 2.5 seconds after the page was first shown
 #
 # What's drawn: backgrounds in a colour, pictures and gradients, one over the
 # other. Borders of every style, with round and oval corners, and the line
@@ -29,6 +30,7 @@
 @use "./box" Box Piece Span Line floats placed flexes grids
 @use "./svg" => Svg
 @use "./canvas" Board found image!
+@use "./video" Reel frame
 
 abstract type Item end
 
@@ -82,6 +84,21 @@ struct Sketch <: Item
   x::Float64; y::Float64; w::Float64; h::Float64
   radii::Radii
   board::Board
+  dx::Float64; dy::Float64; dw::Float64; dh::Float64
+  sharp::Bool
+end
+
+"""
+A picture file that moves, like a GIF. It's drawn as it is at the moment that
+the page is drawn: `now` holds how many seconds ago the page was first shown,
+or nothing for a page that shows the file's first picture. So a page isn't
+laid out again each time the picture changes.
+"""
+struct Moving <: Item
+  x::Float64; y::Float64; w::Float64; h::Float64
+  radii::Radii
+  reel::Reel
+  now::Base.RefValue{Any}
   dx::Float64; dy::Float64; dw::Float64; dh::Float64
   sharp::Bool
 end
@@ -215,6 +232,7 @@ mutable struct List
   base::String                                # the address of the page, which its links are from
   places::Vector{Place}                       # where each element's box is, in the order that the boxes are met
   floats::Vector{Vector{Vector{Item}}}        # for each box that's drawn apart and is open, the floats in it: they're drawn over its text's boxes
+  now::Base.RefValue{Any}                     # how many seconds after the page was first shown it's drawn, for its pictures that move, or nothing
 end
 
 const SAME = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
@@ -816,7 +834,9 @@ picture!(l::List, b::Box, image, cx, cy, iw, ih, radii) = begin
     dw, dh = nw * k, nh * k
   end
   at = (cx + px(s.objectat[1], iw - dw), cy + px(s.objectat[2], ih - dh), dw, dh)
-  push!(l.items, image isa Board ? Sketch(cx, cy, iw, ih, radii, image, at..., s.rendering == :pixelated) : Picture(cx, cy, iw, ih, radii, image, at..., s.rendering == :pixelated))
+  sharp = s.rendering == :pixelated
+  push!(l.items, image isa Board ? Sketch(cx, cy, iw, ih, radii, image, at..., sharp) : image isa Reel ? Moving(cx, cy, iw, ih, radii, image, l.now, at..., sharp) :
+                 Picture(cx, cy, iw, ih, radii, image, at..., sharp))
 end
 
 "Add what the box `b` draws, and what's in it, in the order of the text. `(ox, oy)` is the corner of the border of the box that `b` is in."
@@ -1015,9 +1035,9 @@ What to draw of the page whose <html> element has the box `root`, which is
 laid out `wide` px wide and `tall` px tall. `pictures` gives the picture of an
 address, as `boxes` takes it.
 """
-list(root::Box, wide, tall; pictures=src -> nothing, base="") = begin
+list(root::Box, wide, tall; pictures=src -> nothing, base="", at=nothing) = begin
   l = List(Item[], Link[], Words[], Float64(wide), Float64(tall), 0x00000000, pictures, "", nothing, nothing, Clip[], Order[], nothing, 0,
-           IdDict{Box,Tuple{Float64,Float64}}(), IdDict{Box,Tuple{Float64,Float64,Int}}(), SAME, 0, String(base), Place[], Vector{Vector{Item}}[])
+           IdDict{Box,Tuple{Float64,Float64}}(), IdDict{Box,Tuple{Float64,Float64,Int}}(), SAME, 0, String(base), Place[], Vector{Vector{Item}}[], Ref{Any}(at))
   # The background of the page is the <html> element's, or the <body>'s when that has none
   body = findfirst(k -> k.element !== nothing && k.element.tag == "body", root.children)
   from = alpha(root.style.background) > 0 || !isempty(root.style.image) || body === nothing ? root : root.children[body]
@@ -1271,6 +1291,15 @@ draw_image(canvas, image, x, y, w, h; sharp=false) = begin
   with_paint(0xffffffff) do paint
     Skia.sk_canvas_draw_image_rect(canvas, image, src, rect(x, y, w, h), Ref(sharp ? NEAREST : SAMPLING), paint, Skia.SRC_RECT_CONSTRAINT_FAST)
   end
+end
+
+paint!(canvas, i::Moving) = begin
+  at = i.now[]
+  shown = at === nothing ? i.reel.first : frame(i.reel, at)
+  cut = i.radii != SQUARE || i.dx < i.x - 0.01 || i.dy < i.y - 0.01 || i.dx + i.dw > i.x + i.w + 0.01 || i.dy + i.dh > i.y + i.h + 0.01
+  cut && (Skia.sk_canvas_save(canvas); clip_shape(canvas, i.x, i.y, i.w, i.h, i.radii))
+  draw_image(canvas, shown.image, i.dx, i.dy, i.dw, i.dh; sharp=i.sharp)
+  cut && Skia.sk_canvas_restore(canvas)
 end
 
 paint!(canvas, i::Sketch) = begin
@@ -1720,7 +1749,7 @@ right(l::List) = begin
   depth = 0
   for i in l.items
     i isa Move ? (depth += 1) : i isa Unmove ? (depth -= 1) : nothing
-    depth == 0 && i isa Union{Fill,Edge,Picture,Sketch,Backing,Glyphs,Widget,Drawing} && (x = max(x, i.x + i.w))
+    depth == 0 && i isa Union{Fill,Edge,Picture,Sketch,Moving,Backing,Glyphs,Widget,Drawing} && (x = max(x, i.x + i.w))
   end
   x
 end
@@ -1742,8 +1771,10 @@ Draw the page, with its top left corner at the canvas's. With `top` and
 the canvas cuts off, as a window does with what's scrolled out of it, isn't
 drawn either.
 """
-draw(canvas, l::List; top=-Inf, bottom=Inf) = begin
+draw(canvas, l::List; top=-Inf, bottom=Inf, at=l.now[]) = begin
   moved = 0   # how many moves are open: what's moved isn't where its numbers say
+  # A picture that moves shows its picture of the moment `at`, and the list is as it was after
+  was, l.now[] = l.now[], at
   for i in l.items
     i isa Move ? (moved += 1) : i isa Unmove ? (moved -= 1) : nothing
     if !(i isa Bracket)
@@ -1752,4 +1783,6 @@ draw(canvas, l::List; top=-Inf, bottom=Inf) = begin
     end
     paint!(canvas, i)
   end
+  l.now[] = was
+  nothing
 end

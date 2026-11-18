@@ -323,6 +323,32 @@ end
   @test shows() && sent().pictures && !haskey(K.fetches, url) && isempty(sent().waiting)
 end
 
+@testset "a picture of an email that moves, moves" begin
+  # The test's GIF is 40 by 20: a red square at the left, in the middle and at the right, for half a second each, again and again
+  url = "https://example.com/moving.gif"
+  path = email("A GIF", """<body style="margin:0" bgcolor="#ffffff"><img src="$url" style="display:block"></body>""")
+  mkpath(K.sent_dir(path))
+  touch(K.sent_mark(path))   # you asked for this email's pictures once
+  K.fetches[url] = joinpath(@__DIR__, "web_moving.gif")   # and the picture is kept already, as it is once Ladder has fetched it
+  show(path)
+  @test shows() && sent().pictures && laid().tall == 20 && time() - sent().since < 5
+  laid_out = sent().shown.page
+  red((r, g, b)) = r > 200 && g < 60
+  # The email is drawn as it is now, this long after it first showed: the test says how long that is
+  sent().since = time() - 0.1
+  frames(1)
+  @test red(colour(spot(5, 10))) && !red(colour(spot(20, 10)))
+  sent().since = time() - 0.6
+  frames(1)
+  @test red(colour(spot(20, 10))) && !red(colour(spot(5, 10)))
+  sent().since = time() - 1.1
+  frames(1)
+  @test red(colour(spot(35, 10))) && !red(colour(spot(20, 10)))
+  shot("sent-11-gif.png")
+  # The email is laid out once: only the window is drawn again
+  @test sent().shown.page === laid_out && K.Web.changes(laid_out, 0.6) == 1.0
+end
+
 @testset "an email with no HTML shows its words" begin
   show(plain_email)
   @test item() === nothing && any(==("No HTML here."), texts())

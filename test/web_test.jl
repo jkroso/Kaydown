@@ -503,7 +503,7 @@ end
 end
 
 "The colour of the pixel at `(x, y)` of the page as it's drawn on white: how red, how green and how blue"
-pixel(p, x, y) = begin
+pixel(p, x, y; at=p.at) = begin
   info = Ref(Skia.sk_image_info_t(C_NULL, Skia.SK_COLOR_TYPE_RGBA_8888, Skia.SK_ALPHA_TYPE_PREMUL, Int(p.wide), Int(p.tall)))
   one = Ref(Skia.sk_image_info_t(C_NULL, Skia.SK_COLOR_TYPE_RGBA_8888, Skia.SK_ALPHA_TYPE_PREMUL, 1, 1))
   out = zeros(UInt8, 4)
@@ -511,7 +511,7 @@ pixel(p, x, y) = begin
     surface = Skia.sk_surface_make_raster_n32_premul(pointer_from_objref(info), C_NULL)
     canvas = Skia.sk_surface_get_canvas(surface)
     Skia.sk_canvas_clear(canvas, 0xffffffff)
-    Web.draw(canvas, p)
+    Web.draw(canvas, p; at)
     image = Skia.sk_surface_make_image_snapshot(surface)
     Skia.sk_image_read_pixels(image, pointer_from_objref(one), out, Csize_t(4), Cint(x), Cint(y), Skia.sk_image_caching_hint_t(0))
     Skia.sk_image_unref(image)
@@ -688,6 +688,10 @@ end
   # With no time, it shows its first picture, and the page says that it would move
   rest = Web.page(html; wide=100, pictures)
   @test red(pixel(rest, 5, 10)) && !Web.moving(rest) && rest.until == Inf
+  # A page that's laid out once can be drawn at any moment: the picture in the <img> moves, and the one behind the box needs a new layout
+  @test red(pixel(rest, 20, 10; at=0.7)) && red(pixel(rest, 35, 10; at=1.2)) && red(pixel(rest, 5, 30; at=0.7)) && red(pixel(rest, 5, 10))
+  @test count(i -> i isa Paint.Moving, rest.list.items) == 1 && Web.changes(rest, 0.2) == 0.5 && Web.changes(rest, 1.2) == 1.5
+  @test Web.changes(Web.page("<p>still</p>"), 1.0) == Inf && Web.changes(Web.page("""<img src="m.png">"""; pictures), 3.5) == Inf   # nothing moves, or what moved has stopped
   # One that stops lets the page come to rest
   once = Web.page("""<!DOCTYPE html><body style="margin:0"><img src="m.png"></body>"""; wide=100, pictures, at=5.0)
   @test once.until == 3 && !Web.moving(once) && red(pixel(once, 35, 10))

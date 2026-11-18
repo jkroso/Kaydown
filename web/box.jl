@@ -112,7 +112,7 @@ Base.@kwdef mutable struct Box
   shape::Float64 = NaN                 # of a picture that isn't there: its width over its height, as its tag's `width` and `height` say
   picture::Any = nothing               # of a picture: what the page's pictures have for it
   fills::Bool = false                  # of a drawing with a shape and no size: it's as wide as the box that it's in
-  widget::Symbol = :none               # of an :image that's no picture: :svg, :checkbox, :radio, :range, :color, :progress, :meter, :video, :audio, :frame, :canvas, or :select for the arrows of a <select>. A video's `picture` is the `Frame` that it shows.
+  widget::Symbol = :none               # of an :image that's no picture: :svg, :checkbox, :radio, :range, :color, :progress, :meter, :video, :audio, :frame, :canvas, or :select for the arrows of a <select>. A video's `picture` is the `Frame` that it shows, and the `picture` of a picture file that moves is its `Reel`.
   value::Float64 = NaN                 # of a tick box: 1 when it's ticked. Of a slider or a bar: how much of it is full, from 0 to 1.
   grid::Any = nothing                  # of a table: its rows and its columns
   cbh::Float64 = NaN                   # how tall the content of the box that it's in is, when that's known before its content is laid out: a height in percent is of this
@@ -375,6 +375,7 @@ struct Env
   look::Any                          # the style of each element, and of its parts
   pictures::Function
   films::Function                    # the video at an address, as video.jl reads it, or nothing
+  reels::Function                    # the pictures of a picture file that moves, like a GIF, as video.jl reads it, or nothing for any other picture
   at::Union{Float64,Nothing}         # how many seconds ago the page was first shown, or nothing for the page as it comes to rest
   counters::Counters
   wide::Float64                      # how wide and how high the window is, for a picture that has a file for each size of window
@@ -652,7 +653,9 @@ add!(out, e::Element, parent::Style, env::Env, link) = begin
     found = env.pictures(src)
     if found !== nothing
       b.natural = (Float64(found[1]) / dense, Float64(found[2]) / dense)
-      b.picture = found[3]
+      # A picture that moves, like a GIF, is drawn as it is at the moment that the page is drawn
+      moving = env.reels(src)
+      b.picture = moving === nothing ? found[3] : moving
     end
     if found === nothing
       # Until a picture is there, its tag's width and height say what shape it has
@@ -803,9 +806,9 @@ The box of the page's <html> element, with the boxes of all that's in it.
 `wide` and `high` are how big the window is, for a picture that has a file
 for each size of window.
 """
-boxes(doc::Document, look; pictures=no_pictures, films=no_pictures, at=nothing, wide=1024.0, high=800.0) = begin
+boxes(doc::Document, look; pictures=no_pictures, films=no_pictures, reels=no_pictures, at=nothing, wide=1024.0, high=800.0) = begin
   out = Box[]
-  env = Env(look, pictures, films, at, Counters(), Float64(wide), Float64(high), IdDict{Style,Style}())
+  env = Env(look, pictures, films, reels, at, Counters(), Float64(wide), Float64(high), IdDict{Style,Style}())
   add!(out, doc.root, Style(), env, "")
   isempty(out) ? Box(kind=:block, style=Style(display=:block)) : (out[1].kind = :block; out[1])
 end

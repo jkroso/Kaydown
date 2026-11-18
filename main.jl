@@ -62,6 +62,9 @@
 #     the map of that place. The + and the − on the map show less and more
 #     of what's round it. Drag the map to move it, and click it to put the
 #     pin where you clicked.
+#   - Write a code block in the language `web` with the address of a page of
+#     the web in it to show that page. Click it to make it fill the window,
+#     where you scroll the page, follow its links and type in its fields.
 #   - Write a code block in the language `find` to list the to-do items
 #     that aren't ticked in every page of the folder. At its top, type words
 #     to keep only the lines that have them, and choose the kind of line and
@@ -268,6 +271,8 @@
 @use "./eml" => Eml
 @use "./webpage" => Webpages
 @use "./web" => Web
+@use "./web/browser" => Browsers
+@use "./web/files" => Webfiles
 @use "./slides" => Slides
 @use "github.com/jkroso/UI.jl/Interface/draw" Bubble
 @use "github.com/jkroso/UI.jl/Interface/draw" popups sync_mouse!
@@ -15700,6 +15705,230 @@ card_html(e, text, styled::Ref{Bool}) = begin
   rules * Cards.markup(card, unescaped(String(m[1])))
 end
 
+# --- a page of the web ------------------------------------------------------------------------
+#
+# A code block in the language `web` shows a page of the web, which Ladder's
+# own engine lays out and draws: see web/browser.jl. The block's first line is
+# the page's address:
+#
+#     ```web
+#     https://julialang.org
+#     ```
+#
+# The address can be the name of a file of HTML beside the document. A block
+# that starts with a tag, like `<h1>`, holds the HTML of the page itself.
+#
+# In the document, the block shows the top of the page, and the page's scripts
+# run. A click on it, or the button that shows beside its top right corner
+# while the mouse is over it, makes it fill the window. There the page is
+# yours to use: the wheel scrolls it, a click follows a link or presses a
+# button, and you type in its fields. The bar over the page has what a
+# browser has:
+#
+#   - The arrows go back to the page before, and forward again. ⌘[ and ⌘]
+#     do the same.
+#   - The round arrow gets the page again, with all of its files. So does ⌘R.
+#   - The field shows the address of the page that shows. Click it, or press
+#     ⌘L, type another address and press Return to go there.
+#   - The next button opens the page in your browser. In the document, a
+#     click with ⌘ held does that.
+#   - The last button puts the block back in the document. So does Esc, once
+#     no field of the page has the keyboard.
+#
+# The pages that you go to aren't written into the block: its line stays the
+# page that it starts at. ⌘E, while the block fills the window, shows that
+# line.
+#
+# A page of an email asks the web for nothing, so a `web` block there shows no
+# page. A window that isn't on the screen asks for nothing either, unless a
+# test put its own function in `WEB_GETTER`.
+
+const WEBVIEW = "web"
+const WEB_HIGH = 420px     # how tall the page is in the document at the most, before the zoom
+const WEB_LEAST = 60px     # and at the least
+push!(BLOCK_ICONS, "globe", "arrow-left", "arrow-right", "arrow-clockwise", "box-arrow-up-right", "fullscreen-exit")
+
+"What gets a file from the web for a `web` block. A test puts its own function here, so that it uses no network."
+const WEB_GETTER = Ref{Function}(Webfiles.curl)
+
+"What a `web` block shows: a page of the web"
+@def mutable struct WebView <: SemanticUI
+  n::Int = 0                               # its place among the page's web views
+  first::Int = 0                           # the lines of its block, when the page was last laid out
+  last::Int = 0
+  lines::Any = nothing                     # the lines that it was last read from
+  browser::Any = nothing                   # the Browser that gets the page and shows it
+  parts::Dict{Any,Any} = Dict{Any,Any}()   # its buttons and its text field, kept between frames
+  full::Bool = false                       # it fills the window, over the page
+  tall::px = 0px                           # how tall it was in the page when it was last laid out there
+  pinned::px = 0px                         # how far the page was scrolled when it filled the window
+end
+
+"True when a `web` block of `e` may ask the web: the page isn't an email, and its window is on the screen or a test stands in for `curl`"
+web_online(e) = !Eml.isemail(e.buf.path) && (WEB_GETTER[] !== Webfiles.curl || on_screen(e))
+
+"The Browser of the web view `v`, which it keeps for as long as the document is open"
+web_browser(v::WebView) = begin
+  v.browser === nothing || return v.browser
+  e = editor(v)
+  files = Webfiles.Files(getter=(a...) -> WEB_GETTER[](a...), online=() -> web_online(e))
+  v.browser = own!(v, Browsers.Browser(files=files, open=url -> BROWSER[](url), idle=:hand, active=false))
+end
+
+"""
+What the lines of a `web` block ask for: the address of a page, or the HTML
+of one with the address that the addresses in it are from. The name of a
+file beside the document is that file.
+"""
+web_source(e, lines) = begin
+  i = findfirst(l -> !isempty(strip(l)), lines)
+  i === nothing && return (address="", html="", base="")
+  dir = docdir(e)
+  first = String(strip(lines[i]))
+  # A block that starts with a tag holds the page itself. Its addresses are from the document's folder.
+  startswith(first, '<') && return (address="", html=join(lines, "\n"), base="file://" * joinpath(abspath(dir), "page.html"))
+  if !occursin(r"^[a-z][a-z0-9+.-]*:"i, first)
+    file = startswith(first, '~') ? expanduser(first) : joinpath(dir, first)
+    isfile(file) && return (address=abspath(file), html="", base="")
+  end
+  (address=first, html="", base="")
+end
+
+reread!(v::WebView, lines) = begin
+  lines == v.lines && return v
+  v.lines = lines
+  b = web_browser(v)
+  b.address, b.html, b.base = web_source(editor(v), lines)
+  v
+end
+
+"The field at the top of a web view that fills the window, which shows the page's address and takes another"
+web_input(v::WebView) = block_part!(v, :input) do
+  TextInput(placeholder="An address, like julialang.org", font_family=SANS, font_size=13px,
+            look=(_, text) -> Row(width(grow=grow), height(grow=grow), clip=true, text))
+end
+
+"The address that the top of the web view `v` shows: of the page that's on its way, or of the page that shows"
+web_address(v::WebView) = (b = web_browser(v); Browsers.loading(b) ? b.coming.address : b.shown)
+
+describe(v::WebView) = begin
+  e = editor(v)
+  b = web_browser(v)
+  with_theme(component_theme(e.zoom)) do
+    b.zoom = round(Float64(e.zoom), digits=2)
+    if !v.full
+      # In the page it shows the top of the page of the web, as tall as that page up to `WEB_HIGH`. A click makes it fill the window.
+      isempty(b.address) && isempty(b.html) &&
+        return Column(block_look()..., name="Web page", block_note("Write the address of a page in this block, like https://julialang.org"))
+      b.active = false
+      b.wide = e.width - 2px
+      p = b.view.page
+      # Until a page has come, the block is as tall as it's likely to be with one
+      b.high = p === nothing || isempty(b.view.html) ? WEB_HIGH * e.zoom : clamp(px(p.tall), WEB_LEAST * e.zoom, WEB_HIGH * e.zoom)
+      return Box(width(grow=grow), Alignment.Start, fillable(v, (:block, v), Column(block_look()..., clip=true, name="Web page", b), wide=:grow))
+    end
+    w, h = window_size(e)
+    win = window_of(v)
+    input = web_input(v)
+    input.color = colours.ink
+    typing = win !== nothing && win.focus === input
+    # The field shows where the page is, until someone types in it
+    typing || (input.text = web_address(v); input.cursor = input.anchor = 0)
+    b.active = true
+    b.wide, b.high = w, max(40px, h - TOPBAR_H - 38px)
+    field = Row(width(grow=grow), height(26px), padding(8px, 0px), child_gap=7px, radius(6px), Alignment.Center, background(colours.bg),
+                border(1px, :solid, typing ? colours.accent : colours.line),
+                Icon(b.failed ? "exclamation-circle" : "globe", size=12px, color=colours.dim), Box(width(grow=grow), height(grow=grow), input))
+    bar = block_bar(block_button!(v, :back, :back, icon="arrow-left", tip="Back to the page before  ⌘[", off=!Browsers.can_back(b)),
+                    block_button!(v, :forward, :forward, icon="arrow-right", tip="Forward again  ⌘]", off=!Browsers.can_forward(b)),
+                    block_button!(v, :reload, :reload, icon="arrow-clockwise", tip="Get the page again  ⌘R"),
+                    Box(width(4px)), field, Box(width(4px)),
+                    block_button!(v, :browser, :browser, icon="box-arrow-up-right", tip="Open the page in your browser"),
+                    block_button!(v, :full, :full, icon="fullscreen-exit", tip="Back to the document  esc"))
+    Column(width(grow=grow), height(grow=grow), Alignment.Start, background(takeoff_back()), name="Web page", bar, b)
+  end
+end
+push!(BLOCK_ICONS, "exclamation-circle")
+
+"""
+Make the web view fill the window, or put it back in the document. While it
+fills the window, the page of the web has the keyboard.
+"""
+full!(v::WebView, on::Bool) = begin
+  e = editor(v)
+  on && unfill!(e)   # one block at a time fills the window
+  v.full = on
+  v.pinned = e.scroll.offset
+  on ? focus(web_browser(v)) : focus(e)
+  handled
+end
+
+act!(v::WebView, action, w) = begin
+  b = web_browser(v)
+  action == :full && return full!(v, !v.full)
+  action == :back ? Browsers.back!(b) : action == :forward ? Browsers.forward!(b) : action == :reload ? Browsers.reload!(b) :
+  action == :browser ? (isempty(web_address(v)) || BROWSER[](web_address(v))) : nothing
+  v.full && focus(b)
+  handled
+end
+
+"Go to the address that was typed in the field at the top of the web view, and give the keyboard to the page"
+web_go!(v::WebView) = begin
+  b = web_browser(v)
+  words = strip(web_input(v).text)
+  isempty(words) || Browsers.go!(b, words)
+  focus(b)
+  handled
+end
+
+cursor(v::WebView) = :arrow
+
+# In the document, a click makes the web view fill the window. With ⌘ held it opens the page in the browser, and with
+# ⌥ held the document shows the block's lines. A click beside a button of one that fills the window is the block's.
+onkey(v::WebView, ::KeyPress{Keys.mouse_left}) = begin
+  v.full && return (focus(web_browser(v)); handled)
+  held(v, Keys.opt) && return nothing
+  held(v, Keys.cmd) && return (isempty(web_address(v)) || BROWSER[](web_address(v)); handled)
+  full!(v, true)
+end
+
+# Return in the field goes to the address that's typed there. Esc leaves the field first, and then puts the block
+# back in the document. The page has taken its own Esc by then: see web/browser.jl.
+onkey(v::WebView, ev::KeyPress{Keys.enter}) = v.full && ev.window.focus === web_input(v) ? web_go!(v) : nothing
+onkey(v::WebView, ev::KeyPress{Keys.escape}) = begin
+  v.full || return nothing
+  ev.window.focus === web_input(v) ? (focus(web_browser(v)); handled) : full!(v, false)
+end
+onkey(v::WebView, ev::KeyPress{K}) where K = begin
+  (v.full && Keys.cmd in ev.window.keys) || return nothing
+  K == Keys.l && return (focus(web_input(v)); tabbed!(web_input(v)); handled)
+  K == Keys.r && return act!(v, :reload, ev.window)
+  K == Keys.left_bracket && return act!(v, :back, ev.window)
+  K == Keys.right_bracket && return act!(v, :forward, ev.window)
+  nothing
+end
+
+# While it fills the window, the mouse and the wheel are its own, and never the document's under it
+onmouse(v::WebView, ::MouseMove) = v.full ? handled : nothing
+onscroll(v::WebView, ::MouseScroll) = v.full ? handled : nothing
+
+keyboard_part(v::WebView) = web_browser(v)
+
+"The web view as HTML: a link to its page, or the page that the block holds, in a frame"
+web_html(e, v::WebView) = begin
+  b = web_browser(v)
+  if !isempty(b.html)
+    held = replace(b.html, '&' => "&amp;", '"' => "&quot;")
+    return "<iframe srcdoc=\"$held\" style=\"width:100%;height:$(round(Int, num(WEB_HIGH)))px;border:1px solid #d8d2c8;border-radius:8px\"></iframe>"
+  end
+  isempty(b.address) && return nothing
+  address = startswith(b.address, '/') ? "file://" * b.address : Browsers.whole(b.address)
+  shown = replace(address, '&' => "&amp;", '<' => "&lt;", '>' => "&gt;", '"' => "&quot;")
+  "<p><a href=\"$shown\">$shown</a></p>"
+end
+
+BLOCKS[WEBVIEW] = BlockKind("Web page", "globe", WebView, web_html)
+
 # --- blocks that a file defines --------------------------------------------------------------
 #
 # A page can have kinds of block that Ladder doesn't know. A code block in a
@@ -21425,6 +21654,7 @@ const INSERTS = [
   ("Columns",       ["```$COLUMN_BLOCK", "2", "```", "", ""], (5, 0)),
   ("Find",          ["```$FIND", "```", "", ""],    (4, 0)),
   ("Sketch",        ["```$SKETCH", "```", "", ""],  (4, 0)),
+  ("Web Page",      ["```$WEBVIEW", "https://", "```", "", ""], (2, 8)),
   ("Signature",     ["```$SIGNATURE", "```", "", ""], (4, 0)),
   ("Contact",       ["```$CONTACT", "", "```"],     (2, 0)),
   ("Gallery",       ["```$GALLERY", "```", "", ""], (4, 0)),

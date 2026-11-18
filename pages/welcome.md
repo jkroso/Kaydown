@@ -305,6 +305,28 @@ Hold ⌘ and click the card to open the page in your browser. To change the addr
 
 An address that ends as a picture's does, like `![Julia](https://julialang.org/logo.png)`, shows the picture. So does an address that turns out to be a picture when Ladder gets it. A web address by itself, like https://julialang.org, is text.
 
+## Pages of the web
+
+A code block in the language `web` shows a page of the web. Write the page's address in it, like `https://julialang.org`, or the name of a file of HTML beside the document. Ladder draws the page itself and runs its scripts. Click the block and it fills the window. There you scroll the page, follow its links and type in its fields, and the bar over it goes back, forward and to another address. Esc puts the block back in the page.
+
+A block that starts with a tag holds the page itself, like this one:
+
+```web
+<body style="margin:16px; font:15px/22px system-ui">
+<h3 style="margin:0 0 8px">A page that's written here</h3>
+<p style="margin:0 0 10px">Click the block to make it fill the window. Then type your name, and press the button.</p>
+<input id="name" placeholder="Your name" style="font-size:14px; width:180px">
+<button id="hello" style="font-size:14px">Say hello</button>
+<p id="out" style="margin:10px 0 0; color:#2a78d6"></p>
+<p style="margin:10px 0 0"><a href="https://julialang.org">Go to julialang.org</a></p>
+<script>
+  document.getElementById('hello').addEventListener('click', () => {
+    document.getElementById('out').textContent = 'Hello, ' + (document.getElementById('name').value || 'you') + '.'
+  })
+</script>
+</body>
+```
+
 ## Takeoffs
 
 A code block in the language `takeoff` shows a plan that you measure from: a page of a PDF file, or a picture. Drop the file on the block, or click the block to choose it. This one has the plan of a small house, with its power points and lights counted, a run of cable measured and the kitchen floor measured.

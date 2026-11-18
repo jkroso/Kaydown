@@ -20,7 +20,14 @@
 # the scripts first, and a link opens unless a script said to do no more. The
 # page's timers run when they're due, and the page is laid out again after a
 # script changes it. `say(level, text)` is called with each line that a script
-# prints, and `v.live.scripts.log` keeps them.
+# prints, and `v.live.scripts.log` keeps them. `go(address)` is called when
+# the page asks to go to another page, and `allowed(address)` says whether a
+# script may read the file at an address: see live.jl.
+#
+# `load` can give `:waiting` for a file that's on its way. The page shows
+# without it, and `refresh!(v)` lays the page out again once it has come.
+#
+# browser.jl makes a window onto a page that scrolls and takes the keyboard.
 
 @use "github.com/jkroso/Prospects.jl" @def
 @use "github.com/jkroso/MiniFB.jl" onkey KeyPress Keys flt
@@ -50,6 +57,9 @@
   say::Any = (level, text) -> nothing   # called with each line that a script prints
   live::Any = nothing     # the page with its scripts running
   started::Any = nothing  # what its scripts were started for
+  go::Any = nothing       # called with the address that the page's scripts ask to go to, or nothing for a page that goes nowhere
+  allowed::Any = address -> true   # true when a script may read the file at an address
+  limit::Float64 = 10.0   # how many seconds a script may run before it's stopped
   moves::Bool = true      # draw the page's animations as time passes
   showing::Any = nothing  # the page's document, its clock and when it was first shown, for a page that's laid out again as time passes
 end
@@ -92,7 +102,8 @@ running!(v::View, want) = begin
   key = (want[1], v.fit, v.css, v.base)
   if v.live === nothing || v.started != key
     v.live === nothing || close(v.live)
-    v.live = Live.live(v.html; wide=want[2], zoom=v.zoom, fit=v.fit, css=v.css, load=v.load, high=v.high, base=v.base, say=v.say)
+    v.live = Live.live(v.html; wide=want[2], zoom=v.zoom, fit=v.fit, css=v.css, load=v.load, high=v.high, base=v.base, say=v.say,
+                       go=v.go, allowed=v.allowed, limit=v.limit)
     v.started = key
   else
     resize!(v.live, want[2]; high=v.high, zoom=v.zoom)
@@ -145,4 +156,19 @@ onkey(v::View, ::KeyPress{Keys.mouse_left}) = begin
   handled
 end
 
-export View
+"A file that the page waited for has come: a picture, a sheet or a font. The page is laid out again with it."
+refresh!(v::View) = begin
+  v.live === nothing || Live.refresh!(v.live)
+  v.showing === nothing || Web.retry!(v.showing.pictures)
+  v.made = nothing
+  v
+end
+
+"Read the page's HTML again and start its scripts again, as for another page"
+restart!(v::View) = begin
+  v.live === nothing || (close(v.live); v.live = nothing)
+  v.started = v.showing = v.made = nothing
+  v
+end
+
+export View, page!, refresh!, restart!

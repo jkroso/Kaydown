@@ -89,7 +89,7 @@ class MouseEvent extends UIEvent {
     this.relatedTarget = init.relatedTarget ?? null
   }
   get pageX() { return this.clientX }
-  get pageY() { return this.clientY }
+  get pageY() { return this.clientY + native.scroll() }
   get x() { return this.clientX }
   get y() { return this.clientY }
   get offsetX() { return this.target instanceof Element ? this.clientX - this.target.getBoundingClientRect().left : this.clientX }
@@ -663,9 +663,10 @@ class Element extends Node {
   getElementsByTagName(tag) { tag = String(tag).toLowerCase(); return tag === '*' ? this.querySelectorAll('*') : list(native.tagged(scope(this), tag)) }
   getElementsByClassName(names) { const words = String(names).split(/\s+/).filter(Boolean); return words.length ? this.querySelectorAll(words.map(w => '.' + CSS.escape(w)).join('')) : new NodeList() }
 
+  // An element's rectangle is from the corner of the window, so it's higher by as far as the page is scrolled
   getClientRects() {
-    const flat = native.rects(this[ID]), all = []
-    for (let i = 0; i < flat.length; i += 4) all.push(rectangle(flat[i], flat[i + 1], flat[i + 2], flat[i + 3]))
+    const flat = native.rects(this[ID]), all = [], scrolled = native.scroll()
+    for (let i = 0; i < flat.length; i += 4) all.push(rectangle(flat[i], flat[i + 1] - scrolled, flat[i + 2], flat[i + 3]))
     return all
   }
   getBoundingClientRect() {
@@ -682,12 +683,13 @@ class Element extends Node {
   get scrollHeight() { return this[ID] === ROOT ? Math.round(this.getBoundingClientRect().height) : this.clientHeight }
   get scrollLeft() { return 0 }
   set scrollLeft(v) {}
-  get scrollTop() { return 0 }
-  set scrollTop(v) {}
-  scrollIntoView() {}
-  scrollTo() {}
-  scroll() {}
-  scrollBy() {}
+  // Only the page scrolls, so only its <html> and its <body> say how far
+  get scrollTop() { return this[ID] === ROOT || this === document.body ? native.scroll() : 0 }
+  set scrollTop(v) { if (this[ID] === ROOT || this === document.body) native.scrollTo(Number(v) || 0) }
+  scrollIntoView() { if (this.isConnected) native.scrollTo(native.scroll() + this.getBoundingClientRect().top) }
+  scrollTo(x, y) { if (this[ID] === ROOT || this === document.body) scrollTo(x, y) }
+  scroll(x, y) { this.scrollTo(x, y) }
+  scrollBy(x, y) { if (this[ID] === ROOT || this === document.body) scrollBy(x, y) }
   getAnimations() { return [] }
   setPointerCapture() {}
   releasePointerCapture() {}
@@ -733,7 +735,7 @@ class HTMLElement extends Element {
   // An element's place is always given from the <body>, and so from the corner of the page, as WebKit gives it for a <body> with no place of its own
   get offsetParent() { return this === document.body || this[ID] === ROOT || !this.isConnected ? null : document.body }
   get offsetLeft() { return Math.round(this.getBoundingClientRect().left) }
-  get offsetTop() { return Math.round(this.getBoundingClientRect().top) }
+  get offsetTop() { return Math.round(this.getBoundingClientRect().top + native.scroll()) }
   get isContentEditable() { return false }
   get tabIndex() { const v = this.getAttribute('tabindex'); return v == null ? (/^(a|button|input|select|textarea)$/.test(this.localName) ? 0 : -1) : Number(v) || 0 }
   set tabIndex(v) { this.setAttribute('tabindex', String(v)) }
@@ -742,12 +744,14 @@ class HTMLElement extends Element {
     if (old === this) return
     if (old && old !== document.body) old.blur()
     focused = this
+    native.focused(this[ID])
     dispatch(this, new FocusEvent('focus', {relatedTarget: old}))
     dispatch(this, new FocusEvent('focusin', {bubbles: true, relatedTarget: old}))
   }
   blur() {
     if (focused !== this) return
     focused = null
+    native.focused(0)
     dispatch(this, new FocusEvent('blur'))
     dispatch(this, new FocusEvent('focusout', {bubbles: true}))
   }
@@ -844,8 +848,8 @@ reflect(HTMLLinkElement, ['href'], 'address')
 const HTMLFormElement = tags('HTMLFormElement', ['form'], HTMLElement, {
   get elements() { return this.querySelectorAll('input, select, textarea, button') },
   get length() { return this.elements.length },
-  submit() {},
-  requestSubmit() { dispatch(this, new Event('submit', {bubbles: true, cancelable: true})) },
+  submit() { native.send(this[ID], 0) },
+  requestSubmit(by) { submit(this, by ?? null) },
   reset() { dispatch(this, new Event('reset', {bubbles: true, cancelable: true})) },
   checkValidity() { return true },
   reportValidity() { return true },
@@ -1027,7 +1031,7 @@ class Document extends Node {
   getElementsByTagName(tag) { tag = String(tag).toLowerCase(); return tag === '*' ? this.querySelectorAll('*') : list(native.tagged(0, tag)) }
   getElementsByClassName(names) { return Element.prototype.getElementsByClassName.call(this, names) }
   getElementsByName(name) { return this.querySelectorAll(`[name="${CSS.escape(String(name))}"]`) }
-  elementFromPoint(x, y) { return wrap(native.hit(Number(x), Number(y))) }
+  elementFromPoint(x, y) { return wrap(native.hit(Number(x), Number(y) + native.scroll())) }
   elementsFromPoint(x, y) { const all = []; for (let e = this.elementFromPoint(x, y); e; e = e.parentElement) all.push(e); return all }
 
   createElement(tag) { return wrap(native.create(String(tag).toLowerCase())) }
@@ -1200,16 +1204,28 @@ function setInterval(f, ms = 0, ...args) {
 function clearTimeout(id) { timers.delete(id); frames = frames.filter(fr => fr.id !== id) }
 function requestAnimationFrame(f) { frames.push({id: ++last, f}); return last }
 
+// A file that's on its way: `native.load` gives false for it. `ask` calls `then` with the file's text once it has come, or with
+// null when it can't be had. Each tick asks again for the files that were on their way.
+let asks = []
+function ask(address, then) {
+  const got = native.load(address)
+  if (got === false) asks.push([address, then])
+  else try { then(got) } catch (e) { report(e) }
+}
+
 // How many ms from `now` the next timer is due, 0 when a script waits for the next frame, or -1 when nothing waits
 function waiting(now) {
   if (frames.length) return 0
-  let soonest = Infinity
+  let soonest = asks.length ? now + 50 : Infinity
   for (const t of timers.values()) soonest = Math.min(soonest, t.at)
   return soonest === Infinity ? -1 : Math.max(0, soonest - now)
 }
 
 // Run what's due at `now`: the scripts that wait for a frame, then the timers, in the order that they're due
 function tick(now) {
+  const asked = asks
+  asks = []
+  for (const [address, then] of asked) ask(address, then)
   const waited = frames
   frames = []
   for (const {f} of waited) try { f(now) } catch (e) { report(e) }
@@ -1296,13 +1312,13 @@ class URL {
   static canParse(address, base) { try { new URL(address, base); return true } catch (_) { return false } }
 }
 
-// Where the page is from. A script can read it. A script that sets it goes nowhere.
+// Where the page is from. A script can read it. A script that sets it asks to go to another page: script.jl says where that leads.
 const location = {
   get href() { return native.resolve('') || 'about:blank' },
-  set href(v) { native.log('warn', `The page asked to go to ${v}, which does nothing here`) },
+  set href(v) { native.go(String(v)) },
   assign(v) { this.href = v },
   replace(v) { this.href = v },
-  reload() {},
+  reload() { native.go(this.href) },
   toString() { return this.href },
 }
 for (const part of ['protocol', 'host', 'hostname', 'port', 'pathname', 'search', 'hash', 'origin']) {
@@ -1351,8 +1367,8 @@ function fetch(input, init = {}) {
   return new Promise((resolve, reject) => {
     const address = typeof input === 'string' ? input : input && input.url !== undefined ? input.url : String(input)
     const method = String(init.method ?? (input && input.method) ?? 'GET').toUpperCase()
-    const text = method === 'GET' || method === 'HEAD' ? native.load(address) : null
-    text == null ? reject(new TypeError('Load failed')) : resolve(new Response(method === 'HEAD' ? '' : text, {url: native.resolve(address)}))
+    if (method !== 'GET' && method !== 'HEAD') return reject(new TypeError('Load failed'))
+    ask(address, text => text == null ? reject(new TypeError('Load failed')) : resolve(new Response(method === 'HEAD' ? '' : text, {url: native.resolve(address)})))
   })
 }
 
@@ -1371,8 +1387,8 @@ class XMLHttpRequest extends EventTarget {
   }
   #state(n) { this.readyState = n; dispatch(this, new Event('readystatechange')) }
   send() {
-    const done = () => {
-      const text = this.#method === 'GET' || this.#method === 'HEAD' ? native.load(this.#address) : null
+    const gets = this.#method === 'GET' || this.#method === 'HEAD'
+    const done = text => {
       if (text == null) {
         this.#state(4)
         dispatch(this, new Event('error'))
@@ -1386,7 +1402,9 @@ class XMLHttpRequest extends EventTarget {
       }
       dispatch(this, new Event('loadend'))
     }
-    this.#async ? setTimeout(done, 0) : done()
+    // A script that doesn't wait can't have a file that's still on its way
+    if (!this.#async) { const got = gets ? native.load(this.#address) : null; return done(got === false ? null : got) }
+    setTimeout(() => gets ? ask(this.#address, done) : done(null), 0)
   }
 }
 Object.assign(XMLHttpRequest, {UNSENT: 0, OPENED: 1, HEADERS_RECEIVED: 2, LOADING: 3, DONE: 4})
@@ -1533,11 +1551,23 @@ function click(target, x, y) {
     }
     dispatch(field, new Event('input', {bubbles: true}))
     dispatch(field, new Event('change', {bubbles: true}))
-  } else if (field instanceof HTMLButtonElement && field.type === 'submit' && !field.disabled && field.form) {
-    dispatch(field.form, new Event('submit', {bubbles: true, cancelable: true}))
+  } else if (field && !field.disabled && field.form && (field instanceof HTMLButtonElement ? field.type === 'submit' : /^(submit|image)$/.test(field.type))) {
+    submit(field.form, field)
   }
   return true
 }
+
+// Send a form, as the button `by` does, or the Return key with null. The page's scripts hear of it first, and one of them can say to do no more.
+function submit(form, by) {
+  const event = new Event('submit', {bubbles: true, cancelable: true})
+  event.submitter = by
+  if (dispatch(form, event)) native.send(form[ID], by ? by[ID] : 0)
+}
+
+// How far down a script asks the page to be scrolled: `scrollTo(0, 400)` or `scrollTo({top: 400})`
+const down = (x, y) => Number(x !== null && typeof x === 'object' ? x.top : y) || 0
+function scrollTo(x, y) { native.scrollTo(down(x, y)) }
+function scrollBy(x, y) { native.scrollTo(native.scroll() + down(x, y)) }
 
 // --- the window ---------------------------------------------------------------------------
 
@@ -1545,9 +1575,10 @@ document = Object.create(Document.prototype)
 
 const sized = i => ({configurable: true, enumerable: true, get: () => native.window()[i], set() {}})
 const still = {configurable: true, enumerable: true, get: () => 0, set() {}}
+const scrolled = {configurable: true, enumerable: true, get: () => native.scroll(), set() {}}
 Object.defineProperties(global, {
   innerWidth: sized(0), innerHeight: sized(1), outerWidth: sized(0), outerHeight: sized(1),
-  scrollX: still, scrollY: still, pageXOffset: still, pageYOffset: still, screenX: still, screenY: still, screenLeft: still, screenTop: still,
+  scrollX: still, scrollY: scrolled, pageXOffset: still, pageYOffset: scrolled, screenX: still, screenY: still, screenLeft: still, screenTop: still,
   location: {configurable: true, enumerable: true, get: () => location, set(v) { location.href = v }},
 })
 
@@ -1564,7 +1595,7 @@ Object.assign(global, {
   queueMicrotask: microtask, fetch, atob, btoa, matchMedia,
   getComputedStyle: element => computed(element),
   getSelection: () => selection,
-  scrollTo() {}, scroll() {}, scrollBy() {}, focus() {}, blur() {}, print() {}, stop() {}, close() {}, postMessage() {},
+  scrollTo, scroll: scrollTo, scrollBy, focus() {}, blur() {}, print() {}, stop() {}, close() {}, postMessage() {},
   open() { return null },
   alert(text) { native.log('info', 'alert: ' + String(text ?? '')) },
   confirm(text) { native.log('info', 'confirm: ' + String(text ?? '')); return false },
@@ -1596,11 +1627,25 @@ return {
   waiting: () => waiting(native.now()),
   // A click at a point of the page, on the element with the number `id`
   click: (id, x, y) => click(wrap(id) ?? document.body ?? document, x, y),
-  // Any other event, on the element with the number `id`, or on the window when it's 0
+  // Any other event, on the element with the number `id`, or on the window when it's 0. The page hears of a scroll on its document.
   fire(id, type, init) {
     const C = /^(mouse|dblclick|contextmenu)/.test(type) ? MouseEvent : /^key/.test(type) ? KeyboardEvent : Event
-    return dispatch(id ? wrap(id) : global, new C(type, init ?? {}))
+    return dispatch(id ? wrap(id) : type === 'scroll' ? document : global, new C(type, init ?? (type === 'scroll' ? {bubbles: true} : {})))
   },
+  // The element with the number `id` gets the keyboard, or with 0 the element that has it loses it
+  focus(id) {
+    const e = id ? wrap(id) : null
+    if (e && typeof e.focus === 'function') e.focus()
+    else if (focused) focused.blur()
+  },
+  // The text `value` was typed into the field with the number `id`
+  input(id, value) {
+    const field = wrap(id)
+    field.value = value
+    dispatch(field, new InputEvent('input', {bubbles: true}))
+  },
+  // The form with the number `id` is sent, by the button with the number `by`, or by the Return key with 0
+  submit(id, by) { submit(wrap(id), by ? wrap(by) : null) },
   // The <script> with the number `id` starts to run, or with 0 none runs now
   script(id) { running = id ? wrap(id) : null },
   // The page is read and its scripts have run

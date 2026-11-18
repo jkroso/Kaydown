@@ -23,18 +23,29 @@
 #
 # `load(address)` gives the bytes or the text of a file that the page names, or
 # nothing: a script with a `src`, and what a script asks for with `fetch` or
-# XMLHttpRequest. Nothing is asked of the web here.
+# XMLHttpRequest. Nothing is asked of the web here. For a file that's on its
+# way, `load` gives `:waiting`: `step!` asks again, and the script that waits
+# for it goes on when it has come.
+#
+# What the scripts see of the window, they ask of four functions that the
+# caller can set: `s.window()` is its size, `s.scroll()` is how far down the
+# page its top is, and `s.scroll(y)` moves it there. `s.go(address)` goes to
+# another page, as when a script sets `location.href` or sends a form. With
+# none, the page stays and the log says so. `s.focused(element)` is told which
+# element a script gave the keyboard. `allowed(address)` says whether a
+# script may read the file at an address with `fetch` or XMLHttpRequest: a
+# browser lets a script read another site's file only when that site agrees.
+# With none, a script reads whatever `load` gives.
 #
 # What a script can't do here:
 #
 # - `import` and `<script type="module">`. Such a script is left out, and the log says so.
 # - `document.write`. The page is read before its first script runs, so a
 #   script in the <head> sees the whole page.
-# - Send anything: `fetch` and XMLHttpRequest only get, through `load`.
+# - Send anything: `fetch` and XMLHttpRequest only get, through `load`, and a
+#   form that sends with "post" goes nowhere.
 # - Workers, WebSocket, shadow trees and custom elements. A <canvas> draws in 2D
 #   only: see context.jl.
-# - Scroll. The page is laid out whole, so `scrollY` is 0 and an element's
-#   rectangle is its place on the page.
 # - `getComputedStyle` knows only what `computed` gives: see live.jl.
 #
 # A list like `childNodes` or `children` is the nodes as they were when it was
@@ -48,6 +59,7 @@
 @use "./jsc" Context Object ScriptError
 @use "./dom" Node Element Text Document document attr text VOID RAW
 @use "./css" selectors matches resolve media
+@use "./form" sent
 @use "./window" WINDOW
 @use "./context" => Drawing
 
@@ -73,10 +85,17 @@ mutable struct Scripts
   contents::IdDict{Element,Element}   # what's in each <template>: a fragment that's kept apart from the page
   selectors::Dict{String,Any}    # each selector that a script has used, read
   started::Float64
+  scroll::Function               # `scroll()` is how far down the page the top of the window is, and `scroll(y)` moves it there
+  go::Any                        # `go(address)` goes to another page, or nothing when the page can go nowhere
+  focused::Function              # told the element that has the keyboard now, or nothing
+  allowed::Function              # true when a script may read what's at an address, with `fetch` or XMLHttpRequest
+  pending::Vector{Element}       # the <script> elements whose file is on its way
 end
 
 # No more lines than this are kept in the log: a script in a loop can print for ever
 const LINES = 1000
+# How many ms pass before a file that's on its way is asked for again
+const PATIENCE = 50.0
 
 """
 A JavaScript world for the page of `doc`. `load(address)` gives the bytes or
@@ -84,12 +103,14 @@ the text of a file, or nothing. `base` is the address of the page. `limit` is
 how many seconds a script may run before it's stopped.
 """
 Scripts(doc::Document; load=address -> nothing, base="", say=(level, text) -> nothing, limit=10,
-        place=e -> NTuple{4,Float64}[], at=(x, y) -> nothing, computed=(e, name) -> nothing, window=() -> (1024.0, 768.0)) = begin
+        place=e -> NTuple{4,Float64}[], at=(x, y) -> nothing, computed=(e, name) -> nothing, window=() -> (1024.0, 768.0),
+        scroll=(y...) -> 0.0, go=nothing, focused=e -> nothing, allowed=address -> true) = begin
   s = Scripts(Context(; limit), doc, Dict{Int,Node}(), IdDict{Node,Int}(), 0, 0, false, Tuple{Symbol,String}[], say, load, String(base),
-              place, at, computed, window, Dict{String,Object}(), IdDict{Element,Bool}(), IdDict{Element,Element}(), Dict{String,Any}(), time())
+              place, at, computed, window, Dict{String,Object}(), IdDict{Element,Bool}(), IdDict{Element,Element}(), Dict{String,Any}(), time(),
+              scroll, go, focused, allowed, Element[])
   apart!(s, doc.root)
   made = JS.evaluate(s.js, WINDOW; name="window.js")(natives(s))
-  for name in ("tick", "waiting", "click", "fire", "script", "ready", "alive", "rejected")
+  for name in ("tick", "waiting", "click", "fire", "script", "ready", "alive", "rejected", "focus", "input", "submit")
     s.hooks[name] = made[name]
   end
   JS.unhandled!(s.js, s.hooks["rejected"])
@@ -387,9 +408,18 @@ natives(s::Scripts) = begin
     "window" => () -> collect(s.window()),
     "computed" => (id, name) -> (e = element(s, id); connected(s, e) ? s.computed(e, String(name)) : nothing),
     "media" => query -> (w = s.window(); media(query, w[1], w[2])),
+    "scroll" => () -> Float64(s.scroll()),
+    "scrollTo" => y -> (s.scroll(Float64(y)); nothing),
+    "go" => address -> (go!(s, resolve(home(s), address)); nothing),
+    "send" => (form, by) -> (send!(s, element(s, form), by == 0 ? nothing : element(s, by)); nothing),
+    "focused" => id -> (s.focused(id == 0 ? nothing : element(s, id)); nothing),
 
     "log" => (level, line) -> note!(s, Symbol(level), line),
-    "load" => address -> loaded(s, address),
+    # A file that's on its way is false, and one that can't be had, or that a script of this page may not read, is nothing
+    "load" => address -> begin
+      found = loaded(s, address)
+      found === :waiting ? false : found === nothing || s.allowed(resolve(home(s), address)) ? found : nothing
+    end,
     "resolve" => address -> isempty(address) ? home(s) : resolve(home(s), address),
     "join" => (base, address) -> resolve(base, address),
     "now" => () -> 1000 * (time() - s.started),
@@ -398,10 +428,24 @@ natives(s::Scripts) = begin
   )
 end
 
-"The text of the file at `address`, which is from the page's address, or nothing"
+"The text of the file at `address`, which is from the page's address, or nothing. It's `:waiting` for a file that's on its way."
 loaded(s::Scripts, address::AbstractString) = begin
   found = s.load(resolve(home(s), address))
-  found === nothing ? nothing : found isa AbstractString ? String(found) : String(copy(found))
+  found === nothing || found === :waiting ? found : found isa AbstractString ? String(found) : String(copy(found))
+end
+
+"Go to the page at `address`, as a link does. With nowhere to go, the page stays and the log says so."
+go!(s::Scripts, address::AbstractString) =
+  s.go === nothing ? note!(s, :warn, "The page asked to go to $address, which does nothing here") : (s.go(String(address)); nothing)
+
+"""
+Send the form `form`, as the button `by` does, or the Return key with nothing.
+A form that sends with "get" is an address, and the page goes there. Nothing
+can be sent any other way, so a form that sends with "post" goes nowhere.
+"""
+send!(s::Scripts, form::Element, by=nothing) = begin
+  method, address = sent(form, by; base=home(s))
+  method == "get" ? go!(s, address) : note!(s, :warn, "The page asked to send a form to $address, which this engine can't do")
 end
 
 # --- running the page's scripts -----------------------------------------------------------
@@ -422,6 +466,12 @@ run!(s::Scripts, e::Element) = begin
   type in SCRIPT || return   # data that the page keeps in a <script>, like JSON or a template
   src = strip(attr(e, "src"))
   code = isempty(src) ? text(e) : loaded(s, src)
+  if code === :waiting
+    # Its file is on its way. `step!` runs it when the file has come.
+    delete!(s.ran, e)
+    any(p -> p === e, s.pending) || push!(s.pending, e)
+    return
+  end
   id = number(s, e)
   if code === nothing
     note!(s, :error, "The script $src could not be loaded")
@@ -455,14 +505,22 @@ next frame. Gives how many seconds until the next timer is due, 0 when a
 script waits for the next frame, or nothing when nothing waits.
 """
 step!(s::Scripts) = begin
+  # The scripts whose file was on its way run once it has come, in the order that the page asked for them
+  if !isempty(s.pending)
+    waited = copy(s.pending)
+    empty!(s.pending)
+    foreach(e -> connected(s, e) && run!(s, e), waited)
+  end
   wait = guarded(() -> s.hooks["tick"](1000 * (time() - s.started)), s, -1.0)
   length(s.nodes) > 2 * s.kept + 2000 && sweep!(s)
+  isempty(s.pending) || (wait = wait < 0 ? PATIENCE : min(wait, PATIENCE))
   wait < 0 ? nothing : wait / 1000
 end
 
 "How many seconds until the next timer of the page is due, 0 when a script waits for the next frame, or nothing when nothing waits"
 waiting(s::Scripts) = begin
   wait = guarded(() -> s.hooks["waiting"](), s, -1.0)
+  isempty(s.pending) || (wait = wait < 0 ? PATIENCE : min(wait, PATIENCE))
   wait < 0 ? nothing : wait / 1000
 end
 
@@ -472,6 +530,22 @@ False when a script said that the click should do no more, as for a link that
 the script follows itself.
 """
 click!(s::Scripts, e::Union{Element,Nothing}, x=0.0, y=0.0) = guarded(() -> s.hooks["click"](number(s, e), x, y), s, true)::Bool
+
+"""
+Give the keyboard to the element `e`, or take it from the element that has
+it, with nothing. The page's scripts hear `focus` and `blur`.
+"""
+focus!(s::Scripts, e::Union{Element,Nothing}) = guarded(() -> s.hooks["focus"](number(s, e)), s)
+
+"Put the text `value` in the field `e`, as typing does. The page's scripts hear `input`."
+input!(s::Scripts, e::Element, value::AbstractString) = guarded(() -> s.hooks["input"](number(s, e), String(value)), s)
+
+"""
+Send the form `form`, as the button `by` does, or the Return key with nothing.
+The page's scripts hear `submit` first, and the form goes nowhere when one of
+them says to do no more.
+"""
+submit!(s::Scripts, form::Element, by::Union{Element,Nothing}=nothing) = guarded(() -> s.hooks["submit"](number(s, form), number(s, by)), s)
 
 "Tell the page's scripts of an event of the kind `type` on `e`, or on the window with nothing. `init` is what the event says, like `Dict(\"key\" => \"a\")`."
 fire!(s::Scripts, e::Union{Element,Nothing}, type::AbstractString, init=Dict{String,Any}("bubbles" => true, "cancelable" => true)) =
@@ -495,4 +569,4 @@ sweep!(s::Scripts) = begin
   nothing
 end
 
-export Scripts, ScriptError, start!, step!, waiting, click!, fire!, sweep!, evaluate
+export Scripts, ScriptError, start!, step!, waiting, click!, fire!, focus!, input!, submit!, sweep!, evaluate

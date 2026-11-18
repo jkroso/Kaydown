@@ -47,7 +47,10 @@
 # canvas.jl is the surface of a <canvas> and the drawing on it, and context.jl
 # gives it to a page's scripts. For a page with scripts: jsc.jl runs
 # JavaScript, script.jl and window.jl give a script the page, and live.jl lays
-# the page out again after a script changes it.
+# the page out again after a script changes it. view.jl shows a page in a
+# window that UI.jl draws. browser.jl is a web view: it gets a page from the
+# web with files.jl, scrolls it, and takes the mouse and the keyboard for it.
+# form.jl says what a form sends.
 
 @use Skia
 @use "github.com/jkroso/MiniFB.jl/skia" srgb
@@ -73,7 +76,9 @@ mutable struct Pictures
   load::Function
   films::Dict{String,Any}   # each video that the page names, or nothing
 end
-Pictures(load) = finalizer(release, Pictures(Dict{String,Any}(), load, Dict{String,Any}()))
+# A `load` can give `:waiting` for a file that's on its way: live.jl gives that to a script, which can wait. A picture, a
+# sheet or a font that isn't here yet is left out, as one that can't be had is.
+Pictures(load) = finalizer(release, Pictures(Dict{String,Any}(), src -> (got = load(src); got === :waiting ? nothing : got), Dict{String,Any}()))
 
 "Forget the pictures that weren't there, so that they're asked for again: one may have come from the web since"
 retry!(p::Pictures) = (filter!(kv -> kv.second !== nothing, p.found); filter!(kv -> kv.second !== nothing, p.films); p)

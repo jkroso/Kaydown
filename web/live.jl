@@ -5,6 +5,14 @@
 #     draw(canvas, p)           # as any page of main.jl
 #     step!(l)                  # run the timers that are due. Gives how many seconds until the next, or nothing.
 #     click!(l, x, y)           # a click at a point of the page. False when a script said to do no more with it.
+#     move!(l, x, y)            # the mouse is at a point of the page now
+#     press!(l, x, y), release!(l, x, y)   # the mouse button goes down there, and comes up
+#     scroll!(l, 400)           # the top of the window is 400 px down the page
+#     focus!(l, element)        # give an element the keyboard. `l.focused` is the element that has it.
+#     input!(l, element, "text")           # type into a field
+#     key!(l, "keydown", "Enter")          # a key goes down, or comes up with "keyup"
+#     submit!(l, form)          # send a form
+#     refresh!(l)               # a file that the page waited for has come: lay the page out again with it
 #     resize!(l, 500)           # the page is 500 px wide now
 #     l.scripts.log             # what the scripts printed, and the errors that they threw
 #     evaluate(l, "document.title")
@@ -12,7 +20,14 @@
 #
 # `live` takes what `page` takes, and `limit`: how many seconds a script may
 # run before it's stopped. `say(level, text)` is called with each line that a
-# script prints.
+# script prints. `go(address)` is called when the page asks to go to another
+# page: a script set `location.href`, or a form was sent. `allowed(address)`
+# says whether a script may read the file at an address: see script.jl.
+#
+# With `high`, the page is seen through a window that high, and it scrolls:
+# `l.scroll` is how far down the page the top of the window is, in px before
+# the zoom. A point that `click!` and the others take is a point of the page,
+# as `link(p, x, y)` takes it, wherever the page is scrolled to.
 #
 # The scripts run in script.jl. This file lays the page out for them: a script
 # that asks where an element is (`getBoundingClientRect`, `offsetWidth`) gets
@@ -33,7 +48,7 @@
 @use "./style" alpha Clock
 @use "./script" => JS
 @use "./script" Scripts ScriptError
-@use "./main" Page Pictures page moving
+@use "./main" Page Pictures page moving retry!
 
 "A page whose scripts run"
 mutable struct Live
@@ -44,6 +59,10 @@ mutable struct Live
   page::Union{Page,Nothing}  # the page as it was last laid out
   places::IdDict{Element,Vector{NTuple{4,Float64}}}   # where the box of each element is in that page, in px before the zoom
   boxes::IdDict{Element,Box}                          # and the first box of each element
+  scroll::Float64                                     # how far down the page the top of the window is, in px before the zoom
+  focused::Union{Element,Nothing}                     # the element that has the keyboard
+  over::Union{Element,Nothing}                        # the element that the mouse is over
+  rest::Float64                                       # until when a page that moves isn't laid out again only because time passed
 end
 
 # With scripts, what's for a reader with none isn't part of the page
@@ -55,11 +74,14 @@ takes. `limit` is how many seconds a script may run before it's stopped, and
 `say(level, text)` is called with each line that a script prints.
 """
 live(html::AbstractString; wide=700, zoom=1.0, load=src -> nothing, pictures=Pictures(load), css="", fit=false, widest=2000, high=nothing, base="",
-     limit=10, say=(level, text) -> nothing) = begin
+     limit=10, say=(level, text) -> nothing, go=nothing, allowed=address -> true) = begin
   doc = document(html)
   options = (; wide, zoom, load, css=css * WITH_SCRIPTS, fit, widest, high, base, clock=Clock())
-  l = Live(doc, Scripts(doc; load, base, say, limit), options, pictures, nothing, IdDict{Element,Vector{NTuple{4,Float64}}}(), IdDict{Element,Box}())
+  l = Live(doc, Scripts(doc; load, base, say, limit, go, allowed), options, pictures, nothing, IdDict{Element,Vector{NTuple{4,Float64}}}(), IdDict{Element,Box}(),
+           0.0, nothing, nothing, 0.0)
   s = l.scripts
+  s.scroll = (y...) -> isempty(y) ? l.scroll : scroll!(l, y[1])
+  s.focused = e -> (l.focused = e; nothing)
   s.place = e -> (page!(l); get(l.places, e, NTuple{4,Float64}[]))
   s.at = (x, y) -> at(l, x, y)
   s.computed = (e, name) -> computed(l, e, name)
@@ -74,7 +96,10 @@ Base.isopen(l::Live) = isopen(l.scripts)
 "The page of `l`, laid out as its tree is now"
 page!(l::Live) = begin
   s = l.scripts
-  (l.page === nothing || s.changed || moving(l.page)) || return l.page
+  # A page that moves is laid out again as time passes. A layout that takes long leaves three times as long for the
+  # rest: a script that asks where things are, again and again, would else get a new layout each time.
+  (l.page === nothing || s.changed || (moving(l.page) && time() >= l.rest)) || return l.page
+  began = time()
   s.changed = false
   # A script can add a <style> or a <base>, and can put another <body> in the page
   root = l.doc.root
@@ -93,12 +118,21 @@ page!(l::Live) = begin
     foreach(note, b.over)
   end
   note(p.root)
+  l.rest = time() + max(1 / 30, 3 * (time() - began))
   p
 end
 
-"The element at the point `(x, y)` of the page, in px before the zoom, or nothing. Of the boxes there, it's the one that the page has last."
-at(l::Live, x, y) = begin
-  places = page!(l).list.places
+"The page as it was last laid out, which is what the window shows. It's laid out now only if it never was."
+seen(l::Live) = l.page === nothing ? page!(l) : l.page
+
+"""
+The element at the point `(x, y)` of the page, in px before the zoom, or
+nothing. Of the boxes there, it's the one that the page has last. A script
+asks about the page as it is now. With `fresh=false`, it's the page as it
+was last laid out: the mouse points at what the window shows.
+"""
+at(l::Live, x, y; fresh=true) = begin
+  places = (fresh ? page!(l) : seen(l)).list.places
   i = findlast(q -> q.left <= x < q.left + q.wide && q.top <= y < q.top + q.tall, places)
   i === nothing ? nothing : places[i].element
 end
@@ -155,8 +189,78 @@ the click should do no more: then the caller doesn't open the link there.
 """
 click!(l::Live, x, y) = begin
   z = l.options.zoom
-  JS.click!(l.scripts, at(l, x / z, y / z), x / z, y / z)
+  JS.click!(l.scripts, at(l, x / z, y / z; fresh=false), x / z, y / z - l.scroll)
 end
+
+"What an event of the mouse says to a script: where the mouse is in the window"
+mouse(l::Live, x, y) = (z = l.options.zoom; Dict{String,Any}("bubbles" => true, "cancelable" => true, "clientX" => x / z, "clientY" => y / z - l.scroll))
+
+"""
+The mouse is at the point `(x, y)` of the page now. The page's scripts hear
+`mousemove` on the element there, and `mouseout` and `mouseover` when that's
+another element than before. With no point, the mouse has left the page.
+"""
+move!(l::Live, x, y) = begin
+  z = l.options.zoom
+  e = at(l, x / z, y / z; fresh=false)
+  if e !== l.over
+    l.over === nothing || JS.fire!(l.scripts, l.over, "mouseout", mouse(l, x, y))
+    l.over = e
+    e === nothing || JS.fire!(l.scripts, e, "mouseover", mouse(l, x, y))
+  end
+  e === nothing || JS.fire!(l.scripts, e, "mousemove", mouse(l, x, y))
+  l
+end
+move!(l::Live) = (l.over === nothing || (JS.fire!(l.scripts, l.over, "mouseout"); l.over = nothing); l)
+
+"The mouse button goes down at the point `(x, y)` of the page. False when a script said to do no more with it."
+press!(l::Live, x, y) = (z = l.options.zoom; JS.fire!(l.scripts, at(l, x / z, y / z; fresh=false), "mousedown", mouse(l, x, y)))
+"The mouse button comes up at the point `(x, y)` of the page"
+release!(l::Live, x, y) = (z = l.options.zoom; JS.fire!(l.scripts, at(l, x / z, y / z; fresh=false), "mouseup", mouse(l, x, y)))
+
+"How far down the page the top of the window can be: the page's height less the window's, in px before the zoom"
+reach(l::Live) = l.options.high === nothing ? 0.0 : max(0.0, (seen(l).tall - l.options.high) / l.options.zoom)
+
+"""
+Put the top of the window `y` px down the page, in px before the zoom, or as
+near that as the page goes. A page with no window doesn't scroll. The page's
+scripts hear `scroll` when it moved.
+"""
+scroll!(l::Live, y) = begin
+  to = clamp(Float64(y), 0.0, reach(l))
+  to == l.scroll && return to
+  l.scroll = to
+  fire!(l, "scroll")
+  to
+end
+
+"Give the keyboard to the element `e`, or take it from the element that has it, with nothing. `l.focused` is the element that has it."
+focus!(l::Live, e::Union{Element,Nothing}) = (JS.focus!(l.scripts, e); l.focused)
+
+"Put the text `value` in the field `e`, as typing does"
+input!(l::Live, e::Element, value::AbstractString) = JS.input!(l.scripts, e, value)
+
+"""
+A key of the keyboard goes down (`type` is "keydown") or comes up ("keyup").
+`key` is what it types, like "a" or "Enter". The element that has the
+keyboard hears it, or the page's <body>. False when a script said to do no
+more with it.
+"""
+key!(l::Live, type::AbstractString, key::AbstractString; shift=false, ctrl=false, alt=false, meta=false) =
+  JS.fire!(l.scripts, something(l.focused, l.doc.body), type,
+           Dict{String,Any}("bubbles" => true, "cancelable" => true, "key" => key, "code" => length(key) == 1 ? "" : key, "keyCode" => keycode(key),
+                            "shiftKey" => shift, "ctrlKey" => ctrl, "altKey" => alt, "metaKey" => meta))
+
+# The number that an old script knows a key by
+const KEYCODES = Dict("Backspace" => 8, "Tab" => 9, "Enter" => 13, "Escape" => 27, " " => 32, "PageUp" => 33, "PageDown" => 34, "End" => 35, "Home" => 36,
+                      "ArrowLeft" => 37, "ArrowUp" => 38, "ArrowRight" => 39, "ArrowDown" => 40, "Delete" => 46)
+keycode(key::AbstractString) = get(() -> length(key) == 1 && isascii(key) ? Int(uppercase(only(key))) : 0, KEYCODES, key)
+
+"Send the form `form`, as the button `by` does, or the Return key with nothing"
+submit!(l::Live, form::Element, by::Union{Element,Nothing}=nothing) = JS.submit!(l.scripts, form, by)
+
+"A file that the page waited for has come: a picture, a sheet or a font. The page is laid out again with it."
+refresh!(l::Live) = (retry!(l.pictures); l.page = nothing; l)
 
 "Tell the page's scripts of an event on the window, like \"resize\", or on the element `e`"
 fire!(l::Live, type::AbstractString, e::Union{Element,Nothing}=nothing) = JS.fire!(l.scripts, e, type)
@@ -167,10 +271,11 @@ Base.resize!(l::Live, wide; high=l.options.high, zoom=l.options.zoom) = begin
   l.options = merge(l.options, (; wide, high, zoom))
   l.page = nothing
   fire!(l, "resize")
+  l.scroll = min(l.scroll, reach(l))   # a page that's shorter now can't be scrolled as far
   l
 end
 
 "Run `code` in the page, and give the value of its last statement. What the script throws is thrown here, as a `ScriptError`."
 evaluate(l::Live, code::AbstractString; kw...) = JS.evaluate(l.scripts, code; kw...)
 
-export Live, ScriptError, live, page!, step!, waiting, click!, fire!, evaluate
+export Live, ScriptError, live, page!, step!, waiting, click!, move!, press!, release!, scroll!, focus!, input!, key!, submit!, refresh!, fire!, evaluate

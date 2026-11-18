@@ -21,6 +21,7 @@ A code block does more than show code. What it does depends on its language:
 - `contact` is the card of a person or a company. A click on its email address starts an email, and a vCard file from the Contacts app makes one.
 - `gallery` shows the pictures of a folder as a grid of small squares, and a click makes one fill the window.
 - `map` shows the map of a place, with a pin on the place.
+- `web` shows a page of the web. Click it to make it fill the window, where you scroll the page, follow its links and type in its fields.
 - `find` lists the to-do items that aren't ticked in every page of a folder. With words in it, it lists the lines that have those words. It can list another kind of line, or a kind of block, like every takeoff.
 - `timelog` keeps the hours that you work on each task, with a button that starts and stops the clock.
 - `ask` is a question from an agent, with answers to click.
@@ -248,6 +249,47 @@ What's at the address decides what the line shows:
 A web address by itself stays text, and a link with words, like `[Julia](https://julialang.org)`, stays a link. An email shows no cards: each such line in it shows a picture.
 
 Ladder gets each page once, in the background. It reads only the start of the page, and only what the page says of itself: its `og:title`, `og:description`, `og:image` and `og:site_name`, or its title and its description where those are missing. It keeps those texts and the picture in `~/Library/Caches/Ladder/cards`, so the card shows at once the next time, and with no network. Until the page comes, and when Ladder can't get it, the card shows the address. In a page of HTML, each card is a link in a box. `linkcard.jl` says how a page is read.
+
+## Show a page of the web
+
+A code block in the language `web` shows a page of the web. Its first line is the page's address:
+
+````
+```web
+https://julialang.org
+```
+````
+
+Ladder's own engine gets the page, lays it out and draws it, and runs the page's scripts. No browser takes part. The address can be the name of a file of HTML beside the document. A block that starts with a tag, like `<h1>`, holds the HTML of the page itself.
+
+In the document, the block shows the top of the page, up to 420 px of it. Click it, or the button that shows beside its top right corner while the mouse is over it, and it fills the window. There you use the page:
+
+- The wheel scrolls it. So do Space, Page Up, Page Down, the up and down arrows, Home and End.
+- A click follows a link, presses a button, ticks a tick box or opens a list of choices.
+- A click on a field for text gives it the keyboard. You type in it, and Return sends its form.
+- The page's scripts hear the mouse and the keys.
+
+The bar over the page has what a browser has:
+
+- The two arrows go back to the page before, and forward again. ⌘[ and ⌘] do the same.
+- The round arrow gets the page again. So does ⌘R.
+- The field shows the address of the page. Click it, or press ⌘L, type another address and press Return to go there.
+- The next button opens the page in your browser. In the document, a click on the block with ⌘ held does that.
+- The last button puts the block back in the document. So does Esc.
+
+The pages that you go to aren't written into the block: its line stays the page that it starts at. Hold ⌥ and click the block to see that line and change it. The Insert menu has a Web Page.
+
+The view keeps a page from the web away from what isn't its own, as a browser does. A page from the web gets no file of your Mac. A script of the page reads another site's file only when that site allows it. Ladder sends no cookie and no password with a request, so no site sees you as signed in. A `web` block in an email shows no page, since an email asks the web for nothing.
+
+What the view doesn't do yet:
+
+- It can't sign in to a site, and it sends no form that sends with "post".
+- A box that a page fixes in the window, like a bar at its top, scrolls with the page.
+- What a page's CSS says for the mouse over an element (`:hover`) is left out, and the words of a page can't be selected.
+- Scripts that are modules don't run, so a site that's built from them shows only what its HTML has.
+- All of a page is laid out again after each change. A long page with busy scripts, like a long Wikipedia article, answers slowly while its scripts run.
+
+`web/browser.jl` says more, and `web/files.jl` says how the files of a page are got.
 
 ## Put blocks of a page side by side
 
@@ -655,6 +697,8 @@ julia -O0 --project=. test/web_test.jl            # web/, which draws a page of 
 julia -O0 --project=. test/web_canvas_test.jl     # a <canvas> that a page's scripts draw on, and a page with scripts that moves
 julia -O0 --project=. test/web_view_test.jl       # a page of HTML in a window: its size, a click on a link, and a new width. A page with scripts in a window: a click that a script hears, and a timer
 julia -O0 --project=. test/web_script_test.jl     # the scripts of a page: JavaScript run with JavaScriptCore, what a script reads and changes of the page, the page's own scripts, timers, events, where things are, and nodes that no script holds any more
+julia -O0 --project=. test/web_browser_test.jl    # the web view: what a form sends, files from the web with a stand-in for curl, a page that scrolls and waits for its files, and a view in a window that you click, scroll and type in
+julia -O0 --project=. test/web_block_test.jl      # the `web` block: a page of the web in a document, the block that fills the window with its bar, another address, and the block as HTML
 ```
 
 The tests are in the `test` folder. Run them from Ladder's folder, as above. The first three need no Centient. `test/centient_fake.jl` answers in its place. The last two use no network and no email account. `test/mail_fake.jl` is a pretend email server that runs in the test.
@@ -694,6 +738,8 @@ To show an email as it was sent, Ladder lays its HTML out itself, with the code 
 A page can move. `page(html; at=2.5)` draws the page as it is 2.5 seconds after it was first shown: each animation of its CSS (`@keyframes`) is as far as it has got then, and a `<video>` that plays shows its picture of that moment. `View` lays a page out again up to 30 times a second for as long as something in it moves, and a click on a video that shows its buttons starts it or stops it. All of the page is laid out for each step, so a big page moves in fewer steps. macOS reads the video file, so a video is what QuickTime plays, and it makes no sound here. An email is drawn once, as it comes to rest.
 
 The code in `web/` can run a page's scripts too, with JavaScriptCore, the JavaScript engine that macOS has for Safari, so nothing is added to the app. `live(html)` in `web/live.jl` makes a page whose scripts run, and `View(html=..., scripts=true)` shows one in a window. A script gets `document`, the page's elements, events and timers, and the page is laid out again after a script changes it. A script can draw on a `<canvas>` in 2D (`getContext('2d')`): the drawing is done in Julia with Skia, in `web/canvas.jl`, and Chart.js draws its charts with it. An email never gets this: Ladder shows an email with no script, as mail apps do. The top of `web/script.jl` lists what a script can't do here.
+
+`web/browser.jl` is a web view: `Browser(address="https://julialang.org")` gets a page and the files that it names, shows it in a window that scrolls, and takes the mouse and the keyboard for it. The `web` block shows one. `web/files.jl` gets the files with `curl`, eight at a time, in the background. This is the only part of `web/` that asks the web for anything.
 
 `webpage.swift` makes pictures of a page of HTML with WebKit, the part of macOS that draws web pages. Ladder showed an email with those pictures before it had `web/`. They're a way to check `web/` against a browser: the program also says where WebKit puts each line of a page's words.
 

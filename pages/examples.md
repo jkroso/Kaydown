@@ -16,6 +16,7 @@ The block at the top of this page is front matter: lines at the very top of a fi
 - [Spelling, and finding text in the page](welcome.md#text)
 - [Footnotes](welcome.md#text)
 - [A link card: a web page as a card, with its title, its description and its picture](welcome.md#link-cards)
+- [A page of the web that you use in the window](welcome.md#pages-of-the-web)
 - [Maths: formulas written in TeX](welcome.md#maths)
 - [Lists and to-do items](welcome.md#lists)
 - [Tables, and the keys that Ladder uses](welcome.md#tables)

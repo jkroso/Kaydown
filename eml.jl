@@ -8,6 +8,7 @@
 #     isemail(path)            # true for a file whose name ends in .eml
 #     render(path)             # the email in the file at `path`, as the lines of a page
 #     webpage(path)            # the email's HTML, as its sender wrote it, or ""
+#     header_fields(path)      # every field of the email's header, as name => value
 #     attached(path, lines)    # the first of the lines of that page that link to the email's files
 #     fields(lines)            # what the front matter of a page says, by its keys
 #     isdraft(lines)           # true for a page that's an email to send
@@ -15,7 +16,7 @@
 # Ladder only reads email. Getting it from a server, and sending it, is the
 # work of code that the startup page loads.
 
-@use "./mime" message page addresses webpage
+@use "./mime" message page addresses webpage headers oneline unworded
 @use "./markdown" front_matter
 
 "True for the name of a file that holds an email as a server sends one"
@@ -82,6 +83,19 @@ browser to draw. It's "" for an email with no HTML, and for a file that
 can't be read. See `webpage` in mime.jl.
 """
 webpage(path::AbstractString) = try webpage(message(read(path))) catch; "" end
+
+"""
+Every field of the header of the email in the file at `path`, in the order
+that the email has them, like Received, DKIM-Signature and Subject: each
+field's name, and its value as text on one line. A field can come more than
+once. It's empty for a file that can't be read.
+"""
+header_fields(path) = try
+  raw = read(path)
+  [String(name) => oneline(unworded(value)) for (name, value) in first(headers(raw, 1, length(raw)))]
+catch
+  Pair{String,String}[]
+end
 
 """
 The first of the lines at the end of `lines` that link to the files that came

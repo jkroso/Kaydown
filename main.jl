@@ -174,6 +174,9 @@
 #     down a level, to its words as a page, and up again. It asks the web
 #     for nothing until you click Load pictures. Ladder gets no email and
 #     sends none: that's the work of code that the startup page loads.
+#     Click the top of the email, with its subject and sender, and a line
+#     goes round it. ⌘E or the ladder then shows every field of its header,
+#     and goes back up again. Esc gives the keyboard back to the page.
 #   - The Ladder app updates itself. It gets a newer version while you work,
 #     and the new version takes its place when you quit. A box in the settings
 #     turns that off. update.jl says how it works.
@@ -16155,6 +16158,21 @@ end
   size::px = 13px                                                       # of the text
 end
 
+"""
+The top of an email, in place of the card of its front matter. It's a part of
+the page with levels of its own. See "the top of an email".
+"""
+@def mutable struct EmailHead <: SemanticUI
+  rows::Vector{Tuple{Int,String,String}} = Tuple{Int,String,String}[]   # the keys of the front matter: the line, the key and what it's set to
+  size::px = 13px      # of the text
+  wide::px = 0px       # how wide the page's text is
+  path::String = ""    # the page's file. The top goes back to its highest level when another file shows.
+  full::Bool = false   # it shows every field of the email's header
+  fields::Vector{Pair{String,String}} = Pair{String,String}[]   # those fields, as the email's file has them
+  read_for::Tuple{String,Float64} = ("", 0.0)                   # the file that they were read from, and when it was last changed
+  folded::Any = nothing   # the fields cut into lines for the width they were cut for, and that width
+end
+
 "A key of front matter and what it's set to, in its card"
 @def mutable struct MatterRow <: SemanticUI
   line::Int = 0
@@ -16193,10 +16211,12 @@ matter_rows(lines, t) = begin
   rows
 end
 
-"The front matter that ends at line `t`, as a card"
+"The front matter that ends at line `t`, as a card, or as the top of an email"
 matter_card(e, t) = begin
-  card = node!(MatterCard, e, :matter)
-  card.rows = matter_rows(e.buf.lines, t)
+  rows = matter_rows(e.buf.lines, t)
+  # An email that came or went shows the top of an email in place of its keys. That top has levels of its own.
+  card = email_shows(e, Dict(lowercase(k) => v for (_, k, v) in rows)) ? email_head!(e) : node!(MatterCard, e, :matter)
+  card.rows = rows
   card.size = body(e).size * 0.76
   own!(node!(Document, e, :document), card)
   # Lay it out once to learn how tall it is
@@ -16207,10 +16227,7 @@ end
 describe(c::MatterCard) = begin
   s = c.size
   e = editor(c)
-  said = Dict(lowercase(k) => v for (_, k, v) in c.rows)
-  # An email that came or went shows who it's from and its subject, as an email does, in place of its keys
-  email_shows(e, said) && return email_head(c, said)
-  # ... and code from the startup page can give the card another name, as a draft of an email has
+  # Code from the startup page can give the card another name, as a draft of an email has
   title = something(first_answer(MATTER_TITLES, e), "FRONTMATTER")
   keyface = Face(SANS, "Semibold", s, colours.dim, false)
   keys = maximum(r -> measure(keyface, r[2]), c.rows, init=0px)
@@ -16229,12 +16246,11 @@ describe(r::MatterRow) = begin
 end
 
 """
-The top of an email, in place of the card of its front matter: the subject as
-a title, then who sent it with the date at the right, then who it's to. `said`
-is what the front matter sets each key to. A click shows the front matter as
-it's written, as a click on any front matter does.
+The top of an email at its highest level: the subject as a title, then who
+sent it with the date at the right, then who it's to. `said` is what the front
+matter sets each key to.
 """
-email_head(c::MatterCard, said) = begin
+email_head(c::EmailHead, said) = begin
   s = c.size
   # Each person's name, or the address of one with no name
   people(key) = join((isempty(name) ? address : name for (name, address) in Mime.addresses(get(said, key, ""))), ", ")
@@ -16248,10 +16264,14 @@ email_head(c::MatterCard, said) = begin
          border(1px, :solid, colours.line)[:bottom],
     Box(width(grow=grow), Alignment.Start, padding(0px, 0px, s * 0.5, 0px),
       Text(isempty(subject) ? "No subject" : subject, size=s * 1.6, family=SANS, subfamily="Semibold", color=colours.ink, wrap=WrapMode.words)),
-    Row(width(grow=grow), height(high), child_gap=s * 0.6,
-      Box(height(high), justify=Alignment.Center, label(name, s * 1.05, weight="Semibold")),
-      Box(width(grow=grow), height(high), Alignment.Start, justify=Alignment.Center, clip=true, label(address, s, color=colours.dim)),
-      Box(height(high), justify=Alignment.Center, label(get(said, "date", ""), s, color=colours.dim))),
+    # A line of text is as tall as its capitals, with the foot of its letters at its bottom. So the
+    # inner Row, which puts each part at its bottom, puts the name, the address and the date on one line.
+    # The address is cut at its sides only, so the tops of its tall letters show.
+    Row(width(grow=grow), height(high),
+      Row(width(grow=grow), Alignment.End, child_gap=s * 0.6,
+        Box(label(name, s * 1.05, weight="Semibold")),
+        Box(width(grow=grow), Alignment.Start, clip_x=true, label(address, s, color=colours.dim)),
+        Box(label(get(said, "date", ""), s, color=colours.dim)))),
     (haskey(said, "to") ? (line("To " * people("to")),) : ())...,
     (haskey(said, "cc") ? (line("Cc " * people("cc")),) : ())...)
 end
@@ -16270,6 +16290,163 @@ end
 
 onkey(r::MatterRow, ::KeyPress{Keys.mouse_left}) = edit_matter!(r, r.line)
 onkey(c::MatterCard, ::KeyPress{Keys.mouse_left}) = edit_matter!(c, isempty(c.rows) ? 1 : first(c.rows)[1])
+
+# --- the top of an email -----------------------------------------------------------
+#
+# An email that came or went shows the top of an email in place of the card of
+# its front matter: its subject, who sent it and when, and who it's to. That
+# top is a part of the page with two levels of its own. A level down, it shows
+# every field of the email's header, like Received, Message-ID and
+# DKIM-Signature, each with its value. A page that's an email but not an .eml
+# file shows the keys of its front matter there.
+#
+# A click on the top gives it the keyboard, and a line goes round it. On a page
+# that can change, the caret can also go onto it as a whole. The ladder in the
+# top bar is then the top's: ⌘E, the ladder and the slider go between its two
+# levels, and it keeps the keyboard. Esc, a click on the page, or a key that
+# scrolls the page gives the keyboard back to the page. The top stays at its
+# level until another file shows. On a page that can change, Return shows the
+# front matter as it's written.
+
+const HEAD_LEVELS = ("every field of the email's header", "the email's subject, sender and date")   # from the lower
+
+"The top of the email that the page shows. It goes back to its highest level when another file shows."
+email_head!(e) = begin
+  h = node!(EmailHead, e, :email_head)
+  h.path == e.buf.path || (h.path = e.buf.path; h.full = false)
+  h.wide = e.width
+  h
+end
+
+describe(h::EmailHead) = h.full ? whole_header(h) : email_head(h, Dict(lowercase(k) => v for (_, k, v) in h.rows))
+
+"""
+The fields of the email's header: those of its file, read again only when the
+file changes. A page that's an email but not an .eml file has the keys of its
+front matter, and so has a file whose header can't be read.
+"""
+header_fields!(h::EmailHead) = begin
+  keys = [k => v for (_, k, v) in h.rows if !isempty(k)]
+  Eml.isemail(h.path) || return keys
+  now = (h.path, mtime(h.path))
+  h.read_for == now || (h.fields = Eml.header_fields(h.path); h.read_for = now)
+  isempty(h.fields) ? keys : h.fields
+end
+
+"""
+`s` in lines no wider than `room` in `face`, joined with line breaks, for a
+Text that breaks only there. Lines break at spaces. A word that's too wide for
+a line of its own, like a DKIM signature, goes on from the line that it starts
+on, when a quarter of that line or more is free. It breaks after its last
+hyphen that fits, or between two characters when no hyphen fits. A line is as
+wide as its characters added up.
+"""
+fold(s::AbstractString, face::Face, room) = begin
+  wide(c::Char) = measure(face, string(c))
+  space = wide(' ')
+  # How many characters at the start of `word` fit in `free`: up to its last hyphen that fits, when one does
+  fitting(word, free) = begin
+    fits, hyphen, sofar = 0, 0, 0px
+    for c in word
+      sofar += wide(c)
+      sofar > free && break
+      fits += 1
+      c == '-' && (hyphen = fits)
+    end
+    hyphen > 0 ? hyphen : fits
+  end
+  lines = String[]
+  line, x, started = IOBuffer(), 0px, false
+  for word in split(s)
+    w = sum(wide, word, init=0px)
+    if started && x + space + w <= room
+      print(line, ' ', word)
+      x += space + w
+      continue
+    end
+    more = String(word)
+    if started && w > room && room - x - space >= room / 4
+      cut = fitting(more, room - x - space)
+      cut > 0 && print(line, ' ', first(more, cut))
+      more = String(chop(more, head=cut, tail=0))
+      w = sum(wide, more, init=0px)
+    end
+    started && push!(lines, String(take!(line)))
+    while w > room
+      cut = max(fitting(more, room), 1)
+      push!(lines, first(more, cut))
+      more = String(chop(more, head=cut, tail=0))
+      w = sum(wide, more, init=0px)
+    end
+    print(line, more)
+    x, started = w, true
+  end
+  started && push!(lines, String(take!(line)))
+  join(lines, '\n')
+end
+
+"""
+The top of an email a level down: every field of the email's header, each
+with its value, in a card like the card of front matter. The names of the
+fields take no more than a third of the card, and a name or a value that's
+too wide breaks onto more lines.
+"""
+whole_header(h::EmailHead) = begin
+  s = h.size
+  keyface = Face(SANS, "Semibold", s, colours.dim, false)
+  face = Face(SANS, "", s, colours.ink, false)
+  gap = s * 0.9
+  inner = h.wide - 2s - 2px   # inside the card's line and the room at its sides
+  folded = something(h.folded, ((), nothing))
+  fields = header_fields!(h)
+  if folded[2] != (h.wide, s, fields)
+    keys = min(maximum(f -> measure(keyface, f[1]), fields, init=0px), inner / 3)
+    room = max(inner - keys - gap, 40px) * 0.98   # a little room for the letters' widths that `fold` adds up
+    rows = [(fold(k, keyface, keys), fold(v, face, room)) for (k, v) in fields]
+    folded = h.folded = ((keys, rows), (h.wide, s, fields))
+  end
+  keys, rows = folded[1]
+  lines(words, sub, colour) = Text(words, size=s, family=SANS, subfamily=sub, color=colour, wrap=WrapMode.newlines)
+  Column(width(grow=grow), Alignment.Start, padding(s, s * 0.7), child_gap=s * 0.4, radius(6px),
+         border(1px, :solid, colours.line), background(colours.block), name="Email header",
+    # The heading has a little more room under it than the rows have between them
+    Box(padding(0px, 0px, s * 0.2, 0px), label("HEADER", s * 0.72, color=colours.dim, weight="Bold")),
+    (Row(width(grow=grow), Alignment.Start, padding(0px, s * 0.15), child_gap=gap,
+       Box(fixed(keys), Alignment.Start, lines(k, "Semibold", colours.dim)),
+       Box(width(grow=grow), Alignment.Start, lines(v, "", colours.ink)))
+     for (k, v) in rows)...)
+end
+
+levels(::EmailHead) = HEAD_LEVELS
+level(h::EmailHead) = h.full ? 1 : 2
+level!(h::EmailHead, i::Int) = (h.full = i == 1; h)
+
+"""
+The top of the email that the page shows, while the top bar asks it for its
+levels: while it has the keyboard, or while the caret is on it as a whole.
+Otherwise it's nothing.
+"""
+head_in_charge(e) = begin
+  w = window_of(e)
+  (w === nothing || isempty(e.layout)) && return nothing
+  it = e.layout[1]
+  (it.content isa Live && it.content.node isa EmailHead) || return nothing
+  h = it.content.node
+  (w.focus === h || ((w.focus === e || w.focus === input(e)) && picked(e.buf) == (it.first, it.last))) ? h : nothing
+end
+
+cursor(::EmailHead) = :arrow
+onkey(h::EmailHead, ::KeyPress{Keys.mouse_left}) = (focus(h); handled)
+# On a page that can change, Return shows the front matter as it's written, as it does for any front matter
+onkey(h::EmailHead, ::KeyPress{Keys.enter}) = caretless(editor(h).buf) ? nothing : edit_matter!(h, isempty(h.rows) ? 1 : first(h.rows)[1])
+# A key that isn't held with ⌘ or ⌃, like Space or ↓, gives the keyboard back to the page, and the page takes the key.
+# So the keys that scroll an email still scroll it. A shortcut like ⌘E goes on to the window with the top keeping the keyboard.
+onkey(h::EmailHead, ev::KeyPress{K}) where K = begin
+  w = ev.window
+  (K in (Keys.cmd, Keys.ctrl, Keys.opt, Keys.shft, Keys.fn, Keys.capslock, Keys.escape) || Keys.cmd in w.keys || Keys.ctrl in w.keys) && return nothing
+  focus(editor(h))
+  nothing
+end
 
 # The code of a live block can load methods that are newer than the frame that
 # ran it, so the node is described with the newest methods there are
@@ -19663,7 +19840,8 @@ end
 
 cursor(::Mode) = :hand
 # A block that the click makes fill the window again keeps the keyboard that it took
-onkey(m::Mode, ::KeyPress{Keys.mouse_left}) = (e = editor(m); level!(e); hush!(m); full_block(e) === nothing && focus(e); handled)
+# The top of an email keeps the keyboard, so the ladder stays the top's
+onkey(m::Mode, ::KeyPress{Keys.mouse_left}) = (e = editor(m); level!(e); hush!(m); full_block(e) === nothing && !(level_part(e) isa EmailHead) && focus(e); handled)
 # The tip says what a click does, as the count's tip does
 tip(m::Mode) = (e = editor(m); stop_tip(e, other_level(e)))
 
@@ -19713,13 +19891,15 @@ const TRACK_W = 14px     # the line between the two ends, when there's no level 
 const OPENS_IN = 0.14    # seconds for the slider to open out from the picture
 
 """
-The part of the window that the top bar asks for its levels: the block of
-Julia code that the caret is in, or the document when the caret is in no such
-block. While a block fills the window, the caret is out of sight, and the
-document answers for that block.
+The part of the window that the top bar asks for its levels: the top of an
+email while it has the keyboard or the caret is on it, the block of Julia code
+that the caret is in, or the document when the caret is in no such block.
+While a block fills the window, the caret is out of sight, and the document
+answers for that block.
 """
 level_part(e) = begin
   b = e.buf
+  full_block(e) === nothing && (h = head_in_charge(e)) !== nothing && return h
   c = full_block(e) !== nothing ? nothing : julia_file(b) || !caretless(b) ? julia_part(e, b.caret[1]) : nothing
   c === nothing ? node!(Document, e, :document) : c
 end
@@ -19865,13 +20045,13 @@ end
 
 cursor(::Stop) = :hand
 
-"Go to the level that a click on `s` goes to, and give the page the keyboard. A block that fills the window again keeps the keyboard that it took."
+"Go to the level that a click on `s` goes to, and give the page the keyboard. A block that fills the window again keeps the keyboard that it took, and so does the top of an email."
 go!(s::Stop) = begin
   e = editor(s)
   level!(e, click_level(e, s.level))
   s.quiet = true
   hide_tooltip!(window_of(s))
-  full_block(e) === nothing && focus(e)
+  full_block(e) === nothing && !(level_part(e) isa EmailHead) && focus(e)
   handled
 end
 
@@ -20387,11 +20567,13 @@ const RING_OUT = 10.0   # px from the page's text to the line round a part that 
 "Draw a line round the part of the page that the caret is on as a whole. The page's text is at `ui`."
 ring_part(ctx, e, ui) = begin
   b = e.buf
-  run = picked(b)
+  w = window_of(e)
+  # The top of an email that has the keyboard has the line round it too
+  held = w !== nothing && w.focus isa EmailHead && head_in_charge(e) === w.focus
+  run = held ? (1, 1) : picked(b)
   (run === nothing || isempty(e.layout)) && return
   # While the part has the keyboard, the field in it that takes the keys shows that itself
-  w = window_of(e)
-  (w === nothing || w.focus === e) || return
+  (w === nothing || w.focus === e || held) || return
   it = item(e, run[1])
   it.first <= run[1] <= it.last || return
   across, wide = item_room(e, it)   # a part in a column of the page is as wide as the column

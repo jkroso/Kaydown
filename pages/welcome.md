@@ -297,15 +297,13 @@ To change a formula in a line of text, put the caret in the line and press ⌘E:
 
 ## Link cards
 
-A code block in the language `card` shows a web page as a card, with the page's title, its description and its picture. Write the page's address in the block:
+Write the address of a web page as you would a picture's, on a line of its own, and the line shows the page as a card, with the page's title, its description and its picture:
 
-```card
-https://julialang.org
-```
+![Julia](https://julialang.org)
 
-Hold ⌘ and click the card to open the page in your browser. To change the address, hold ⌥ and click the card: the block shows its lines. A second address on the next line shows a second card under the first. Kaydown gets each page once and keeps what the card shows, so the card is there the next time with no network.
+Hold ⌘ and click the card to open the page in your browser. To change the address, click the card: the line shows as it's written. Kaydown gets each page once and keeps what the card shows, so the card is there the next time with no network.
 
-Only a `card` block shows a card. A web address in a picture's form, like `![Julia](https://julialang.org/logo.png)`, is a picture. A web address by itself, like https://julialang.org, is text.
+An address that ends as a picture's does, like `![Julia](https://julialang.org/logo.png)`, shows the picture. So does an address that turns out to be a picture when Kaydown gets it. A web address by itself, like https://julialang.org, is text.
 
 ## Takeoffs
 

@@ -24,7 +24,6 @@ A code block does more than show code. What it does depends on its language:
 - `find` lists the to-do items that aren't ticked in every page of a folder. With words in it, it lists the lines that have those words. It can list another kind of line, or a kind of block, like every takeoff.
 - `email` lists the emails with a person.
 - `timelog` keeps the hours that you work on each task, with a button that starts and stops the clock.
-- `card` shows a web page as a card: its title, its description and its picture.
 - `ask` is a question from an agent, with answers to click.
 - `changes` shows a diff from an agent, with a button on each change that accepts or rejects it.
 
@@ -36,6 +35,7 @@ A page shows more than text:
 - A formula that's written in TeX between dollar signs shows as maths: `$x^2$` in a line of text, and on lines of its own between a line of `$$` and another.
 - A line that holds only a CSV file shows the file as a table. [Show a CSV file as a table](#show-a-csv-file-as-a-table) says more.
 - A line that holds only a picture, a video or a sound file shows it, or a player for it. The page's Insert menu records a sound from the microphone, and a button under the player writes down what's said in it, on the Mac.
+- A line that holds only the address of a web page, written as a picture is, like `![Julia](https://julialang.org)`, shows the page as a card. [Show a web page as a card](#show-a-web-page-as-a-card) says more.
 - A button beside a diagram, a picture or a page of a PDF file makes it fill the window, where you zoom it with a pinch.
 - A diagram that fills the window can be changed there. Click a box or a line to select it, click it twice to type its words, drag the point on a box's edge onto another box to draw a line, and use the buttons under it to add a box, draw a line, change a shape or take a part away. Each change is written in the code of the block.
 - A Julia file opens as one block of code, which you change and run as you do a `julia` block. There, the box of a value that's a part of a window lists the value's fields and its children.
@@ -234,19 +234,23 @@ Times are written with 24 hours, like `07:30`. Kaydown also reads `7:30am` and `
 
 ## Show a web page as a card
 
-A code block in the language `card` shows a card for each web address in it: the page's title, two lines of its description, its picture, and the name of its site beside the site's icon.
+Write the address of a web page as you would a picture's, on a line of its own:
 
-````
-```card
-https://julialang.org
 ```
-````
+![Julia](https://julialang.org)
+```
 
-Each line of the block that starts with `https://` or `http://` is one card, so two addresses show two cards, one under the other. A line that's anything else shows as faint text. Hold ⌘ and click a card to open its page in your browser. To change an address, hold ⌥ and click the block, or move the caret onto it and press ⌘E: the block shows its lines.
+The line shows a card: the page's title, two lines of its description, its picture, and the name of its site beside the site's icon. Hold ⌘ and click the card to open the page in your browser. Click it with no key held to see the line as it's written, and change the address there. The page's Insert menu has a Link Card, which writes `![](https://)` and puts the caret after the `https://`.
 
-Only a `card` block shows a card. A web address by itself stays text, a link with words, like `[Julia](https://julialang.org)`, stays a link, and a web address in a picture's form, like `![Julia](https://julialang.org/logo.png)`, is a picture.
+What's at the address decides what the line shows:
 
-Kaydown gets each page once, in the background. It reads only the start of the page, and only what the page says of itself: its `og:title`, `og:description`, `og:image` and `og:site_name`, or its title and its description where those are missing. It keeps those texts and the picture in `~/Library/Caches/Kaydown/cards`, so the card shows at once the next time, and with no network. Until the page comes, and when Kaydown can't get it, the card shows the address. `linkcard.jl` says how the block is written and how a page is read.
+- An address that ends as a picture's, a video's, a sound's or a CSV file's does, like `https://julialang.org/logo.png`, shows the picture, the player or the table, as it always did.
+- Any other address shows a card when it's a web page. When it turns out to be a picture, like a picture whose address doesn't end in `.png`, the line shows the picture.
+- The words between the `[` and the `]` are the card's title while the card has none: until the page comes, or when the page has no title.
+
+A web address by itself stays text, and a link with words, like `[Julia](https://julialang.org)`, stays a link. An email shows no cards: each such line in it shows a picture.
+
+Kaydown gets each page once, in the background. It reads only the start of the page, and only what the page says of itself: its `og:title`, `og:description`, `og:image` and `og:site_name`, or its title and its description where those are missing. It keeps those texts and the picture in `~/Library/Caches/Kaydown/cards`, so the card shows at once the next time, and with no network. Until the page comes, and when Kaydown can't get it, the card shows the address. In a page of HTML, each card is a link in a box. `linkcard.jl` says how a page is read.
 
 ## Put blocks of a page side by side
 
@@ -426,7 +430,7 @@ The kinds are:
 
 - The kinds of line: to-do items, done items, headings, lines, paragraphs, bullet points, numbered items, quotes and table rows.
 - Links and pictures, which list the lines that have one.
-- The kinds of block: code blocks, sheets, spreadsheets, live blocks, diagrams, takeoffs, schedules, charts, boards, calendars, columns, sketches, signatures, contacts, maps, find lists, email lists, time logs, link cards, questions and changes.
+- The kinds of block: code blocks, sheets, spreadsheets, live blocks, diagrams, takeoffs, schedules, charts, boards, calendars, columns, sketches, signatures, contacts, maps, find lists, email lists, time logs, questions and changes.
 
 A block shows in the list as the heading that it's under, with the icon of its kind. A block of code, and a block with no heading over it, shows as its own first line. The words in the first field are looked for in that heading and in the lines of the block. A kind of block that a file of your own defines is listed with the code blocks.
 
@@ -617,8 +621,8 @@ julia -O0 --project=. test/gallery_test.jl        # how a gallery is read and wr
 julia -O0 --project=. test/gallery_view_test.jl   # the squares of a gallery, a picture that fills the window, and a picture that's dropped on it
 julia -O0 --project=. test/calendar_test.jl       # how a calendar is read and written, the day in a to-do item's text, and the things of each day
 julia -O0 --project=. test/calendar_view_test.jl  # the month of a calendar: its arrows, a tick, a drag to another day and a new event
-julia -O0 --project=. test/linkcard_test.jl       # how a `card` block is read, how the HTML of a web page is read into a card, and what the card keeps on the Mac
-julia -O0 --project=. test/linkcard_view_test.jl  # the cards of a `card` block: while a page is on its way, the caret in the block, and a click that opens a card
+julia -O0 --project=. test/linkcard_test.jl       # how the HTML of a web page is read into a card, how a page is told from a picture, and what the card keeps on the Mac
+julia -O0 --project=. test/linkcard_view_test.jl  # a line that shows a card: while a page is on its way, a picture that has no .png, the caret on the line, and a click that opens a card
 julia -O0 --project=. test/columns_test.jl        # what a `columns` block says, which blocks it puts in columns, and the room of each
 julia -O0 --project=. test/columns_view_test.jl   # blocks side by side: typing, clicks, the arrows and a selection in a column, a narrow window, HTML and paper
 julia -O0 --project=. test/find_test.jl           # how a list of what's found is read and written, and which lines match

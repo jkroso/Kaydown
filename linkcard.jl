@@ -1,28 +1,26 @@
 # A link card shows what a web page says of itself: its title, a line or two
-# of its description, its picture and the name of its site. In a document the
-# cards are a code block in the language `card`, with a web address on each
-# line:
+# of its description, its picture and the name of its site. In a document a
+# card is written as a picture is, on a line of its own, with the address of
+# a page in place of the picture's:
 #
-#     ```card
-#     https://www.bunnings.com.au/some-product
-#     https://julialang.org
-#     ```
+#     ![Julia](https://julialang.org)
 #
-# Each line that's a web address is one card. A line that's anything else
-# shows as it's written, and an empty line shows nothing.
+# What's at the address decides what the line shows. A web page shows as a
+# card, and a picture as a picture.
 #
-# This file reads those lines, and reads the HTML of a page into a card: its
-# `og:title`, `og:description`, `og:image` and `og:site_name`, then its
-# <title> and its <meta name="description"> where those are missing. It gets
-# the page with `curl`, and keeps what it read in a folder, so that a card
-# shows at once the next time, and with no network. It reads only the start
-# of a page. It runs nothing from the page, and it keeps only those texts and
-# two addresses: the picture's and the icon's. It draws nothing.
+# This file reads the HTML of a page into a card: its `og:title`,
+# `og:description`, `og:image` and `og:site_name`, then its <title> and its
+# <meta name="description"> where those are missing. It gets the page with
+# `curl`, and keeps what it read in a folder, so that a card shows at once the
+# next time, and with no network. It reads only the start of a page. It runs
+# nothing from the page, and it keeps only those texts and two addresses: the
+# picture's and the icon's. It draws nothing.
 
-"The language of a code block that shows link cards"
-const CARD = "card"
-
-"What a web page says of itself. A text that the page doesn't give is empty."
+"""
+What a web page says of itself. A text that the page doesn't give is empty.
+`page` is false when what's at the address turned out to be something other
+than a web page, like a picture. Until Kaydown knows, it's true.
+"""
 struct Card
   url::String           # the address of the page
   title::String
@@ -30,21 +28,13 @@ struct Card
   image::String         # the address of its picture
   site::String          # the name of its site
   icon::String          # the address of the site's icon
+  page::Bool
 end
 
-Card(url::AbstractString; title="", description="", image="", site="", icon="") = Card(url, title, description, image, site, icon)
-
-"A line of a `card` block that has something in it: its text, and whether that's a web address, which shows as a card"
-struct Entry
-  text::String
-  address::Bool
-end
+Card(url::AbstractString; title="", description="", image="", site="", icon="", page=true) = Card(url, title, description, image, site, icon, page)
 
 "True when `text` is a web address and nothing else: it starts with http:// or https://, and it names a computer"
 isaddress(text::AbstractString) = occursin(r"^https?://\S+$"i, text) && !isempty(host(text))
-
-"What the lines of a `card` block hold: each line that isn't empty, in order"
-entries(lines) = Entry[Entry(String(strip(line)), isaddress(strip(line))) for line in lines if !isempty(strip(line))]
 
 "The name of the computer that the web address `url` is on, without a www. at its start: bunnings.com.au"
 host(url::AbstractString) = begin
@@ -177,8 +167,33 @@ end
 
 nonempty(s) = isempty(s) ? nothing : s
 
-"The card of the page at `url`, read from the bytes of the page. It has only the address when the bytes can't be read as text."
-card(bytes::Vector{UInt8}, url::AbstractString) = (html = text(bytes); html === nothing ? Card(url) : card(html, url))
+# How the files that are surely no web page start: PNG, JPEG, GIF, TIFF, ICO, PDF and RIFF, which is WebP and WAV
+const NOT_PAGES = (b"\x89PNG", b"\xff\xd8\xff", b"GIF8", b"II*\0", b"MM\0*", b"\0\0\x01\0", b"%PDF", b"RIFF")
+
+"""
+True when `bytes`, the start of what's at a web address, are a web page. A
+page has one of the tags that only a page has, like <html> or <title>, near
+its top. An SVG picture can have a <title> too, so it's a page only when such
+a tag comes before any <svg>.
+"""
+ispage(bytes::AbstractVector{UInt8}) = begin
+  any(s -> length(bytes) >= length(s) && view(bytes, 1:length(s)) == s, NOT_PAGES) && return false
+  top = String([b < 0x80 ? b : UInt8('?') for b in view(bytes, 1:min(length(bytes), 65536))])
+  tag = findfirst(r"<(?:!doctype\s+html|html|head|body|meta|title)\b"i, top)
+  svg = findfirst(r"<svg\b"i, top)
+  tag !== nothing && (svg === nothing || first(svg) > first(tag))
+end
+
+"""
+The card of the page at `url`, read from the bytes of the page. Bytes that
+aren't a page give a card that says so. A page whose bytes can't be read as
+text gives a card with only the address.
+"""
+card(bytes::Vector{UInt8}, url::AbstractString) = begin
+  ispage(bytes) || return Card(url, page=false)
+  html = text(bytes)
+  html === nothing ? Card(url) : card(html, url)
+end
 
 "The line under a card's words: the name of the site, when the page gives one, and the name of the computer that it's on"
 source(c::Card) = begin
@@ -186,20 +201,24 @@ source(c::Card) = begin
   isempty(c.site) || lowercase(c.site) == name ? name : c.site * " · " * name
 end
 
-"The words at the top of a card: the page's title, or its address while Kaydown has no title"
-heading(c::Card) = isempty(c.title) ? c.url : c.title
+"""
+The words at the top of a card: the page's title. While Kaydown has no title,
+they're `words`, the words that the line of the document has for the card,
+or the address when the line has none.
+"""
+heading(c::Card, words::AbstractString="") = !isempty(c.title) ? c.title : !isempty(words) ? String(words) : c.url
 
-"The words under a card's title: the page's description. For a page that has a title and gives no description, they are its address."
-blurb(c::Card) = !isempty(c.description) ? c.description : isempty(c.title) ? "" : c.url
+"The words under a card's title: the page's description, or its address when that isn't the title"
+blurb(c::Card, words::AbstractString="") = !isempty(c.description) ? c.description : heading(c, words) == c.url ? "" : c.url
 
 # --- the card in a page of HTML -----------------------------------------------------------
 
 escape(s::AbstractString) = replace(s, '&' => "&amp;", '<' => "&lt;", '>' => "&gt;", '"' => "&quot;")
 
-"The card as HTML: a link in a box, with the title, the description, the name of the site and the picture"
-markup(c::Card) =
-  "<a class=\"card\" href=\"" * escape(c.url) * "\"><span class=\"card-words\"><strong>" * escape(heading(c)) * "</strong>" *
-  (isempty(blurb(c)) ? "" : "<span class=\"card-description\">" * escape(blurb(c)) * "</span>") *
+"The card as HTML: a link in a box, with the title, the description, the name of the site and the picture. `words` are the line's words for the card."
+markup(c::Card, words::AbstractString="") =
+  "<a class=\"card\" href=\"" * escape(c.url) * "\"><span class=\"card-words\"><strong>" * escape(heading(c, words)) * "</strong>" *
+  (isempty(blurb(c, words)) ? "" : "<span class=\"card-description\">" * escape(blurb(c, words)) * "</span>") *
   "<span class=\"card-site\">" * escape(source(c)) * "</span></span>" *
   (isempty(c.image) ? "" : "<img class=\"card-picture\" src=\"" * escape(c.image) * "\" alt=\"\">") * "</a>"
 
@@ -223,8 +242,8 @@ name(url::AbstractString) = string(hash(String(url)), base=16)
 
 const FIELDS = (:title, :description, :image, :site, :icon)
 
-"The lines of the file that keeps a card"
-written(c::Card) = String[string(f, ": ", getfield(c, f)) for f in FIELDS if !isempty(getfield(c, f))]
+"The lines of the file that keeps a card. One for an address that isn't a page says so."
+written(c::Card) = String[(string(f, ": ", getfield(c, f)) for f in FIELDS if !isempty(getfield(c, f)))..., (c.page ? () : ("page: no",))...]
 
 "The card of the page at `url`, from the lines of the file that keeps it"
 card(lines::AbstractVector{<:AbstractString}, url::AbstractString) = begin
@@ -233,7 +252,7 @@ card(lines::AbstractVector{<:AbstractString}, url::AbstractString) = begin
     m = match(r"^(\w+): (.*)$", line)
     m === nothing || (said[Symbol(m[1])] = String(m[2]))
   end
-  Card(String(url), (get(said, f, "") for f in FIELDS)...)
+  Card(String(url), (get(said, f, "") for f in FIELDS)..., get(said, :page, "") != "no")
 end
 
 # --- getting a page from the web ----------------------------------------------------------

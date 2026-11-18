@@ -6,12 +6,7 @@
 
 const SITE = "https://www.bunnings.com.au/paint/white-4l?colour=white#top"
 
-@testset "the lines of a block" begin
-  @test C.CARD == "card"
-  found = C.entries(["https://www.bunnings.com.au/some-product", "", "  http://example.com/a?b=1&c=2  ", "Paint for the hall", "   "])
-  @test [f.text for f in found] == ["https://www.bunnings.com.au/some-product", "http://example.com/a?b=1&c=2", "Paint for the hall"]
-  @test [f.address for f in found] == [true, true, false]
-  @test isempty(C.entries(String[])) && isempty(C.entries(["", "  "]))
+@testset "a web address" begin
   # A web address and nothing else
   @test C.isaddress("HTTPS://Example.com/") && C.isaddress("https://example.com/plan.png") && C.isaddress("https://youtu.be/abc")
   @test !C.isaddress("https://") && !C.isaddress("ftp://example.com") && !C.isaddress("example.com") && !C.isaddress("")
@@ -114,9 +109,19 @@ end
 end
 
 @testset "bytes that are a picture" begin
-  # A card's address can be a picture's. Its card has only the address, and nothing throws.
+  # A card's address can be a picture's. Its card says that it's no page, and has only the address.
   png = UInt8[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, rand(UInt8, 300)...]
-  @test C.card(png, SITE).title == "" && C.heading(C.card(png, SITE)) == SITE
+  @test C.card(png, SITE) == C.Card(SITE, page=false) && C.card(PAGE, SITE).page && C.Card(SITE).page
+  @test !C.ispage(png) && !C.ispage(UInt8[0xff, 0xd8, 0xff, 0xe0]) && !C.ispage(Vector{UInt8}("GIF89a")) && !C.ispage(UInt8[])
+  # A picture whose bytes say <title> near their start is still no page
+  @test !C.ispage(Vector{UInt8}("%PDF-1.7 <title>A</title>")) && !C.ispage(Vector{UInt8}("RIFF\0\0\0\0WEBPVP8 <html>"))
+  @test !C.ispage(Vector{UInt8}("<?xml version=\"1.0\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\"><title>A badge</title></svg>"))
+  # A page is one with a tag that only a page has, and an <svg> in a page doesn't change that
+  @test C.ispage(Vector{UInt8}(PAGE)) && C.ispage(Vector{UInt8}("\n  <!doctype html><svg></svg>")) && C.ispage(Vector{UInt8}("<TITLE>A</TITLE>"))
+  @test C.ispage(Vector{UInt8}("<html><body><svg><title>An icon</title></svg>")) && C.ispage(UInt8[0xef, 0xbb, 0xbf, Vector{UInt8}("<html>")...])
+  # Text that has none of those tags is no page
+  @test !C.ispage(Vector{UInt8}("{\"json\": true}")) && !C.ispage(Vector{UInt8}("Just some words, and <b>bold</b> ones"))
+  @test !C.ispage(Vector{UInt8}("<metadata>")) && !C.ispage(Vector{UInt8}("<titles>"))
 end
 
 @testset "what a card keeps" begin
@@ -126,6 +131,9 @@ end
   @test C.card(lines, SITE) == c
   @test C.card(String[], SITE) == C.Card(SITE) && isempty(C.written(C.Card(SITE)))
   @test C.card(["title: A: B", "more: unknown", "not a line"], SITE).title == "A: B"
+  # What it keeps of an address that isn't a page says so
+  @test C.written(C.Card(SITE, page=false)) == ["page: no"] && C.card(["page: no"], SITE) == C.Card(SITE, page=false)
+  @test C.card(["title: A", "page: yes"], SITE).page
   @test C.name(SITE) == C.name(SITE) && C.name(SITE) != C.name(SITE * "x")
 end
 
@@ -141,6 +149,11 @@ end
   # A page with a title and no description has its address under the title
   titled = C.markup(C.Card("https://example.com/a", title="A <page>"))
   @test occursin("<strong>A &lt;page&gt;</strong><span class=\"card-description\">https://example.com/a</span>", titled)
+  # The line's words for the card are its title while it has none, and the address goes under them
+  named = C.markup(C.Card("https://example.com/a"), "A <name>")
+  @test occursin("<strong>A &lt;name&gt;</strong><span class=\"card-description\">https://example.com/a</span>", named)
+  @test C.heading(C.Card("https://example.com/a", title="Title"), "Words") == "Title" && C.heading(C.Card("https://example.com/a"), "") == "https://example.com/a"
+  @test C.blurb(C.Card("https://example.com/a", description="What it is"), "Words") == "What it is"
   # Words of the page are never tags of the card
   @test !occursin("<script", C.markup(C.card("<title>&lt;script&gt;alert(1)&lt;/script&gt;</title>", SITE)))
 end
@@ -171,6 +184,13 @@ end
   # The next run of the app reads the card from the folder, with no network
   empty!(C.cards); empty!(C.jobs); empty!(C.tries); empty!(web); empty!(asked)
   @test C.lookup!(SITE, dir) == (card, false) && isempty(asked)
+  # A picture whose address doesn't say that it's one: its card says that it isn't a page, and the folder keeps that
+  photo = "https://images.example.com/photo-1?w=800"
+  web[photo] = UInt8[0xff, 0xd8, 0xff, 0xe0, rand(UInt8, 100)...]
+  @test C.lookup!(photo, dir) == (C.Card(photo), true)
+  @test C.lookup!(photo, dir) == (C.Card(photo, page=false), false)
+  empty!(C.cards); empty!(C.jobs); empty!(C.tries); empty!(web); empty!(asked)
+  @test C.lookup!(photo, dir) == (C.Card(photo, page=false), false) && isempty(asked)
 end
 
 @testset "a page that can't be had" begin

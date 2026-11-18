@@ -93,9 +93,10 @@
 #     the Finder the same way, and a picture that you copied, like a screenshot.
 #   - Write ![Prices](prices.csv) on a line of its own to show a CSV file as a
 #     table. A `chart` block under the line draws the file's numbers.
-#   - Write a code block in the language `card` with the address of a web
-#     page in it, like https://julialang.org, to show a card with the page's
-#     title, its description and its picture. ⌘-click the card to open the page.
+#   - Write the address of a web page as a picture's, like
+#     ![Julia](https://julialang.org), on a line of its own to show a card with
+#     the page's title, its description and its picture. ⌘-click the card to
+#     open the page.
 #   - Write [^1] in a line and [^1]: on another line to make a footnote.
 #   - Right-click a word with red dots under it to put its spelling right.
 #   - The button at the top left, or ⌘\, shows the other files in the folder.
@@ -14321,22 +14322,28 @@ end
 BLOCKS[SIGNATURE] = BlockKind("Signature", "pen", SignatureView, signature_html)
 # --- a link card -------------------------------------------------------------------------------
 #
-# A code block in the language `card` shows a card for each web address in
-# its lines: the page's title, two lines of its description, its picture, and
-# the name of its site beside the site's icon. A click on a card with ⌘ held
-# opens its address in the browser. In a page that's never changed, a click
-# opens it with no key held. A line of the block that isn't a web address
-# shows as faint text.
+# A line that holds only the address of a web page, written as a picture's
+# is, like ![Julia](https://julialang.org), shows a card: the page's title,
+# two lines of its description, its picture, and the name of its site beside
+# the site's icon. The line's own text shows again while the caret is on it,
+# as a picture's does. A click on the card with ⌘ held opens its address in
+# the browser. In a page that's never changed, a click opens it with no key
+# held. Any other click puts the caret on the line.
 #
-# Kaydown gets each page in the background, and reads what the page says of
-# itself. See linkcard.jl. It keeps that, and the picture, in a folder of the
-# Mac's caches, so the card shows at once the next time, and with no network.
-# Until the page has come, and when it can't be had, the card shows the
-# address. Kaydown asks the web for nothing in an email, and in a window that
-# isn't on the screen.
+# What's at the address decides what the line shows. An address whose name
+# ends as a picture's, a video's, a sound's or a table's does, like .png, shows
+# that, and Kaydown asks for no card. For any other address, Kaydown gets the
+# start of what's there, in the background. A web page shows as a card.
+# Anything else, like a picture whose address doesn't end in .png, shows as a
+# picture. Until Kaydown knows, the line shows a card with the address.
+#
+# Kaydown reads what the page says of itself. See linkcard.jl. It keeps that,
+# and the picture, in a folder of the Mac's caches, so the card shows at once
+# the next time, and with no network. When the page can't be had, the card
+# shows the address. Kaydown asks the web for nothing in a window that isn't
+# on the screen. An email shows no cards: each such line in it is a picture.
 
-const CARD = Cards.CARD
-push!(BLOCK_ICONS, "link-45deg", "globe")
+push!(BLOCK_ICONS, "globe")
 
 "What opens the address of a card: the browser. A test puts its own function here."
 const BROWSER = Ref{Function}(open_url)
@@ -14344,25 +14351,14 @@ const BROWSER = Ref{Function}(open_url)
 "The folder that keeps what the cards read from the web, and their pictures"
 cards_dir() = isempty(MEDIA_CACHE[]) ? joinpath(homedir(), "Library", "Caches", "Kaydown", "cards") : joinpath(MEDIA_CACHE[], "cards")
 
-"What a `card` block shows: a card for each web address in its lines"
-@def mutable struct CardsView <: SemanticUI
-  n::Int = 0                               # its place among the page's `card` blocks
-  first::Int = 0                           # the lines of its block, when the page was last laid out
-  last::Int = 0
-  lines::Vector{String} = String[]         # the lines that `entries` was read from
-  entries::Vector{Cards.Entry} = Cards.Entry[]   # each line of the block that has something in it
-  parts::Dict{Any,Any} = Dict{Any,Any}()   # its cards, kept between frames
-end
-
-"A card of a `card` block: what the web page at one address says of itself"
+"A card that a line of the page shows: what the web page at the line's address says of itself"
 @def mutable struct LinkCard <: SemanticUI
-  of::Any = nothing      # the view of its block
+  line::Int = 0
+  words::String = ""     # the line's words for the card, between its [ and ], which show while the page has no title
   card::Cards.Card = Cards.Card("")
   picture::String = ""   # the key of the page's picture, for an Image, or "" while there's none
   icon::String = ""      # and the key of the site's icon
 end
-
-reread!(v::CardsView, lines) = (lines == v.lines || (v.lines = lines; v.entries = Cards.entries(lines)); v)
 
 # The sizes of a card's title, of its description and of the name of its site, as parts of the size of the page's text
 const CARD_TITLE, CARD_WORDS, CARD_SOURCE = 0.92, 0.8, 0.74
@@ -14405,36 +14401,35 @@ card_picture(e, url) = begin
   file === nothing ? "" : something(picture_key(file), "")
 end
 
-"The card of the block view `v` for the address `url`, which is its `k`th line that has something in it, with what Kaydown knows of the page now"
-link_card!(v::CardsView, k, url) = begin
-  e = editor(v)
-  c = block_part!(() -> LinkCard(of=v), v, (:card, k))
-  card, coming = Cards.lookup!(url, cards_dir(), ask=online(e))
+# The ends of the names of the files that a line shows as what they are, and never as a card
+const NOT_CARDS = (PICTURES..., MAC_PICTURES..., VIDEOS..., SOUNDS..., TABLES..., ".pdf")
+
+"""
+True when a line of `e` that holds only `src`, written as a picture is, can
+show a card: `src` is a web address, its name doesn't end as a picture's, a
+video's, a sound's or a table's does, and the page isn't an email.
+"""
+card_address(e, src) = Cards.isaddress(src) && !Mail.isemail(e.buf.path) && !(lowercase(splitext(Cards.path(src))[2]) in NOT_CARDS)
+
+"""
+What line `i` shows when it holds only the address `src` of a web page,
+written as a picture is: a card. `words` are the line's words for the card.
+It's nothing when the address can't show a card, and when what's there turned
+out not to be a page. That line shows what's there as a picture.
+"""
+card_item(e, i, src, words) = begin
+  card_address(e, src) || return nothing
+  card, coming = Cards.lookup!(src, cards_dir(), ask=online(e))
   coming && redraw_in!(e, 0.2)   # look again soon
+  card.page || return nothing
+  c = node!(LinkCard, e, (:link_card, i))
   # A picture that the card has already isn't looked for again on each frame
   same = c.card == card
-  c.card = card
+  c.line, c.words, c.card = i, words, card
   same && !isempty(c.picture) || (c.picture = card_picture(e, card.image))
   same && !isempty(c.icon) || (c.icon = card_picture(e, card.icon))
-  c
-end
-
-"A line of faint words in a `card` block, in a page whose text is `s` tall and `wide` across"
-card_note(words, s, wide) = begin
-  face = Face(SANS, "", s * CARD_WORDS, colours.faint, false)
-  Box(width(grow=grow), height(face.size * CARD_LINE), padding(s * CARD_PAD, 0px), Alignment.Start, justify=Alignment.Center,
-      label(shortened(face, words, wide - 2s * CARD_PAD), face.size, color=face.color))
-end
-
-describe(v::CardsView) = begin
-  e = editor(v)
-  s = body(e).size
-  # An empty block has the outline of a card, with what to write in it
-  isempty(v.entries) && return Column(width(grow=grow), Alignment.Start, padding(0px, s * 0.5), radius(8px), border(1px, :solid, colours.line),
-                                      background(colours.block), name="Link cards",
-                                      card_note("Write a web address here, like https://julialang.org", s, e.width))
-  Column(width(grow=grow), Alignment.Start, child_gap=s * 0.5, name="Link cards",
-    [entry.address ? link_card!(v, k, entry.text) : card_note(entry.text, s, e.width) for (k, entry) in enumerate(v.entries)]...)
+  own!(node!(Document, e, :document), c)
+  Live(c, card_tall(body(e).size) + 2LIVE_GAP)
 end
 
 describe(c::LinkCard) = begin
@@ -14446,13 +14441,14 @@ describe(c::LinkCard) = begin
   across = isempty(c.picture) ? 0px : min(inside * 1.75, wide * 0.3)
   room = wide - 2pad - 2px - (across > 0px ? across + pad : 0px)
   # An address that stands in for the title isn't bold
-  title = Face(SANS, isempty(card.title) ? "" : "Semibold", s * CARD_TITLE, colours.ink, false)
+  heading = Cards.heading(card, c.words)
+  title = Face(SANS, heading == card.url ? "" : "Semibold", s * CARD_TITLE, colours.ink, false)
   words = Face(SANS, "", s * CARD_WORDS, colours.dim, false)
   source = Face(SANS, "", s * CARD_SOURCE, colours.faint, false)
   line(face, text, room) = Box(width(grow=grow), height(face.size * CARD_LINE), Alignment.Start, justify=Alignment.Center,
                                label(shortened(face, text, room), face.size, color=face.color, weight=face.style))
   # The description has two lines at most, and the second ends in … when there's more
-  under = Cards.blurb(card)
+  under = Cards.blurb(card, c.words)
   told = isempty(under) ? String[] : wrapped(words, under, num(room))
   length(told) > 2 && (told = [told[1], join(told[2:end], " ")])
   mark = source.size * 1.15
@@ -14462,7 +14458,7 @@ describe(c::LinkCard) = begin
   Row(width(grow=grow), height(card_tall(s)), padding(pad), child_gap=pad, radius(8px), border(1px, :solid, colours.line),
       background(ishovered(c) && opening(c) ? colours.hover : colours.block), name="Link card",
     Column(width(grow=grow), height(inside), Alignment.Start,
-      line(title, Cards.heading(card), room),
+      line(title, heading, room),
       (line(words, text, room) for text in told)...,
       Box(width(grow=grow), height(grow=grow)),
       Row(width(grow=grow), height(source.size * CARD_LINE), justify=Alignment.Start, child_gap=s * 0.35,
@@ -14474,20 +14470,27 @@ end
 "True when a click on the card now opens its address: ⌘ is held, or the page is one that's never changed"
 opening(c::LinkCard) = held(c, Keys.cmd) || (editor(c).buf.fixed && !held(c, Keys.shft))
 
-cursor(::CardsView) = :arrow
-cursor(c::LinkCard) = opening(c) ? :hand : :arrow
-# A click with ⌘ held opens the address. Any other click goes on to the page, as a click on any block does.
-onkey(c::LinkCard, ::KeyPress{Keys.mouse_left}) = opening(c) ? (BROWSER[](c.card.url); handled) : nothing
+cursor(c::LinkCard) = opening(c) ? :hand : :ibeam
+# A click with ⌘ held opens the address. Any other click puts the caret on the card's line, so the line shows as it's written.
+onkey(c::LinkCard, ::KeyPress{Keys.mouse_left}) = opening(c) ? (BROWSER[](c.card.url); handled) : edit_matter!(c, c.line)
 
-"The block as HTML: each card as a link in a box, with the rules that give a card its look, and each other line as a paragraph"
-cards_html(e, v::CardsView) = begin
-  isempty(v.entries) && return ""
-  ask = online(e)
-  "<style>\n" * Cards.STYLE * "</style>\n" *
-  join((entry.address ? Cards.markup(first(Cards.lookup!(entry.text, cards_dir(); ask))) : "<p>" * escape(entry.text) * "</p>" for entry in v.entries), "\n")
+"""
+The HTML of the line `text` when it shows a card: the card as a link in a box.
+It's nothing for any other line. The rules that give a card its look come with
+the first card of the page. `styled` is true once they're in.
+"""
+card_html(e, text, styled::Ref{Bool}) = begin
+  occursin("![", text) || return nothing
+  m = match(PICTURE_LINE, text)
+  m === nothing && return nothing
+  src = unescaped(String(m[2]))
+  card_address(e, src) || return nothing
+  card = first(Cards.lookup!(src, cards_dir(), ask=online(e)))
+  card.page || return nothing
+  rules = styled[] ? "" : "<style>\n" * Cards.STYLE * "</style>\n"
+  styled[] = true
+  rules * Cards.markup(card, unescaped(String(m[1])))
 end
-
-BLOCKS[CARD] = BlockKind("Link card", "link-45deg", CardsView, cards_html)
 
 # --- blocks that a file defines --------------------------------------------------------------
 #
@@ -19764,7 +19767,8 @@ const INSERTS = [
   ("Map",           ["```$MAP", "", "```"],         (2, 0)),
   ("Emails",        ["```$EMAIL", "with: ", "```"], (2, 6)),
   ("Time Log",      ["```$TIMELOG", "```", "", ""], (4, 0)),
-  ("Link Card",     ["```$CARD", "https://", "```"], (2, 8)),
+  # A card is the address of a page, written as a picture's is. The caret goes after the https://.
+  ("Link Card",     ["![](https://)"],              (1, 12)),
   # This one records from the microphone into a new file, and the line shows the recorder. The caret goes
   # to an empty line under it, so that you can type while it records.
   ("Recording",     ["![Recording]()", "", ""],     (3, 0)),
@@ -20206,6 +20210,9 @@ picture_item(e, i) = begin
   sound === nothing || return sound_item(e, sound)
   video = video_item(e, src)
   video === nothing || return video
+  # The address of a web page shows a card
+  card = card_item(e, i, src, unescaped(String(m[1])))
+  card === nothing || return card
   path = startswith(src, r"https?://") ? fetched(e, src) : abspath(docdir(e), expanduser(src))
   key = path === nothing ? nothing : picture_key(path)
   key === nothing && return nothing
@@ -21465,13 +21472,14 @@ end
 page_html(e) = begin
   write_blocks!(e)   # a block that a file defines is in the page as what it holds now
   b = e.buf
+  styled = Ref(false)   # whether the rules that give a card its look are in the page yet
   html(b.lines, title=title(b.path),
        block=(lang, s, t) -> lang == SHEET ? sheet_html(e, s, t) : lang == TAKEOFF ? takeoff_html(e, s, t) :
                              lang == SCHEDULE ? schedule_html(e, s, t) :
                              haskey(BLOCKS, lang) ? block_html(e, lang, s, t) :
                              lang == DIAGRAM ? diagram_html(e, s, t) : nothing,
        value=code -> (made = get(e.nodes, (:inline, b.path, code, 1), nothing); made isa Tuple && !made[2] ? made[1] : nothing),
-       file=text -> table_html(e, text),
+       file=text -> (made = table_html(e, text)) !== nothing ? made : card_html(e, text, styled),
        columns=html_columns(e))
 end
 

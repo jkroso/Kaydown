@@ -21,7 +21,7 @@
 # - `code blocks`: the blocks of code that Kaydown shows as code
 # - `sheets`, `spreadsheets`, `live blocks`, `diagrams`, `takeoffs`,
 #   `schedules`, `charts`, `boards`, `calendars`, `columns`, `sketches`, `signatures`, `contacts`, `maps`, `find lists`, `email lists`,
-#   `time logs`, `link cards`, `questions`, `changes`: the blocks that Kaydown shows as that component
+#   `time logs`, `questions`, `changes`: the blocks that Kaydown shows as that component
 #
 # A block is listed by the heading that it's under. A block of code, and a
 # block with no heading over it, is listed by its own first line.
@@ -81,7 +81,6 @@ const WHATS = (todo=what_is("to-do items", "to-dos", "todos", "todo", "to-do", "
                find=what_is("find lists", "find list", "finds", one="find list", langs=(FIND,)),
                email=what_is("email lists", "email list", "emails", one="email list", langs=("email",)),
                timelog=what_is("time logs", "time log", "timelogs", "timesheets", one="time log", langs=("timelog",)),
-               card=what_is("link cards", "link card", "cards", "bookmarks", one="link card", langs=("card",)),
                question=what_is("questions", "question", one="question", langs=("ask",)),
                changes=what_is("changes", one="set of changes", many="sets of changes", langs=("changes",)))
 

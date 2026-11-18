@@ -543,6 +543,21 @@ Ladder asks before it runs the code of a GitHub repository for the first time. T
 
 `pages/progress.jl` is a kind of block to copy, `pages/counter.md` is one that a page defines, and `pages/welcome.md` shows the first. The comment over `FileBlock` in `main.jl` says how it works.
 
+## Start with a page of your own
+
+When you open Ladder without a file, it shows your startup page. The first time, Ladder writes that page, with links to the welcome page and the settings. After that the page is yours, and Ladder never writes to it. It is `startup.md`, in the folder `Home` of `~/Library/Application Support/Ladder`.
+
+Each time Ladder starts, it also runs the Julia code of that page: each `julia` block, from the top, in one module. Julia does the same with its `startup.jl`. So the page is where you load code that adds to Ladder, and the words round each block can say what the code is for.
+
+````
+```julia
+@use "github.com/you/something" => Something
+Something.start(Ladder)
+```
+````
+
+The code has `@use`, as a Julia file that Kip loads has, and the name `Ladder`, which is Ladder's own module. Code that adds to Ladder calls Ladder's functions and adds to its tables. If a block fails, the blocks after it don't run, Ladder opens all the same, and the window says which line of the page failed. A change to the page's code runs the next time Ladder starts.
+
 ## Go back to the file that showed before
 
 Each window keeps the files that it showed, in the order that it showed them. ⌘⌥← goes back to the file that showed before the one that shows now, at the place that it was scrolled to. ⌘⌥→ goes forward again. While the sidebar is open, two arrows at its top right go back and forward too. An arrow is faint when it has no file to go to. The two buttons at the side of a mouse go back and forward as well, if the mouse has them. It works after a link, a click in the list of files, the file finder, and any other way of showing a file. The key bindings page changes the keys. ⌘[ and ⌘] already show the email before and the next email.
@@ -644,6 +659,7 @@ julia -O0 --project=. test/emails_test.jl         # how a list of emails is read
 julia -O0 --project=. test/emails_view_test.jl    # the list of the emails with a person, in a page
 julia -O0 --project=. test/timelog_test.jl        # how a time log is read and written, and how its hours and its money are added up
 julia -O0 --project=. test/timelog_view_test.jl   # the rows of a time log, the button that starts and stops the clock, and a time changed in its row
+julia -O0 --project=. test/startup_test.jl        # the startup page: the page that Ladder writes the first time, its code that runs when Ladder starts, and what the window says when the code fails
 julia -O0 --project=. test/mime_test.jl           # how an email becomes the page that a window shows, and a page an email
 julia -O0 --project=. test/webpage_test.jl        # the pictures that are made of an email's HTML: what's read of them, their links, and how they're asked for and kept
 julia -O0 --project=. test/webpage_view_test.jl   # an email as it was sent: its pictures in the page, its links, the Load pictures button, and its words a level down

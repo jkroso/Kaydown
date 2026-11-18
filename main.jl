@@ -175,6 +175,9 @@
 #   - The Ladder app updates itself. It gets a newer version while you work,
 #     and the new version takes its place when you quit. A box in the settings
 #     turns that off. update.jl says how it works.
+#   - Ladder opens your startup page when you start it without a file, and
+#     runs the Julia code of that page each time it starts. Code there can
+#     add to Ladder. See "the startup page" below.
 #   - On the Key bindings page, choose the keys of VS Code, Sublime Text or
 #     Emacs, or click a command and press the keys you want for it.
 #   - ⌘D selects the word that the caret is in. ⌘D again selects the next
@@ -25624,6 +25627,7 @@ describe(e::Editor) = begin
   confine!(e)   # while the lines of a block fill the window, the caret stays in them
   job_tick!(e)
   update_tick!(e)
+  startup_tick!(e)
   mail_tick!(e)
   zoom_tick!(e)
   slide_tick!(e)
@@ -25973,16 +25977,131 @@ load_settings!(e) = begin
   e
 end
 
+# --- the startup page ------------------------------------------------------------------
+#
+# Ladder has one page that's yours from the start: the startup page. It does
+# two things.
+#
+#   - It's the page that shows when you open Ladder without a file. So it's
+#     the place for what you want to see first: links to your pages, a list
+#     of what's to do.
+#   - Each time Ladder starts, it runs the Julia code of the page: each
+#     `julia` block, from the top, in one module. Julia does the same with
+#     its startup.jl. So the page is where you load code that adds to Ladder,
+#     and it can say in words what each piece of code is for.
+#
+# The code has what a Julia file that Kip loads has, like `@use`, and one name
+# more: `Ladder`, which is this module. Code that adds to Ladder calls
+# Ladder's own functions and adds to its tables, as Ladder's own files do.
+# There's no other layer between the two.
+#
+# The page is `startup.md`, in the folder `Home` of Ladder's folder in
+# ~/Library/Application Support. The first time Ladder starts, it writes the
+# page, with links to the welcome page and to the settings. From then on the
+# page is yours, and Ladder never writes to it.
+#
+# Code that fails stops the code after it, and Ladder opens all the same. The
+# window then says which line of the page failed, under its top bar.
+
+"The folder of the startup page. A test names a folder of its own here."
+const HOME = Ref("")
+home_dir() = isempty(HOME[]) ? joinpath(dirname(settings_file()), "Home") : HOME[]
+
+"The page that Ladder opens when no file is named, and whose Julia code it runs when it starts"
+startup_page() = joinpath(home_dir(), "startup.md")
+
+"A link to the page `name` of Ladder's own pages, as the startup page writes it: the way there from the startup page's folder"
+home_link(words, name) = "[$words]($(escaped(relpath(joinpath(pages_dir[], name), home_dir()))))"
+
+"What the startup page says the first time, before you change it"
+startup_text() = """
+  # Home
+
+  Ladder opens this page when you start it without a file. The page is yours, so change it as you like.
+
+  - $(home_link("Welcome", "welcome.md")) shows what Ladder can do.
+  - $(home_link("Examples", "examples.md")) has more to copy.
+  - $(home_link("Settings", joinpath("settings", "settings.md"))) has the colours, the font and the keys. ⌘, opens it too.
+
+  ## Code that runs when Ladder starts
+
+  Each time Ladder starts, it runs the Julia code on this page, from the top. Code here can add to Ladder: the name `Ladder` is Ladder itself. The block below does nothing yet.
+
+  ```julia
+  # @use "github.com/you/something" => Something
+  # Something.start(Ladder)
+  ```
+  """
+
+"Write the startup page, if there's none. It gives the page's path."
+startup_page!() = begin
+  path = startup_page()
+  if !isfile(path)
+    mkpath(dirname(path))
+    write(path, startup_text())
+  end
+  path
+end
+
+"What failed in the code of the startup page when Ladder started, or \"\", and when Ladder started"
+const STARTUP = Ref(("", 0.0))
+const STARTUP_SHOWS = 12.0   # seconds that the window says what failed
+
+"""
+Run the code of the startup page: each of its `julia` blocks, from the top, in
+one module, which this gives. In that module `Ladder` is this module. Code
+that fails stops the code after it, and `STARTUP[]` then says what failed.
+"""
+run_startup!(path=startup_page()) = begin
+  # A module holds its own name, so the name has a ⭒ in front, as Kip's modules have
+  m = Module(Symbol("⭒startup"))
+  Core.eval(m, :(const Kip = $Kip))
+  Core.eval(m, :(using .Kip))
+  Core.eval(m, :(eval(x) = Core.eval($m, x)))
+  Core.eval(m, :(include(file) = Base.include($m, file)))
+  Core.eval(m, :(const Ladder = $(@__MODULE__)))
+  STARTUP[] = try
+    isfile(path) && Base.invokelatest(run_page!, m, path)
+    ("", time())
+  catch err
+    (trouble(err), time())
+  end
+  m
+end
+
+"Say what failed in the code of the startup page, under the top bar, for a while after Ladder starts"
+startup_tick!(e) = begin
+  words, since = STARTUP[]
+  win = window_of(e)
+  (isempty(words) || win === nothing || get(e.nodes, :startup_told, 0.0) == since) && return
+  left = STARTUP_SHOWS - (time() - since)
+  if left <= 0
+    close_popup!(win, :startup)
+    e.nodes[:startup_told] = since
+  else
+    # The words look as a tooltip does, under the middle of the top bar
+    wide, _ = window_size(e)
+    spot = (wide / 2, 0px, 1px, TOPBAR_H - 8px)
+    popup!(win, Bubble(content=Box(padding(8px, 5px), label("The startup page stopped. " * words, 12px, color=TIP_INK)), target=spot),
+           anchor=spot, placement=:bottom, gap=6px, key=:startup, input=false)
+    redraw_in!(e, left)
+  end
+  nothing
+end
+
 """
 Open an editor window and run it until it closes. `args` can name a Markdown
-file or a folder, and `--paper` or `--night` to choose the colours for this window.
+file or a folder, and `--paper` or `--night` to choose the colours for this
+window. With no file, the window shows the startup page.
 """
 open_editor(args) = begin
   move_old_folders!()
   # macOS can pass its own -options to an app it opens, so skip anything with a dash
   paths = filter(a -> !startswith(a, "-"), args)
   Agent.announce()   # an agent's script knows from now on that this Ladder can send it a page
-  e = build_editor(isempty(paths) ? WELCOME : paths[1])
+  home = startup_page!()
+  run_startup!(home)
+  e = build_editor(isempty(paths) ? home : paths[1])
   load_settings!(e)
   "--night" in args && (e.theme = :night)
   "--paper" in args && (e.theme = :paper)

@@ -318,15 +318,15 @@ self_test() = begin
   rm(dir, recursive=true)
 end
 
-"Open the file or folder named in `args`, or the welcome page"
+"Open the file or folder named in `args`, or the startup page"
 open_ladder(args) = begin
   move_old_folders!()   # before the pages are written into the app's folder
-  welcome = unpack(support())
+  unpack(support())     # the startup page links to these pages
   # The window opens the files that macOS asks for: one you double-clicked to start the app, and any after that
   Opened.listen()
   inbox[] = Opened.files
   Opened.wake[] = Libdl.dlsym(Libdl.dlopen(GLFW.libglfw), :glfwPostEmptyEvent)
-  open_editor(any(a -> !startswith(a, "-"), args) ? args : [welcome; args])
+  open_editor(args)
 end
 
 function (@main)(args::Vector{String})

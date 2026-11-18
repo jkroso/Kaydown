@@ -8,6 +8,15 @@ Three more pages have the rest of the settings. Hold ⌘ and click a link to go 
 - [Key bindings](key-bindings.md) has the keys of each command.
 - [Email](email.md) has your email accounts.
 
+These pages show what a page can do:
+
+- [Examples](../examples.md) lists everything, with a link to an example of each.
+- [Welcome](../welcome.md) has an example of each kind of block.
+- [Components](../components.md) has the buttons, menus, sliders and other parts that a block can show.
+- [Julia](../julia.md) runs code where it is.
+- [Schedule](../schedule.md) plans a job, with the days of each task.
+- [Counter](../counter.md) makes a new kind of block.
+
 ## Colours
 
 ```ui

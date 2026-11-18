@@ -82,3 +82,18 @@ end
   # A web address with a # in it is no page
   @test !K.follow_heading!(e, "https://example.com/page#part") && e.buf.path == joinpath(pages, "schedule.md")
 end
+
+@testset "the settings page links to each page of examples" begin
+  settings = K.settings_page()
+  linked = [String(m[1]) for m in eachmatch(r"\]\(\.\./([^)\s]+)\)", read(settings, String))]
+  # Each Markdown page in the folder of pages, so a new page needs a link there too
+  for name in readdir(pages)
+    K.ismarkdown(name) && @test name in linked
+  end
+  @test all(name -> isfile(joinpath(pages, name)), linked)
+  # A link opens its page in the settings window, and ⌘⌥← comes back
+  e = K.build_editor(settings)
+  K.follow!(e, "../examples.md")
+  @test e.buf.path == hub
+  @test K.go_back!(e) && e.buf.path == settings
+end

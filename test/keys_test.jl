@@ -539,7 +539,8 @@ end
   @test s.nodes[:title] isa K.Title && !any(key -> key isa Tuple && first(key) == :settings_tab, keys(s.nodes))
   # Each other page of the settings' folder has a link on the main page, and a link back to it
   others = filter(name -> endswith(name, ".md") && name != "settings.md", readdir(K.settings_dir()))
-  @test sort(others) == ["code-editor.md", "key-bindings.md"]
+  # The startup page is there once Ladder has started, since Ladder writes it then
+  @test sort(filter(!=("startup.md"), others)) == ["code-editor.md", "key-bindings.md"]
   for name in others
     @test any(line -> occursin("]($name)", line), s.buf.lines)
     @test occursin("](settings.md)", read(K.settings_page(name), String))

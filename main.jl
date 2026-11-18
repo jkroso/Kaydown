@@ -26157,33 +26157,31 @@ page_title(e) = something(first_answer(PAGE_TITLES, e), email_title(e), Some(not
 # There's no other layer between the two. The part before this one has the
 # tables for what Ladder does at its own times.
 #
-# The page is `startup.md`, in the folder `Home` of Ladder's folder in
-# ~/Library/Application Support. The first time Ladder starts, it writes the
-# page, with links to the welcome page and to the settings. From then on the
-# page is yours, and Ladder never writes to it.
+# The page is `startup.md`, in the folder of the pages of the settings, since
+# it's where you set what Ladder is. The Settings page has a link to it. The
+# first time Ladder starts, it writes the page, with links to the welcome page
+# and to the settings. From then on the page is yours, and Ladder never writes
+# to it: it isn't one of the pages that a newer Ladder brings, and git leaves
+# it out of Ladder's own repository.
 #
 # Code that fails stops the code after it, and Ladder opens all the same. The
 # window then says which line of the page failed, under its top bar.
 
-"The folder of the startup page. A test names a folder of its own here."
-const HOME = Ref("")
-home_dir() = isempty(HOME[]) ? joinpath(dirname(settings_file()), "Home") : HOME[]
+"A folder for the startup page that isn't the folder of the settings. A test names a folder of its own here."
+const STARTUP_FOLDER = Ref("")
 
 "The page that Ladder opens when no file is named, and whose Julia code it runs when it starts"
-startup_page() = joinpath(home_dir(), "startup.md")
+startup_page() = isempty(STARTUP_FOLDER[]) ? settings_page("startup.md") : joinpath(STARTUP_FOLDER[], "startup.md")
 
-"A link to the page `name` of Ladder's own pages, as the startup page writes it: the way there from the startup page's folder"
-home_link(words, name) = "[$words]($(escaped(relpath(joinpath(pages_dir[], name), home_dir()))))"
-
-"What the startup page says the first time, before you change it"
+"What the startup page says the first time, before you change it. Its links go from the folder of the settings."
 startup_text() = """
   # Home
 
   Ladder opens this page when you start it without a file. The page is yours, so change it as you like.
 
-  - $(home_link("Welcome", "welcome.md")) shows what Ladder can do.
-  - $(home_link("Examples", "examples.md")) has more to copy.
-  - $(home_link("Settings", joinpath("settings", "settings.md"))) has the colours, the font and the keys. ⌘, opens it too.
+  - [Welcome](../welcome.md) shows what Ladder can do.
+  - [Examples](../examples.md) has more to copy.
+  - [Settings](settings.md) has the colours, the font and the keys. ⌘, opens it too.
 
   ## Code that runs when Ladder starts
 

@@ -67,7 +67,7 @@ The `pages` folder has the pages that come with Ladder:
 - `julia.md` has code to run with ⌘Return.
 - `schedule.md` has a schedule to try.
 - `counter.md` defines a kind of block, and shows it.
-- The `settings` folder has the pages of the settings. ⌘, shows `settings.md`, which has a link to each of the others: `code-editor.md` and `key-bindings.md`.
+- The `settings` folder has the pages of the settings. ⌘, shows `settings.md`, which has a link to each of the others: `code-editor.md`, `key-bindings.md` and `startup.md`, your startup page.
 
 ## Use it with an agent
 
@@ -504,7 +504,7 @@ Ladder asks before it runs the code of a GitHub repository for the first time. T
 
 ## Start with a page of your own
 
-When you open Ladder without a file, it shows your startup page. The first time, Ladder writes that page, with links to the welcome page and the settings. After that the page is yours, and Ladder never writes to it. It is `startup.md`, in the folder `Home` of `~/Library/Application Support/Ladder`.
+When you open Ladder without a file, it shows your startup page. The first time, Ladder writes that page, with links to the welcome page and the settings. After that the page is yours, and Ladder never writes to it. It is `startup.md`, in the folder of the settings' pages, and the Settings page has a link to it.
 
 A link to a folder, like `[Email](~/Mail)`, shows that folder in the sidebar, and the page stays. A path can start at your home folder with `~`. So the startup page can be the way to each folder that you work in. Hold ⌘ and click a link to go there.
 

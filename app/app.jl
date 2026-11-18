@@ -11,7 +11,7 @@
 
 include("start.jl")
 
-@use ".." build_editor open_editor move_old_folders! run_startup! startup_page HOME STARTUP WELCOME restyle! problems pages_dir SIDEBAR_ICONS FILE_ICONS todo_at inbox Agent INSERTS PLAN_ICONS SCHEDULE_ICONS BLOCK_ICONS window! editors settings_editor theme! Update
+@use ".." build_editor open_editor move_old_folders! run_startup! startup_page STARTUP_FOLDER STARTUP WELCOME restyle! problems pages_dir SIDEBAR_ICONS FILE_ICONS todo_at inbox Agent INSERTS PLAN_ICONS SCHEDULE_ICONS BLOCK_ICONS window! editors settings_editor theme! Update
 @use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse Typed ontype
 @use "github.com/jkroso/Font.jl/units" px
 @use "github.com/jkroso/UI.jl/Interface/abstract" focus window_of
@@ -327,14 +327,14 @@ fails. The code loads a file from its source, uses two of Julia's libraries
 by their names, and reads Ladder itself, as code that adds to Ladder does.
 """
 check_startup(dir) = begin
-  was = HOME[]
-  HOME[] = joinpath(dir, "Home")
-  mkpath(HOME[])
-  write(joinpath(HOME[], "more.jl"), "@use Dates: Date\nday() = Date(2026, 11, 18)\n")
+  was = STARTUP_FOLDER[]
+  STARTUP_FOLDER[] = joinpath(dir, "startup")
+  mkpath(STARTUP_FOLDER[])
+  write(joinpath(STARTUP_FOLDER[], "more.jl"), "@use Dates: Date\nday() = Date(2026, 11, 18)\n")
   write(startup_page(), "# Home\n\n```julia\n@use \"./more\" day\n@use LibCURL: curl_version\n" *
                         "const said = (string(day()), unsafe_string(curl_version()), Ladder.startup_page())\n```\n")
   m = run_startup!()
-  HOME[] = was
+  STARTUP_FOLDER[] = was
   isempty(STARTUP[][1]) || error("The code of a startup page failed: ", STARTUP[][1])
   Base.invokelatest(getglobal, m, :said)[1] == "2026-11-18" || error("The code of a startup page gave the wrong day")
 end

@@ -2,7 +2,8 @@
 # time, the Julia code of the page that runs when Ladder starts, and what the
 # window says when that code fails. Run them with
 # `julia -O0 --project=. test/startup_test.jl`. The page is in a folder of the
-# test's own, and the window isn't on the screen.
+# test's own, not in the folder of the settings, and the window isn't on the
+# screen.
 
 @use Test: @test, @testset
 @use "../main" => K
@@ -10,18 +11,27 @@
 @use "github.com/jkroso/UI.jl/Interface/draw" frame popups
 const px = K.px
 
-K.HOME[] = joinpath(mktempdir(), "Home")
+K.STARTUP_FOLDER[] = joinpath(mktempdir(), "startup")
 const page = K.startup_page()
 
+@testset "the page is among the pages of the settings" begin
+  folder = K.STARTUP_FOLDER[]
+  K.STARTUP_FOLDER[] = ""
+  @test K.startup_page() == K.settings_page("startup.md") && dirname(K.startup_page()) == K.settings_dir()
+  # The Settings page has a link to it
+  @test occursin("](startup.md)", read(K.settings_page(), String))
+  K.STARTUP_FOLDER[] = folder
+end
+
 @testset "the first time, Ladder writes the page, and then the page is yours" begin
-  @test page == joinpath(K.HOME[], "startup.md") && !isfile(page)
+  @test page == joinpath(K.STARTUP_FOLDER[], "startup.md") && !isfile(page)
   @test K.startup_page!() == page && isfile(page)
   lines = split(read(page, String), '\n')
   @test lines[1] == "# Home" && any(l -> occursin("```julia", l), lines)
-  # Its links go to Ladder's own pages, by the way there from the page's folder
+  # Its links go to Ladder's own pages, by the way there from the folder of the settings, where the page is
   links = [m[1] for m in eachmatch(r"\]\(([^)]+)\)", read(page, String))]
-  @test length(links) == 3 && all(l -> isfile(abspath(K.HOME[], K.unescaped(l))), links)
-  @test abspath(K.HOME[], K.unescaped(links[1])) == joinpath(K.pages_dir[], "welcome.md")
+  @test length(links) == 3 && all(l -> isfile(abspath(K.settings_dir(), l)), links)
+  @test abspath(K.settings_dir(), links[1]) == joinpath(K.pages_dir[], "welcome.md") && links[3] == "settings.md"
   # A page that's there is never written again
   write(page, "# Mine\n")
   @test K.startup_page!() == page && read(page, String) == "# Mine\n"
@@ -69,7 +79,7 @@ end
   write(page, "# Home\n")
   K.run_startup!()
   @test K.STARTUP[][1] == ""
-  @test (K.run_startup!(joinpath(K.HOME[], "none.md")); K.STARTUP[][1] == "")
+  @test (K.run_startup!(joinpath(K.STARTUP_FOLDER[], "none.md")); K.STARTUP[][1] == "")
 end
 
 @testset "code that fails stops what's after it, and the window says which line failed" begin

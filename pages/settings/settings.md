@@ -2,10 +2,11 @@
 
 Ladder keeps these choices, and uses them the next time it opens. Each one changes every window as you choose it. Press ⌘W to close this window.
 
-Two more pages have the rest of the settings. Hold ⌘ and click a link to go there. To come back, press ⌘⌥←.
+Three more pages have the rest of the settings. Hold ⌘ and click a link to go there. To come back, press ⌘⌥←.
 
 - [Code editor](code-editor.md) has how code shows.
 - [Key bindings](key-bindings.md) has the keys of each command.
+- [Startup](startup.md) is the page that Ladder opens first, and the code that it runs when it starts.
 
 These pages show what a page can do:
 

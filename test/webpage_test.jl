@@ -108,6 +108,42 @@ end
   Fake.slow[] = false
 end
 
+# This one runs webpage.swift with WebKit, so it needs a Mac with Swift. The
+# first run compiles the program, which takes a while.
+if Sys.isapple() && Sys.which("swiftc") !== nothing
+  @testset "the program lets content with a width of its own be as narrow as the page" begin
+    dir = mktempdir()
+    runs = Ref(0)
+    "What the program makes of `html` on a page 700 px wide"
+    drawn(html) = begin
+      n = runs[] += 1
+      source, out = joinpath(dir, "$n.html"), joinpath(dir, "$n.txt")
+      write(source, html)
+      wait(W.run_program(source, 700, 1.0, false, joinpath(dir, "$n"), out, joinpath(dir, "$n.err")))
+      W.shot(out)
+    end
+    # Outlook gives the table round an email the width of its sender's window. The words wrap at the page all the same.
+    words = "Hi Jake, these words go on and on, as words in an email do, so that they need more than one line. " ^ 10
+    outlook = """<table width="1938" style="width:1453.8pt"><tr><td width="1938" style="width:1453.8pt"><p>$words</p>
+                 <table width="600"><tr><td width="300">Left</td><td width="300"><a href="https://example.com/right">Right</a></td></tr></table>
+                 </td></tr></table>"""
+    s = drawn(outlook)
+    @test s.wide == 700 && s.tall > 100
+    # A cell whose width fits the page keeps it
+    @test only(s.links).left > 300 && only(s.links).left + only(s.links).wide < 700
+    # A picture that's wider than the page shrinks to it, and keeps its shape. A link round it says how big it is.
+    s = drawn("""<p><a href="https://example.com/p" style="display:inline-block"><img width="1500" height="300" alt="A wide picture"></a></p>""")
+    @test s.wide == 700 && only(s.links).wide <= 692 && only(s.links).tall < 200
+    # A long word, like a key, goes on in the next line
+    @test drawn("<p>" * "abcdefghij" ^ 200 * "</p>").wide == 700
+    # Content that can't be as narrow as the page makes the page wider
+    s = drawn("""<div style="display:flex"><div style="flex:none;width:500px">One</div><div style="flex:none;width:500px">Two</div></div>""")
+    @test s.wide >= 1000
+    # Content that fits is drawn as it is
+    @test drawn("""<table width="600"><tr><td>Short</td></tr></table>""").wide == 700
+  end
+end
+
 @testset "a link opens with the Mac's app for it" begin
   empty!(Fake.opened)
   W.open_link("https://example.com/a?b=c&d=e")

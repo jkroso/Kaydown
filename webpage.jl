@@ -149,8 +149,15 @@ that it looks as its sender meant only with what the web has for it.
 """
 remote(html) = occursin(r"<(img|link|input|video)\b[^>]*\b(src|href|poster)\s*=\s*[\"']?\s*https?://|\bbackground\s*=\s*[\"']?\s*https?://|url\(\s*[\"']?\s*https?://"i, html)
 
+"""
+How webpage.swift draws a page. Make it one more with a change to the program
+that changes its pictures, so that the pictures it made before are made again.
+2: a table that's wider than the page is let be as narrow as the page.
+"""
+const DRAWS = 2
+
 "The text file in `folder` that says what was made of `html` on a page `wide` px wide"
-file(folder, html, wide, zoom, pictures) = joinpath(folder, string(hash((html, wide, zoom, pictures)), base=16) * ".txt")
+file(folder, html, wide, zoom, pictures) = joinpath(folder, string(hash((html, wide, zoom, pictures, DRAWS)), base=16) * ".txt")
 
 """
 The pictures of `html` on a page `wide` px wide, kept in `folder`. `kept!` in

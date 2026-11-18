@@ -8,8 +8,11 @@
 //
 // The arguments are how wide the page is in px, the file of HTML, the start of
 // the name of each picture, and the text file to write last. The page is as
-// tall as its content. A page whose content can't be as narrow as that is as
-// wide as its content, up to 2000 px.
+// tall as its content. When the content is wider than the page, a width that
+// the HTML gives a table or a cell, wider than the page, is taken away, and a
+// picture or a block of code shrinks to the page. A page whose content still
+// can't be as narrow as that is as wide as its content, up to 2000 px, and
+// Ladder shows it smaller.
 //
 // A tall page makes a picture that's too big to draw in one piece, so the
 // program writes it as strips, each 1024 px tall or less, from the top down:
@@ -75,6 +78,37 @@ let measure = """
 })()
 """
 
+/// Let a part of the page that has a width of its own, wider than the page, be as narrow as the page: a table, a cell
+/// of one, a picture or a block of code. Outlook gives the table round an email the width of its sender's window,
+/// which can be 2000 px. The JavaScript is the program's own. The page's own JavaScript doesn't run.
+let fit = """
+(() => {
+  const page = innerWidth
+  const s = document.createElement('style')
+  s.textContent = `
+    table { max-width: 100% !important; }
+    img, video { max-width: 100% !important; }
+    img[width][height] { height: auto !important; }
+    pre { white-space: pre-wrap !important; }
+    body { overflow-wrap: break-word !important; }`
+  ;(document.head || document.documentElement).appendChild(s)
+  // A cell's width holds its table wide, so a width that the HTML gives, wider than the page, is taken away. Pictures keep theirs, for their shape.
+  const wide = []
+  for (const el of document.querySelectorAll('[width], [style*="width" i]')) {
+    if (el.tagName == 'IMG' || el.tagName == 'VIDEO') continue
+    const said = el.getAttribute('width') || ''
+    if ((!said.includes('%') && parseFloat(said) > page) ||
+        (/(^|[^-])width/i.test(el.getAttribute('style') || '') && el.getBoundingClientRect().width > page + 1)) wide.push(el)
+  }
+  for (const el of wide) {
+    el.removeAttribute('width')
+    el.style.setProperty('width', el.tagName == 'TABLE' ? '100%' : 'auto', 'important')
+    el.style.setProperty('min-width', '0', 'important')
+  }
+  return wide.length
+})()
+"""
+
 final class Painter: NSObject, WKNavigationDelegate {
   let web: WKWebView
   let wide: Double, zoom: Double
@@ -109,28 +143,40 @@ final class Painter: NSObject, WKNavigationDelegate {
     }
   }
 
+  /// How wide the content is, in the px of the page after it's zoomed
+  func needs(_ found: [String: Any]) -> Double { min(widest, ((found["wide"] as? Double) ?? wide) * zoom) }
+
   /// Make the pictures: give the page the room that its content needs, then take a picture of each strip of it
   func shoot() {
     guard !shooting else { return }
     shooting = true
     ask { first in
-      // Content that can't be as narrow as the page makes the page wider, and then it's measured again
-      let needs = min(widest, ((first["wide"] as? Double) ?? self.wide) * self.zoom)
-      let across = needs > self.wide + 1 ? needs.rounded(.up) : self.wide
-      self.web.frame = NSRect(x: 0, y: 0, width: across, height: 600)
-      DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-        self.ask { found in
-          let tall = min(tallest, max(1, (((found["tall"] as? Double) ?? 600) * self.zoom).rounded(.up)))
-          self.web.frame = NSRect(x: 0, y: 0, width: across, height: tall)
-          self.lines = ["page\t\(Int(across))\t\(Int(tall))"]
-          let links = (found["links"] as? [[Any]] ?? []).compactMap { link -> String? in
-            guard link.count == 5, let url = link[4] as? String, !url.contains("\t"), !url.contains("\n") else { return nil }
-            let box = link[0..<4].compactMap { ($0 as? Double).map { String(format: "%.1f", $0 * self.zoom) } }
-            return box.count == 4 ? "link\t" + box.joined(separator: "\t") + "\t" + url : nil
-          }
-          // The page gets a moment to lay itself out in its new room
-          DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { self.strip(1, from: 0, across: across, tall: tall, links: links) }
+      guard self.needs(first) > self.wide + 1 else { return self.size(first) }
+      // Content that's wider than the page is first let shrink to it, and then it's measured again
+      self.web.evaluateJavaScript(fit) { _, _ in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { self.ask { self.size($0) } }
+      }
+    }
+  }
+
+  /// Give the page the room that its content needs, then take a picture of each strip of it
+  func size(_ first: [String: Any]) {
+    // Content that can't be as narrow as the page makes the page wider, and then it's measured again
+    let needs = self.needs(first)
+    let across = needs > self.wide + 1 ? needs.rounded(.up) : self.wide
+    self.web.frame = NSRect(x: 0, y: 0, width: across, height: 600)
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+      self.ask { found in
+        let tall = min(tallest, max(1, (((found["tall"] as? Double) ?? 600) * self.zoom).rounded(.up)))
+        self.web.frame = NSRect(x: 0, y: 0, width: across, height: tall)
+        self.lines = ["page\t\(Int(across))\t\(Int(tall))"]
+        let links = (found["links"] as? [[Any]] ?? []).compactMap { link -> String? in
+          guard link.count == 5, let url = link[4] as? String, !url.contains("\t"), !url.contains("\n") else { return nil }
+          let box = link[0..<4].compactMap { ($0 as? Double).map { String(format: "%.1f", $0 * self.zoom) } }
+          return box.count == 4 ? "link\t" + box.joined(separator: "\t") + "\t" + url : nil
         }
+        // The page gets a moment to lay itself out in its new room
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { self.strip(1, from: 0, across: across, tall: tall, links: links) }
       }
     }
   }

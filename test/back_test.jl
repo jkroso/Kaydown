@@ -241,14 +241,15 @@ end
   @test rf.left - (rb.left + rb.width) == 2px
 end
 
-@testset "a sidebar that's too narrow for its buttons keeps them clear of the file's name" begin
+@testset "the narrowest sidebar still has room for its buttons" begin
   e, w, _ = window("a.md", "b.md")
   sidebar!(e, w)
-  K.side!(e, K.PANEL_MIN); frames(w, 3)
+  K.side!(e, 100px); frames(w, 3)              # dragged further than it goes
+  @test K.panel_w(e) == K.PANEL_MIN
   rb, rf, eye, title = rect(e.nodes[:back]), rect(e.nodes[:forward]), rect(e.nodes[:hidden]), rect(e.nodes[:title])
   @test rb.left >= eye.left + eye.width         # no button is over another
   @test rf.left - (rb.left + rb.width) == 2px
-  @test rf.left + rf.width > K.panel_w(e)      # the arrows are past the sidebar's edge
+  @test K.panel_w(e) - (rf.left + rf.width) == 8px   # the arrows are inside the sidebar's edge, as on a wider one
   @test rf.left + rf.width <= title.left
 end
 

@@ -381,7 +381,10 @@ use!(p::Palette) = foreach(n -> setfield!(colours, n, getfield(p, n)), fieldname
 
 const TOPBAR_H = 44px
 const PANEL_W = 230px     # how wide the sidebar is until you drag its edge
-const PANEL_MIN = 160px   # the narrowest and widest that you can drag it
+# The narrowest and widest that you can drag it. The narrowest still has room for the buttons of the top bar
+# that are over it: 84px for the close, minimise and zoom buttons, 32px for each of the sidebar's two buttons,
+# and 72px for the two arrows with 8px after them. So the arrows never stick out past the sidebar's edge.
+const PANEL_MIN = 220px
 const PANEL_MAX = 480px
 const PROSE_W = 780px    # the widest the text gets, before zooming, until the settings page changes it
 const PAGE_X = 32px      # the least space beside the text
@@ -19568,7 +19571,7 @@ describe(t::TopBar) = begin
   # the sidebar. A window can be too narrow for that, with a wide sidebar or more buttons at its right end. Then the
   # left end gives up its room, so the right end stays in the window and the name keeps some room. With the
   # sidebar hidden, the left end keeps the room of its own two buttons. It always keeps the room that its
-  # buttons need past the sidebar: a sidebar that's dragged narrow is narrower than its buttons.
+  # buttons need past the sidebar: while the sidebar slides open, it's narrower than its buttons.
   wide, _ = window_size(e)
   # While something fills the window, the sidebar isn't there. The bar has none of the sidebar's buttons
   # then, not the one that shows it either, and the file's name is in the middle of the window.

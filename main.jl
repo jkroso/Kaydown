@@ -46,11 +46,18 @@
 #   - Write a code block in the language `calendar` to see a month, with the
 #     page's tasks, its to-do items that have a day like 2026-11-25 in their
 #     text, and events of its own. Drag a thing to another day to move it.
+#   - Write a code block in the language `columns` with a number in it, like 3,
+#     to show the next three blocks of the page side by side. You type in a
+#     column as you type anywhere. A heading takes the blocks under it into its column.
 #   - Write a code block in the language `sketch` to draw: by hand, lines,
 #     arrows, boxes, ovals and words. Click it to make it fill the window,
 #     where its tools are.
 #   - Write a code block in the language `signature` for a place to sign:
 #     press in its box and drag to draw. The file holds each stroke.
+#   - Write a code block in the language `contact` for the card of a person
+#     or a company. Click a row to use it: an email address starts an email.
+#     Click words twice to change them. Drop a vCard file on the page to
+#     make one.
 #   - Write a code block in the language `map` with an address in it to show
 #     the map of that place. The + and the − on the map show less and more
 #     of what's round it. Drag the map to move it, and click it to put the
@@ -86,9 +93,9 @@
 #     the Finder the same way, and a picture that you copied, like a screenshot.
 #   - Write ![Prices](prices.csv) on a line of its own to show a CSV file as a
 #     table. A `chart` block under the line draws the file's numbers.
-#   - Write a web page as a picture is written, on a line of its own, like
-#     ![Julia](https://julialang.org), to show a card with the page's title,
-#     its description and its picture. ⌘-click the card to open the page.
+#   - Write a code block in the language `card` with the address of a web
+#     page in it, like https://julialang.org, to show a card with the page's
+#     title, its description and its picture. ⌘-click the card to open the page.
 #   - Write [^1] in a line and [^1]: on another line to make a footnote.
 #   - Right-click a word with red dots under it to put its spelling right.
 #   - The button at the top left, or ⌘\, shows the other files in the folder.
@@ -113,7 +120,7 @@
 #   - Right-click the page to cut, copy and paste, and to insert a new block
 #     where you clicked: a heading, a list, a to-do item, a table, a sheet, a
 #     spreadsheet, a code block, a live block, a takeoff, a schedule, a chart, a
-#     board, a calendar, a list of what's found, a sketch, a signature, a map, a list of emails, a link card, a recording or a divider.
+#     board, a calendar, a list of what's found, a sketch, a signature, a contact, a map, a list of emails, a link card, a recording or a divider.
 #   - A line that holds only a sound file, like ![Recording](memo.m4a), shows
 #     a player. Insert › Recording records one from the microphone. A button
 #     under the player writes down what's said, in a paragraph under it.
@@ -234,9 +241,11 @@
 @use "./gallery" => Galleries
 @use "./calendar" => Calendars
 @use "./linkcard" => Cards
+@use "./columns" => Columns
 @use "./find" => Searches
 @use "./sketch" => Sketches
 @use "./signature" => Signatures
+@use "./contact" => Contacts
 @use "./map" => Maps
 @use "./emails" => Posts
 @use "./timelog" => Timelogs
@@ -1801,6 +1810,9 @@ table's line of dashes. A ``` line is such a part by itself. Nothing for a
 line of text or of code.
 """
 solid(b::Buffer, i::Int) = begin
+  # A `columns` block that takes no room is such a part, with the empty lines after it that take none
+  fold = column_fold(b, i)
+  fold === nothing || return fold
   ks = kinds(b)
   k = ks[i]
   if k.kind in (Kind.fence, Kind.code)
@@ -1843,7 +1855,8 @@ part(b::Buffer, i::Int) = begin
   run = solid(b, i)
   run === nothing && return nothing
   k = kinds(b)[i].kind
-  k == Kind.table || (k == Kind.fence && run[1] == run[2]) ? nothing : run
+  # A `columns` block that takes no room doesn't show either
+  k == Kind.table || (k == Kind.fence && run[1] == run[2]) || column_fold(b, i) !== nothing ? nothing : run
 end
 
 """
@@ -2031,6 +2044,9 @@ end
 
 "Lay out line `i` of the document"
 flow(e, i::Int, raw::Bool=israw(e.buf, i)) = begin
+  # A line in a column of the page is laid out for the column's width. See "blocks of the page side by side".
+  column = column_at(e, i)
+  column === nothing || return column_flow(e, column, i, raw)
   text, line = e.buf.lines[i], kinds(e.buf)[i]
   if e.buf.view == :code
     # A line of a file of code is laid out as a line of a file that's only shown is
@@ -2767,7 +2783,7 @@ marks(e, it::Item, s::Sheet, x, y) = begin
     for (r, i) in enumerate(s.rows)
       lo[1] <= i <= hi[1] || continue
       top = r == 1 ? y + SHEET_GAP : y + row_top(s, r)
-      push!(out, (num(x), num(top), num(x + e.width), num(r == n ? bottom : y + row_top(s, r + 1))))
+      push!(out, (num(x), num(top), num(x + item_room(e, it)[2]), num(r == n ? bottom : y + row_top(s, r + 1))))
     end
     lo[1] <= it.last && hi[1] >= it.last && push!(out, (num(x), num(bottom), num(x + 7px), num(y + it.tall)))
     return out
@@ -2813,7 +2829,7 @@ press!(e, it::Item, s::Sheet, pos) = begin
     return true
   end
   r = rowunder(s, pos[2] - e.origin[2] - it.top)
-  (length(s.cells[r]) == 1 && pos[1] - e.origin[1] < expr_x(s) - SHEET_X) || return false
+  (length(s.cells[r]) == 1 && pos[1] - e.origin[1] - item_room(e, it)[1] < expr_x(s) - SHEET_X) || return false
   name_row!(e, s.rows[r])
   true
 end
@@ -3044,7 +3060,7 @@ suggestbox(e) = begin
     f, dx = cellflow(s, r, length(s.cells[r]))
     k, x = spot(f, start)
     face = Face(SHEET_FONT, SHEET_WEIGHT, s.size, colours.ink, false)
-    across, down = dx + x, row_top(s, r) + f.lh * k
+    across, down = item_room(e, it)[1] + dx + x, row_top(s, r) + f.lh * k
   elseif s isa Flow
     # In a code block, the list is under the line of the screen that the name is on
     k, x = spot(s, start)
@@ -7871,9 +7887,8 @@ end
 todo_line(e, x, y) = begin
   dx, dy = px(x) - e.origin[1], px(y) - e.origin[2]
   (-30px <= dx < e.width && y >= num(TOPBAR_H)) || return nothing
-  k = findlast(it -> it.top <= dy, e.layout)
-  k === nothing && return nothing
-  it = e.layout[k]
+  dy >= 0px || return nothing
+  it = e.layout[item_under(e, dx, dy)]
   f = it.content
   dy < it.top + it.tall && f isa Flow && f.kind == Kind.todo && !f.raw ? it.first : nothing
 end
@@ -7903,10 +7918,11 @@ task_over(e) = begin
   d.of, d.key = v, ts[i].todo.key
   wide = describe(Row(Alignment.Start, geometry(d)), (9999px, 9999px)).width
   # They go at the right end of the first of the item's lines that has room for them, or under the item when none has
-  k = findfirst(vl -> maximum(seg -> seg.x + seg.w, vl.segs, init=0px) + 24px + wide <= e.width, f.lines)
+  edge = sum(item_room(e, it))   # the right edge of the item's column, or of the page
+  k = findfirst(vl -> maximum(seg -> seg.x + seg.w, vl.segs, init=0px) + 24px + wide <= edge, f.lines)
   d.floats = k === nothing
   vl = f.lines[something(k, length(f.lines))]
-  left = e.origin[1] + e.width - wide
+  left = e.origin[1] + edge - wide
   top = e.origin[2] + it.top + f.above + vl.top
   top = d.floats ? top + vl.high - 2px : top + (vl.high - DETAILS_H) / 2
   top >= TOPBAR_H || return hide()
@@ -9113,10 +9129,11 @@ BLOCKS[CHART] = BlockKind("Chart", "bar-chart", ChartView, chart_html)
 #
 # A code block in the language `map` shows the map round a place, with a pin
 # on the place and the address under it. map.jl says how the block is
-# written, and gets the picture: a program of its own makes it with the Mac's
-# maps. The window never waits for that program. Until the picture is there,
-# the block shows a grey box. Each picture is kept on the Mac, so a page shows
-# its map at once the next time, with no network.
+# written. A program of its own asks the Mac's maps for two things: where the
+# place is, and the picture of the map. The window never waits for that
+# program. Until the picture is there, the block shows a grey box. What comes
+# back is kept on the Mac, so a page shows its map at once the next time,
+# with no network.
 #
 #   - The − and the + on the map show more and less of what's round the
 #     place. The block keeps that as a line like `zoom: 15`.
@@ -9130,21 +9147,32 @@ BLOCKS[CHART] = BlockKind("Chart", "bar-chart", ChartView, chart_html)
 #   - The button beside the map's top right corner makes it fill the window,
 #     as a picture does, and so does Return with the caret on the map.
 #
+# The picture has no pin in it. Kaydown draws the pin over the picture, on the
+# point where the place is. So a click moves the pin in the same frame, and
+# the picture stays the one that it was: it depends on the middle, the zoom,
+# the size and dark or light, and not on the place. The address under the map
+# comes later, when the program has it.
+#
 # Every picture is drawn where its own middle is on the map that shows now.
-# So after a drag, a click or a change of zoom, the picture that showed stays
-# in its place until the right one is there, and the map never jumps.
+# So after a drag or a change of zoom, the picture that showed stays in its
+# place until the right one is there, and the map never jumps.
 #
 # A window that isn't on the screen, like one a test makes, never runs the
 # program and never opens the Maps app. A test puts functions of its own in
-# `Maps.HELPER` and `Maps.OPENER` to see what the block does with them.
+# `Maps.HELPER`, `Maps.FINDER` and `Maps.OPENER` to see what the block does
+# with them.
+
+@use "github.com/jkroso/UI.jl/Interface/image" register_image
 
 const MAP = Maps.MAP
-const MAP_PAUSE = 0.3   # seconds that a map keeps one width before Kaydown asks for a picture that wide
+# Seconds that a map keeps one width before Kaydown asks for a picture that wide, and that a pin
+# keeps its place before Kaydown makes the picture that fills the window
+const MAP_PAUSE = 0.3
 const MAP_ROUND = 7.0   # the radius of the map's top corners, which are just inside the round corners of its block
 const MAP_SLACK = 4.0   # px that the mouse can move between a press and a release that are still a click
 push!(BLOCK_ICONS, "geo-alt", "plus-lg", "dash-lg", "box-arrow-up-right", "crosshair")
 
-"What a `map` block shows: a picture of the map round a place, and the address under it"
+"What a `map` block shows: a picture of the map round a place, a pin on the place, and the address under it"
 @def mutable struct MapView <: SemanticUI
   n::Int = 0                               # its place among the page's maps
   first::Int = 0                           # the lines of its block, when the page was last laid out
@@ -9152,13 +9180,17 @@ push!(BLOCK_ICONS, "geo-alt", "plus-lg", "dash-lg", "box-arrow-up-right", "cross
   data::Maps.Site = Maps.Site()
   lines::Vector{String} = String[]         # the lines that `data` was read from
   asked::Any = nothing                     # how wide the map is, and when it got that width
-  got::Any = nothing                       # what `Maps.picture!` last said of the picture that the map needs now
-  # The last picture that was there: its file, its zoom, the latitude and the longitude in its middle, its place,
-  # and the latitude and the longitude of that place. It shows until the next one is there.
+  # What's known of a place: the place, what `Maps.found!` last said of it, and the latitude, the longitude and the address that Apple has for it
+  place::Any = nothing
+  got::Any = nothing                       # what `Maps.picture!` last said of the picture that the map needs now, and whether the program can run
+  # The last picture that was there: its file, its zoom, the latitude and the longitude in its middle, and how wide it is.
+  # It shows until the next one is there.
   shown::Any = nothing
   # While the mouse button is down on the map: where it went down, the middle of the map then, and whether the mouse has dragged the map
   grab::Any = nothing
   at::Any = nothing                        # the latitude and the longitude in the middle of the map while a drag moves it
+  pinned::Any = nothing                    # the picture and the point that the picture with a pin in it was last made from
+  due::Any = nothing                       # the picture and the point that it's to be made from next, and since when
   box::NTuple{4,Float64} = (0.0, 0.0, 0.0, 0.0)   # where the picture was last drawn in the window
   parts::Dict{Any,Any} = Dict{Any,Any}()   # its buttons and its picture, kept between frames
 end
@@ -9175,6 +9207,12 @@ reread!(v::MapView, lines) = begin
   v
 end
 
+"True in a window that's on the screen. A window that a test makes isn't."
+on_screen(node) = (w = window_of(node); w !== nothing && !isempty(w.glfw))
+
+"True when `file` holds a picture that Kaydown can draw"
+whole_picture(file) = try image_aspect(file) > 0 catch; false end
+
 "The place of the block, as two blocks that name one place have it"
 map_place(v::MapView) = lowercase(Maps.query(v.data.place))
 
@@ -9184,71 +9222,110 @@ map_wide(v::MapView) = round(Int, num(editor(v).width))
 "The zoom that the map's picture is made at: the block's, or a higher one on a page that's too wide for it"
 map_zoom(v::MapView) = Maps.fit(v.data.zoom, map_wide(v), Maps.TALL)
 
+"What Apple has for the block's place, or nothing while that isn't known"
+map_facts(v::MapView) = (p = v.place; p !== nothing && p.key == map_place(v) ? p.facts : nothing)
+
 """
 Where the pin is: the latitude and the longitude of the block's place. For an
-address, that's what Apple has for it, which is known once a picture of the
-place has come. It's nothing until then.
+address, that's what Apple has for it. It's nothing until that's known.
 """
 map_pin(v::MapView) = begin
   at = Maps.coordinates(v.data.place)
   at !== nothing && return at
-  s = v.shown
-  s !== nothing && s.place == map_place(v) ? s.pin : nothing
+  found = map_facts(v)
+  found === nothing ? nothing : (found.lat, found.lon)
 end
 
 """
 The latitude and the longitude in the middle of the map: where a drag has it
-now, what the block's `centre` line says, or the place. It's nothing while
-the place of an address isn't known.
+now, what the block's `centre` line says, or the place. It has the five
+decimal places that a block keeps, as the middle of a picture has. It's
+nothing while the place of an address isn't known.
 """
-map_middle(v::MapView) = something(v.at, v.data.centre, map_pin(v), Some(nothing))
-
-"True when the map has a picture to draw: one of this place, or one whose place on the map that shows now is known"
-map_shows(v::MapView) = v.shown !== nothing && (v.shown.place == map_place(v) || (v.shown.centre !== nothing && map_middle(v) !== nothing))
-
-"""
-True when a drag can move the map and a click can move its place: the page
-can be changed, and the map shows a picture whose middle is known.
-"""
-map_moves(v::MapView) = begin
-  b = editor(v).buf
-  !readonly(b) && !b.fixed && map_shows(v) && v.shown.centre !== nothing && map_middle(v) !== nothing
+map_middle(v::MapView) = begin
+  v.at === nothing || return v.at
+  middle = something(v.data.centre, map_pin(v), Some(nothing))
+  middle === nothing ? nothing : Maps.rounded(middle)
 end
 
-"True in a window that's on the screen. A window that a test makes isn't."
-on_screen(node) = (w = window_of(node); w !== nothing && !isempty(w.glfw))
+"""
+Where the picture that the map has is on a map `w` px by `h` px that shows
+what the block says now: its left, its top, its width and its height, in px
+from that map's top left corner. It's nothing when the map has no picture,
+or the middle of the map isn't known.
+"""
+map_spot(v::MapView, w, h) = begin
+  shown, middle = v.shown, map_middle(v)
+  (shown === nothing || middle === nothing) && return nothing
+  zoom = map_zoom(v)
+  # A picture that was made at another zoom is drawn as big as the map of this zoom is
+  k = 2.0^(zoom - shown.zoom)
+  wide, tall = shown.wide * k, Maps.TALL * k
+  cx, cy = Maps.point(shown.centre, middle, zoom, w, h)
+  (cx - wide / 2, cy - tall / 2, wide, tall)
+end
 
-"True when `file` holds a picture that Kaydown can draw"
-whole_picture(file) = try image_aspect(file) > 0 catch; false end
+"True when the map has a picture to draw: some of the picture that it has is in the map that shows now"
+map_shows(v::MapView) = begin
+  w, h = map_wide(v), Maps.TALL
+  r = map_spot(v, w, h)
+  r !== nothing && r[1] < w && r[1] + r[3] > 0 && r[2] < h && r[2] + r[4] > 0
+end
+
+"True when the page can be changed: a page that's read-only takes no drag and no click"
+map_changes(v::MapView) = (b = editor(v).buf; !readonly(b) && !b.fixed)
+
+"True when a drag can move the map and a click can move its place: the page can be changed, and the map shows a picture"
+map_moves(v::MapView) = map_changes(v) && map_shows(v)
+
+"""
+What Apple has for the block's place. The program that finds a place is
+started here, when the place isn't kept. A latitude and a longitude need no
+finding, and are asked for only to learn their address. What comes back is
+read once.
+"""
+map_find!(v::MapView, runs) = begin
+  key = map_place(v)
+  p = v.place
+  p !== nothing && p.key == key && p.facts !== nothing && return p
+  ask(start) = Maps.found!(media_dir(), v.data.place; start)
+  found = ask(runs)
+  facts = found.state == :there ? Maps.facts(found.file) : nothing
+  # A file that holds something else is taken away, and made again later
+  found.state == :there && facts === nothing && (Maps.spoiled!(found.file); found = ask(false))
+  v.place = (key=key, found=found, facts=facts)
+end
 
 """
 The picture that the map needs now: as wide as the page's text, at the block's
-zoom, with the block's `centre` in its middle, dark on a dark page.
-`Maps.picture!` says what it gives. The program
-that makes the picture is started here, when the picture isn't kept. While the
-window changes size, the map has another width in each frame, so the program
-is only started once the width has stayed for a moment.
+zoom, with the middle of the map in its middle, dark on a dark page.
+`Maps.picture!` says what it gives. The program that makes the picture is
+started here, when the picture isn't kept. While the window changes size, the
+map has another width in each frame, so the program is only started once the
+width has stayed for a moment. While the place of an address isn't known, the
+map has no middle, and no picture is asked for.
 """
 map_picture!(v::MapView) = begin
-  e = editor(v)
   s = v.data
-  wide, dark = map_wide(v), dark_page()
-  zoom = map_zoom(v)
+  wide, dark, zoom = map_wide(v), dark_page(), map_zoom(v)
   (v.asked === nothing || v.asked[1] != wide) && (v.asked = (wide, v.asked === nothing ? 0.0 : time()))
   rest = MAP_PAUSE - (time() - v.asked[2])
   runs = on_screen(v) || Maps.HELPER[] !== Maps.run_program
-  ask(start) = Maps.picture!(media_dir(), s.place, zoom, wide, Maps.TALL, dark; centre=s.centre, start)
-  p = ask(runs && rest <= 0)
-  # A file that was cut short is no picture. It's taken away, and made again later.
-  p.state == :there && !whole_picture(p.file) && (Maps.spoiled!(p.file); p = ask(false))
-  if p.state == :there
-    found = Maps.facts(p.file)
-    pin = something(Maps.coordinates(s.place), found.lat === nothing ? nothing : (found.lat, found.lon), Some(nothing))
-    v.shown = (file=p.file, zoom=zoom, centre=something(s.centre, pin, Some(nothing)), place=map_place(v), pin=pin)
+  place = map_find!(v, runs)
+  # The picture is of what the block says, and not of where a drag has the map now: the block changes when the mouse lets go
+  middle = something(s.centre, map_pin(v), Some(nothing))
+  p = nothing
+  if middle !== nothing
+    middle = Maps.rounded(middle)
+    ask(start) = Maps.picture!(media_dir(), middle, zoom, wide, Maps.TALL, dark; start)
+    p = ask(runs && rest <= 0)
+    # A file that was cut short is no picture. It's taken away, and made again later.
+    p.state == :there && !whole_picture(p.file) && (Maps.spoiled!(p.file); p = ask(false))
+    p.state == :there && (v.shown = (file=p.file, zoom=zoom, centre=middle, wide=wide))
   end
   v.shown === nothing || isfile(v.shown.file) || (v.shown = nothing)
-  # The window looks again when the program may have finished, when the width has stayed, or when it's time to try again
-  wait = min(p.wait, runs && rest > 0 ? rest : Inf)
+  # The window looks again when a program may have finished, when the width has stayed, or when it's time to try again
+  wait = min(place.found.wait, p === nothing ? Inf : p.wait, runs && rest > 0 ? rest : Inf)
   isfinite(wait) && redraw_in!(v, max(wait, 0.05))
   v.got = (p, runs)
 end
@@ -9257,16 +9334,64 @@ end
 map_words(v::MapView) = begin
   map_shows(v) && return ""
   p, runs = v.got
-  p.state == :lost ? p.problem : p.state == :failed ? p.problem * (runs ? " It tries again in a minute." : "") :
-  p.state == :none && !runs ? Maps.FAILED : "Finding the place…"
+  # Without a middle, the map waits for the place. With one, it waits for the picture.
+  waits = p === nothing ? v.place.found : p
+  waits.state == :lost ? waits.problem : waits.state == :failed ? waits.problem * (runs ? " It tries again in a minute." : "") :
+  waits.state == :none && !runs ? Maps.FAILED : "Finding the place…"
 end
 
-"The address under a map: the one that Apple has for the place, or the place as the block has it"
+"""
+The words under a map: the address that Apple has for the place, or the place
+as the block has it until that's known. An address that Apple's maps don't
+have says so here, when the map shows a picture all the same.
+"""
 map_address(v::MapView) = begin
-  p, _ = v.got
-  found = p.state == :there ? Maps.facts(p.file).address :
-          v.shown !== nothing && v.shown.place == map_place(v) ? Maps.facts(v.shown.file).address : ""
-  isempty(found) ? v.data.place : found
+  found = map_facts(v)
+  found === nothing || isempty(found.address) || return found.address
+  lost = v.place !== nothing && v.place.key == map_place(v) && v.place.found.state == :lost
+  lost && map_shows(v) ? v.data.place * ". " * v.place.found.problem : v.data.place
+end
+
+"""
+The point of the picture that the map has where the pin is, in px from the
+picture's top left corner. It's nothing when the place isn't known, or isn't
+in that picture.
+"""
+map_pin_in(v::MapView) = begin
+  shown, pin = v.shown, map_pin(v)
+  (shown === nothing || pin === nothing) && return nothing
+  at = Maps.point(pin, shown.centre, shown.zoom, shown.wide, Maps.TALL)
+  0 <= at[1] <= shown.wide && 0 <= at[2] <= Maps.TALL ? at : nothing
+end
+
+"""
+The key, for an Image, of the picture that fills the window: the map's
+picture with the pin drawn in it, since what fills the window is a picture
+and no more. A map whose place isn't in its picture fills the window as it
+is.
+
+That picture takes some hundredths of a second to make. So it's made a
+moment after the picture or the pin last changed, and not in the frame of
+the click that moved the pin. Until the first one is made, the map fills the
+window without its pin.
+"""
+map_full!(v::MapView) = begin
+  shown, at = v.shown, map_pin_in(v)
+  at === nothing && return shown.file
+  key = "the map with its pin $(objectid(v))"
+  want = (shown.file, at)
+  if v.pinned != want
+    (v.due === nothing || v.due[1] != want) && (v.due = (want, time()))
+    if v.grab === nothing && time() - v.due[2] >= MAP_PAUSE
+      was = has_image(key) ? image_source(key) : nothing
+      register_image(key, pinned_png(shown.file, at))
+      was === nothing || Skia.sk_image_unref(was.raw)   # the picture that the key had isn't needed
+      v.pinned, v.due = want, nothing
+    else
+      redraw_in!(v, MAP_PAUSE)
+    end
+  end
+  has_image(key) ? key : shown.file
 end
 
 describe(v::MapView) = begin
@@ -9286,7 +9411,7 @@ describe(v::MapView) = begin
       block_button!(v, :in, (:zoom, 1), icon="plus-lg", tip="Show the place closer", off=s.zoom >= most))
     Column(block_look()..., clip=true, name="Map",
       Stack(width(grow=grow), height(px(Maps.TALL)), Alignment.Start,
-        map_shows(v) ? fillable(v, (:picture, v.shown.file), area, wide=:grow) : area,
+        map_shows(v) ? fillable(v, (:picture, map_full!(v)), area, wide=:grow) : area,
         Row(width(grow=grow), padding(8px), Alignment.Start, justify=Alignment.End, buttons)),
       Row(width(grow=grow), padding(5px, 6px, 5px, 12px), child_gap=8px, Alignment.Center,
         Box(Icon("geo-alt", size=14px, color=colours.dim)),
@@ -9303,38 +9428,74 @@ describe(a::MapArea) = begin
       (isempty(words) ? () : (Box(Text(words, size=13px, family=SANS, color=colours.dim, wrap=WrapMode.words)),))...)
 end
 
-"Draw a pin whose point is at `(x, y)`, like the one that map.swift draws in a picture"
+"The places along the bend from `a` to `d` that `b` and `c` pull towards them, without `a`"
+pin_bend(a, b, c, d, steps=12) = [(1 - t)^3 .* a .+ 3t * (1 - t)^2 .* b .+ 3t^2 * (1 - t) .* c .+ t^3 .* d for t in (1:steps) ./ steps]
+
+"""
+Draw a pin whose point is at `(x, y)`: a red drop with a white dot in it, as
+maps mark a place. It's drawn as a shape, so it's sharp however big the
+canvas draws it, on the screen and on paper.
+"""
 pin_ink(ctx, x, y) = begin
-  red = RGBA(0.92, 0.26, 0.21, 1.0)
-  trace(ctx, [(x, y), (x - 9.9, y - 21.3), (x + 9.9, y - 21.3)], red, 1.0; fill=red, closed=true)
-  disc(ctx, x, y - 26, 11, red)
-  disc(ctx, x, y - 26, 4, RGBA(1.0, 1.0, 1.0, 1.0))
+  r, cy = 11.0, y - 26.0   # the radius of the pin's round head, and how high its middle is
+  shape = [(x, y); pin_bend((x, y), (x - 2, y - 9), (x - r, cy + 9), (x - r, cy));
+           [(x - r * cos(a), cy - r * sin(a)) for a in (1:23) .* (π / 24)];
+           (x + r, cy); pin_bend((x + r, cy), (x + r, cy + 9), (x + 2, y - 9), (x, y))]
+  # A soft shadow on the ground under the point
+  shadow = ink(RGBA(0.0, 0.0, 0.0, 0.25))
+  ground = Ref(Skia.sk_rect_t(Float32(x - 5), Float32(y - 2), Float32(x + 5), Float32(y + 2)))
+  Skia.sk_canvas_draw_oval(ctx, ground, shadow)
+  Skia.sk_paint_delete(shadow)
+  trace(ctx, shape, RGBA(0.70, 0.16, 0.13, 1.0), 1.0; fill=RGBA(0.92, 0.26, 0.21, 1.0), closed=true)
+  disc(ctx, x, cy, 4, RGBA(1.0, 1.0, 1.0, 1.0))
+end
+
+"""
+The picture in `file` with a pin drawn on the point `at` of it, in px from its
+top left corner, as the bytes of a PNG file. The page of HTML and the map
+that fills the window show that picture, since each shows a picture and no
+more.
+"""
+pinned_png(file, at) = begin
+  image = image_source(file)
+  info = Ref(Skia.sk_image_info_t(C_NULL, Skia.SK_COLOR_TYPE_RGBA_8888, Skia.SK_ALPHA_TYPE_OPAQUE, image.width, image.height))
+  GC.@preserve info begin
+    surface = Skia.sk_surface_make_raster_n32_premul(pointer_from_objref(info), C_NULL)
+    surface == C_NULL && return read(file)
+    canvas = Skia.sk_surface_get_canvas(surface)
+    paint_picture(canvas, image.raw, (0, 0, image.width, image.height), (0, 0, image.width, image.height))
+    # The pin is as big on the picture as it is on the page, where the picture has `Maps.SCALE` pixels to the px
+    Skia.sk_canvas_scale(canvas, Float32(Maps.SCALE), Float32(Maps.SCALE))
+    pin_ink(canvas, at[1], at[2])
+    drawn = Skia.sk_surface_make_image_snapshot(surface)
+    encoded = Skia.sk_encode_png(C_NULL, drawn, Int32(6))
+    bytes = copy(unsafe_wrap(Array, Ptr{UInt8}(Skia.sk_data_get_data(encoded)), Skia.sk_data_get_size(encoded)))
+    Skia.sk_data_unref(encoded)
+    Skia.sk_image_unref(drawn)
+    Skia.sk_surface_unref(surface)
+    bytes
+  end
 end
 
 # The picture is drawn at its own size, with its middle where that latitude and longitude is on the map that
 # shows now. So a picture that was made for another width, or for another middle, shows the same streets in
-# the same places until the right one is there, and the part with no picture yet is grey. A picture that was
-# made at another zoom is drawn as big as the map of this zoom is. A place that a click has just moved has a
-# pin drawn on it at once, until its own picture is there.
+# the same places until the right one is there, and the part with no picture yet is grey. The pin is drawn
+# over it, on the place. A place that isn't in the map that shows has no pin, and nothing is drawn outside
+# the map's box.
 draw(ctx, size, ui::ConcreteRect, a::MapArea) = begin
   v = a.of
   x, y, w, h = v.box = (num(ui.left), num(ui.top), num(ui.width), num(ui.height))
-  (map_shows(v) && whole_picture(v.shown.file)) || return
-  shown, middle, zoom = v.shown, map_middle(v), map_zoom(v)
+  r = map_spot(v, w, h)
+  (r !== nothing && map_shows(v) && whole_picture(v.shown.file)) || return
   # Only the top corners are round: the box that's cut out goes on under the map's foot
   with_clip(ctx, ui.left, ui.top, ui.width, ui.height) do
     with_round_clip(ctx, ui.left, ui.top, ui.width, ui.height + px(2MAP_ROUND), px(MAP_ROUND)) do
-      image = image_source(shown.file)
-      k = 2.0^(zoom - shown.zoom) / Maps.SCALE
-      wide, tall = image.width * k, image.height * k
-      # A picture whose middle isn't known is of this place, and goes in the middle
-      cx, cy = middle === nothing || shown.centre === nothing ? (w / 2, h / 2) : Maps.point(shown.centre, middle, zoom, w, h)
-      paint_picture(ctx, image.raw, (0, 0, image.width, image.height), (x + cx - wide / 2, y + cy - tall / 2, wide, tall))
+      image = image_source(v.shown.file)
+      paint_picture(ctx, image.raw, (0, 0, image.width, image.height), (x + r[1], y + r[2], r[3], r[4]))
       pin = map_pin(v)
-      if pin !== nothing && middle !== nothing && pin != shown.pin
-        at = Maps.point(pin, middle, zoom, w, h)
-        pin_ink(ctx, x + at[1], y + at[2])
-      end
+      pin === nothing && return
+      at = Maps.point(pin, map_middle(v), map_zoom(v), w, h)
+      0 <= at[1] <= w && 0 <= at[2] <= h && pin_ink(ctx, x + at[1], y + at[2])
     end
   end
 end
@@ -9378,20 +9539,20 @@ block_tick!(v::MapView) = (v.grab !== nothing && !held(v, Keys.mouse_left) && ma
 The mouse button came up. After a drag, the middle of what shows is written
 as the block's `centre` line. After a click, the block's place becomes the
 latitude and the longitude of the point that was clicked, and the middle that
-showed is written too, so the map stays where it is and only the pin moves.
-⌘Z takes either back.
+showed is written too, so the map stays where it is, with the picture that it
+had, and only the pin moves. ⌘Z takes either back.
 """
 map_drop!(v::MapView) = begin
   g, v.grab = v.grab, nothing
   at, v.at = v.at, nothing
-  (g === nothing || !map_moves(v)) && return v
+  (g === nothing || !map_changes(v)) && return v
   s = v.data
   if g.dragged
     at === nothing && return v
     s.centre = Maps.rounded(at)
   else
     clicked = Maps.latlon((g.from[1] - v.box[1], g.from[2] - v.box[2]), g.middle, map_zoom(v), v.box[3], v.box[4])
-    s.centre === nothing && (s.centre = Maps.rounded(g.middle))
+    s.centre === nothing && (s.centre = g.middle)
     s.place = Maps.text(clicked)
   end
   write_block!(v, MAP, Maps.written(s))
@@ -9412,23 +9573,38 @@ act!(v::MapView, action, w) = begin
 end
 
 """
-The map as HTML: its picture, when one is kept, and the address under it as a
-link to Apple Maps. The picture is in the page itself, so the page needs no
-other file. A page of HTML is light, so it gets the light map when that one
-is kept.
+The map as HTML: its picture with the pin drawn in it, when a picture is
+kept, and the address under it as a link to Apple Maps. The picture is in the
+page itself, so the page needs no other file. A page of HTML is light, so it
+gets the light map when that one is kept. Nothing is asked of Apple's maps
+for it.
 """
 map_html(e, v::MapView) = begin
   s = v.data
   isempty(s.place) && return nothing
-  wide = map_wide(v)
-  kept = [Maps.picture!(media_dir(), s.place, map_zoom(v), wide, Maps.TALL, dark, centre=s.centre, start=false) for dark in (false, true)]
-  k = findfirst(p -> p.state == :there, kept)
-  file = k !== nothing ? kept[k].file : v.shown !== nothing && v.shown.place == map_place(v) && isfile(v.shown.file) ? v.shown.file : nothing
-  found = file === nothing ? "" : Maps.facts(file).address
-  address = escape(isempty(found) ? s.place : found)
-  across = file === nothing ? nothing : Maps.wide(file)
-  picture = across === nothing ? "" : "<img src=\"$(Maps.data_uri(file))\" alt=\"A map of $address\" width=\"$across\">\n"
-  "<div class=\"diagram\">\n$picture<p><a href=\"$(escape(Maps.link(s.place)))\">$address</a></p>\n</div>"
+  found = Maps.found!(media_dir(), s.place, start=false)
+  facts = found.state == :there ? Maps.facts(found.file) : nothing
+  pin = something(Maps.coordinates(s.place), facts === nothing ? nothing : (facts.lat, facts.lon), Some(nothing))
+  middle = something(s.centre, pin, Some(nothing))
+  wide, zoom = map_wide(v), map_zoom(v)
+  # The picture that the block asks for, light or else dark, or else the picture that the map shows now
+  picture = nothing
+  if middle !== nothing
+    middle = Maps.rounded(middle)
+    kept = [Maps.picture!(media_dir(), middle, zoom, wide, Maps.TALL, dark, start=false) for dark in (false, true)]
+    k = findfirst(p -> p.state == :there, kept)
+    k === nothing || (picture = (file=kept[k].file, zoom=zoom, centre=middle, wide=wide))
+  end
+  picture === nothing && v.shown !== nothing && isfile(v.shown.file) && map_shows(v) && (picture = v.shown)
+  address = escape(facts === nothing || isempty(facts.address) ? s.place : facts.address)
+  shows = ""
+  if picture !== nothing && whole_picture(picture.file)
+    at = pin === nothing ? nothing : Maps.point(pin, picture.centre, picture.zoom, picture.wide, Maps.TALL)
+    inside = at !== nothing && 0 <= at[1] <= picture.wide && 0 <= at[2] <= Maps.TALL
+    bytes = inside ? pinned_png(picture.file, at) : read(picture.file)
+    shows = "<img src=\"$(Maps.data_uri(bytes))\" alt=\"A map of $address\" width=\"$(picture.wide)\">\n"
+  end
+  "<div class=\"diagram\">\n$shows<p><a href=\"$(escape(Maps.link(s.place)))\">$address</a></p>\n</div>"
 end
 
 BLOCKS[MAP] = BlockKind("Map", "geo-alt", MapView, map_html)
@@ -10696,6 +10872,439 @@ board_html(e, v::BoardView) = begin
 end
 
 BLOCKS[BOARD] = BlockKind("Board", "kanban", BoardView, board_html)
+
+# --- blocks of the page side by side -------------------------------------------------------------
+#
+# A code block in the language `columns` holds a number, and that many of the
+# blocks after it show side by side. columns.jl says how the block is written
+# and which blocks each column holds. The blocks stay the page's own lines:
+# the caret goes into them, and every key does there what it does anywhere else.
+#
+# The page's layout does the work. `page_columns!` finds the columns before
+# the page is laid out. `column_turn!` is called at each line of the layout.
+# In a column it makes the page's text as wide as the column, so each line
+# wraps there, and each table, picture and component is made for that width.
+# A column's lines of text and its tables are placed at the column's left
+# edge. So the caret, the selection and a click find them as they find any
+# other line. Each column starts level with the first, and the page goes on
+# under the tallest. `page_parts` puts the columns side by side in the window.
+#
+# In a narrow window the blocks show one under another.
+#
+# The `columns` block itself takes no room in the page, and shows nothing.
+# `column_fold` says which lines that is: the block's own, and as many of the
+# empty lines after it as there are before it. So the room over the columns is
+# the room between two blocks. As rich text the caret steps over those lines,
+# as it steps over the ``` lines of a code block. As plain text (⌘E) the caret
+# goes through them, and the block shows its lines while the caret is on them.
+# A block that doesn't say how many columns keeps a little room, and says how
+# to write it.
+
+const COLUMN_BLOCK = Columns.COLUMNS   # the language of the block. `COLUMNS` is the columns of a takeoff's table.
+const COLUMN_GAP = 1.6     # the room between two columns, as a part of the size of the page's text
+const COLUMN_MARK = 1px    # how tall a `columns` block that says nothing is in the page, without the room above and below it
+push!(BLOCK_ICONS, "columns-gap")
+
+"One column of the page, as the layout places it"
+struct PageColumn
+  first::Int   # the lines of the page that show in it
+  last::Int
+  left::px     # how far its left edge is from the left edge of the page's text
+  wide::px
+  group::Int   # the place of its group among the page's groups of columns
+end
+
+"The columns that one `columns` block makes"
+mutable struct ColumnGroup
+  block::Int   # the line that opens the `columns` block
+  top::px      # how far down the page the layout put the columns
+  tall::px     # they're as tall as the tallest of them
+end
+
+"The columns of a page that are side by side, and what the layout does with them"
+mutable struct PageColumns
+  path::String                      # the page that they're the columns of
+  columns::Vector{PageColumn}       # in the order of their lines
+  groups::Vector{ColumnGroup}
+  folds::Vector{Tuple{Int,Int,Bool}}   # the lines of each `columns` block that takes no room, and whether the caret is in them
+  now::Union{Nothing,PageColumn}    # the column that the layout is in. The page's text is as wide as that column then.
+  busy::Bool                        # a line of a column is being laid out, so `column_at` doesn't send it round again
+  next::Int                         # the place in `columns` of the next column that the layout comes to
+  from::Int                         # the first item of the column that the layout is in
+  flows::Dict{Any,Any}              # the page's own layouts and its width, to put back after a column
+  width::px
+end
+
+"The room between two columns of the page"
+column_gap(e) = body(e).size * COLUMN_GAP
+
+"Each `columns` block of the page, with the blocks that it puts in columns. They're found again when the page has changed."
+column_groups(e) = begin
+  b = e.buf
+  get!(e.flows, (:column_groups, b.path, b.version)) do
+    # A line that holds only a picture or a formula is a block by itself
+    Columns.groups(b.lines, kinds(b), alone=i -> pictured(b, i) || maths_line(b, i))
+  end
+end
+
+"""
+The lines of a `columns` block that takes no room in the page, when line `i`
+is one of them: the first and the last. Nothing for any other line. A block
+that says how many columns takes no room. Nor do the empty lines after it, as
+many of them as there are empty lines before it: the room that's left over the
+columns is the room between two blocks of the page.
+"""
+column_fold(b::Buffer, i::Int) = begin
+  b.view == :markdown || return nothing
+  ks = kinds(b)
+  j = i
+  if ks[i].kind == Kind.blank
+    # An empty line is one of them when the block is the first thing over it
+    while j > 1 && ks[j].kind == Kind.blank
+      j -= 1
+    end
+    (ks[j].kind == Kind.fence && ks[j].level == 1) || return nothing
+  elseif !(ks[i].kind in (Kind.fence, Kind.code))
+    return nothing
+  end
+  s, t = codeblock(b, j)
+  (t > s && Columns.opens(ks[s]) && ks[t].kind == Kind.fence && ks[t].level == 1) || return nothing
+  Columns.shares(@view b.lines[s+1:t-1]) === nothing && return nothing
+  bare(k) = 1 <= k <= length(ks) && ks[k].kind == Kind.blank
+  n = 0
+  while bare(s - n - 1) && bare(t + n + 1)
+    n += 1
+  end
+  i <= t + n ? (s, t + n) : nothing
+end
+
+"""
+Find the columns of the page, before the layout: where each is across the
+page, and how wide. A window that's too narrow has none. It also finds the
+`columns` blocks that take no room. It's nothing when the page has neither. A
+layout that failed in a column left the column's width behind, so the page's
+own is put back first.
+"""
+page_columns!(e) = begin
+  old = pop!(e.nodes, :columns, nothing)
+  old !== nothing && old.now !== nothing && (e.flows = old.flows; empty!(e.flows))
+  b = e.buf
+  (b.view == :markdown && lowered(e) === nothing) || return nothing
+  found = column_groups(e)
+  isempty(found) && return nothing
+  gap = column_gap(e)
+  s = PageColumns(b.path, PageColumn[], ColumnGroup[], Tuple{Int,Int,Bool}[], nothing, false, 1, 0, e.flows, e.width)
+  for g in found
+    fold = column_fold(b, g.first)
+    # With the caret in them, the lines of the block show
+    fold === nothing || push!(s.folds, (fold..., !caretless(b) && all(p -> fold[1] <= p[1] <= fold[2], (b.caret, b.anchor))))
+  end
+  for g in (Columns.stacked(num(e.width), e.zoom) ? () : found)
+    isempty(g.spans) && continue
+    push!(s.groups, ColumnGroup(g.first, 0px, 0px))
+    left = 0px
+    # A group with fewer blocks than its number has room for the columns that it hasn't got
+    for (k, wide) in enumerate(Columns.rooms(g.shares, num(e.width), num(gap))[1:length(g.spans)])
+      lines = Columns.reach(g, k)
+      push!(s.columns, PageColumn(first(lines), last(lines), left, px(wide), length(s.groups)))
+      left += px(wide) + gap
+    end
+  end
+  isempty(s.columns) && isempty(s.folds) && return nothing
+  e.nodes[:columns] = s
+end
+
+"True when `it`, an item that the layout just made, is of a `columns` block that takes no room: the block, or an empty line after it"
+folded(s::PageColumns, e, it::Item) = begin
+  k = findfirst(f -> f[1] <= it.first <= f[2], s.folds)
+  k === nothing && return false
+  # With the caret in the block, the block is lines of code, which show
+  it.content isa Live && return it.content.node isa ColumnsView
+  it.content isa Flow && kinds(e.buf)[it.first].kind == Kind.blank && !s.folds[k][3]
+end
+
+"An item that takes no room, in the place of `it`"
+flat(e, it::Item) = Item(it.first, it.last, it.top, 0px, Flow([VLine(Seg[], 0px, 0, 0, 0px, 0px)], 0px, body(e).size, 0px, 0px, Kind.blank, false))
+
+"The column that line `i` of the page shows in, or nothing"
+column_at(e, i::Int) = begin
+  s = get(e.nodes, :columns, nothing)
+  # Another page can show before the next layout finds its columns
+  (s === nothing || s.busy || s.path != e.buf.path) && return nothing
+  for c in s.columns
+    c.first > i && break
+    i <= c.last && return c
+  end
+  nothing
+end
+
+"How far the left edge of `it` is from the left edge of the page's text, and how wide it is: its column's, or the page's"
+item_room(e, it::Item) = (c = column_at(e, it.first); c === nothing ? (0px, e.width) : (c.left, c.wide))
+
+"The layouts of the lines of a column that's as wide as `c`, kept apart from those of the page's own width"
+column_cache(s::PageColumns, c::PageColumn) = get!(() -> Dict{Any,Any}(), s.flows, (:column, c.wide))
+
+"Do `f` while the page's text is as wide as the column `c`, so that what `f` lays out and describes fits the column"
+in_column(f, e, s::PageColumns, c::PageColumn) = begin
+  width, flows = e.width, e.flows
+  e.width, e.flows = c.wide, column_cache(s, c)
+  try
+    f()
+  finally
+    e.width, e.flows = width, flows
+  end
+end
+
+"`f` moved `dx` to the right. A line of a column is placed at the column's left edge."
+shifted(f::Flow, dx::px) = dx == 0px ? f :
+  Flow([VLine([Seg(s.text, s.col, s.n, s.face, s.atomic, s.link, s.x + dx, s.w, s.node) for s in vl.segs], vl.x + dx, vl.from, vl.to, vl.top, vl.high)
+        for vl in f.lines], f.lh, f.size, f.above, f.below, f.kind, f.raw)
+shifted(g::Grid, dx::px) = dx == 0px ? g : Grid(g.rows, g.widths, g.heights, g.cells, g.flows, g.head, g.left + dx, g.values)
+shifted(content, dx::px) = content   # a sheet and a component have no place across the page of their own
+
+"Line `i` of the page, which is in the column `c`, laid out for the column's width and placed at its left edge"
+column_flow(e, c::PageColumn, i::Int, raw::Bool) = begin
+  s = e.nodes[:columns]
+  s.busy = true
+  f = try
+    # The layout of the page is in the column already. Anything else that asks is at the page's own width.
+    s.now === c ? flow(e, i, raw) : in_column(() -> flow(e, i, raw), e, s, c)
+  finally
+    s.busy = false
+  end
+  shifted(f, c.left)
+end
+
+"""
+The layout has come to line `i` of the page, and `top` is how far down the page
+it has got. This says how far down the page line `i` goes. After a `columns`
+block, line `i` goes where the block was, because the block takes no room. At
+the first line of a column, the page's text becomes as wide as the column, and
+the line goes level with the top of the group's first column. After the last line of a
+column, the page's text gets its own width back. After the last column of a
+group, the page goes on under the tallest column.
+"""
+column_turn!(s::PageColumns, e, items::Vector{Item}, i::Int, top::px) = begin
+  # A `columns` block takes no room, so the item that was just made for it goes flat, and line `i` takes its place
+  if !isempty(items) && last(items).tall > 0px && folded(s, e, last(items))
+    items[end] = flat(e, last(items))
+    top = last(items).top
+  end
+  c = s.now
+  if c !== nothing && i > c.last
+    g = s.groups[c.group]
+    g.tall = max(g.tall, top - g.top)
+    e.width, e.flows = s.width, s.flows
+    s.now = nothing
+    # A table is placed at the column's left edge, as each line of text was when it was laid out
+    for k in s.from:length(items)
+      it = items[k]
+      it.content isa Grid && (items[k] = Item(it.first, it.last, it.top, it.tall, shifted(it.content, c.left)))
+    end
+    ends = s.next > length(s.columns) || s.columns[s.next].group != c.group
+    ends && (top = g.top + g.tall)
+  end
+  if s.now === nothing && s.next <= length(s.columns) && i >= s.columns[s.next].first
+    c = s.columns[s.next]
+    g = s.groups[c.group]
+    (s.next == 1 || s.columns[s.next-1].group != c.group) && (g.top = top; g.tall = 0px)
+    s.next += 1
+    s.now, s.from = c, length(items) + 1
+    e.width, e.flows = c.wide, column_cache(s, c)
+    top = g.top
+  end
+  top
+end
+
+"How far down the page the lowest of `items` ends. In a group of columns, that's the end of the tallest column."
+lowest(e, items) = haskey(e.nodes, :columns) ? maximum(it -> it.top + it.tall, items) : last(items).top + last(items).tall
+
+"The first and the last of the items `lo` to `hi` of the page, with the whole of each group of columns that they're part of"
+whole_groups(e, items, lo::Int, hi::Int) = begin
+  first_of(k) = (c = column_at(e, items[k].first); c === nothing ? nothing : c.group)
+  while lo > 1 && first_of(lo) !== nothing && first_of(lo - 1) == first_of(lo)
+    lo -= 1
+  end
+  while hi < length(items) && first_of(hi) !== nothing && first_of(hi + 1) == first_of(hi)
+    hi += 1
+  end
+  (lo, hi)
+end
+
+"""
+The place in the page's layout of the item under a point that's `dx` across
+and `dy` down from the top left corner of the page's text. Beside a group of
+columns and between two of them, it's an item of the column that the point is
+in or after. Under a column that's shorter than its group, it's the column's
+last item.
+"""
+item_under(e, dx::px, dy::px) = begin
+  items = e.layout
+  k = something(findlast(it -> it.top <= dy, items), 1)
+  s = get(e.nodes, :columns, nothing)
+  s === nothing && return k
+  g = findfirst(g -> g.top <= dy < g.top + g.tall, s.groups)
+  g === nothing && return k
+  mine = [c for c in s.columns if c.group == g]
+  c = mine[something(findlast(c -> c.left <= dx, mine), 1)]
+  lo = findfirst(it -> it.first >= c.first, items)
+  hi = findlast(it -> it.first <= c.last, items)
+  (lo === nothing || hi === nothing || hi < lo) && return k
+  lo - 1 + something(findlast(it -> it.top <= dy, view(items, lo:hi)), 1)
+end
+
+"""
+The parts of the page that `items` show, as the document holds them: one under
+another, with the columns of a group side by side. Each column describes its
+blocks while the page's text is as wide as the column.
+"""
+page_parts(d::Document, e, items) = begin
+  parts(run) = Any[x isa Item ? describe(e, x) : x for x in blocks(d, run)]
+  s = get(e.nodes, :columns, nothing)
+  s === nothing && return parts(items)
+  out, run = Any[], Item[]
+  k, n = 1, length(items)
+  while k <= n
+    c = column_at(e, items[k].first)
+    if c === nothing
+      push!(run, items[k])
+      k += 1
+      continue
+    end
+    append!(out, parts(run))
+    empty!(run)
+    group, columns = c.group, Any[]
+    while k <= n && c !== nothing && c.group == group
+      mine = Item[]
+      while k <= n && items[k].first <= c.last
+        it = items[k]
+        # Its text is drawn from the column's own left edge
+        push!(mine, Item(it.first, it.last, it.top, it.tall, shifted(it.content, -c.left)))
+        k += 1
+      end
+      push!(columns, in_column(() -> Column(fixed(c.wide), Alignment.Start, name="Column", parts(mine)...), e, s, c))
+      c = k <= n ? column_at(e, items[k].first) : nothing
+    end
+    push!(out, Row(width(grow=grow), Alignment.Start, child_gap=column_gap(e), name="Columns", columns...))
+  end
+  append!(out, parts(run))
+  out
+end
+
+"""
+The place on line `j` that ↑ or ↓ takes the caret to from line `from`, with `x`
+as far across the page as the caret tries to stay. It's nothing when `j` isn't
+a line of the page. It follows the rules of `line_step`: the caret steps over
+a line that doesn't show, and goes onto a part like a picture as a whole.
+"""
+land(e, j::Int, by::Int, x::px, from::Int) = begin
+  b = e.buf
+  if rich(b)
+    j = step_over(b, j, by, from)
+    1 <= j <= length(b.lines) || return nothing
+    free(b, j, from) || return (j, 0)
+  end
+  1 <= j <= length(b.lines) || return nothing
+  into = item(e, j)
+  into.content isa Sheet && return enter(e, into, into.content, by, x - item_room(e, into)[1])
+  f = flow(e, j, b.plain)
+  (j, colat(f, by < 0 ? length(f.lines) : 1, x))
+end
+
+"""
+The place one line up or down the screen from the caret. ↑ and ↓ stay in a
+column of the page: they go through its blocks, and leave the group of columns
+from the column's first and last line. Into a group, they go to the column
+that's under the caret.
+"""
+vertical(e, by::Int) = begin
+  p = line_step(e, by)
+  s = get(e.nodes, :columns, nothing)
+  s === nothing && return p
+  b = e.buf
+  i = b.caret[1]
+  from, to = column_at(e, i), column_at(e, p[1])
+  from == to && return p
+  x = something(e.goal, 0px)
+  if from !== nothing
+    # In a table, the caret keeps its place across its cell. Out of the table it keeps its place across the page,
+    # so that it comes back into the column that it left.
+    it = item(e, i)
+    at = it.content isa Grid ? gridcell(it.content, b.caret) : nothing
+    at === nothing || (x = e.goal = cell_origin(it.content, at...)[1] + spot(it.content.flows[at[1]][at[2]], b.caret[2])[2])
+    # Out of a column: only the line above the group or the line under it is next, not another column's
+    (to === nothing || to.group != from.group) && return p
+    mine = [c for c in s.columns if c.group == from.group]
+    j = by > 0 ? last(mine).last + 1 : first(mine).first - 1
+    return something(land(e, j, by, x, i), b.caret)
+  end
+  # Into a group: the column that the caret is over
+  mine = [c for c in s.columns if c.group == to.group]
+  c = mine[something(findlast(c -> c.left <= x, mine), 1)]
+  something(land(e, by > 0 ? c.first : c.last, by, x, i), p)
+end
+
+"""
+The view of a `columns` block. A block that says how many columns shows
+nothing, and the layout gives it no room. One that doesn't say shows a faint
+line with words that say how to write it.
+"""
+@def mutable struct ColumnsView <: SemanticUI
+  n::Int = 0                                       # its place among the page's `columns` blocks
+  first::Int = 0                                   # the lines of its block, when the page was last laid out
+  last::Int = 0
+  shares::Union{Nothing,Vector{Float64}} = nothing   # the share of each column, or nothing when the block doesn't say
+  lines::Vector{String} = String[]                 # the lines that `shares` was read from
+  parts::Dict{Any,Any} = Dict{Any,Any}()
+end
+
+reread!(v::ColumnsView, lines) = begin
+  lines == v.lines && return v
+  v.lines = lines
+  v.shares = Columns.shares(lines)
+  v
+end
+
+"What the line of a block that doesn't say how many columns says"
+const COLUMN_WORDS = "Columns: write how many in the block, like 3"
+
+# The block is a thin strip of the page. Its line and its words are drawn over the room above and below it.
+describe(v::ColumnsView) = Box(width(grow=grow), height(COLUMN_MARK))
+cursor(::ColumnsView) = :arrow
+
+draw(ctx, size, ui::ConcreteRect, v::ColumnsView) = begin
+  v.shares === nothing || return nothing   # a block that's right shows nothing
+  e = editor(v)
+  face = Face(SANS, "", body(e).size * 0.62, colours.dim, false)
+  x, y = num(ui.left), num(ui.top)
+  rectangle(ctx, ui.left, ui.top, ui.width, 1px, background=colours.line, border=0px)
+  # The words stand on the line, at its left end, with a picture of two columns before them
+  side = num(face.size)
+  wide = side * 1.35 + num(measure(face, COLUMN_WORDS)) + 8
+  rectangle(ctx, ui.left, ui.top - px(side), px(wide), px(2side), background=colours.bg, border=0px)
+  round_box(ctx, x, y - side * 0.42, side * 0.4, side * 0.84, 1.5, line=face.color)
+  round_box(ctx, x + side * 0.55, y - side * 0.42, side * 0.4, side * 0.84, 1.5, line=face.color)
+  write_ink(ctx, COLUMN_WORDS, x + side * 1.35, y + num(capital(face)) / 2, face)
+  nothing
+end
+
+"""
+The columns of the page for a page of HTML: for each group, the first line, the
+last line and the share of each column. A column that the group has no block
+for has no lines, and keeps its room.
+"""
+html_columns(e) = map(filter(g -> !isempty(g.spans), column_groups(e))) do g
+  map(eachindex(g.shares)) do k
+    k <= length(g.spans) || return (last(g.spans[end]) + 1, last(g.spans[end]), g.shares[k])
+    (first(Columns.reach(g, k)), last(Columns.reach(g, k)), g.shares[k])
+  end
+end
+
+# In a page of HTML the block itself is nothing: its columns are there
+columns_html(e, v::ColumnsView) = v.shares === nothing ? nothing : ""
+
+# The language `column` means the same as `columns`
+foreach(lang -> BLOCKS[lang] = BlockKind("Columns", "columns-gap", ColumnsView, columns_html), Columns.LANGS)
 
 # --- a list of what was found in the pages of a folder -----------------------------------------
 #
@@ -12887,6 +13496,615 @@ end
 
 BLOCKS[EMAIL] = BlockKind("Emails", "envelope", EmailsView, emails_html)
 
+# --- contacts ----------------------------------------------------------------------------------
+#
+# A code block in the language `contact` holds contacts: people and
+# companies. contact.jl says how the block is written. Each contact shows as
+# a card: a round picture, the name, the role and the company under it, and a
+# row for each other detail. A block with nothing in it shows a card with a
+# place for a name.
+#
+#   - A click on a row uses it. An email address starts a new email, a phone
+#     number a call, an address shows in the Maps app, and a web address
+#     opens in the browser. Each one goes through `BROWSER`, as the address
+#     of a link card does, so a test opens nothing.
+#   - While the mouse is over a row, a button at its right end copies its value.
+#   - Two clicks on the name, the role, the company or the value of a row
+#     change those words where they are, with no box round them. Return keeps
+#     the change, esc leaves it, and a click somewhere else keeps it. An
+#     emptied value takes its line out of the block. So a click on a row
+#     waits a moment for a second click before it opens anything.
+#   - While the mouse is over a card, two buttons show at its top right. The
+#     + opens a menu of the details to add. The other one writes the contact
+#     as a vCard file and opens the file, so the Contacts app asks to add it.
+#   - While the mouse is over the block, a button under the last card adds a contact.
+#   - A vCard file that's dropped on the page becomes a block of its
+#     contacts, and one that's dropped on a block joins it. ⌘V does the same
+#     with a contact that was copied in the Contacts app.
+#   - A page that can't be changed, like an email, takes no changes. Its
+#     rows still open and copy.
+
+const CONTACT = Contacts.CONTACT
+push!(BLOCK_ICONS, "person-vcard", "person", "building", "envelope", "telephone", "geo-alt", "globe", "card-text", "tag",
+      "plus", "plus-circle", "person-plus", "copy", "check")
+const CONTACT_WIDE = 420px   # how wide a card is at the usual size of the text, in a page with room for it
+const CONTACT_FACE = 44px    # how wide the round picture is
+const CONTACT_PAD = 12px     # the room inside a card's edge, and between the picture and the words
+const CONTACT_NAME = 22px    # how tall the line of the name is
+const CONTACT_LINE = 20px    # and each other line of a card
+const CONTACT_WAIT = 0.35    # how many seconds a click on a row waits for a second click
+const CONTACT_COPIED = 1.2   # how many seconds the button of a row shows that it copied
+"The details that the + of a card adds: what the menu calls each, and its kind"
+const CONTACT_MENU = [("Email", :email), ("Phone", :phone), ("Address", :address), ("Website", :web), ("Note", :note)]
+"The icon of a row of each kind. A row of any other kind has a tag."
+const CONTACT_ICONS = Dict(:email => "envelope", :phone => "telephone", :address => "geo-alt", :web => "globe", :note => "card-text", :company => "building")
+"What the button of a row of each kind copies, as its tooltip says it"
+const CONTACT_COPIES = Dict(:email => "the email address", :phone => "the phone number", :address => "the address", :web => "the web address", :note => "the note")
+
+"What a `contact` block shows: a card for each contact of the block"
+@def mutable struct ContactView <: SemanticUI
+  n::Int = 0                               # its place among the page's blocks of contacts
+  first::Int = 0                           # the lines of its block, when the page was last laid out
+  last::Int = 0
+  data::Vector{Contacts.Contact} = Contacts.Contact[]
+  lines::Vector{String} = String[]         # the lines that `data` was read from
+  parts::Dict{Any,Any} = Dict{Any,Any}()   # its cards, their rows and buttons, and the field, kept between frames
+  # What's being changed where it is, or nothing: the contact's place in the block, then the line of the
+  # contact, or `:name` for its name, or the kind of a new detail, like `:email`
+  editing::Any = nothing
+  waiting::Any = nothing                   # a click on a row that opens something: when it was, the contact and the line
+  clicked::Any = (0.0, nothing, 0.0, 0.0)  # when the last click was, what it was on and where
+  copied::Any = (0.0, 0, 0)                # when a value was last copied, and its contact and its line
+  menu::Int = 0                            # the card whose menu of details is open, or 0
+end
+
+"The card of one contact"
+@def mutable struct ContactCard <: SemanticUI
+  of::Any = nothing
+  k::Int = 0
+end
+"The round picture of a card: the photo, the initials, or a building for a company"
+@def mutable struct ContactFace <: SemanticUI
+  of::Any = nothing
+  k::Int = 0
+  key::String = ""   # of the photo, for drawing, or "" when the card has none to show
+end
+"Words of a card that two clicks change where they are: the name, the role or the company"
+@def mutable struct ContactWords <: SemanticUI
+  of::Any = nothing
+  k::Int = 0
+  i::Any = :name       # the line of the contact, or `:name`
+  room::px = 0px       # how wide the words can be
+  tight::Bool = false  # other words follow them on their line, so the field is as wide as what's typed
+end
+"A row of a card: one detail, with its icon"
+@def mutable struct ContactRow <: SemanticUI
+  of::Any = nothing
+  k::Int = 0
+  i::Any = 0           # the line of the contact, or the kind of a new detail that's being typed
+  room::px = 0px       # how wide the row is
+end
+"A small button of a card, with only an icon. A click does `contact_act!(view, action, window)`."
+@def mutable struct ContactButton <: SemanticUI
+  of::Any = nothing
+  action::Any = (:none,)
+  icon::String = ""
+  tip::String = ""
+  quiet::Bool = false   # clicked, so no tooltip until the mouse leaves it
+end
+
+"The field that takes the place of words of a card while you change them"
+contact_input(v::ContactView) = block_part!(v, :edit) do
+  TextInput(placeholder="", font_family=SANS, font_size=13px,
+            look=(_, text) -> Row(width(grow=grow), height(grow=grow), clip=true, text))
+end
+
+"""
+That field in a box with no border and no background, set to draw its text
+`size` tall. `sizing` says how wide and how tall the box is.
+"""
+contact_field(v::ContactView, size, sizing...) = begin
+  input = contact_input(v)
+  input.color = colours.ink
+  theme = component_theme(editor(v).zoom)
+  # A size in points is a part of the theme's size
+  input.font_size = (12 * num(size) / num(theme.size))pt
+  with_theme(() -> Box(sizing..., input), theme)
+end
+
+"""
+A part of a block of contacts that's kept between frames. `parent` is the part
+that it's drawn in. So the mouse over a button of a row is over the row too,
+and over the row's card.
+"""
+contact_part!(make, v::ContactView, key, parent) = begin
+  node = get!(make, v.parts, key)
+  node.parent === nothing && setfield!(node, :parent, parent)
+  node
+end
+
+contact_card!(v::ContactView, k) = contact_part!(() -> ContactCard(of=v, k=k), v, (:card, k), v)
+contact_words!(v::ContactView, k, i) = contact_part!(() -> ContactWords(of=v, k=k, i=i), v, (:words, k, i), contact_card!(v, k))
+contact_row!(v::ContactView, k, i) = contact_part!(() -> ContactRow(of=v, k=k, i=i), v, (:row, k, i), contact_card!(v, k))
+"The button of the block that's kept for `action`, with what it shows now"
+contact_button!(v::ContactView, action, icon, tip, parent) = begin
+  b = contact_part!(() -> ContactButton(of=v), v, (:button, action), parent)
+  b.action, b.icon, b.tip = action, icon, tip
+  b
+end
+
+reread!(v::ContactView, lines) = begin
+  lines == v.lines && return v
+  v.lines = lines
+  v.data = Contacts.contacts(lines)
+  # The line that was being changed can go, as when ⌘Z takes it back
+  v.editing = v.waiting = nothing
+  v
+end
+
+"True for contacts in a page that can't be changed, like an email. They take no changes."
+locked(v::ContactView) = (b = editor(v).buf; readonly(b) || b.fixed)
+
+"The contact at `k` of the block. A place after the last one has a contact with nothing in it: the one that a new name starts."
+contact_of(v::ContactView, k::Int) = k in eachindex(v.data) ? v.data[k] : Contacts.Contact()
+
+"How many cards the block shows: one for each contact, one for a block with none, and one more while a new contact gets its name"
+contact_cards(v::ContactView) = max(1, length(v.data), v.editing === nothing ? 0 : v.editing[1])
+
+"How wide a card is in the page: 420 px at the usual size of the text, and no wider than the page's text"
+contact_wide(v::ContactView) = (e = editor(v); min(CONTACT_WIDE * e.zoom, e.width))
+
+"""
+Keep what the field holds: write it into the line that was being changed, as
+the name, or as a new detail. A contact that's left with no lines goes out of
+the block. It's true when that changed the block.
+"""
+settle!(v::ContactView) = begin
+  v.editing === nothing && return false
+  k, what = v.editing
+  text = contact_input(v).text
+  v.editing = nothing
+  locked(v) && return false
+  list = Contacts.contacts(v.lines)
+  fresh = k > length(list)
+  c = fresh ? Contacts.Contact() : list[k]
+  changed = what === :name ? Contacts.rename!(c, text) : what isa Symbol ? Contacts.add!(c, what, text) : Contacts.set!(c, what, text)
+  changed || return false
+  fresh && Contacts.add!(list, c)
+  isempty(c.lines) && Contacts.remove!(list, k)
+  write_block!(v, CONTACT, Contacts.written(list))
+  true
+end
+
+"""
+Put the field in the place of words of contact `k`, with the words in it and
+selected. `what` is the line of the contact, or `:name`, or the kind of a new
+detail, which starts with nothing in it.
+"""
+change!(v::ContactView, k::Int, what) = begin
+  locked(v) && return handled
+  c = contact_of(v, k)
+  words = what === :name ? Contacts.title(c) : what isa Symbol ? "" : what in eachindex(c.lines) ? c.lines[what].value : nothing
+  words === nothing && return handled
+  input = contact_input(v)
+  input.text = words
+  input.anchor, input.cursor, input.scroll = 0, length(words), 0px
+  input.placeholder = what === :name ? "Name" : what isa Symbol ? first(CONTACT_MENU[findfirst(m -> last(m) == what, CONTACT_MENU)]) : ""
+  v.editing, v.waiting = (k, what), nothing
+  v.clicked = (0.0, nothing, 0.0, 0.0)
+  # The press isn't a click on the page's text, so the text doesn't select when the mouse moves
+  e = editor(v)
+  e.clicked = (e.clicked[1], e.clicked[2], 0)
+  focus(input)
+  handled
+end
+
+"Note a click on `what`. True when it's the second of two clicks in one place."
+contact_twice!(v::ContactView, what, w) = begin
+  at, on, x, y = v.clicked
+  mx, my = num(w.mouse[1]), num(w.mouse[2])
+  v.clicked = (time(), what, mx, my)
+  time() - at < CONTACT_WAIT && on == what && hypot(mx - x, my - y) < 4
+end
+
+"True when the block can open something now. A window that isn't on the screen opens nothing, unless a test put its own function in place of the browser."
+contact_opens(v::ContactView) = on_screen(v) || BROWSER[] !== open_url
+
+"Open what line `i` of contact `k` names: a new email, a call, the Maps app or the browser"
+use_row!(v::ContactView, k, i) = begin
+  c = contact_of(v, k)
+  i in eachindex(c.lines) || return nothing
+  to = Contacts.link(c.lines[i])
+  to === nothing || !contact_opens(v) || BROWSER[](to)
+  nothing
+end
+
+"Write contact `k` as a vCard file in a folder for temporary files, and open the file, so the Contacts app asks to add it"
+keep_contact!(v::ContactView, k) = begin
+  c = contact_of(v, k)
+  (Contacts.isblank(c) || !contact_opens(v)) && return nothing
+  path = joinpath(mktempdir(), Contacts.filename(c))
+  write(path, Contacts.vcard(c))
+  BROWSER[](path)
+  nothing
+end
+
+"Do what a button of a card does"
+contact_act!(v::ContactView, action, w) = begin
+  kind = action[1]
+  # What was being changed is kept first. A line that went with it leaves the others in new places.
+  n = length(v.lines)
+  settle!(v)
+  length(v.lines) == n || kind == :new || return handled
+  if kind == :copy
+    c = contact_of(v, action[2])
+    if action[3] in eachindex(c.lines)
+      clipboard!(w, c.lines[action[3]].value)
+      v.copied = (time(), action[2], action[3])
+      redraw_in!(v, CONTACT_COPIED + 0.05)   # so that the button shows its own icon again
+    end
+  elseif kind == :more
+    # The menu hangs under the button, which stays while the menu is open
+    k = action[2]
+    v.menu = k
+    show_menu!(w, [first(m) for m in CONTACT_MENU], w.mouse[1], w.mouse[2], 150px, theme=menu_theme(), item_height=28px, lift=3.0,
+               under=v.parts[(:button, action)], gap=4px,
+               onselect=j -> (v.menu = 0; j in eachindex(CONTACT_MENU) && change!(v, k, last(CONTACT_MENU[j])); nothing))
+  elseif kind == :keep
+    keep_contact!(v, action[2])
+  elseif kind == :new
+    change!(v, length(v.data) + 1, :name)
+  end
+  handled
+end
+
+"""
+What happens to a block of contacts in each frame, before the page is laid
+out. A click somewhere else keeps what the field holds. A click on a row
+that no second click followed opens what the row names.
+"""
+block_tick!(v::ContactView) = begin
+  w = window_of(v)
+  typing = w !== nothing && w.focus === contact_input(v)
+  v.editing === nothing || typing || settle!(v)
+  # The field went, as when ⌘Z took its line back, so the page has the keyboard again
+  v.editing === nothing && typing && focus(editor(v))
+  if v.waiting !== nothing && time() - v.waiting[1] >= CONTACT_WAIT
+    _, k, i = v.waiting
+    v.waiting = nothing
+    use_row!(v, k, i)
+  end
+  v
+end
+
+# The keys that the field has no use for come here. Return keeps what's typed, and esc leaves the words as they were.
+onkey(v::ContactView, ev::KeyPress{Keys.enter}) = ev.window.focus === contact_input(v) ? (settle!(v); focus(editor(v)); handled) : nothing
+onkey(v::ContactView, ev::KeyPress{Keys.escape}) = ev.window.focus === contact_input(v) ? (v.editing = nothing; focus(editor(v)); handled) : nothing
+
+# Return, while the caret is on the block as a whole, starts on the name of its first contact
+keyboard_part(v::ContactView) = locked(v) ? nothing : (v.editing === nothing && change!(v, 1, :name); contact_input(v))
+
+describe(b::ContactButton) = begin
+  ishovered(b) || (b.quiet = false)
+  z = editor(b.of).zoom
+  Box(fixed(20px * z), height(20px * z), radius(5px * z), Alignment.Center, name="Button", background(ishovered(b) ? colours.active : clear),
+      Row(Alignment.Center, Icon(b.icon, size=13px * z, color=colours.dim)))
+end
+
+cursor(::ContactButton) = :hand
+onmouse(b::ContactButton, ev::MouseMove) = begin
+  (b.quiet || isempty(b.tip)) && return
+  show_tooltip!(ev.window, tip_label(b.tip), b, placement=:bottom, gap=6px)
+end
+onkey(b::ContactButton, ev::KeyPress{Keys.mouse_left}) = begin
+  b.quiet = true
+  hide_tooltip!(ev.window)
+  contact_act!(b.of, b.action, ev.window)
+end
+
+"""
+The key, for drawing, of the picture that a contact names, or "" while there's
+none to show. A file is named from the page's folder, as a picture line names
+one. A picture from the web is fetched in the background and kept, as the
+picture of a link card is. An email asks a web site for nothing.
+"""
+contact_photo(e, src::AbstractString) = begin
+  isempty(src) && return ""
+  occursin(r"^https?://"i, src) && return Mail.isemail(e.buf.path) ? "" : card_picture(e, src)
+  something(picture_key(abspath(docdir(e), expanduser(unescaped(src)))), "")
+end
+
+describe(f::ContactFace) = begin
+  v = f.of
+  e = editor(v)
+  z = e.zoom
+  c = contact_of(v, f.k)
+  side = CONTACT_FACE * z
+  f.key = contact_photo(e, Contacts.photo(c))
+  # With no photo: a building for a company, the initials of a person, and a head for a contact with no name yet
+  letters = Contacts.initials(Contacts.title(c))
+  mark = !isempty(f.key) ? () : Contacts.iscompany(c) ? (Icon("building", size=20px * z, color=colours.accent),) :
+         isempty(letters) ? (Icon("person", size=22px * z, color=colours.faint),) :
+         (label(letters, 16px * z, color=colours.accent, weight="Semibold"),)
+  Box(fixed(side), height(side), radius(side / 2), Alignment.Center, name="Picture",
+      background(isempty(letters) && !Contacts.iscompany(c) ? colours.hover : tint(colours.accent, 0.13)), Row(Alignment.Center, mark...))
+end
+
+# The photo fills the circle. What doesn't fit in a square is cut off at its sides, or at its top and bottom.
+draw(ctx, size, ui::ConcreteRect, f::ContactFace) = begin
+  isempty(f.key) && return
+  source = try image_source(f.key) catch; return end
+  w, h = Float64(source.width), Float64(source.height)
+  side = min(w, h)
+  side > 0 || return
+  with_round_clip(ctx, ui.left, ui.top, ui.width, ui.height, ui.width / 2) do
+    paint_picture(ctx, source.raw, ((w - side) / 2, (h - side) / 2, side, side), (num(ui.left), num(ui.top), num(ui.width), num(ui.height)))
+  end
+end
+
+describe(t::ContactWords) = begin
+  v = t.of
+  z = editor(v).zoom
+  c = contact_of(v, t.k)
+  name = t.i === :name
+  size, tall = name ? (15px * z, CONTACT_NAME * z) : (13px * z, CONTACT_LINE * z)
+  if v.editing == (t.k, t.i)
+    # The words are changed where they are, with no box round them. A field with words after it is as wide as what's typed.
+    field = contact_input(v)
+    typed = measure(Face(SANS, "", size, colours.ink, false), isempty(field.text) ? field.placeholder : field.text) + 4px * z
+    wide = t.tight ? fixed(clamp(typed, 24px * z, max(24px * z, t.room))) : width(grow=grow)
+    return contact_field(v, size, wide, height(tall))
+  end
+  words = name ? Contacts.title(c) : t.i in eachindex(c.lines) ? c.lines[t.i].value : ""
+  face = Face(SANS, name ? "Semibold" : "", size, name ? colours.ink : colours.dim, false)
+  # A contact with no name says where its name goes
+  shown, colour = isempty(words) && name ? (on_paper(editor(v)) || locked(v) ? "" : "Name", colours.faint) : (shortened(face, words, t.room), face.color)
+  Row(height(tall), Box(label(shown, size, color=colour, weight=face.style)))
+end
+
+cursor(t::ContactWords) = :arrow
+# Two clicks change the words. A contact with no name takes its name at the first click. Any other click goes on to the page.
+onkey(t::ContactWords, ev::KeyPress{Keys.mouse_left}) = begin
+  v = t.of
+  (held(v, Keys.opt) || locked(v) || v.editing == (t.k, t.i)) && return nothing
+  twice = contact_twice!(v, (t.k, t.i), ev.window)
+  settle!(v) && return nothing   # the click kept what was being changed, and the lines aren't where they were
+  nameless = t.i === :name && isempty(Contacts.title(contact_of(v, t.k)))
+  twice || nameless ? change!(v, t.k, t.i) : nothing
+end
+
+"The lines that the value of the detail `d` takes in a row with `room` for it. An address and a note wrap. Anything else is one line."
+contact_lines(d::Contacts.Detail, face::Face, room) =
+  d.kind in (:email, :web, :phone) || isempty(d.value) ? [d.value] : wrapped(face, d.value, num(room))
+
+describe(r::ContactRow) = begin
+  v, k = r.of, r.k
+  e = editor(v)
+  z = e.zoom
+  c = contact_of(v, k)
+  # A new detail that's being typed has no line yet
+  d = r.i isa Symbol ? Contacts.Detail(r.i, "", "") : r.i in eachindex(c.lines) ? c.lines[r.i] : nothing
+  d === nothing && return Box(height(0px))
+  size, line, gap = 13px * z, CONTACT_LINE * z, 7px * z
+  editing = v.editing == (k, r.i)
+  to = Contacts.link(d)
+  face = Face(SANS, "", size, to === nothing ? colours.ink : colours.accent, false)
+  grey = Face(SANS, "", size, colours.dim, false)
+  # The label of a row that has one is cut short before it takes more than a third of the row
+  caption = shortened(grey, Contacts.caption(d), r.room / 3)
+  room = r.room - 15px * z - gap - (isempty(caption) ? 0px : measure(grey, caption) + gap) - 20px * z - gap
+  lines = contact_lines(d, face, room)
+  cell(words, colour) = Row(height(line), Box(label(words, size, color=colour)))
+  value = if editing
+    # The words are changed where they are, with no box round them. The row stays as tall as it was.
+    Column(width(grow=grow), Alignment.Start, contact_field(v, size, width(grow=grow), height(line)),
+           (length(lines) > 1 ? (Box(height(line * (length(lines) - 1))),) : ())...)
+  else
+    Column(width(grow=grow), Alignment.Start, (cell(shortened(face, words, room), face.color) for words in lines)...)
+  end
+  over = ishovered(r) && !editing && !isempty(d.value) && !on_paper(e)
+  done = v.copied[2:3] == (k, r.i) && time() - v.copied[1] < CONTACT_COPIED
+  button = over || done ? (contact_button!(v, (:copy, k, r.i), done ? "check" : "copy", "Copy " * get(CONTACT_COPIES, d.kind, "this"), r),) : ()
+  Row(width(grow=grow), Alignment.Start, child_gap=gap, name="Detail",
+    Box(fixed(15px * z), height(line), Alignment.Center, Row(Alignment.Center, Icon(get(CONTACT_ICONS, d.kind, "tag"), size=13px * z, color=colours.dim))),
+    (isempty(caption) ? () : (cell(caption, colours.dim),))...,
+    value,
+    Box(fixed(20px * z), height(line), Alignment.Center, button...))
+end
+
+cursor(r::ContactRow) = begin
+  c = contact_of(r.of, r.k)
+  r.i in eachindex(c.lines) && Contacts.link(c.lines[r.i]) !== nothing ? :hand : :arrow
+end
+
+# A click on a row opens what the row names, once it's known that no second click comes. Two clicks change
+# the row's value. The click goes on to the page, which takes the keyboard back from the field.
+onkey(r::ContactRow, ev::KeyPress{Keys.mouse_left}) = begin
+  v = r.of
+  (held(v, Keys.opt) || v.editing == (r.k, r.i)) && return nothing
+  twice = contact_twice!(v, (r.k, r.i), ev.window)
+  settle!(v) && return nothing   # the click kept what was being changed, and the lines aren't where they were
+  c = contact_of(v, r.k)
+  r.i in eachindex(c.lines) || return nothing
+  # A page that can't be changed has no second click to wait for
+  locked(v) && return use_row!(v, r.k, r.i)
+  twice && return change!(v, r.k, r.i)
+  if Contacts.link(c.lines[r.i]) !== nothing
+    v.waiting = (time(), r.k, r.i)
+    redraw_in!(v, CONTACT_WAIT + 0.02)
+  end
+  nothing
+end
+
+describe(card::ContactCard) = begin
+  v, k = card.of, card.k
+  e = editor(v)
+  z = e.zoom
+  c = contact_of(v, k)
+  pad = CONTACT_PAD * z
+  inner = contact_wide(v) - 2pad - 2px - CONTACT_FACE * z - pad   # how wide the column beside the picture is
+  over = !on_paper(e) && (ishovered(card) || v.menu == k)
+  # The buttons have their room at the top right, so the name isn't cut shorter when they show
+  buttons = 44px * z
+  name = contact_words!(v, k, :name)
+  name.room, name.tight = inner - buttons - 4px * z, false
+  filler(node) = v.editing == (k, node.i) && !node.tight ? () : (Box(width(grow=grow)),)
+  head = Row(width(grow=grow), height(CONTACT_NAME * z), justify=Alignment.Start, name, filler(name)...,
+    Row(fixed(buttons), height(20px * z), child_gap=2px * z, justify=Alignment.End,
+      (over && !locked(v) ? (contact_button!(v, (:more, k), "plus", "Add a detail", card),) : ())...,
+      (over && !Contacts.isblank(c) ? (contact_button!(v, (:keep, k), "person-plus", "Add to Contacts", card),) : ())...))
+  # Under the name of a person: the role, a comma, the company
+  role, firm = Contacts.under(c)
+  grey = Face(SANS, "", 13px * z, colours.dim, false)
+  both = role !== nothing && firm !== nothing
+  comma = both ? measure(grey, ",") + 4px * z : 0px
+  under = Any[]
+  taken = 0px
+  if role !== nothing
+    t = contact_words!(v, k, role)
+    # The company keeps half of the line at the least
+    t.tight, t.room = both, both ? max(inner / 2, inner - comma - measure(grey, c.lines[firm].value)) : inner
+    taken = min(measure(grey, c.lines[role].value), t.room)
+    push!(under, t)
+    both && push!(under, Row(height(CONTACT_LINE * z), Box(label(",", 13px * z, color=colours.dim))), Box(width(4px * z)))
+  end
+  if firm !== nothing
+    t = contact_words!(v, k, firm)
+    t.tight, t.room = false, inner - taken - comma
+    push!(under, t)
+  end
+  tag = isempty(under) ? () : (Row(width(grow=grow), height(CONTACT_LINE * z), justify=Alignment.Start, under..., filler(under[end])...),)
+  rows = Any[contact_row!(v, k, i) for i in Contacts.rows(c)]
+  # A new detail that's being typed is a row at the end
+  v.editing !== nothing && v.editing[1] == k && v.editing[2] isa Symbol && v.editing[2] !== :name && push!(rows, contact_row!(v, k, v.editing[2]))
+  foreach(r -> r.room = inner, rows)
+  # A card with only a name, or a name and the line under it, has them level with the middle of the picture
+  Row(fixed(contact_wide(v)), isempty(rows) ? Alignment.Center : Alignment.Start, padding(pad), child_gap=pad, radius(8px), border(1px, :solid, colours.line),
+      background(colours.block), clip=true, name="Contact",
+    contact_part!(() -> ContactFace(of=v, k=k), v, (:face, k), card),
+    Column(width(grow=grow), Alignment.Start, head, tag..., (isempty(rows) ? () : (Box(height(5px * z)),))..., rows...))
+end
+
+cursor(::ContactCard) = :arrow
+cursor(::ContactView) = :arrow
+
+describe(v::ContactView) = begin
+  e = editor(v)
+  z = e.zoom
+  wide = contact_wide(v)
+  cards = [contact_card!(v, k) for k in 1:contact_cards(v)]
+  # The button that adds a contact has its room under the last card, so the page doesn't move when it shows.
+  # It's there while the mouse is over the block, and not while a new contact gets its name.
+  adds = !locked(v) && !on_paper(e)
+  starting = v.editing !== nothing && v.editing[1] > length(v.data)
+  more = !adds ? () : (Row(fixed(wide), height(22px * z), justify=Alignment.Start,
+    (ishovered(v) && !starting && !isempty(v.data) ? (contact_button!(v, (:new,), "plus-circle", "Add a contact", v),) : ())...),)
+  Box(width(grow=grow), Alignment.Start,
+    Column(fixed(wide), Alignment.Start, name="Contacts",
+      Column(fixed(wide), Alignment.Start, child_gap=8px * z, cards...), more...))
+end
+
+"The contacts of the block as HTML: a card for each one, with the class names of the h-card microformat"
+contact_html(e, v::ContactView) = Contacts.markup(v.data)
+
+BLOCKS[CONTACT] = BlockKind("Contact", "person-vcard", ContactView, contact_html)
+
+# --- contacts from a vCard ---------------------------------------------------------------------
+#
+# The Contacts app writes a contact as a vCard: a .vcf file, or text that
+# starts with BEGIN:VCARD. contact.jl reads one. A vCard file that's dropped
+# on the page, or pasted, goes in as a block of its contacts.
+
+"The contacts that the file at `path` holds, when it's a vCard file. Any other file has none, and so has one that can't be read."
+file_contacts(path::AbstractString) = begin
+  (isfile(path) && lowercase(splitext(path)[2]) in (".vcf", ".vcard")) || return Contacts.Contact[]
+  try Contacts.from_vcard(read(path, String)) catch; Contacts.Contact[] end
+end
+
+"The contacts of the vCard files among `paths`, and the paths that are left"
+split_contacts(paths) = begin
+  list = Contacts.Contact[]
+  rest = filter(paths) do p
+    found = file_contacts(p)
+    foreach(c -> Contacts.add!(list, c), found)
+    isempty(found)
+  end
+  (list, rest)
+end
+
+"The block of contacts under the mouse, or nothing. Only a block that the page shows now is where it was last drawn."
+contacts_at(e, w) = begin
+  x, y = w.mouse
+  for it in view(e.layout, intersect(e.shown, eachindex(e.layout)))
+    node = it.content isa Live ? it.content.node : nothing
+    node isa ContactView || continue
+    r = rect(node)
+    r !== nothing && r.left <= x < r.left + r.width && r.top <= y < r.top + r.height && return node
+  end
+  nothing
+end
+
+"Add `list` to the contacts of the block, each one after an empty line. It's true when the block took them."
+add_contacts!(v::ContactView, list) = begin
+  (isempty(list) || locked(v)) && return false
+  settle!(v)
+  all = Contacts.contacts(v.lines)
+  foreach(c -> Contacts.add!(all, c), list)
+  write_block!(v, CONTACT, Contacts.written(all))
+  true
+end
+
+"""
+Put the contacts of `list` into the text at `at`, and give the place for the
+caret. In a block of contacts, they join the block. Anywhere else, they go in
+as a new block under the block that `at` is in, as a picture that's dropped
+does, and the caret goes to an empty line under it.
+"""
+put_contacts!(e, list, at::Pos) = begin
+  b = e.buf
+  (isempty(list) || readonly(b) || b.fixed) && return at
+  ks = kinds(b)
+  if ks[at[1]].kind in (Kind.fence, Kind.code)
+    s, t = codeblock(b, at[1])
+    if ks[s].lang == CONTACT && t > s && ks[t].kind == Kind.fence && ks[t].level == 1
+      all = Contacts.contacts(b.lines[s+1:t-1])
+      foreach(c -> Contacts.add!(all, c), list)
+      edit!(b, line_end(b, s), line_end(b, t - 1), "\n" * join(Contacts.written(all), "\n"))
+      return (s, 0)
+    end
+  end
+  under = block_end(b, at[1])
+  empty = isempty(strip(b.lines[under]))
+  block = ["```$CONTACT"; Contacts.written(collect(Contacts.Contact, list)); "```"]
+  # An empty line goes under the block, for the caret, unless the page has one there
+  spare = under < length(b.lines) && isempty(strip(b.lines[under+1]))
+  edit!(b, empty ? (under, 0) : line_end(b, under), line_end(b, under), (empty ? "" : "\n\n") * join(block, "\n") * (spare ? "" : "\n"))
+  (under + (empty ? 0 : 2) + length(block), 0)
+end
+
+"Put the contacts of `list` in the page at the caret, in place of what's selected, as ⌘V does with a contact that was copied"
+paste_contacts!(e, list) = begin
+  b = e.buf
+  selecting(b) && type!(e, "")
+  b.caret = b.anchor = put_contacts!(e, list, settle(b, b.caret))
+  focus(e)
+  touch!(e)
+end
+
+"""
+The contacts that ⌘V pastes, or none: the clipboard holds the text of a
+vCard, or a contact that was copied in the Contacts app. In a code block of
+another language, a vCard is pasted as its text.
+"""
+copied_contacts(e, text::AbstractString) = begin
+  b = e.buf
+  b.view == :markdown || return Contacts.Contact[]   # a file of code has no blocks
+  k = kinds(b)[b.caret[1]]
+  k.kind == Kind.code && kinds(b)[codeblock(b, b.caret[1])[1]].lang != CONTACT && return Contacts.Contact[]
+  card = Contacts.isvcard(text) ? text : Sys.isapple() ? Pasteboard.vcard() : ""
+  try Contacts.from_vcard(card) catch; Contacts.Contact[] end
+end
+
 # --- a signature -------------------------------------------------------------------------------
 #
 # A code block in the language `signature` is a place where a person signs
@@ -13095,6 +14313,175 @@ signature_html(e, v::SignatureView) = begin
 end
 
 BLOCKS[SIGNATURE] = BlockKind("Signature", "pen", SignatureView, signature_html)
+# --- a link card -------------------------------------------------------------------------------
+#
+# A code block in the language `card` shows a card for each web address in
+# its lines: the page's title, two lines of its description, its picture, and
+# the name of its site beside the site's icon. A click on a card with ⌘ held
+# opens its address in the browser. In a page that's never changed, a click
+# opens it with no key held. A line of the block that isn't a web address
+# shows as faint text.
+#
+# Kaydown gets each page in the background, and reads what the page says of
+# itself. See linkcard.jl. It keeps that, and the picture, in a folder of the
+# Mac's caches, so the card shows at once the next time, and with no network.
+# Until the page has come, and when it can't be had, the card shows the
+# address. Kaydown asks the web for nothing in an email, and in a window that
+# isn't on the screen.
+
+const CARD = Cards.CARD
+push!(BLOCK_ICONS, "link-45deg", "globe")
+
+"What opens the address of a card: the browser. A test puts its own function here."
+const BROWSER = Ref{Function}(open_url)
+
+"The folder that keeps what the cards read from the web, and their pictures"
+cards_dir() = isempty(MEDIA_CACHE[]) ? joinpath(homedir(), "Library", "Caches", "Kaydown", "cards") : joinpath(MEDIA_CACHE[], "cards")
+
+"What a `card` block shows: a card for each web address in its lines"
+@def mutable struct CardsView <: SemanticUI
+  n::Int = 0                               # its place among the page's `card` blocks
+  first::Int = 0                           # the lines of its block, when the page was last laid out
+  last::Int = 0
+  lines::Vector{String} = String[]         # the lines that `entries` was read from
+  entries::Vector{Cards.Entry} = Cards.Entry[]   # each line of the block that has something in it
+  parts::Dict{Any,Any} = Dict{Any,Any}()   # its cards, kept between frames
+end
+
+"A card of a `card` block: what the web page at one address says of itself"
+@def mutable struct LinkCard <: SemanticUI
+  of::Any = nothing      # the view of its block
+  card::Cards.Card = Cards.Card("")
+  picture::String = ""   # the key of the page's picture, for an Image, or "" while there's none
+  icon::String = ""      # and the key of the site's icon
+end
+
+reread!(v::CardsView, lines) = (lines == v.lines || (v.lines = lines; v.entries = Cards.entries(lines)); v)
+
+# The sizes of a card's title, of its description and of the name of its site, as parts of the size of the page's text
+const CARD_TITLE, CARD_WORDS, CARD_SOURCE = 0.92, 0.8, 0.74
+const CARD_LINE = 1.36   # how tall a line of a card is, as a part of the size of its text
+const CARD_PAD = 0.65    # the room inside a card's edge, as a part of the size of the page's text
+
+"How tall a card is in a page whose text is `s` tall. Every card is as tall as the next, so the page's text doesn't move when a card fills in."
+card_tall(s) = s * (2CARD_PAD + CARD_LINE * (CARD_TITLE + 2CARD_WORDS + CARD_SOURCE) + 0.45)
+
+"`words` cut short with … so that they're no wider than `room` in `face`"
+shortened(face::Face, words::AbstractString, room) = begin
+  (room <= 0px || measure(face, words) <= room) && return String(words)
+  cs = collect(words)
+  lo, hi = 0, length(cs)
+  while lo < hi
+    mid = (lo + hi + 1) ÷ 2
+    measure(face, rstrip(String(cs[1:mid])) * "…") <= room ? (lo = mid) : (hi = mid - 1)
+  end
+  rstrip(String(cs[1:lo])) * "…"
+end
+
+"The picture with the key `key` in a box `wide` by `tall`. The picture fills the box, and the box cuts off what doesn't fit."
+covered(key, wide, tall) = begin
+  aspect = image_aspect(key)
+  w, h = aspect > wide / tall ? (tall * aspect, tall) : (wide, wide / aspect)
+  Box(fixed(wide), height(tall), radius(6px), clip=true, Image(key, fixed(w), height(h)))
+end
+
+"""
+True when Kaydown can ask the web for what a card shows: the page isn't an
+email, and its window is on the screen. A window that a test makes isn't, so a
+test asks the web for nothing, unless it put its own function in place of `curl`.
+"""
+online(e) = !Mail.isemail(e.buf.path) && (Cards.getter[] !== Cards.curl || (w = window_of(e); w !== nothing && !isempty(w.glfw)))
+
+"The key, for an Image, of the picture at the web address `url`, or \"\" while Kaydown has none. It asks for the next frame while the picture is on its way."
+card_picture(e, url) = begin
+  file, coming = Cards.picture!(url, cards_dir(), ask=online(e))
+  coming && redraw_in!(e, 0.2)   # look again soon
+  file === nothing ? "" : something(picture_key(file), "")
+end
+
+"The card of the block view `v` for the address `url`, which is its `k`th line that has something in it, with what Kaydown knows of the page now"
+link_card!(v::CardsView, k, url) = begin
+  e = editor(v)
+  c = block_part!(() -> LinkCard(of=v), v, (:card, k))
+  card, coming = Cards.lookup!(url, cards_dir(), ask=online(e))
+  coming && redraw_in!(e, 0.2)   # look again soon
+  # A picture that the card has already isn't looked for again on each frame
+  same = c.card == card
+  c.card = card
+  same && !isempty(c.picture) || (c.picture = card_picture(e, card.image))
+  same && !isempty(c.icon) || (c.icon = card_picture(e, card.icon))
+  c
+end
+
+"A line of faint words in a `card` block, in a page whose text is `s` tall and `wide` across"
+card_note(words, s, wide) = begin
+  face = Face(SANS, "", s * CARD_WORDS, colours.faint, false)
+  Box(width(grow=grow), height(face.size * CARD_LINE), padding(s * CARD_PAD, 0px), Alignment.Start, justify=Alignment.Center,
+      label(shortened(face, words, wide - 2s * CARD_PAD), face.size, color=face.color))
+end
+
+describe(v::CardsView) = begin
+  e = editor(v)
+  s = body(e).size
+  # An empty block has the outline of a card, with what to write in it
+  isempty(v.entries) && return Column(width(grow=grow), Alignment.Start, padding(0px, s * 0.5), radius(8px), border(1px, :solid, colours.line),
+                                      background(colours.block), name="Link cards",
+                                      card_note("Write a web address here, like https://julialang.org", s, e.width))
+  Column(width(grow=grow), Alignment.Start, child_gap=s * 0.5, name="Link cards",
+    [entry.address ? link_card!(v, k, entry.text) : card_note(entry.text, s, e.width) for (k, entry) in enumerate(v.entries)]...)
+end
+
+describe(c::LinkCard) = begin
+  e = editor(c)
+  s, wide, card = body(e).size, e.width, c.card
+  pad = s * CARD_PAD
+  inside = card_tall(s) - 2pad - 2px
+  # The picture is at the right, and takes no more than a third of the card
+  across = isempty(c.picture) ? 0px : min(inside * 1.75, wide * 0.3)
+  room = wide - 2pad - 2px - (across > 0px ? across + pad : 0px)
+  # An address that stands in for the title isn't bold
+  title = Face(SANS, isempty(card.title) ? "" : "Semibold", s * CARD_TITLE, colours.ink, false)
+  words = Face(SANS, "", s * CARD_WORDS, colours.dim, false)
+  source = Face(SANS, "", s * CARD_SOURCE, colours.faint, false)
+  line(face, text, room) = Box(width(grow=grow), height(face.size * CARD_LINE), Alignment.Start, justify=Alignment.Center,
+                               label(shortened(face, text, room), face.size, color=face.color, weight=face.style))
+  # The description has two lines at most, and the second ends in … when there's more
+  under = Cards.blurb(card)
+  told = isempty(under) ? String[] : wrapped(words, under, num(room))
+  length(told) > 2 && (told = [told[1], join(told[2:end], " ")])
+  mark = source.size * 1.15
+  # Many sites have a dark icon with nothing behind it, which a dark page would hide. There it has a light square behind it.
+  page = convert(RGBA{Float64}, colours.bg)
+  behind = page.r + page.g + page.b < 1.5 ? (background(RGBA(1, 1, 1, 0.85)),) : ()
+  Row(width(grow=grow), height(card_tall(s)), padding(pad), child_gap=pad, radius(8px), border(1px, :solid, colours.line),
+      background(ishovered(c) && opening(c) ? colours.hover : colours.block), name="Link card",
+    Column(width(grow=grow), height(inside), Alignment.Start,
+      line(title, Cards.heading(card), room),
+      (line(words, text, room) for text in told)...,
+      Box(width(grow=grow), height(grow=grow)),
+      Row(width(grow=grow), height(source.size * CARD_LINE), justify=Alignment.Start, child_gap=s * 0.35,
+        isempty(c.icon) ? Icon("globe", size=mark, color=colours.faint) : Image(c.icon, fixed(mark), height(mark), radius(3px), behind...),
+        Box(label(shortened(source, Cards.source(card), room - mark - s * 0.35), source.size, color=source.color)))),
+    (across > 0px ? (covered(c.picture, across, inside),) : ())...)
+end
+
+"True when a click on the card now opens its address: ⌘ is held, or the page is one that's never changed"
+opening(c::LinkCard) = held(c, Keys.cmd) || (editor(c).buf.fixed && !held(c, Keys.shft))
+
+cursor(::CardsView) = :arrow
+cursor(c::LinkCard) = opening(c) ? :hand : :arrow
+# A click with ⌘ held opens the address. Any other click goes on to the page, as a click on any block does.
+onkey(c::LinkCard, ::KeyPress{Keys.mouse_left}) = opening(c) ? (BROWSER[](c.card.url); handled) : nothing
+
+"The block as HTML: each card as a link in a box, with the rules that give a card its look, and each other line as a paragraph"
+cards_html(e, v::CardsView) = begin
+  isempty(v.entries) && return ""
+  ask = online(e)
+  "<style>\n" * Cards.STYLE * "</style>\n" *
+  join((entry.address ? Cards.markup(first(Cards.lookup!(entry.text, cards_dir(); ask))) : "<p>" * escape(entry.text) * "</p>" for entry in v.entries), "\n")
+end
+
+BLOCKS[CARD] = BlockKind("Link card", "link-45deg", CardsView, cards_html)
 
 # --- blocks that a file defines --------------------------------------------------------------
 #
@@ -13713,6 +15100,7 @@ layout!(e, width=text_width(e)) = begin
   stand!(b)
   ks = kinds(b)
   width == e.width || (e.width = width; empty!(e.flows))
+  columns = page_columns!(e)   # the blocks that show side by side after a `columns` block, or nothing when the page has none
   # A file that's only shown is one viewer, or lines of text that are laid out once and kept
   b.view == :file && return e.layout = [file_item(e, b)]
   readonly(b) && return e.layout = get!(() -> text_items(e, b), e.flows, (:shown, b.path, b.version))
@@ -13727,6 +15115,8 @@ layout!(e, width=text_width(e)) = begin
   schedules = 0   # and how many schedules
   seen = Dict{String,Int}()   # and how many blocks in each of the languages of `BLOCKS`
   while i <= n
+    # In a column, the page's text is as wide as the column, and each column starts level with the first
+    columns === nothing || (top = column_turn!(columns, e, items, i, top))
     j = i
     if ks[i].kind == Kind.table
       while j < n && ks[j+1].kind == Kind.table
@@ -13872,6 +15262,7 @@ layout!(e, width=text_width(e)) = begin
       i += 1
     end
   end
+  columns === nothing || column_turn!(columns, e, items, n + 1, top)   # the page ends in a column
   e.layout = slide_items(e, items)   # while the page shows as slides, only the items of one slide
 end
 
@@ -14021,18 +15412,19 @@ describe(b::Block) = Column(width(grow=grow), Alignment.Start, [describe(editor(
 describe(d::Document) = begin
   e = editor(d)
   items = e.layout
-  total = isempty(items) ? 0px : last(items).top + last(items).tall
+  total = isempty(items) ? 0px : lowest(e, items)
   _, h = window_size(e)
   # Only the lines on screen, and a few either side, are built
   from, to = e.scroll.offset - PAGE_TOP - 200px, e.scroll.offset + h + 200px
   lo = something(findfirst(it -> it.top + it.tall >= from, items), length(items))
   hi = something(findlast(it -> it.top <= to, items), lo)
+  lo, hi = whole_groups(e, items, lo, hi)   # a group of columns is built whole
   e.shown = lo:hi
   # Each row of text cuts off what's past its end, so long lines that don't wrap need a page as wide as the longest
   Column(fixed(wraps(e) ? e.width : max(e.width, e.reach + SIDE_ROOM)), Alignment.Start, name="Document",
     spacer(items[lo].top),
-    [x isa Item ? describe(e, x) : x for x in blocks(d, items[lo:hi])]...,
-    spacer(total - items[hi].top - items[hi].tall))
+    page_parts(d, e, items[lo:hi])...,
+    spacer(total - lowest(e, view(items, lo:hi))))
 end
 
 # With ⌘ held, a click on a link opens it, so the mouse shows a hand there. In a page that's never
@@ -14101,12 +15493,13 @@ of the selection straight from one kind of line to the next. The line that the
 selection starts in has no `margin`, so its box starts where its text does. A
 selection that's all in one code block has no `margin` on any line. See `within_code`.
 """
-marks(f::Flow, x, y, (from, to, more); margin=true) = begin
+marks(f::Flow, x, y, (from, to, more); margin=true, edge=0px) = begin
   out = Rect[]
   n = length(f.lines)
   for (k, vl) in enumerate(f.lines)
     (from <= vl.to && to >= vl.from) || continue
-    x1 = from > vl.from ? xcol(vl, from) : margin ? 0px : vl.x
+    # `edge` is the left edge of the line's column of the page, where the space to the left of its text starts
+    x1 = from > vl.from ? xcol(vl, from) : margin ? edge : vl.x
     x2 = xcol(vl, min(to, vl.to))
     # A little extra shows that the end of the line is selected too
     (to > vl.to || (more && k == n)) && (x2 += 7px)
@@ -14231,20 +15624,22 @@ selection_boxes(ctx, e, ui) = begin
   rects = Rect[]
   for it in e.layout[e.shown]
     top = ui.top + it.top
+    across, wide = item_room(e, it)   # an item in a column of the page starts at the column's left edge, and is as wide as the column
+    left = ui.left + across
     if it.content isa Grid
       g = it.content
       if b.caret[1] != b.anchor[1]
         # A selection that covers several lines takes each row whole
         lo, hi = selection(b)
         y = top + TABLE_GAP
-        lo[1] < it.first && hi[1] >= it.first && push!(rects, (num(ui.left), num(top), num(ui.left + 7px), num(y)))
+        lo[1] < it.first && hi[1] >= it.first && push!(rects, (num(left), num(top), num(left + 7px), num(y)))
         y += g.head   # a spreadsheet's row of letters isn't part of the text, so it's never selected
         for (r, i) in enumerate(g.rows)
           h = g.heights[r] + (r == length(g.rows) ? 2px : 1px)
-          lo[1] <= i <= hi[1] && push!(rects, (num(ui.left), num(y), num(ui.left + e.width), num(y + h)))
+          lo[1] <= i <= hi[1] && push!(rects, (num(left), num(y), num(left + wide), num(y + h)))
           y += h
         end
-        lo[1] <= it.last && hi[1] > it.last && push!(rects, (num(ui.left), num(y), num(ui.left + 7px), num(y + TABLE_GAP)))
+        lo[1] <= it.last && hi[1] > it.last && push!(rects, (num(left), num(y), num(left + 7px), num(y + TABLE_GAP)))
         continue
       end
       for (r, i) in enumerate(g.rows), (c, cell) in enumerate(g.cells[r])
@@ -14254,15 +15649,15 @@ selection_boxes(ctx, e, ui) = begin
         fill_selection(ctx, marks(g.flows[r][c], ui.left + x, top + y, (max(sel[1], cell.lo), min(sel[2], cell.limit), false), margin=false))
       end
     elseif it.content isa Sheet
-      append!(rects, marks(e, it, it.content, ui.left, top))
+      append!(rects, marks(e, it, it.content, left, top))
     elseif it.content isa Live
       # A live block is selected whole
       lo, hi = selection(b)
       selecting(b) && lo[1] <= it.first && hi[1] >= it.last &&
-        push!(rects, (num(ui.left), num(top), num(ui.left + e.width), num(top + it.tall)))
+        push!(rects, (num(left), num(top), num(left + wide), num(top + it.tall)))
     else
       sel = selected(b, it.first)
-      sel === nothing || append!(rects, marks(it.content, ui.left, top, sel, margin=margins && selection(b)[1][1] < it.first))
+      sel === nothing || append!(rects, marks(it.content, ui.left, top, sel, margin=margins && selection(b)[1][1] < it.first, edge=across))
     end
   end
   rects
@@ -14314,7 +15709,7 @@ carets(ctx, e, ui) = begin
       end
       continue
     end
-    it.content isa Sheet && caret(ctx, e, it.content, ui.left, top)
+    it.content isa Sheet && caret(ctx, e, it.content, ui.left + item_room(e, it)[1], top)
     it.first == b.caret[1] && it.content isa Flow && caret(ctx, e, it.content, ui.left, top, b.caret[2])
   end
 end
@@ -14326,7 +15721,7 @@ locate(e, (x, y)) = begin
   # On a page that's scrolled sideways, a point on the numbers of the lines is on the first part of the line that shows
   dx, dy = max(x - e.origin[1], sideways(e)), y - e.origin[2]
   items = e.layout
-  it = items[something(findlast(it -> it.top <= dy, items), 1)]
+  it = items[item_under(e, dx, dy)]
   if it.content isa Grid
     g = it.content
     # The row and the column under the point
@@ -14341,7 +15736,7 @@ locate(e, (x, y)) = begin
     k = line_at(f, dy - it.top - y)
     return (g.rows[r], cellcol(f, k, dx - x, cells[c]))
   end
-  it.content isa Sheet && return locate(e, it, it.content, dx, dy - it.top)
+  it.content isa Sheet && return locate(e, it, it.content, dx - item_room(e, it)[1], dy - it.top)
   if it.content isa Live
     # A point on a live block counts as the end of the line above it or the start of the line below
     above = dy < it.top + it.tall/2 ? it.first > 1 : it.last == length(e.buf.lines)
@@ -14370,9 +15765,8 @@ key held opens a link only when the click is on its words.
 """
 link_on(e, (x, y)) = begin
   dx, dy = x - e.origin[1], y - e.origin[2]
-  k = findlast(it -> it.top <= dy, e.layout)
-  k === nothing && return nothing
-  it = e.layout[k]
+  (dy >= 0px && !isempty(e.layout)) || return nothing
+  it = e.layout[item_under(e, dx, dy)]
   f = it.content
   f isa Flow || return nothing
   for vl in f.lines
@@ -14411,7 +15805,7 @@ end
 todo_at(e, (x, y)) = begin
   isempty(e.layout) && return nothing
   dx, dy = x - e.origin[1], y - e.origin[2]
-  it = e.layout[something(findlast(it -> it.top <= dy, e.layout), 1)]
+  it = e.layout[item_under(e, dx, dy)]
   f = it.content
   (f isa Flow && f.kind == Kind.todo && !f.raw) || return nothing
   # The box is on the item's first line
@@ -14426,7 +15820,7 @@ end
 inline_at(e, (x, y)) = begin
   isempty(e.layout) && return nothing
   dx, dy = x - e.origin[1], y - e.origin[2]
-  it = e.layout[something(findlast(it -> it.top <= dy, e.layout), 1)]
+  it = e.layout[item_under(e, dx, dy)]
   c = it.content
   if c isa Grid
     for r in eachindex(c.rows), col in eachindex(c.flows[r])
@@ -14469,7 +15863,7 @@ press!(e, pos) = begin
     e.clicked = (time(), (box, 0), 0)
     return tick!(e, box)
   end
-  it = e.layout[something(findlast(it -> it.top <= pos[2] - e.origin[2], e.layout), 1)]
+  it = e.layout[item_under(e, pos[1] - e.origin[1], pos[2] - e.origin[2])]
   made = held(e, Keys.opt) ? nothing : inline_at(e, pos)
   # A click on a formula in a line of text puts the caret beside it, as a click on a word does
   if made !== nothing && !(made.node isa Equation)
@@ -14715,8 +16109,8 @@ word_step(b::Buffer, p::Pos, by::Int) = begin
   (i, col)
 end
 
-"The place one line up or down the screen from the caret"
-vertical(e, by::Int) = begin
+"The place one line up or down the screen from the caret, in the order of the page's lines. `vertical` keeps it in a column of the page."
+line_step(e, by::Int) = begin
   b = e.buf
   i, col = b.caret
   run = picked(b)
@@ -15306,6 +16700,9 @@ paste!(e) = begin
   paths = Pasteboard.files()
   if isempty(paths)
     text = Sys.isapple() ? Pasteboard.text() : clipboard()
+    # A contact that was copied in the Contacts app goes in as a block of contacts
+    list = copied_contacts(e, text)
+    isempty(list) || return paste_contacts!(e, list)
     # A picture that's copied from a web page comes with its address as text, and the picture is what's wanted
     found = isempty(strip(text)) || occursin(r"^\s*\w+://\S+\s*$", text) ? Pasteboard.media() : nothing
     path = found === nothing ? nothing : keep_pasted(e, found...)
@@ -16361,6 +17758,13 @@ onfiledrop(e::Editor, w::Window, paths) = begin
   # A picture that's dropped on a gallery goes into the gallery
   g = gallery_at(e, w)
   g !== nothing && add_pictures!(g, paths) && return nothing
+  # A vCard file that's dropped on a block of contacts joins the block
+  c = contacts_at(e, w)
+  if c !== nothing
+    list, paths = split_contacts(paths)
+    add_contacts!(c, list)
+    isempty(paths) && return nothing
+  end
   put_files!(e, paths, settle(e.buf, locate(e, w.mouse)))
 end
 
@@ -16370,6 +17774,9 @@ put_files!(e, paths, at::Pos) = begin
   isempty(paths) && return
   b = e.buf
   b.view == :markdown || return   # only a page has text for the path to go into, as Markdown
+  # A vCard file goes in as a block of its contacts
+  list, paths = split_contacts(paths)
+  at = put_contacts!(e, list, at)
   # A CSV file goes on a line of its own as a picture does, so the page shows it as a table
   pictures = [markdown_for(e, p) for p in paths if isfile(p) && (ispicture(p) || istable(p))]
   others = [markdown_for(e, p) for p in paths if !(isfile(p) && (ispicture(p) || istable(p)))]
@@ -16491,7 +17898,7 @@ tablebar(e) = begin
   # The page's text is in the middle of the space beside the file panel
   w, _ = window_size(e)
   side = panel_w(e) * opened(e)
-  left = side + max(PAGE_X, (w - side - e.width) / 2)
+  left = side + max(PAGE_X, (w - side - e.width) / 2) + item_room(e, it)[1]
   (Row(width(grow=grow), height(grow=grow), Alignment.Start, padding(top, 0px, 0px, left), bar),)
 end
 
@@ -16505,9 +17912,15 @@ describe(b::ToolButton) = begin
             background(on ? colours.active : ishovered(b) && !off(b) ? colours.hover : clear),
           Icon(b.icon, size=15px, color=off(b) ? colours.faint : b.action == :mail_send ? colours.accent : colours.dim))
   # While the sidebar is closed, a dot beside its button says that an agent waits for a page that isn't showing
-  (b.action == :panel && !e.panel && !isempty(elsewhere(e))) || return box
-  Row(child_gap=4px, box, Box(width(7px), height(7px), radius(3.5px), background(colours.accent)))
+  (b.action == :panel && waiting_dot(e)) || return box
+  Row(Alignment.Center, child_gap=DOT_GAP, box, Box(width(DOT_W), height(DOT_W), radius(DOT_W / 2), background(colours.accent)))
 end
+
+const DOT_W = 7px     # how wide the dot beside the sidebar's button is
+const DOT_GAP = 4px   # the room between the button and its dot
+
+"True when the sidebar's button has a dot beside it: the sidebar is closed, and an agent waits for a page that isn't showing"
+waiting_dot(e) = !e.panel && !isempty(elsewhere(e))
 
 cursor(b::ToolButton) = off(b) ? :arrow : :hand
 
@@ -16920,7 +18333,9 @@ describe(t::TopBar) = begin
   # The two arrows are at the sidebar's right edge, as far in as the right end of a row of its list. They
   # ride on that edge while the sidebar slides open, once it has passed the other buttons.
   arrows = full ? () : history_buttons(e)
-  need = 84px + 32px * length(buttons) - 2px + (isempty(arrows) ? 0px : 74px)
+  # Each button is 30px wide with 2px after it. The arrows have 8px after them, and so has the last
+  # button when there are no arrows. The dot beside the sidebar's button has room of its own.
+  need = 84px + 32px * length(buttons) + (isempty(arrows) ? 8px : 72px) + (!full && waiting_dot(e) ? DOT_GAP + DOT_W : 0px)
   over = max(need, panel_w(e) * showing)
   left = max(150px * (1 - showing), need - panel_w(e) * showing, min(side, wide - panel_w(e) * showing - side - TITLE_ROOM))
   e.nodes[:title_room] = wide - panel_w(e) * showing - left - side   # the name is cut short to fit in it
@@ -17193,6 +18608,16 @@ slideshow(e) = get(e.nodes, :slides, nothing)
 slide_room(e) = max(0px, window_size(e)[2] - TOPBAR_H - PAGE_TOP - page_bottom(e))
 
 """
+The slides of the page that shows. The blocks that a `columns` block puts
+side by side stay on one slide, so a heading among them starts no slide.
+"""
+page_slides(e) = begin
+  b = e.buf
+  spans = [first(first(g.spans)):last(last(g.spans)) for g in column_groups(e) if !isempty(g.spans)]
+  Slides.slides(b.lines, kinds(b), held=i -> any(span -> i in span, spans))
+end
+
+"""
 Show the page as slides, from the slide that the caret is in. A page with
 nothing to show stays as it is, and so does a file that isn't a page. Nothing
 happens while something else fills the window, like a sketch or a picture.
@@ -17200,7 +18625,7 @@ happens while something else fills the window, like a sketch or a picture.
 show_slides!(e) = begin
   b = e.buf
   (slideshow(e) === nothing && b.view == :markdown && !filled(e) && e.popup == :none) || return e
-  list = Slides.slides(b.lines, kinds(b))
+  list = page_slides(e)
   isempty(list) && return e
   finding(e) && close_find!(e)
   # A slide has no caret and nothing selected, and a drag on it selects nothing
@@ -17235,7 +18660,7 @@ end_slides!(e) = begin
   # Another file shows now. The page is where it was when it next shows.
   b === e.buf || return (b.offset = s.offset; handled)
   e.scroll.offset = s.offset
-  list = Slides.slides(b.lines, kinds(b))
+  list = page_slides(e)
   k = clamp(s.at, 1, max(1, length(list)))
   if !isempty(list) && !(k == s.first && Slides.number(list, b.caret[1]) == k)
     b.caret = b.anchor = (list[k].first, 0)
@@ -17276,7 +18701,7 @@ slide_tick!(e) = begin
   b = e.buf
   (b.path == s.path && b.view == :markdown) || return end_slides!(e)
   if b.version != s.version
-    s.list = Slides.slides(b.lines, kinds(b))
+    s.list = page_slides(e)
     s.version = b.version
     isempty(s.list) && return end_slides!(e)
     s.at = clamp(s.at, 1, length(s.list))
@@ -17494,7 +18919,8 @@ ring_part(ctx, e, ui) = begin
   (w === nothing || w.focus === e) || return
   it = item(e, run[1])
   it.first <= run[1] <= it.last || return
-  round_box(ctx, num(ui.left) - RING_OUT, num(ui.top + it.top) + 1, num(e.width) + 2RING_OUT, max(4.0, num(it.tall) - 2), 8.0,
+  across, wide = item_room(e, it)   # a part in a column of the page is as wide as the column
+  round_box(ctx, num(ui.left + across) - RING_OUT, num(ui.top + it.top) + 1, num(wide) + 2RING_OUT, max(4.0, num(it.tall) - 2), 8.0,
             fill=tint(colours.accent, 0.06), line=tint(colours.accent, 0.75), wide=1.5)
 end
 
@@ -17512,11 +18938,13 @@ nodes_in(pick, e, it::Item) = begin
   drawn === nothing && return out
   page = node!(Document, e, :document)
   top, bottom = e.origin[2] + it.top, e.origin[2] + it.top + it.tall
+  left = e.origin[1] + item_room(e, it)[1]   # a part in a column of the page has other parts beside it
+  right = left + item_room(e, it)[2]
   walk(ui, inpage) = begin
     ui isa ConcreteRect || return
     node = ui.from isa GeometricUI ? ui.from.from : nothing
     inpage |= node === page
-    inpage && node isa SemanticUI && node !== page && top <= ui.top + ui.height / 2 < bottom && pick(node) &&
+    inpage && node isa SemanticUI && node !== page && top <= ui.top + ui.height / 2 < bottom && left - 1px <= ui.left + ui.width / 2 <= right + 1px && pick(node) &&
       !any(n -> n === node, out) && push!(out, node)
     foreach(child -> walk(child, inpage), ui.children)
   end
@@ -17547,17 +18975,13 @@ enter_part!(e) = begin
   if run[1] == 1 && kinds(b)[1].lang in (MATTER, TOML_MATTER)
     b.caret = b.anchor = line_end(b, min(2, run[2]))
     touch!(e)
-  elseif kinds(b)[run[1]].lang == MATH && run[2] > run[1]
-    # A formula shows its TeX, with the caret at the end of its first line
+  elseif (kinds(b)[run[1]].lang == MATH || kinds(b)[run[1]].lang in Columns.LANGS) && run[2] > run[1]
+    # A formula shows its TeX, and a `columns` block its number, with the caret at the end of its first line
     b.caret = b.anchor = line_end(b, run[1] + 1)
     touch!(e)
   elseif maths_line(b, run[1])
     # The caret goes to the end of the TeX, before the $$ that closes it
     b.caret = b.anchor = (run[1], length(rstrip(b.lines[run[1]])) - 2)
-    touch!(e)
-  elseif carded(b, run[1])
-    # A link card shows as it's written, with the caret at the end of its line
-    b.caret = b.anchor = line_end(b, run[1])
     touch!(e)
   end
   e
@@ -17768,7 +19192,8 @@ outline(lines::Vector{String}, kinds::Vector{Line}, folder::AbstractString="") =
       elseif l.lang == SCHEDULE
         push!(out, Entry(i, 7, "Schedule", "bar-chart-steps", min(close + 1, length(lines))))
       elseif haskey(BLOCKS, l.lang)
-        push!(out, Entry(i, 7, BLOCKS[l.lang].name, BLOCKS[l.lang].icon, min(close + 1, length(lines))))
+        # A `columns` block shows nothing, so the caret goes into it: its lines show, and its number can be changed
+        push!(out, Entry(i, 7, BLOCKS[l.lang].name, BLOCKS[l.lang].icon, min((l.lang in Columns.LANGS ? i : close) + 1, length(lines))))
       elseif l.lang == DIAGRAM
         # Code that can't be drawn as a diagram is a code block like any other.
         # The caret goes under the block. In the block, it would show the block's code.
@@ -17840,6 +19265,8 @@ choose!(e, item) = begin
   b.reading = false
   line = clamp(l.caret, 1, length(b.lines))
   b.caret = b.anchor = settle(b, (line, length(b.lines[line])))
+  # The caret stays in a `columns` block that takes no room, so that the block shows its lines
+  column_fold(b, line) === nothing || (b.caret = b.anchor = b.stood = line_end(b, line))
   # Put its first line near the top of the window rather than just on screen.
   # The next frame does it, once it has laid out the file that's showing.
   e.nodes[:hold] = (clamp(l.line, 1, length(b.lines)), 24px - PAGE_TOP)
@@ -18320,14 +19747,17 @@ const INSERTS = [
   ("Chart",         ["```$CHART", "```", "", ""],   (4, 0)),
   ("Board",         ["```$BOARD", "```", "", ""],   (4, 0)),
   ("Calendar",      ["```$CALENDAR", "```", "", ""], (4, 0)),
+  # The two blocks that are typed under it show side by side
+  ("Columns",       ["```$COLUMN_BLOCK", "2", "```", "", ""], (5, 0)),
   ("Find",          ["```$FIND", "```", "", ""],    (4, 0)),
   ("Sketch",        ["```$SKETCH", "```", "", ""],  (4, 0)),
   ("Signature",     ["```$SIGNATURE", "```", "", ""], (4, 0)),
+  ("Contact",       ["```$CONTACT", "", "```"],     (2, 0)),
   ("Gallery",       ["```$GALLERY", "```", "", ""], (4, 0)),
   ("Map",           ["```$MAP", "", "```"],         (2, 0)),
   ("Emails",        ["```$EMAIL", "with: ", "```"], (2, 6)),
   ("Time Log",      ["```$TIMELOG", "```", "", ""], (4, 0)),
-  ("Link Card",     ["![](https://)"],              (1, 12)),
+  ("Link Card",     ["```$CARD", "https://", "```"], (2, 8)),
   # This one records from the microphone into a new file, and the line shows the recorder. The caret goes
   # to an empty line under it, so that you can type while it records.
   ("Recording",     ["![Recording]()", "", ""],     (3, 0)),
@@ -18769,8 +20199,6 @@ picture_item(e, i) = begin
   sound === nothing || return sound_item(e, sound)
   video = video_item(e, src)
   video === nothing || return video
-  card = card_item(e, i)   # the address of a web page shows the page's card
-  card === nothing || return card
   path = startswith(src, r"https?://") ? fetched(e, src) : abspath(docdir(e), expanduser(src))
   key = path === nothing ? nothing : picture_key(path)
   key === nothing && return nothing
@@ -18784,167 +20212,6 @@ picture_item(e, i) = begin
   node.line, node.key, node.w, node.h = i, key, w, h
   own!(node!(Document, e, :document), node)
   Live(node, h + 2LIVE_GAP)
-end
-
-# --- a link card ---------------------------------------------------------------------------
-#
-# A line that's written as a picture is, with the address of a web page, like
-# ![Julia](https://julialang.org), shows as a card: the page's title, two
-# lines of its description, its picture, and the name of its site beside the
-# site's icon. The line's own text shows again while the caret is in it. A
-# click on the card with ⌘ held opens the address in the browser. In a page
-# that's never changed, a click opens it with no key held.
-#
-# Kaydown gets the page in the background, and reads what the page says of
-# itself. See linkcard.jl. It keeps that, and the picture, in a folder of the
-# Mac's caches, so the card shows at once the next time, and with no network.
-# Until the page has come, and when it can't be had, the card shows the words
-# of its line and the address. An address that turns out to be a picture
-# shows the picture, as it did before there were cards. An email shows no
-# cards, so that Kaydown asks a web site for nothing more than it did.
-
-push!(BLOCK_ICONS, "globe")
-
-"What opens the address of a card: the browser. A test puts its own function here."
-const BROWSER = Ref{Function}(open_url)
-
-"The folder that keeps what the cards read from the web, and their pictures"
-cards_dir() = isempty(MEDIA_CACHE[]) ? joinpath(homedir(), "Library", "Caches", "Kaydown", "cards") : joinpath(MEDIA_CACHE[], "cards")
-
-"True when line `i` asks for a card: it's written as a picture is, and its address is a web page's"
-carded(b::Buffer, i::Int) =
-  kinds(b)[i].kind == Kind.paragraph && occursin("![", b.lines[i]) && !Mail.isemail(b.path) && Cards.asked(b.lines[i]) !== nothing
-
-"A card that a line of the document shows for the web page whose address it holds"
-@def mutable struct LinkCard <: SemanticUI
-  line::Int = 0
-  words::String = ""     # the words of the line, which are the title while the page gives none
-  card::Cards.Card = Cards.Card("")
-  picture::String = ""   # the key of the page's picture, for an Image, or "" while there's none
-  icon::String = ""      # and the key of the site's icon
-  size::px = TEXT_SIZE   # of the page's text
-  wide::px = 0px         # how wide the page's text is
-end
-
-# The sizes of a card's title, of its description and of the name of its site, as parts of the size of the page's text
-const CARD_TITLE, CARD_WORDS, CARD_SOURCE = 0.92, 0.8, 0.74
-const CARD_LINE = 1.36   # how tall a line of a card is, as a part of the size of its text
-const CARD_PAD = 0.65    # the room inside a card's edge, as a part of the size of the page's text
-
-"How tall a card is in a page whose text is `s` tall. Every card is as tall as the next, so the page's text doesn't move when a card fills in."
-card_tall(s) = s * (2CARD_PAD + CARD_LINE * (CARD_TITLE + 2CARD_WORDS + CARD_SOURCE) + 0.45)
-
-"`words` cut short with … so that they're no wider than `room` in `face`"
-shortened(face::Face, words::AbstractString, room) = begin
-  (room <= 0px || measure(face, words) <= room) && return String(words)
-  cs = collect(words)
-  lo, hi = 0, length(cs)
-  while lo < hi
-    mid = (lo + hi + 1) ÷ 2
-    measure(face, rstrip(String(cs[1:mid])) * "…") <= room ? (lo = mid) : (hi = mid - 1)
-  end
-  rstrip(String(cs[1:lo])) * "…"
-end
-
-"The picture with the key `key` in a box `wide` by `tall`. The picture fills the box, and the box cuts off what doesn't fit."
-covered(key, wide, tall) = begin
-  aspect = image_aspect(key)
-  w, h = aspect > wide / tall ? (tall * aspect, tall) : (wide, wide / aspect)
-  Box(fixed(wide), height(tall), radius(6px), clip=true, Image(key, fixed(w), height(h)))
-end
-
-describe(c::LinkCard) = begin
-  s, card = c.size, c.card
-  pad = s * CARD_PAD
-  inside = card_tall(s) - 2pad - 2px
-  # The picture is at the right, and takes no more than a third of the card
-  across = isempty(c.picture) ? 0px : min(inside * 1.75, c.wide * 0.3)
-  room = c.wide - 2pad - 2px - (across > 0px ? across + pad : 0px)
-  # An address that stands in for the title isn't bold
-  heading = Cards.heading(card, c.words)
-  title = Face(SANS, heading == card.url ? "" : "Semibold", s * CARD_TITLE, colours.ink, false)
-  words = Face(SANS, "", s * CARD_WORDS, colours.dim, false)
-  source = Face(SANS, "", s * CARD_SOURCE, colours.faint, false)
-  line(face, text, room) = Box(width(grow=grow), height(face.size * CARD_LINE), Alignment.Start, justify=Alignment.Center,
-                               label(shortened(face, text, room), face.size, color=face.color, weight=face.style))
-  # The description has two lines at most, and the second ends in … when there's more
-  under = Cards.blurb(card, c.words)
-  told = isempty(under) ? String[] : wrapped(words, under, num(room))
-  length(told) > 2 && (told = [told[1], join(told[2:end], " ")])
-  mark = source.size * 1.15
-  # Many sites have a dark icon with nothing behind it, which a dark page would hide. There it has a light square behind it.
-  page = convert(RGBA{Float64}, colours.bg)
-  behind = page.r + page.g + page.b < 1.5 ? (background(RGBA(1, 1, 1, 0.85)),) : ()
-  Row(width(grow=grow), height(card_tall(s)), padding(pad), child_gap=pad, radius(8px), border(1px, :solid, colours.line),
-      background(ishovered(c) && opening(c) ? colours.hover : colours.block), name="Link card",
-    Column(width(grow=grow), height(inside), Alignment.Start,
-      line(title, heading, room),
-      (line(words, text, room) for text in told)...,
-      Box(width(grow=grow), height(grow=grow)),
-      Row(width(grow=grow), height(source.size * CARD_LINE), justify=Alignment.Start, child_gap=s * 0.35,
-        isempty(c.icon) ? Icon("globe", size=mark, color=colours.faint) : Image(c.icon, fixed(mark), height(mark), radius(3px), behind...),
-        Box(label(shortened(source, Cards.source(card), room - mark - s * 0.35), source.size, color=source.color)))),
-    (across > 0px ? (covered(c.picture, across, inside),) : ())...)
-end
-
-"True when a click on the card now opens its address: ⌘ is held, or the page is one that's never changed"
-opening(c::LinkCard) = held(c, Keys.cmd) || (editor(c).buf.fixed && !held(c, Keys.shft))
-
-cursor(c::LinkCard) = opening(c) ? :hand : :ibeam
-# A click with ⌘ held opens the address. Any other click puts the caret on the card's line, so the line shows as it's written.
-onkey(c::LinkCard, ::KeyPress{Keys.mouse_left}) = opening(c) ? (BROWSER[](c.card.url); handled) : edit_matter!(c, c.line)
-
-"""
-True when Kaydown can ask the web for what a card shows: the page's window is
-on the screen. A window that a test makes isn't, so a test asks the web for
-nothing, unless it put its own function in place of `curl`.
-"""
-online(e) = Cards.getter[] !== Cards.curl || (w = window_of(e); w !== nothing && !isempty(w.glfw))
-
-"The key, for an Image, of the picture at the web address `url`, or \"\" while Kaydown has none. It asks for the next frame while the picture is on its way."
-card_picture(e, url) = begin
-  file, coming = Cards.picture!(url, cards_dir(), ask=online(e))
-  coming && redraw_in!(e, 0.2)   # look again soon
-  file === nothing ? "" : something(picture_key(file), "")
-end
-
-"True when Kaydown has the picture at the web address `src` on the Mac, from a time when a line showed it"
-has_picture(src) = begin
-  file = get(fetches, src, :none)
-  file === :none && (file = joinpath(pictures_dir(), string(hash(src), base=16)))
-  file isa String && picture_key(file) !== nothing
-end
-
-"""
-What line `i` shows when it asks for a card: the card of the page at its
-address. It's nothing for any other line, and for an address that is a picture
-or turns out to be one, which the line shows as a picture.
-"""
-card_item(e, i) = begin
-  b = e.buf
-  Mail.isemail(b.path) && return nothing
-  found = Cards.asked(b.lines[i])
-  found === nothing && return nothing
-  words, url = found
-  has_picture(unescaped(url)) && return nothing
-  card, coming = Cards.lookup!(url, cards_dir(), ask=online(e))
-  Cards.pictured(card) && return nothing
-  coming && redraw_in!(e, 0.2)   # look again soon
-  node = node!(LinkCard, e, (:card, i))
-  # A picture that the card has already isn't looked for again on each frame
-  same = node.card == card
-  node.line, node.words, node.card, node.size, node.wide = i, words, card, body(e).size, e.width
-  same && !isempty(node.picture) || (node.picture = card_picture(e, card.image))
-  same && !isempty(node.icon) || (node.icon = card_picture(e, card.icon))
-  own!(node!(Document, e, :document), node)
-  Live(node, card_tall(node.size) + 2LIVE_GAP)
-end
-
-"The card of the page at the address `url` as HTML, with the `words` of its line. It's nothing in a page that shows no cards, and for an address that Kaydown shows as a picture."
-card_html(e, words, url) = begin
-  (Mail.isemail(e.buf.path) || has_picture(unescaped(url))) && return nothing
-  card = first(Cards.lookup!(url, cards_dir(), ask=online(e)))
-  Cards.pictured(card) ? nothing : Cards.markup(card, words)
 end
 
 # --- video and sound from the web --------------------------------------------------------
@@ -20196,9 +21463,9 @@ page_html(e) = begin
                              lang == SCHEDULE ? schedule_html(e, s, t) :
                              haskey(BLOCKS, lang) ? block_html(e, lang, s, t) :
                              lang == DIAGRAM ? diagram_html(e, s, t) : nothing,
-       card=(words, url) -> card_html(e, words, url),
        value=code -> (made = get(e.nodes, (:inline, b.path, code, 1), nothing); made isa Tuple && !made[2] ? made[1] : nothing),
-       file=text -> table_html(e, text))
+       file=text -> table_html(e, text),
+       columns=html_columns(e))
 end
 
 "Ask where to save a file, with `name` to start with, in the document's folder. It gives the path, or nothing if you cancel."
@@ -24068,6 +25335,9 @@ breaks(e) = begin
     held = c isa Flow && (c.kind == Kind.heading || (held && blank(e, it)))
     held || push!(out, it.top + it.tall)
   end
+  # A page doesn't end part of the way down a group of columns: the place would be between two lines of one column only
+  columns = get(e.nodes, :columns, nothing)
+  columns === nothing || filter!(y -> !any(g -> g.top < y < g.top + g.tall, columns.groups), out)
   sort!(out)
 end
 
@@ -24079,7 +25349,7 @@ the end of the text, isn't printed.
 pages(e, room) = begin
   items = filter(it -> !blank(e, it), e.layout)
   isempty(items) && return [(0px, 0px)]
-  total = last(items).top + last(items).tall
+  total = lowest(e, items)
   ends = breaks(e)
   out = Tuple{px,px}[]
   top = first(items).top
@@ -24127,8 +25397,8 @@ print_pdf(e, paper=paper_size()) = begin
     w = e.width
     spans = pages(e, px((ph - 2PRINT_Y) / scale))
     d = node!(Document, e, :document)
-    whole = Column(fixed(w), Alignment.Start, [x isa Item ? describe(e, x) : x for x in blocks(d, e.layout)]...)
-    total = isempty(e.layout) ? 0px : last(e.layout).top + last(e.layout).tall
+    whole = Column(fixed(w), Alignment.Start, page_parts(d, e, e.layout)...)
+    total = isempty(e.layout) ? 0px : lowest(e, e.layout)
     # A live block's code can load the drawing methods of what it shows, so the newest methods are used
     scene = Base.invokelatest(describe, whole, (w, total))
     title, creator, none = splitext(name(b))[1], "Kaydown", ""

@@ -70,9 +70,11 @@ Exit code 3 means that Kaydown is not installed, or that it is too old to send a
 | Numbers as bars, lines or a pie | A `chart` code block. See below. |
 | The page's tasks as cards in columns | A `board` code block. See below. |
 | A place for a person to sign | A `signature` code block. See below. |
+| The card of a person or a company | A `contact` code block. See below. |
 | A month, with the things that have a day | A `calendar` code block. See below. |
 | The map of a place | A `map` code block. See below. |
 | The hours worked on each task | A `timelog` code block. See below. |
+| Two or more things side by side, like options to compare | A `columns` code block before them. See below. |
 | When each task is done, and what it waits for | A `schedule` code block. See below. |
 | A table | A Markdown table. The user can type in its cells and add rows. |
 | The rows of a CSV file | `![what it holds](prices.csv)` on a line of its own. The path starts at the page's folder. The user can't type in this table. See below. |
@@ -82,7 +84,7 @@ Exit code 3 means that Kaydown is not installed, or that it is too old to send a
 | Maths | TeX between dollar signs: `$x^2$` in a line of text, and on lines of its own between a line of `$$` and another. A dollar sign before a number, like `$5`, stays a dollar sign. |
 | A picture | `![what it shows](picture.png)` on a line of its own. The path starts at the page's folder. A web address works too. |
 | Several pictures as a grid | A `gallery` code block. See below. |
-| A web page as a card, with its title, its description and its picture | `![words](https://julialang.org)` on a line of its own: a picture's form, with the page's address. Kaydown gets the page. The words are the title until it has the page's own. A bare address stays text. |
+| A web page as a card, with its title, its description and its picture | A `card` code block with the page's address on a line, like `https://julialang.org`. One card for each address. Kaydown gets the page. A bare address outside the block stays text. |
 | A footnote | `[^1]` in the text, and a line that starts with `[^1]:`. |
 | Another page | A link to another `.md` file. The user holds ⌘ and clicks it. |
 
@@ -317,6 +319,29 @@ name: Sam Lee
 
 Kaydown writes the rest. The first stroke adds the line `signed: 2026-11-18 09:14`, and each stroke adds a line that starts with `pen`. A block with a `pen` line is signed. Do not write `signed:` or `pen` lines yourself, and do not change them.
 
+### A contact
+
+A `contact` code block shows the card of a person or a company: a round picture, the name, and a row for each detail. The user clicks an email address to start an email, a phone number to call, an address to see it in the Maps app, and a web address to open it.
+
+````
+```contact
+Ada Lovelace
+role: Engineer
+company: Analytical Engines
+email: ada@example.com
+mobile: 0400 123 456
+address: 12 Example St, Sydney NSW 2000
+web: example.com
+note: Met at the 2026 conference.
+
+Analytical Engines
+kind: company
+email: hello@example.com
+```
+````
+
+The first line of a contact is its name. Each other line is a label, a colon and a value. The labels are `role`, `company`, `email`, `phone` (or `mobile`, `work`, `home`, `fax`), `address`, `web`, `photo` and `note`. A label can be there more than once. Any other label, like `ABN: 12 345 678 901`, shows as a row with the label and the value. `photo:` is the path of a picture, from the page's folder. `kind: company` makes the contact a company. An empty line ends a contact, and the next line is the name of the next one. Write only what you know. The user can add the rest in the card.
+
 ### A gallery
 
 A `gallery` code block shows pictures as a grid of small squares. The user clicks one to see it big. There, ← and →, or the arrows under the picture, go to the others. The bar under it says which picture shows, like “2 of 6”.
@@ -385,6 +410,44 @@ rate: 85
 ````
 
 A line with no stop time, like `2026-11-18 08:10- | Roofing`, is the one that runs now. Write no more than one. `rate: 85` is the dollars for each hour, and makes the totals show money. `round: 15` rounds each stretch to the nearest 15 minutes in the totals. A `chart` block under the log draws the hours of each task.
+
+### Columns
+
+A `columns` code block holds a number. That many of the blocks after it show side by side. Use it to compare options, or to put a picture beside its text. The blocks are ordinary lines of the page, so the user types in them as anywhere else.
+
+````
+```columns
+3
+```
+
+### Option A
+
+Cheapest.
+
+- Two days
+
+### Option B
+
+Lasts longer.
+
+- Three days
+
+### Option C
+
+Both.
+
+---
+
+This paragraph is under the columns.
+````
+
+- A column that starts with a heading holds the heading and every block under it, up to the next heading of the same level or a higher one. Start each column with a heading of one level.
+- A column that starts with any other block holds that one block: a paragraph, a list, a quote, a table, a code block, a picture, a diagram.
+- A line of `---` ends the columns. So does another `columns` block.
+- When the last column starts with a heading, put a line of `---` after its last block. Without it, the text that follows is in that column too.
+- Several numbers are widths. `2 1` is two columns, the first twice as wide as the second.
+- The headings and the tasks in the columns are the page's own. They are in the list of contents, on a `board` and in a `schedule`.
+- In a narrow window, Kaydown shows the blocks one under another. Use two or three columns, not more.
 
 ### Code that runs
 

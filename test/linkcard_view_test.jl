@@ -1,6 +1,5 @@
-# Tests for the link cards of main.jl: a line that's written as a picture is,
-# with the address of a web page, shows the page's title, its description and
-# its picture. Run them
+# Tests for the `card` block of main.jl: a card for each web address in the
+# block, with the page's title, its description and its picture. Run them
 # with `julia -O0 --project=. test/linkcard_view_test.jl`. They use a window
 # that isn't on the screen, and no network: a function of the test stands in
 # for `curl`, and another for the browser. Set `KAYDOWN_SHOTS` to a folder,
@@ -32,9 +31,7 @@ K.BROWSER[] = url -> (push!(opened, url); nothing)
 const PAINT = "https://www.bunnings.com.au/paint"
 const SLOW = "https://docs.julialang.org/en/v1/manual/getting-started/"
 const GONE = "https://gone.example.com/"
-const PHOTO = "https://example.com/photo"        # an address with no ending that turns out to be a picture
-const KEPT = "https://example.com/kept"          # and one whose picture Kaydown has already
-const TALK = "https://www.youtube.com/watch?v=abc"
+const JULIA = "https://julialang.org/"   # the address of a line that's written as a picture is
 const picture = read(joinpath(@__DIR__, "..", "app", "icon.png"))
 web[PAINT] = """
 <html><head><title>Paint | Bunnings</title>
@@ -48,45 +45,37 @@ web[PAINT] = """
 web["https://www.bunnings.com.au/images/paint.png"] = picture
 web["https://www.bunnings.com.au/icon.png"] = picture
 web[SLOW] = "<title>Getting Started · The Julia Language</title><meta name=\"description\" content=\"Documentation for The Julia Language.\">"
-web[PHOTO] = picture
 
 const page = joinpath(dir, "links.md")
 cp(joinpath(@__DIR__, "..", "app", "icon.png"), joinpath(dir, "plan.png"))
 write(page, """
 # Links
 
-![Paint]($PAINT)
+```card
+$PAINT
+```
 
 Some words with $PAINT in the line.
 
-[Words that go somewhere]($PAINT)
+```card
+$SLOW
+Paint for the hall
 
-![]($SLOW)
+$GONE
+```
 
-![A page that's gone]($GONE)
+```card
+```
 
 $PAINT
 
-<$SLOW>
-
-![A plan](plan.png)
-
-![A photo]($PHOTO)
-
-![A photo that's kept]($KEPT)
-
-![A talk]($TALK)
-
-- ![Paint]($PAINT)
+![Julia]($JULIA)
 
 The end.
 """)
 
-# Kaydown gets a picture from the web with `curl` itself. Here it has each of these already, or knows that it can't be had,
-# so that it asks the web for nothing.
-K.fetches[PHOTO] = nothing
-K.fetches[TALK] = nothing
-K.fetches[KEPT] = joinpath(dir, "plan.png")
+# Kaydown gets a picture from the web with `curl` itself. Here it knows that this one can't be had, so that it asks the web for nothing.
+K.fetches[JULIA] = nothing
 
 const e = K.build_editor(page)
 const w = Window(e, size=(1000px, 1000px))
@@ -95,8 +84,14 @@ frames()
 K.focus(e)
 shot(name) = haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(ENV["KAYDOWN_SHOTS"], name), w)
 line(text) = findfirst(startswith(text), e.buf.lines)
-card(i) = K.item(e, i).content.node::K.LinkCard
-iscard(i) = (c = K.item(e, i).content; c isa K.Live && c.node isa K.LinkCard)
+flows(i) = K.item(e, i).content isa K.Flow
+"The view of the page's `n`th `card` block, and the first and last line of that block"
+view(n) = e.nodes[(:block, K.CARD, page, n)]::K.CardsView
+block(n) = K.block_lines(e.buf, K.CARD, n)
+"True when the page's `n`th `card` block shows its cards, and not its lines"
+shows(n) = (c = K.item(e, block(n)[1]).content; c isa K.Live && c.node === view(n))
+"The `k`th card of the page's `n`th `card` block"
+card(n, k=1) = view(n).parts[(:card, k)]::K.LinkCard
 key(k, held=Keys(0)) = (w.keys = held; onkey(w, KeyPress{k}(0, w)); w.keys = Keys(0); frames())
 caret!(p) = (e.buf.caret = e.buf.anchor = p; K.touch!(e); frames())
 at((x, y)) = (w.mouse = typeof(w.mouse)(px(x), px(y)); onmouse(w, MouseMove(Vec2{px}(px(x), px(y)), w)); frames(1))
@@ -112,168 +107,148 @@ click(node, held=Keys(0)) = begin
   frames()
 end
 
-const paint, slow, gone = line("![Paint]"), line("![](" * SLOW), line("![A page that's gone]")
-flows(i) = K.item(e, i).content isa K.Flow
-
-@testset "the lines that show as cards" begin
-  @test iscard(paint) && iscard(slow) && iscard(gone)
-  @test K.carded(e.buf, paint) && K.solid(e.buf, paint) == (paint, paint) && K.part(e.buf, slow) == (slow, slow)
-  # A web address alone on a line is a line of text, as it was before there were cards, and so is one between < and >
-  for bare in (line(PAINT), line("<" * SLOW))
-    @test flows(bare) && !K.carded(e.buf, bare) && K.solid(e.buf, bare) === nothing && !K.israw(e.buf, bare)
-    @test join(seg.text for vl in K.item(e, bare).content.lines for seg in vl.segs) == e.buf.lines[bare]
-  end
-  # An address in a line of text, a link with words and a list item stay as they were
-  for start in ("Some words", "[Words", "- ")
-    @test flows(line(start)) && !K.carded(e.buf, line(start))
-  end
-  # A picture on the Mac is a picture, and so is one from the web that Kaydown has already. No one is asked for that one.
-  @test K.item(e, line("![A plan]")).content.node isa K.Picture && K.item(e, line("![A photo that's kept]")).content.node isa K.Picture
-  @test !(KEPT in asked)
-  # A video on YouTube is no card. Its line does what it did: Kaydown has no picture for it, so it shows as it's written.
-  @test !K.carded(e.buf, line("![A talk]")) && flows(line("![A talk]")) && !(TALK in asked)
+@testset "what a block shows" begin
+  @test shows(1) && shows(2) && shows(3)
+  # One address is one card. Two addresses are two cards, one under the other, and a line that isn't an address is between them.
+  @test [en.text for en in view(1).entries] == [PAINT] && [en.address for en in view(2).entries] == [true, false, true]
+  @test card(1).card.url == PAINT && card(2, 1).card.url == SLOW && card(2, 3).card.url == GONE && !haskey(view(2).parts, (:card, 2))
+  tall = K.card_tall(K.body(e).size)
+  @test 90 <= K.num(tall) <= 110 && rect(card(1)).height ≈ tall && rect(card(1)).width ≈ e.width
+  @test rect(card(2, 3)).top > rect(card(2, 1)).top + tall && rect(card(2, 3)).height ≈ tall
+  @test rect(view(2)).height > 2tall && rect(view(2)).height < 2.6tall
+  # An empty block says what to write, in one line
+  @test isempty(view(3).entries) && rect(view(3)).height < 0.6tall
+  # The sidebar lists each block, the Insert menu has it, and a `find` block can list the page's link cards
+  @test count(en -> en.title == "Link card", K.outline(e.buf)) == 3 && any(x -> x isa Tuple && x[1] == "Link Card", K.INSERTS)
+  @test K.Searches.what("link cards") == :card && K.Searches.block_kind(K.CARD) == :card && "link-45deg" in K.SIDEBAR_ICONS
   # A window that isn't on the screen asks the web for nothing with `curl`. This test has its own function in place of it.
   mine = C.getter[]
   @test K.online(e)
   C.getter[] = C.curl
   @test !K.online(e)
   C.getter[] = mine
-  # An email shows no cards
+  # In an email, Kaydown asks the web for nothing
   was = e.buf.path
   e.buf.path = joinpath(dir, "letter.eml")
-  @test !K.carded(e.buf, paint) && K.card_item(e, paint) === nothing
+  @test !K.online(e)
   e.buf.path = was
+end
+
+@testset "only a block shows a card" begin
+  # A web address alone on a line is a line of text, and so is one in a line of words
+  bare = findlast(==(PAINT), e.buf.lines)
+  @test flows(bare) && K.solid(e.buf, bare) === nothing && flows(line("Some words"))
+  @test join(seg.text for vl in K.item(e, bare).content.lines for seg in vl.segs) == PAINT
+  # A web address in a picture's form is a picture line, as it always was. Kaydown has no picture for this one, so it
+  # shows as it's written. It's no card, and the cards asked no one for it.
+  julia = line("![Julia]")
+  @test K.pictured(e.buf, julia) && K.solid(e.buf, julia) == (julia, julia) && flows(julia) && K.picture_item(e, julia) === nothing
+  @test !(JULIA in asked) && !any(n -> n isa K.LinkCard && n.card.url == JULIA, values(e.nodes))
+  @test occursin("<p><img src=\"$JULIA\" alt=\"Julia\"></p>", K.page_html(e))
 end
 
 @testset "a card while its page is on its way" begin
   # Each page was asked for once, and nothing else was
-  @test sort(asked) == sort([PAINT, SLOW, GONE, PHOTO])
-  c = card(paint)
-  @test c.card == C.Card(PAINT) && c.words == "Paint" && c.picture == "" && c.icon == ""
-  # The words of the line are the title, with the address under them. A line with no words has the address as its title.
-  @test C.heading(c.card, c.words) == "Paint" && C.blurb(c.card, c.words) == PAINT && C.source(c.card) == "bunnings.com.au"
-  @test card(slow).words == "" && C.heading(card(slow).card, card(slow).words) == SLOW
-  @test iscard(line("![A photo]"))   # until its first bytes come, Kaydown can't tell that it's a picture
+  @test sort(asked) == sort([PAINT, SLOW, GONE])
+  c = card(1)
+  @test c.card == C.Card(PAINT) && c.picture == "" && c.icon == ""
+  @test C.heading(c.card) == PAINT && C.source(c.card) == "bunnings.com.au"
   shot("cards-waiting.png")
-  tall = K.item(e, paint).tall
-  @test tall == K.card_tall(K.body(e).size) + 2K.LIVE_GAP && 90 <= K.num(K.card_tall(K.body(e).size)) <= 110
-  @test rect(c).width ≈ e.width
-  top = K.item(e, slow).top
+  tops = [K.item(e, block(n)[1]).top for n in 1:3]
   arrived[] = true
   frames(4)
   # The page that can't be had was asked for twice. Here the second time comes at once.
   C.jobs[joinpath(K.cards_dir(), C.name(GONE) * ".html")] -= C.SOON
   frames(4)
   @test count(==(GONE), asked) == 2
-  # The page's own title takes the place of the words
-  @test c.card.title == "White paint & primer, 4 L" && c.card.site == "Bunnings Australia" && C.heading(c.card, c.words) == c.card.title
-  @test !isempty(c.picture) && !isempty(c.icon)
-  @test card(slow).card.title == "Getting Started · The Julia Language" && card(slow).picture == ""
-  # A page that can't be had keeps the words of its line as its title, and the page doesn't move when a card fills in
-  @test card(gone).card == C.Card(GONE) && C.heading(card(gone).card, card(gone).words) == "A page that's gone"
-  @test K.item(e, paint).tall == tall && K.item(e, slow).top == top
+  @test c.card.title == "White paint & primer, 4 L" && c.card.site == "Bunnings Australia" && !isempty(c.picture) && !isempty(c.icon)
+  @test card(2, 1).card.title == "Getting Started · The Julia Language" && card(2, 1).picture == ""
+  # A page that can't be had keeps its address, and the page doesn't move when a card fills in
+  @test card(2, 3).card == C.Card(GONE) && [K.item(e, block(n)[1]).top for n in 1:3] == tops
   @test !K.dirty(e.buf)
   shot("cards.png")
   # The folder keeps each card and each picture, and nothing of the pages themselves
   kept = readdir(K.cards_dir())
-  @test dirname(K.cards_dir()) == joinpath(dir, "cache") && count(endswith(".card"), kept) == 3 && !any(endswith(".html"), kept)
+  @test dirname(K.cards_dir()) == joinpath(dir, "cache") && count(endswith(".card"), kept) == 2 && !any(endswith(".html"), kept)
   @test C.name("https://www.bunnings.com.au/images/paint.png") in kept
 end
 
-@testset "an address that turns out to be a picture" begin
-  photo = line("![A photo]")
-  # It's no card. While Kaydown hasn't the picture, the line shows as it's written, as it did before there were cards.
-  @test C.pictured(first(C.lookup!(PHOTO, K.cards_dir()))) && K.card_item(e, photo) === nothing && flows(photo)
-  @test K.pictured(e.buf, photo) && !K.has_picture(PHOTO)
-  # Once Kaydown has the picture, the line shows it
-  K.fetches[PHOTO] = joinpath(dir, "plan.png")
-  frames()
-  @test K.has_picture(PHOTO) && K.item(e, photo).content.node isa K.Picture
-end
-
-@testset "the caret goes onto a card as a whole" begin
-  caret!((paint - 1, 0))
+@testset "the caret and the block" begin
+  s, t = block(1)
+  # The caret goes onto the block as a whole
+  caret!((s - 1, 0))
   key(Keys.down)
-  @test e.buf.caret == (paint, 0) && K.picked(e.buf) == (paint, paint) && iscard(paint)
+  @test e.buf.caret == (s, 0) && K.picked(e.buf) == (s, t) && shows(1)
   shot("cards-picked.png")
-  key(Keys.down)
-  @test e.buf.caret[1] == paint + 1 && iscard(paint)
-  key(Keys.up)
-  @test K.picked(e.buf) == (paint, paint)
-  # Return shows the line as it's written, with the caret at its end
+  # Return gives the keyboard to a block that takes it. This one has nothing to type in, so it stays as it is.
   key(Keys.enter)
-  @test e.buf.caret == (paint, length("![Paint]($PAINT)")) && flows(paint)
+  @test K.picked(e.buf) == (s, t) && shows(1) && e.buf.lines[s:t] == ["```card", PAINT, "```"]
+  key(Keys.down)
+  @test e.buf.caret[1] == t + 1 && shows(1)
+  # With the caret in the block, the block shows its lines. What's typed there changes the address, and ⌘Z takes it back.
+  caret!((s + 1, length(PAINT)))
+  @test !shows(1) && flows(s + 1) && K.item(e, s + 1).content.kind == K.Kind.code
   shot("cards-typing.png")
-  # What's typed there changes the line, and ⌘Z takes it back
   ontype(e, Typed('s', w)); frames()
-  @test e.buf.lines[paint] == "![Paint]($PAINT)s" && flows(paint)
+  @test e.buf.lines[s+1] == PAINT * "s"
   K.undo!(e.buf); frames()
-  @test e.buf.lines[paint] == "![Paint]($PAINT)"
+  @test e.buf.lines[s+1] == PAINT
   caret!((1, 0))
-  @test iscard(paint)
-  # ⌫ takes the card away, and ⌘Z puts it back
-  caret!((gone, 0))
+  @test shows(1) && card(1).card.title == "White paint & primer, 4 L"
+  # A click with ⌥ held shows the lines too
+  click(card(1), Keys.opt)
+  @test e.buf.caret == (s + 1, 0) && !shows(1) && flows(s + 1)
+  caret!((1, 0))
+  # ⌫ takes the block away, and ⌘Z puts it back
+  caret!((s, 0))
   key(Keys.backspace)
-  @test line("![A page that's gone]") === nothing
+  @test block(3) === nothing && !(PAINT in e.buf.lines[1:s+1])
   K.undo!(e.buf); frames()
-  @test line("![A page that's gone]") == gone && iscard(gone)
+  @test block(1) == (s, t) && shows(1) && !K.dirty(e.buf)
 end
 
-@testset "typing a card" begin
-  last = line("The end.")
-  caret!(K.line_end(e.buf, last))
-  key(Keys.enter); key(Keys.enter)
-  new = e.buf.caret[1]
+@testset "a new block from the Insert menu" begin
   web["https://example.org/new"] = "<title>A new page</title>"
-  for c in "![New](https://example.org/new)"
-    ontype(e, Typed(c, w))
-  end
-  frames()
-  # The line shows as its text while the caret is in it, and Kaydown asks for no page until the caret leaves
-  @test e.buf.lines[new] == "![New](https://example.org/new)" && flows(new)
-  @test !any(startswith("https://example.org"), asked)
-  caret!((1, 0)); frames(4)
-  @test iscard(new) && card(new).card.title == "A new page" && "https://example.org/new" in asked
-  foreach(_ -> K.undo!(e.buf), 1:60); frames()
-  @test line("![New]") === nothing && !K.dirty(e.buf)
-  # Insert › Link Card writes the line, with the caret where the address goes on
   item = K.INSERTS[findfirst(x -> x isa Tuple && x[1] == "Link Card", K.INSERTS)]
   caret!(K.line_end(e.buf, line("The end.")))
   K.add_block!(e, item[2], item[3]); frames()
-  made = e.buf.caret[1]
-  @test e.buf.lines[made] == "![](https://)" && e.buf.caret == (made, 12) && flows(made)
+  s, t = block(4)
+  # The caret is after https:// in the block, and the block shows its lines while the caret is there
+  @test e.buf.lines[s:t] == ["```card", "https://", "```"] && e.buf.caret == (s + 1, 8) && flows(s + 1)
   for c in "example.org/new"
     ontype(e, Typed(c, w))
   end
-  caret!((1, 0)); frames()
-  @test e.buf.lines[made] == "![](https://example.org/new)" && iscard(made) && card(made).card.title == "A new page"
-  foreach(_ -> K.undo!(e.buf), 1:60); frames()
-  @test line("![](https://example.org") === nothing && !K.dirty(e.buf)
+  frames()
+  # Kaydown asks for no page until the caret leaves the block
+  @test e.buf.lines[s+1] == "https://example.org/new" && !any(startswith("https://example.org"), asked)
+  caret!((1, 0)); frames(4)
+  @test shows(4) && card(4).card.title == "A new page" && "https://example.org/new" in asked
+  foreach(_ -> K.undo!(e.buf), 1:40); frames()
+  @test block(4) === nothing && !K.dirty(e.buf)
 end
 
 @testset "a click on a card" begin
-  c = card(paint)
+  c = card(1)
   caret!((1, 0))
-  @test K.cursor(c) == :ibeam && !K.opening(c)
-  # A click puts the caret in the card's line, so the line shows as it's written
+  was = e.buf.caret
+  @test K.cursor(c) == :arrow && !K.opening(c)
+  # A click with no key held opens nothing, and leaves the block as it is
   click(c)
-  @test e.buf.caret == (paint, length("![Paint]($PAINT)")) && flows(paint) && isempty(opened)
-  caret!((1, 0))
+  @test isempty(opened) && e.buf.caret == was && shows(1)
   # With ⌘ held, the mouse shows a hand, and a click opens the address
   w.keys = Keys.cmd
   @test K.cursor(c) == :hand
   w.keys = Keys(0)
-  was = e.buf.caret
   click(c, Keys.cmd)
-  @test opened == [PAINT] && e.buf.caret == was && iscard(paint)
-  click(card(slow), Keys.cmd)
-  @test opened == [PAINT, SLOW]
+  @test opened == [PAINT] && e.buf.caret == was && shows(1)
+  click(card(2, 3), Keys.cmd)
+  @test opened == [PAINT, GONE]
   # In a page that's never changed, a click opens the address with no key held
   chmod(page, 0o444)
   frames()
   @test e.buf.fixed && K.cursor(c) == :hand
   click(c)
-  @test opened == [PAINT, SLOW, PAINT] && iscard(paint)
+  @test opened == [PAINT, GONE, PAINT] && shows(1)
   chmod(page, 0o644)
   frames()
   @test !e.buf.fixed
@@ -283,14 +258,13 @@ end
   made = K.page_html(e)
   @test occursin("<a class=\"card\" href=\"$PAINT\"><span class=\"card-words\"><strong>White paint &amp; primer, 4 L</strong>", made)
   @test occursin("<img class=\"card-picture\" src=\"https://www.bunnings.com.au/images/paint.png\" alt=\"\">", made)
-  # A page that couldn't be had has the words of its line as its title, and its address under them
-  @test occursin("<a class=\"card\" href=\"$GONE\"><span class=\"card-words\"><strong>A page that's gone</strong><span class=\"card-description\">$GONE</span>", made)
-  @test occursin("a.card {", made) && count("class=\"card\"", made) == 3
-  # The other lines are as they were: an address by itself is text, and a picture is a picture
-  @test occursin("<p>$PAINT</p>", made) && occursin("<p>&lt;$SLOW&gt;</p>", made)
-  @test occursin("<p>Some words with $PAINT in the line.</p>", made) && occursin("<a href=\"$PAINT\">Words that go somewhere</a>", made)
-  @test occursin("<p><img src=\"$PHOTO\" alt=\"A photo\"></p>", made) && occursin("<p><img src=\"$KEPT\" alt=\"A photo that's kept\"></p>", made)
-  @test occursin("<p><img src=\"plan.png\" alt=\"A plan\"></p>", made) && occursin("<li><img src=\"$PAINT\" alt=\"Paint\">", made)
+  # Two cards of one block, with the line between them as a paragraph
+  @test occursin("<strong>Getting Started · The Julia Language</strong>", made) && occursin("</a>\n<p>Paint for the hall</p>\n<a class=\"card\" href=\"$GONE\">", made)
+  @test occursin("<a class=\"card\" href=\"$GONE\"><span class=\"card-words\"><strong>$GONE</strong>", made)
+  # The rules for a card's look come with each block that has a card. An empty block is nothing in the page.
+  @test count("class=\"card\"", made) == 3 && count("a.card {", made) == 2 && !occursin("language-card", made)
+  # A page with no `card` block has none of those rules, and an address by itself is a line of text
+  @test occursin("<p>$PAINT</p>", made) && !occursin("card", K.html(["# A page", "", PAINT, "", "![Julia]($JULIA)"]))
   @test length(K.print_pdf(e)) > 1000
   frames()
 end
@@ -301,9 +275,9 @@ end
   shot("cards-night.png")
   K.theme!(e, :sepia); frames()
   # In a narrow window the card is as wide as the text, and its words end in …
-  narrow = Window(e, size=(420px, 900px))
+  narrow = Window(e, size=(420px, 1000px))
   foreach(_ -> frame(narrow), 1:3)
-  @test rect(card(paint)).width ≈ e.width && K.num(e.width) < 400
+  @test rect(card(1)).width ≈ e.width && K.num(e.width) < 400
   haskey(ENV, "KAYDOWN_SHOTS") && save_png(joinpath(ENV["KAYDOWN_SHOTS"], "cards-narrow.png"), narrow)
   close(narrow)
 end

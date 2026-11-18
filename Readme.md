@@ -15,13 +15,16 @@ A code block does more than show code. What it does depends on its language:
 - `chart` draws the numbers of a table as bars, as lines or as a pie.
 - `board` shows the page's to-do items as cards in columns, and you drag a card to move it.
 - `calendar` shows a month, with the page's tasks, its to-do items that have a day, and events of its own.
+- `columns` holds a number, and shows that many of the blocks after it side by side.
 - `sketch` is a drawing: lines by hand, arrows, boxes, ovals and words.
 - `signature` is a place to sign: a person draws their signature in a box, and the page says who signed and when.
+- `contact` is the card of a person or a company. A click on its email address starts an email, and a vCard file from the Contacts app makes one.
 - `gallery` shows the pictures of a folder as a grid of small squares, and a click makes one fill the window.
 - `map` shows the map of a place, with a pin on the place.
 - `find` lists the to-do items that aren't ticked in every page of a folder. With words in it, it lists the lines that have those words. It can list another kind of line, or a kind of block, like every takeoff.
 - `email` lists the emails with a person.
 - `timelog` keeps the hours that you work on each task, with a button that starts and stops the clock.
+- `card` shows a web page as a card: its title, its description and its picture.
 - `ask` is a question from an agent, with answers to click.
 - `changes` shows a diff from an agent, with a button on each change that accepts or rejects it.
 
@@ -32,7 +35,6 @@ A page shows more than text:
 - A quote whose first line is `> [!NOTE]` shows as a callout: a note that stands out, with an icon and a colour of its own. The other kinds are `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]` and `[!CAUTION]`. GitHub reads the same lines the same way. Words after the `]` are the callout's title.
 - A formula that's written in TeX between dollar signs shows as maths: `$x^2$` in a line of text, and on lines of its own between a line of `$$` and another.
 - A line that holds only a CSV file shows the file as a table. [Show a CSV file as a table](#show-a-csv-file-as-a-table) says more.
-- A line that's written as a picture is, with the address of a web page, shows a card: the page's title, its description and its picture.
 - A line that holds only a picture, a video or a sound file shows it, or a player for it. The page's Insert menu records a sound from the microphone, and a button under the player writes down what's said in it, on the Mac.
 - A button beside a diagram, a picture or a page of a PDF file makes it fill the window, where you zoom it with a pinch.
 - A diagram that fills the window can be changed there. Click a box or a line to select it, click it twice to type its words, drag the point on a box's edge onto another box to draw a line, and use the buttons under it to add a box, draw a line, change a shape or take a part away. Each change is written in the code of the block.
@@ -232,17 +234,62 @@ Times are written with 24 hours, like `07:30`. Kaydown also reads `7:30am` and `
 
 ## Show a web page as a card
 
-Write a web page as you write a picture, on a line of its own, and the line shows as a card: the page's title, two lines of its description, its picture, and the name of its site beside the site's icon.
+A code block in the language `card` shows a card for each web address in it: the page's title, two lines of its description, its picture, and the name of its site beside the site's icon.
 
+````
+```card
+https://julialang.org
 ```
-![Julia](https://julialang.org)
+````
+
+Each line of the block that starts with `https://` or `http://` is one card, so two addresses show two cards, one under the other. A line that's anything else shows as faint text. Hold ⌘ and click a card to open its page in your browser. To change an address, hold ⌥ and click the block, or move the caret onto it and press ⌘E: the block shows its lines.
+
+Only a `card` block shows a card. A web address by itself stays text, a link with words, like `[Julia](https://julialang.org)`, stays a link, and a web address in a picture's form, like `![Julia](https://julialang.org/logo.png)`, is a picture.
+
+Kaydown gets each page once, in the background. It reads only the start of the page, and only what the page says of itself: its `og:title`, `og:description`, `og:image` and `og:site_name`, or its title and its description where those are missing. It keeps those texts and the picture in `~/Library/Caches/Kaydown/cards`, so the card shows at once the next time, and with no network. Until the page comes, and when Kaydown can't get it, the card shows the address. `linkcard.jl` says how the block is written and how a page is read.
+
+## Put blocks of a page side by side
+
+A code block in the language `columns` holds a number. That many of the blocks after it show side by side, as columns of one width. The blocks stay the page's own lines, so you type in a column as you type anywhere else.
+
+````
+```columns
+3
 ```
 
-The address starts with `https://` or `http://`. The words in the square brackets are the card's title until Kaydown has read the page's own title, and they stay the title when the page has none. Hold ⌘ and click the card to open the page in your browser. Click the card with no key held, and the line shows as it's written, so that you can change it.
+### Option A
 
-Only a line of that form is a card. A web address by itself stays text, and a link with words, like `[Julia](https://julialang.org)`, stays a link. A line with the address of a picture, a video or a sound file shows that file, as it always did. So does a line whose address has no such ending and turns out to be a picture. A video on YouTube is no card.
+Cheapest.
 
-Kaydown gets the page once, in the background. It reads only the start of the page, and only what the page says of itself: its `og:title`, `og:description`, `og:image` and `og:site_name`, or its title and its description where those are missing. It keeps those texts and the picture in `~/Library/Caches/Kaydown/cards`, so the card shows at once the next time, and with no network. Until the page comes, and when Kaydown can't get it, the card shows the words of its line and the address. An email shows no cards. `linkcard.jl` says how a page is read.
+- Two days
+
+### Option B
+
+Lasts longer.
+
+- Three days
+
+### Option C
+
+Both.
+
+---
+
+This paragraph is under the columns.
+````
+
+- A block is a paragraph, a list, a quote, a table, a code block, a picture, or a block like a diagram or a chart. Empty lines between blocks don't count.
+- A heading takes the blocks under it into its column, up to the next heading of its level or a higher one. A lower heading, like `####` under `###`, stays in the column. Any other block is a column by itself.
+- A line across the page (`---`) ends the columns, and so does another `columns` block. The line shows under the columns, as wide as the page.
+- Several numbers are the share of the width of each column. `2 1` is two columns, and the first is twice as wide as the second. One number alone is always a count.
+- When fewer columns follow than the number says, the columns that are missing keep their room.
+- Each column wraps its text at its own width, and a table, a picture or a diagram in a column is made for that width. The columns line up at the top, with a gap between them.
+- ← and → move the caret through the columns in the order of the file. ↑ and ↓ stay in one column, and leave the columns from its first and last line. A click puts the caret in the column under the mouse.
+- In a narrow window, the blocks show one under another.
+
+The `columns` block itself takes no room in the page, and shows nothing there. The caret steps over it. To change the number, press ⌘E, or click the ladder at the top right, and press ↑ from the first column. The block shows its lines while the caret is on them, and ⌘E again goes back up. A click on "Columns" in the sidebar's list of the page's headings puts the caret in the block too. A block that doesn't say how many columns shows a faint line with words that say how to write it. The language `column` means the same as `columns`.
+
+The sidebar and a `find` block see the blocks in the columns as the page's own blocks, which they are. A page of HTML and a printed page show the columns too. `columns.jl` says how the block is written.
 
 ## Draw a sketch
 
@@ -268,6 +315,50 @@ The block shows a box with a line to sign on, and the name under it. A block wit
 - A page that can't be changed, like an email or a file that's read-only, takes no strokes.
 
 The places of a stroke are in the box's own measure, 420 wide and 130 tall. So the signature keeps its shape when the text is bigger and when the window is narrow. The page of HTML and the printed page show the signature with who signed and when under it. `signature.jl` says how the lines are written.
+
+## Keep the card of a person or a company
+
+A code block in the language `contact` is the card of a person or a company. It shows a round picture, the name, and a row for each detail.
+
+````
+```contact
+Ada Lovelace
+role: Engineer
+company: Analytical Engines
+email: ada@example.com
+mobile: 0400 123 456
+address: 12 Example St, Sydney NSW 2000
+web: example.com
+photo: ada.jpg
+note: Met at the 2026 conference.
+ABN: 12 345 678 901
+
+Analytical Engines
+kind: company
+email: hello@example.com
+```
+````
+
+The first line of a contact is its name. Each other line is a label, a colon and a value. Capitals in a label don't matter.
+
+- `role` and `company` show under the name, like "Engineer, Analytical Engines".
+- `email`, `address`, `web` and `note` are a row each. `website` and `url` are other words for `web`.
+- `phone` is a phone number. So are `mobile`, `work`, `home` and `fax`, and the row shows that word before the number.
+- `photo` names a picture file, from the page's folder, or a picture on the web. Without it, the card shows the person's initials.
+- `kind: company` says that the contact is a company. Its picture is a building, and it has no line under its name.
+- Any other label, like `ABN`, is a row with the label and the value.
+
+A label can be there more than once: two `email` lines are two rows. A line with no label is read by its shape: an email address, a web address, a phone number, or else a note. An empty line ends a contact, and the next line is the name of the next one. So a block can hold several contacts, and each one has a card.
+
+- Click a row to use it. An email address starts a new email, a phone number starts a call, an address shows in the Maps app, and a web address opens in the browser.
+- While the mouse is over a row, a button at its right end copies its value.
+- Click the name, the role, the company or the value of a row twice to change it where it is. Return keeps the change, esc leaves it, and a click somewhere else keeps it. A value that you empty takes its line out of the block. A click on a row waits a moment before it opens anything, in case a second click comes.
+- While the mouse is over a card, two buttons show at its top right. The + opens a menu: Email, Phone, Address, Website and Note. Choose one and type its value. The other button opens the contact in the Contacts app, which asks to add it.
+- While the mouse is over the block, a button under the last card adds a contact.
+- Drag a contact from the Contacts app onto the page, and the page gets a block with that contact. Dropped on a block of contacts, it joins that block. A vCard file (`.vcf`) from the Finder does the same, and so does ⌘V with a contact that you copied in the Contacts app.
+- A page that can't be changed, like an email or a file that's read-only, takes no changes. Its rows still open and copy.
+
+Each change is one step for ⌘Z. The page of HTML has a card for each contact, with links for the email address and the phone number, and the class names of the h-card microformat. `contact.jl` says how the lines are written, and reads and writes vCards.
 
 ## Show the pictures of a folder
 
@@ -305,7 +396,7 @@ A code block in the language `map` shows the map round a place, with a pin on th
 - The first line is the place: an address, or a latitude and a longitude like `-37.7701, 144.9610`.
 - The − and the + on the map show more and less of what's round the place. The block keeps that as a line like `zoom: 15`. Each step up shows half as much from side to side.
 - Drag the map to move it. When you let go, the block keeps the middle of what shows as a line like `centre: -33.86120, 151.21010`. The pin stays on the place. `center` is read as the same word.
-- Click the map to move the place. The pin goes where you clicked, and the block's first line becomes that point's latitude and longitude, like `-33.85930, 151.21320`. The map stays where it is.
+- Click the map to move the place. The pin goes where you clicked at once, and the block's first line becomes that point's latitude and longitude, like `-33.85930, 151.21320`. The map stays where it is. The address of the point shows under the map a moment later, when Apple has sent it.
 - ⌘Z takes back a drag or a click.
 - When the place isn't in the middle of the map, a third button beside the − puts it back there. It takes the `centre` line away.
 - **Open in Maps** opens the Mac's Maps app at the place.
@@ -313,10 +404,11 @@ A code block in the language `map` shows the map round a place, with a pin on th
 - A page that can't be changed, like a file that's read-only, takes no drag and no click.
 - The address under the map is the one that Apple has for the place. Check it: when Apple doesn't know an address, the pin can go on another address that's like it.
 - Write a street address. The name of a place alone, like "Sydney Opera House", isn't enough for Apple to find it.
-- Apple's maps make the picture, so the first picture of a place needs the network. Until the picture is there, the block is a grey box. Kaydown keeps each picture on the Mac, so the map shows at once the next time, with no network. When Kaydown can't get a picture, the block says so, and Kaydown tries again a minute later.
+- Apple's maps find where an address is and make the picture, so the first map of a place needs the network. Until the picture is there, the block is a grey box. Kaydown keeps each picture and each place on the Mac, so the map shows at once the next time, with no network. When Kaydown can't get a picture, the block says so, and Kaydown tries again a minute later.
+- Kaydown draws the pin itself, over the picture. A place that isn't in the part of the map that shows has no pin.
 - A dark page has a dark map. The page of HTML that ⌘⇧E saves has the picture in it, with the address under it as a link to Apple Maps.
 
-Kaydown never asks where the Mac is, so macOS asks you for nothing. `map.jl` says how the block is written, and `map.swift` makes the picture.
+Kaydown never asks where the Mac is, so macOS asks you for nothing. `map.jl` says how the block is written, and `map.swift` asks Apple's maps for the place and for the picture.
 
 ## List what's in the pages of a folder
 
@@ -334,7 +426,7 @@ The kinds are:
 
 - The kinds of line: to-do items, done items, headings, lines, paragraphs, bullet points, numbered items, quotes and table rows.
 - Links and pictures, which list the lines that have one.
-- The kinds of block: code blocks, sheets, spreadsheets, live blocks, diagrams, takeoffs, schedules, charts, boards, calendars, sketches, signatures, maps, find lists, email lists, time logs, questions and changes.
+- The kinds of block: code blocks, sheets, spreadsheets, live blocks, diagrams, takeoffs, schedules, charts, boards, calendars, columns, sketches, signatures, contacts, maps, find lists, email lists, time logs, link cards, questions and changes.
 
 A block shows in the list as the heading that it's under, with the icon of its kind. A block of code, and a block with no heading over it, shows as its own first line. The words in the first field are looked for in that heading and in the lines of the block. A kind of block that a file of your own defines is listed with the code blocks.
 
@@ -525,16 +617,20 @@ julia -O0 --project=. test/gallery_test.jl        # how a gallery is read and wr
 julia -O0 --project=. test/gallery_view_test.jl   # the squares of a gallery, a picture that fills the window, and a picture that's dropped on it
 julia -O0 --project=. test/calendar_test.jl       # how a calendar is read and written, the day in a to-do item's text, and the things of each day
 julia -O0 --project=. test/calendar_view_test.jl  # the month of a calendar: its arrows, a tick, a drag to another day and a new event
-julia -O0 --project=. test/linkcard_test.jl       # which lines are link cards, how the HTML of a web page is read into a card, and what the card keeps on the Mac
-julia -O0 --project=. test/linkcard_view_test.jl  # a link card in the page: while its page is on its way, the caret on it, and a click that opens it
+julia -O0 --project=. test/linkcard_test.jl       # how a `card` block is read, how the HTML of a web page is read into a card, and what the card keeps on the Mac
+julia -O0 --project=. test/linkcard_view_test.jl  # the cards of a `card` block: while a page is on its way, the caret in the block, and a click that opens a card
+julia -O0 --project=. test/columns_test.jl        # what a `columns` block says, which blocks it puts in columns, and the room of each
+julia -O0 --project=. test/columns_view_test.jl   # blocks side by side: typing, clicks, the arrows and a selection in a column, a narrow window, HTML and paper
 julia -O0 --project=. test/find_test.jl           # how a list of what's found is read and written, and which lines match
 julia -O0 --project=. test/find_view_test.jl      # the list in the page, and a tick that goes to another page's file
 julia -O0 --project=. test/sketch_test.jl         # how a sketch is read and written, what a click is on, and the places that change a shape
 julia -O0 --project=. test/sketch_view_test.jl    # a sketch in the page, and its tools while it fills the window: drawing, moving, changing and deleting shapes
 julia -O0 --project=. test/signature_test.jl      # how a signature is read and written: its strokes, its name and its day
 julia -O0 --project=. test/signature_view_test.jl # a signature in the page: strokes drawn with the mouse, ⌘Z, the Clear button and the name's field
-julia -O0 --project=. test/map_test.jl            # how a map is read and written, its link to Apple Maps, the pictures that are kept, and where a latitude and a longitude is in a picture
-julia -O0 --project=. test/map_view_test.jl       # a map in the page: its buttons, a drag that moves it, a click that moves its place, the grey box while its picture is made, and a place that isn't found
+julia -O0 --project=. test/contact_test.jl        # how contacts are read and written, what a click on a row opens, and the vCards that are written and read
+julia -O0 --project=. test/contact_view_test.jl   # the cards of a block of contacts: a click on a row, words changed where they are, a new detail, and a vCard file that's dropped
+julia -O0 --project=. test/map_test.jl            # how a map is read and written, its link to Apple Maps, the places and the pictures that are kept, and where a latitude and a longitude is in a picture
+julia -O0 --project=. test/map_view_test.jl       # a map in the page: its pin, its buttons, a drag that moves it, a click that moves its place, the grey box while its picture is made, and a place that isn't found
 julia -O0 --project=. test/file_block_test.jl     # a kind of block that a file defines: what it shows, and what goes back into its lines
 julia -O0 --project=. test/autosave_test.jl       # the setting that saves a page when you leave its window
 julia -O0 --project=. test/children_test.jl       # the parts of the page as the document's children, and a walk from one part to another
@@ -562,7 +658,7 @@ Kip.link("/path/to/UI.jl")
 
 To write down what's said in a recording, Kaydown runs `transcribe.swift`, which uses the speech recognition in macOS 26 and later. Run from the source, Kaydown compiles it the first time, so it needs Swift, which comes with Xcode's command line tools. The app has it compiled already.
 
-To make the picture of a map, Kaydown runs `map.swift`, which uses MapKit, the maps that are part of macOS. It needs macOS 26 or later. Run from the source, Kaydown compiles it the first time, as it does `transcribe.swift`. The app has it compiled already.
+To find the place of a map and to make its picture, Kaydown runs `map.swift`, which uses MapKit, the maps that are part of macOS. It needs macOS 26 or later. Run from the source, Kaydown compiles it the first time, as it does `transcribe.swift`. The app has it compiled already.
 
 UI.jl has a script that runs an app and reloads each file when you save it:
 

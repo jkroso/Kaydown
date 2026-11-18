@@ -3,31 +3,20 @@
 
 @use Test: @test, @testset
 @use "../linkcard" => C
-@use "../html" html
 
 const SITE = "https://www.bunnings.com.au/paint/white-4l?colour=white#top"
 
-@testset "the lines that are cards" begin
-  @test C.asked("![Bunnings](https://www.bunnings.com.au/some-product)") == ("Bunnings", "https://www.bunnings.com.au/some-product")
-  @test C.asked("  ![ A page ]( <http://example.com/a?b=1&c=2> \"More\" )  ") == ("A page", "http://example.com/a?b=1&c=2")
-  @test C.asked("![](HTTPS://Example.com/)") == ("", "HTTPS://Example.com/")
-  # The picture can be the words of a link, as a line that holds only a picture can
-  @test C.asked("[![Julia](https://julialang.org)](https://docs.julialang.org)") == ("Julia", "https://julialang.org")
-  # An address by itself, a link with words, and a card in a line of text or in a list
-  @test C.asked("https://www.bunnings.com.au/some-product") === nothing && C.asked("<https://example.com>") === nothing
-  @test C.asked("[Bunnings](https://www.bunnings.com.au)") === nothing
-  @test C.asked("See ![Bunnings](https://www.bunnings.com.au)") === nothing && C.asked("![A](https://example.com) and more") === nothing
-  @test C.asked("- ![Bunnings](https://www.bunnings.com.au)") === nothing && C.asked("") === nothing
-  # A file on the Mac, and an address that isn't a web page's
-  @test C.asked("![Plan](plan.png)") === nothing && C.asked("![Notes](notes.html)") === nothing
-  @test C.asked("![A](https://)") === nothing && C.asked("![A](ftp://example.com/a)") === nothing
-  # A picture, a video, a sound and a PDF are files, and Kaydown shows them as it did
-  @test C.asked("![Plan](https://example.com/plan.png)") === nothing && C.asked("![Walk](https://example.com/walk.MOV?key=1)") === nothing
-  @test C.asked("![Memo](https://example.com/memo.m4a#t=4)") === nothing && C.asked("![Plan](https://example.com/plan.pdf)") === nothing
-  @test C.asked("![Page](https://example.com/plan.png.html)") == ("Page", "https://example.com/plan.png.html")
-  # A video on YouTube is no card
-  @test C.asked("![Talk](https://www.youtube.com/watch?v=abc)") === nothing && C.asked("![Talk](https://youtu.be/abc)") === nothing
-  @test C.page("https://example.com/youtube.com") && !C.page("https://m.youtube.com/watch?v=abc") && !C.page("example.com")
+@testset "the lines of a block" begin
+  @test C.CARD == "card"
+  found = C.entries(["https://www.bunnings.com.au/some-product", "", "  http://example.com/a?b=1&c=2  ", "Paint for the hall", "   "])
+  @test [f.text for f in found] == ["https://www.bunnings.com.au/some-product", "http://example.com/a?b=1&c=2", "Paint for the hall"]
+  @test [f.address for f in found] == [true, true, false]
+  @test isempty(C.entries(String[])) && isempty(C.entries(["", "  "]))
+  # A web address and nothing else
+  @test C.isaddress("HTTPS://Example.com/") && C.isaddress("https://example.com/plan.png") && C.isaddress("https://youtu.be/abc")
+  @test !C.isaddress("https://") && !C.isaddress("ftp://example.com") && !C.isaddress("example.com") && !C.isaddress("")
+  @test !C.isaddress("https://example.com and more") && !C.isaddress("See https://example.com") && !C.isaddress("<https://example.com>")
+  @test !C.isaddress("[Bunnings](https://www.bunnings.com.au)") && !C.isaddress("![Bunnings](https://www.bunnings.com.au)")
 end
 
 @testset "the parts of an address" begin
@@ -82,8 +71,7 @@ const PAGE = """
   @test c.image == "https://www.bunnings.com.au/images/paint.jpg?w=600&h=400"
   @test c.site == "Bunnings" && c.icon == "https://www.bunnings.com.au/static/icon.png"
   @test C.heading(c) == "White paint & primer, 4 L" && C.source(c) == "Bunnings · bunnings.com.au"
-  # The page's own title and description count before the words of the line and the address
-  @test C.heading(c, "Paint") == c.title && C.blurb(c, "Paint") == c.description && !C.pictured(c)
+  @test C.blurb(c) == c.description
   # Without the og: lines, the <title> and the description of the page count
   plain = C.card("<html><head><TITLE lang=en>\n  A plain   page\n</TITLE><META NAME=\"Description\" CONTENT=\"What it is > what it was\"></head></html>",
                  "http://example.com/a/b.html")
@@ -96,8 +84,7 @@ const PAGE = """
   # A page that says nothing, and one that isn't HTML, give a card with only the address
   empty = C.card("{\"json\": true}", "https://example.com/api")
   @test empty.title == "" && empty.description == "" && empty.image == "" && C.heading(empty) == "https://example.com/api"
-  # The words of the line are its title, and the address is under them. With no words, the address is the title.
-  @test C.heading(empty, "The API") == "The API" && C.blurb(empty, "The API") == "https://example.com/api" && C.blurb(empty) == ""
+  @test C.blurb(empty) == ""   # the address is the title, so it isn't under the title too
   # A page with a title and no description has its address under the title
   @test C.blurb(C.card("<title>Only a title</title>", SITE)) == SITE
   @test C.card("", "https://example.com").title == ""
@@ -126,20 +113,10 @@ end
   @test C.card(rand(UInt8, 5000), SITE).url == SITE   # bytes that aren't a page never throw
 end
 
-@testset "an address that turns out to be a picture" begin
-  bytes(start...) = UInt8[start..., zeros(UInt8, 40)...]
-  for start in ((0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a), (0xff, 0xd8, 0xff, 0xe0), Vector{UInt8}("GIF89a"), Vector{UInt8}("%PDF-1.7"),
-                (Vector{UInt8}("RIFF")..., 1, 2, 3, 4, Vector{UInt8}("WEBP")...), (0x49, 0x49, 0x2a, 0x00), (0x4d, 0x4d, 0x00, 0x2a),
-                (0x00, 0x00, 0x01, 0x00), (Vector{UInt8}("BM")..., 9, 9, 9, 9, 0, 0, 0, 0), (0, 0, 0, 0x18, Vector{UInt8}("ftypheic")...))
-    @test C.picture(bytes(start...))
-  end
-  @test C.picture(Vector{UInt8}("<?xml version=\"1.0\"?>\n<!-- drawn -->\n<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>"))
-  @test !C.picture(Vector{UInt8}(PAGE)) && !C.picture(UInt8[]) && !C.picture(Vector{UInt8}("BMW cars")) && !C.picture(Vector{UInt8}("RIFF....WAVE"))
-  @test !C.picture(Vector{UInt8}("<html><body><svg></svg></body></html>"))
-  # Its card says that it's a picture, and the file that keeps the card says so too
-  c = C.card(bytes(0xff, 0xd8, 0xff), SITE)
-  @test C.pictured(c) && c.title == "" && C.pictured(C.card(C.written(c), SITE))
-  @test !C.pictured(C.Card(SITE)) && !C.pictured(C.Card(""))
+@testset "bytes that are a picture" begin
+  # A card's address can be a picture's. Its card has only the address, and nothing throws.
+  png = UInt8[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, rand(UInt8, 300)...]
+  @test C.card(png, SITE).title == "" && C.heading(C.card(png, SITE)) == SITE
 end
 
 @testset "what a card keeps" begin
@@ -161,27 +138,11 @@ end
   # A card with only its address
   bare = C.markup(C.Card("https://example.com/a?b=<1>"))
   @test occursin("<strong>https://example.com/a?b=&lt;1&gt;</strong>", bare) && !occursin("<img", bare) && !occursin("card-description", bare)
-  # With the words of its line, the words are the title and the address is under them
-  named = C.markup(C.Card("https://example.com/a"), "A <page>")
-  @test occursin("<strong>A &lt;page&gt;</strong><span class=\"card-description\">https://example.com/a</span>", named)
+  # A page with a title and no description has its address under the title
+  titled = C.markup(C.Card("https://example.com/a", title="A <page>"))
+  @test occursin("<strong>A &lt;page&gt;</strong><span class=\"card-description\">https://example.com/a</span>", titled)
   # Words of the page are never tags of the card
   @test !occursin("<script", C.markup(C.card("<title>&lt;script&gt;alert(1)&lt;/script&gt;</title>", SITE)))
-end
-
-@testset "a card in a page of HTML" begin
-  lines = ["# Links", "", "![Paint]($SITE)", "", "See $SITE now.", "", SITE, "", "<https://example.com/>", "", "![Plan](plan.png)", "", "- ![Paint]($SITE)"]
-  # Without a function that gives a card, the line is a picture, as it was, and the page has no rules for cards
-  plain = html(lines)
-  @test occursin("<p><img src=\"$SITE\" alt=\"Paint\"></p>", plain) && !occursin("card", plain)
-  # An address by itself is a line of text, with or without that function
-  @test occursin("<p>$SITE</p>", plain) && occursin("<p>&lt;https://example.com/&gt;</p>", plain)
-  made = html(lines, card=(words, url) -> C.markup(C.Card(url), words))
-  @test occursin("\n<a class=\"card\" href=\"$SITE\"><span class=\"card-words\"><strong>Paint</strong>", made)
-  @test count("class=\"card\"", made) == 1 && occursin("a.card {", made)
-  @test occursin("<p>$SITE</p>", made) && occursin("<p>&lt;https://example.com/&gt;</p>", made) && occursin("<p>See $SITE now.</p>", made)
-  @test occursin("<p><img src=\"plan.png\" alt=\"Plan\"></p>", made) && occursin("<li><img src=\"$SITE\" alt=\"Paint\">", made)
-  # A function that has no card for an address leaves the line as it was
-  @test html(lines, card=(words, url) -> nothing) == plain
 end
 
 # --- getting a page, with a function in place of `curl` ----------------------------------------
@@ -240,12 +201,6 @@ end
   @test C.lookup!("https://example.com/quiet", dir, ask=false) == (C.Card("https://example.com/quiet"), false)
   @test C.picture!("https://example.com/quiet.jpg", dir, ask=false) == (nothing, false) && isempty(asked)
   @test C.lookup!(gone, dir, ask=false)[1].title == "Back"   # a page that it keeps still shows
-  # An address that turns out to be a picture: the card says so, and the folder keeps that
-  photo = "https://example.com/photo"
-  web[photo] = UInt8[0xff, 0xd8, 0xff, 0xe0, zeros(UInt8, 40)...]
-  @test C.lookup!(photo, dir)[2] && C.pictured(C.lookup!(photo, dir)[1])
-  empty!(C.cards)
-  @test C.pictured(C.lookup!(photo, dir)[1])
   # Only the start of a page is read
   web["https://example.com/long"] = "<title>Start</title>" * " "^(2C.PAGE_BYTES) * "<meta property=\"og:title\" content=\"End\">"
   @test C.lookup!("https://example.com/long", dir)[2] && C.lookup!("https://example.com/long", dir)[1].title == "Start"

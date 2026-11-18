@@ -1,22 +1,26 @@
 # A link card shows what a web page says of itself: its title, a line or two
 # of its description, its picture and the name of its site. In a document the
-# card is a line that's written as a picture is, with the page's address:
+# cards are a code block in the language `card`, with a web address on each
+# line:
 #
-#     ![Bunnings](https://www.bunnings.com.au/some-product)
+#     ```card
+#     https://www.bunnings.com.au/some-product
+#     https://julialang.org
+#     ```
 #
-# The words are the card's title until the page's own title is read, and they
-# stay the title when the page has none. A web address by itself is no card,
-# and nor is a link with words. A line with the address of a picture, a video
-# or a sound file shows that file, as it always did. So does a line with an
-# address that has no such name and turns out to be a picture.
+# Each line that's a web address is one card. A line that's anything else
+# shows as it's written, and an empty line shows nothing.
 #
-# This file says which lines are cards, and reads the HTML of a page into a
-# card: its `og:title`, `og:description`, `og:image` and `og:site_name`, then
-# its <title> and its <meta name="description"> where those are missing. It
-# gets the page with `curl`, and keeps what it read in a folder, so that a
-# card shows at once the next time, and with no network. It reads only the
-# start of a page. It runs nothing from the page, and it keeps only those
-# texts and two addresses: the picture's and the icon's. It draws nothing.
+# This file reads those lines, and reads the HTML of a page into a card: its
+# `og:title`, `og:description`, `og:image` and `og:site_name`, then its
+# <title> and its <meta name="description"> where those are missing. It gets
+# the page with `curl`, and keeps what it read in a folder, so that a card
+# shows at once the next time, and with no network. It reads only the start
+# of a page. It runs nothing from the page, and it keeps only those texts and
+# two addresses: the picture's and the icon's. It draws nothing.
+
+"The language of a code block that shows link cards"
+const CARD = "card"
 
 "What a web page says of itself. A text that the page doesn't give is empty."
 struct Card
@@ -30,30 +34,17 @@ end
 
 Card(url::AbstractString; title="", description="", image="", site="", icon="") = Card(url, title, description, image, site, icon)
 
-# A line that holds only a picture, as main.jl reads it: ![words](address), which can be the words of a link
-const LINE = r"^\s*(?:\[\s*)?!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)(?:\s*\]\([^)]*\))?\s*$"
-# An address that ends like this names a file that Kaydown shows as a picture, a video or a sound. It's no web page.
-const FILES = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".heic", ".heif", ".avif", ".tif", ".tiff", ".ico", ".pdf",
-               ".mp4", ".mov", ".m4v", ".mp3", ".m4a", ".wav", ".aif", ".aiff", ".aac", ".flac", ".caf")
-# The computers that YouTube's videos are on. A line with one of their addresses is no card.
-const VIDEO_SITES = ("youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be", "youtube-nocookie.com")
-
-"True when `url` is the address of a web page that a card can show: it isn't a picture, a video or a sound by its name, and it isn't on YouTube"
-page(url::AbstractString) =
-  occursin(r"^https?://"i, url) && !isempty(host(url)) && !(lowercase(splitext(path(url))[2]) in FILES) && !(host(url) in VIDEO_SITES)
-
-"""
-The words and the web address of the line `text`, when the line asks for a
-card: it's written as a picture is, like `![Bunnings](https://bunnings.com.au)`,
-it holds nothing else, and its address is a web page's. It's nothing for any
-other line.
-"""
-asked(text::AbstractString) = begin
-  occursin("![", text) || return nothing
-  m = match(LINE, text)
-  (m === nothing || !page(m[2])) && return nothing
-  (String(strip(m[1])), String(m[2]))
+"A line of a `card` block that has something in it: its text, and whether that's a web address, which shows as a card"
+struct Entry
+  text::String
+  address::Bool
 end
+
+"True when `text` is a web address and nothing else: it starts with http:// or https://, and it names a computer"
+isaddress(text::AbstractString) = occursin(r"^https?://\S+$"i, text) && !isempty(host(text))
+
+"What the lines of a `card` block hold: each line that isn't empty, in order"
+entries(lines) = Entry[Entry(String(strip(line)), isaddress(strip(line))) for line in lines if !isempty(strip(line))]
 
 "The name of the computer that the web address `url` is on, without a www. at its start: bunnings.com.au"
 host(url::AbstractString) = begin
@@ -186,33 +177,8 @@ end
 
 nonempty(s) = isempty(s) ? nothing : s
 
-"""
-True when `bytes` are the start of a picture, or of a PDF file, which macOS
-shows as a picture. The first bytes of a file say what kind it is.
-"""
-picture(bytes::Vector{UInt8}) = begin
-  starts(with...) = length(bytes) >= length(with) && all(i -> bytes[i] == with[i], eachindex(with))
-  word(from, n) = length(bytes) >= from + n - 1 ? String(bytes[from:from+n-1]) : ""
-  starts(0x89, 0x50, 0x4e, 0x47) || starts(0xff, 0xd8, 0xff) || word(1, 4) == "GIF8" || word(1, 4) == "%PDF" ||
-    (word(1, 4) == "RIFF" && word(9, 4) == "WEBP") || starts(0x49, 0x49, 0x2a, 0x00) || starts(0x4d, 0x4d, 0x00, 0x2a) ||
-    starts(0x00, 0x00, 0x01, 0x00) || (word(1, 2) == "BM" && length(bytes) > 26 && bytes[7:10] == zeros(UInt8, 4)) ||
-    (word(5, 4) == "ftyp" && word(9, 4) in ("heic", "heix", "mif1", "msf1", "avif", "avis")) ||
-    occursin(r"^\s*(?:<\?xml[^>]*>\s*)?(?:<!--.*?-->\s*)*(?:<!DOCTYPE[^>]*>\s*)?(?:<!--.*?-->\s*)*<svg\b"is, String([b < 0x80 ? b : UInt8('?') for b in view(bytes, 1:min(length(bytes), 2048))]))
-end
-
-"""
-The card of the page at `url`, read from the bytes of the page. It has only the
-address when the bytes can't be read as text. When the bytes are a picture, the
-card says so: its picture is the address itself. See `pictured`.
-"""
-card(bytes::Vector{UInt8}, url::AbstractString) = begin
-  picture(bytes) && return Card(url, image=String(url))
-  html = text(bytes)
-  html === nothing ? Card(url) : card(html, url)
-end
-
-"True when the address of the card turned out to be a picture, and no page. Its line shows the picture, as it did before there were cards."
-pictured(c::Card) = !isempty(c.image) && c.image == c.url
+"The card of the page at `url`, read from the bytes of the page. It has only the address when the bytes can't be read as text."
+card(bytes::Vector{UInt8}, url::AbstractString) = (html = text(bytes); html === nothing ? Card(url) : card(html, url))
 
 "The line under a card's words: the name of the site, when the page gives one, and the name of the computer that it's on"
 source(c::Card) = begin
@@ -220,20 +186,20 @@ source(c::Card) = begin
   isempty(c.site) || lowercase(c.site) == name ? name : c.site * " · " * name
 end
 
-"The words at the top of a card: the page's title. While Kaydown has no title, they are `words`, the words of the card's line, or the address when the line has none."
-heading(c::Card, words::AbstractString="") = !isempty(c.title) ? c.title : !isempty(words) ? String(words) : c.url
+"The words at the top of a card: the page's title, or its address while Kaydown has no title"
+heading(c::Card) = isempty(c.title) ? c.url : c.title
 
-"The words under a card's title: the page's description. For a page that gives none, they are the address, unless the title is the address."
-blurb(c::Card, words::AbstractString="") = !isempty(c.description) ? c.description : heading(c, words) == c.url ? "" : c.url
+"The words under a card's title: the page's description. For a page that has a title and gives no description, they are its address."
+blurb(c::Card) = !isempty(c.description) ? c.description : isempty(c.title) ? "" : c.url
 
 # --- the card in a page of HTML -----------------------------------------------------------
 
 escape(s::AbstractString) = replace(s, '&' => "&amp;", '<' => "&lt;", '>' => "&gt;", '"' => "&quot;")
 
-"The card as HTML: a link in a box, with the title, the description, the name of the site and the picture. `words` are the words of the card's line."
-markup(c::Card, words::AbstractString="") =
-  "<a class=\"card\" href=\"" * escape(c.url) * "\"><span class=\"card-words\"><strong>" * escape(heading(c, words)) * "</strong>" *
-  (isempty(blurb(c, words)) ? "" : "<span class=\"card-description\">" * escape(blurb(c, words)) * "</span>") *
+"The card as HTML: a link in a box, with the title, the description, the name of the site and the picture"
+markup(c::Card) =
+  "<a class=\"card\" href=\"" * escape(c.url) * "\"><span class=\"card-words\"><strong>" * escape(heading(c)) * "</strong>" *
+  (isempty(blurb(c)) ? "" : "<span class=\"card-description\">" * escape(blurb(c)) * "</span>") *
   "<span class=\"card-site\">" * escape(source(c)) * "</span></span>" *
   (isempty(c.image) ? "" : "<img class=\"card-picture\" src=\"" * escape(c.image) * "\" alt=\"\">") * "</a>"
 

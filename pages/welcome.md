@@ -297,11 +297,15 @@ To change a formula in a line of text, put the caret in the line and press ⌘E:
 
 ## Link cards
 
-Write a web page as you write a picture, on a line of its own, like `![Julia](https://julialang.org)`. The line shows as a card, with the page's title, its description and its picture:
+A code block in the language `card` shows a web page as a card, with the page's title, its description and its picture. Write the page's address in the block:
 
-![Julia](https://julialang.org)
+```card
+https://julialang.org
+```
 
-Hold ⌘ and click the card to open the page in your browser. Click the card with no key held, and the line shows as it's written, so that you can change it. The words in the square brackets are the card's title until Kaydown has read the page's own title. Kaydown gets the page once and keeps what the card shows, so the card is there the next time with no network. A web address by itself, like https://julialang.org, stays text, and [a link with words](https://julialang.org) stays a link.
+Hold ⌘ and click the card to open the page in your browser. To change the address, hold ⌥ and click the card: the block shows its lines. A second address on the next line shows a second card under the first. Kaydown gets each page once and keeps what the card shows, so the card is there the next time with no network.
+
+Only a `card` block shows a card. A web address in a picture's form, like `![Julia](https://julialang.org/logo.png)`, is a picture. A web address by itself, like https://julialang.org, is text.
 
 ## Takeoffs
 
@@ -398,6 +402,44 @@ month: 2026-11
 
 The arrows go to the month before and the month after, and **Today** goes back to the month of today. Drag an event or a to-do item to another day, and Kaydown writes the new day into its line. Click an empty part of a day twice to add an event: type its words and press Return. Click a thing twice to go to its line.
 
+## Columns
+
+A code block in the language `columns` holds a number. That many of the blocks after it show side by side. They are still lines of this page: click in a column and type.
+
+```columns
+3
+```
+
+Each block after the `columns` block is a column. This paragraph is the first of three.
+
+- A list is a block too.
+- So is a table.
+
+| Part | Cost |
+|---|---|
+| Pipe | $420 |
+| Fittings | $95 |
+
+The `columns` block takes no room in the page, and the caret steps over it. To change its number, press ⌘E and then ↑ from the first column. The block shows its lines while the caret is on them. Press ⌘E again when the number is right. In a narrow window, the blocks show one under another.
+
+A heading takes the blocks under it into its column, up to the next heading of its level. Two numbers, like `3 2`, are the share of the width of each column. The language `column` means the same as `columns`.
+
+```column
+3 2
+```
+
+### Copper pipe
+
+Lasts **longer**.
+
+- Three days of work
+
+### Plastic pipe
+
+Cheaper.
+
+- Two days of work
+
 ## Sketches
 
 A code block in the language `sketch` is a drawing. In the page it shows only the drawing. Click it, and it fills the window with its tools at the top. Choose a tool there, and drag in the sketch to draw with it: by hand, a line, an arrow, a box or an oval. For words, click where they go, type them there and press Return. Click words twice with the first tool to change them. The dots choose a colour. With the first tool, click a shape to select it, drag it to move it, and press Delete to take it away. The shape that's selected glows. Drag one of its circles to move a corner, and use the numbers at the top to make its line thicker, its corners rounder or its words bigger: click a number to type another, or use the buttons beside it. Esc chooses the first tool, and Esc with that tool puts the sketch back in the page. So does the last button at the top. To see the lines that make the drawing, press ⌘E or click the ladder while the sketch fills the window. Those lines then fill the window as text. ⌘E again makes the drawing fill the window again, and Esc puts the lines back in the page.
@@ -425,6 +467,29 @@ name: Sam Lee
 
 Without the `name:` line, a field under the box takes the name.
 
+## Contacts
+
+A code block in the language `contact` is the card of a person or a company. The first line is the name, and each other line is a label, a colon and a value. Click a row to use it: an email address starts a new email, and a web address opens in the browser. While the mouse is over a row, a button at its right end copies its value. Click words twice to change them where they are.
+
+```contact
+Mei Tanaka
+role: Site manager
+company: Harbour Builders
+email: mei@example.com
+mobile: 0400 555 010
+address: 4 Wharf Road, Newcastle NSW 2300
+web: example.com/harbour
+note: Calls back after 3 pm.
+
+Harbour Builders
+kind: company
+email: office@example.com
+phone: (02) 5550 0100
+ABN: 12 345 678 901
+```
+
+A block can hold several contacts, with an empty line between one and the next. `kind: company` says that a contact is a company. While the mouse is over a card, the + at its top right adds a detail, and the button beside it adds the contact to the Contacts app. A button under the last card adds a contact. Drag a contact from the Contacts app onto the page, or drop a vCard file, to make a block of contacts.
+
 ## Maps
 
 A code block in the language `map` shows the map of a place, with a pin on the place. Write an address in it, or a latitude and a longitude like `-33.8593, 151.2132`.
@@ -433,7 +498,7 @@ A code block in the language `map` shows the map of a place, with a pin on the p
 1 Macquarie Street, Sydney NSW 2000
 ```
 
-The − and the + on the map show more and less of what's round the place. Drag the map to move it. Click the map to put the pin where you clicked. ⌘Z takes back a drag or a click. **Open in Maps** opens the Maps app at the place. The address under the map is the one that Apple has for the place. Check that the pin is where you mean.
+The − and the + on the map show more and less of what's round the place. Drag the map to move it. Click the map to put the pin where you clicked: it moves at once. ⌘Z takes back a drag or a click. **Open in Maps** opens the Maps app at the place. The address under the map is the one that Apple has for the place. Check that the pin is where you mean.
 
 The block keeps what you do as lines. A drag writes the middle of the map, like `centre: -33.86120, 151.21010`. A click writes the latitude and the longitude of the pin as the place. After a drag, a third button beside the − puts the place back in the middle.
 

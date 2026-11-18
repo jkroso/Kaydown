@@ -9,6 +9,8 @@
 #     in it.
 #   - Front matter is never part of a slide.
 #   - A heading of level 3 or lower stays inside its slide.
+#   - A heading in a group of columns starts no slide, so the columns stay on
+#     one slide. The page says which lines those are.
 #
 # It also works out how much bigger than the page's text a slide's text is,
 # so that the slide suits the window. It draws nothing.
@@ -29,14 +31,15 @@ starts(line::Line) = line.kind == Kind.rule || (line.kind == Kind.heading && lin
 The slides of the page with these `lines`, in order. A slide shows no empty
 line at its top or its bottom. A part of the page with nothing in it, like the
 lines between a line across the page and the heading after it, is no slide:
-its lines belong to the slide that comes next.
+its lines belong to the slide that comes next. `held(i)` is true for a line
+that starts no slide whatever it is, like a heading in a group of columns.
 """
-slides(lines, kinds=classify(lines)) = begin
+slides(lines, kinds=classify(lines); held=i -> false) = begin
   out = Slide[]
   n = length(lines)
   start = from = front_matter(lines) + 1
   for i in from:n+1
-    (i > n || starts(kinds[i])) || continue
+    (i > n || (starts(kinds[i]) && !held(i))) || continue
     a = findnext(k -> k.kind != Kind.blank, kinds, from)
     if a !== nothing && a < i
       push!(out, Slide(start, a, findprev(k -> k.kind != Kind.blank, kinds, i - 1)))

@@ -16,21 +16,28 @@
 # word.
 #
 # This file reads and writes those lines, writes the place as a link to Apple
-# Maps, and gets the picture of the map. It also works out which latitude and
-# longitude is at each point of the picture, so that a drag can move the map
-# and a click can move the place. It draws nothing.
+# Maps, finds where the place is, and gets the picture of the map. It also
+# works out which latitude and longitude is at each point of the picture, so
+# that Kaydown can draw the pin on the place, a drag can move the map and a
+# click can move the place. It draws nothing.
 #
-# map.swift makes the picture, as a program of its own, because macOS only
-# offers its maps to Swift. Apple finds the address and sends the map, so the
-# first picture of a place needs the network. Each picture is kept in a folder
-# as a PNG file, named by the place, the middle, the zoom, the size and whether
-# the page is dark. A text file beside it holds the latitude, the longitude and the
-# address that Apple has for the place. So a map shows at once the next time,
-# with no network.
+# map.swift does the two things that need Apple's maps, as a program of its
+# own, because macOS only offers its maps to Swift. Both need the network the
+# first time, and what comes back is kept in a folder, so a map shows at once
+# the next time, with no network:
 #
-#     p = picture!(folder, "8 Wattle Street, Brunswick", 15, 720, 280, false)
-#     p.state   # :there, :coming, :failed, :lost or :none. Ask again while it's :coming.
-#     p.file    # the PNG file, once the state is :there
+# - It finds a place: the latitude and the longitude of an address, and the
+#   address that Apple has for a place. That's kept in a text file, named by
+#   the place.
+# - It makes the picture of the map round a point. The picture has no pin, so
+#   it doesn't change when the place does. It's kept as a PNG file, named by
+#   its middle, the zoom, the size and whether the page is dark.
+#
+#     f = found!(folder, "8 Wattle Street, Brunswick")
+#     f.state         # :there, :coming, :failed, :lost or :none. Ask again while it's :coming.
+#     facts(f.file)   # the latitude, the longitude and the address, once the state is :there
+#     p = picture!(folder, (-37.7694, 144.9405), 15, 720, 280, false)
+#     p.file          # the PNG file, once its state is :there
 #
 # The Kaydown app has the program in it, beside its own program. When Kaydown
 # runs from its source, it compiles map.swift the first time it's needed,
@@ -47,7 +54,7 @@ const ZOOM = 15       # the zoom of a block that names none
 const ZOOMS = 3:19    # the least and the most that a block can ask for: a continent, and one building
 const TALL = 280      # how tall the picture of a map is, in px
 const SCALE = 2       # how many pixels of the picture's file go to a px, as map.swift has it
-const RETRY = 60      # seconds after a picture can't be made before Kaydown tries again
+const RETRY = 60      # seconds after the program fails before Kaydown runs it again
 
 "A latitude and a longitude, in degrees"
 const LatLon = NTuple{2,Float64}
@@ -127,36 +134,34 @@ link(place::AbstractString) = "https://maps.apple.com/?q=" * escaped(query(place
 app_link(place::AbstractString) = "maps://?q=" * escaped(query(place))
 
 """
-The name of the files that keep the picture of `place`, without what they end
-in. `centre` is the middle of the picture, or nothing when the place is. Two
-blocks that name one place with other capitals or other spaces have the same
-picture. The name starts with how map.swift frames a picture, so a picture
-that an older map.swift framed another way isn't taken for this one.
+The name of the file that keeps the picture whose middle is `centre`, without
+what it ends in. The middle counts to the five decimal places that a block
+keeps. The name starts with what the picture holds: a map with no pin. A
+picture that an older map.swift made with a pin in it has another name, and
+isn't taken for this one.
 """
-name(place, zoom, wide, tall, dark, centre=nothing) =
-  "map-" * string(hash(join(("rect", lowercase(query(place)), zoom, wide, tall, dark ? "dark" : "light",
-                             centre === nothing ? "" : text(centre)), '|')), base=16)
+name(centre, zoom, wide, tall, dark) = "map-" * string(hash(join(("plain", text(centre), zoom, wide, tall, dark ? "dark" : "light"), '|')), base=16)
 
-"The PNG file in `folder` that keeps the picture of `place`"
-file(folder, place, zoom, wide, tall, dark, centre=nothing) = joinpath(folder, name(place, zoom, wide, tall, dark, centre) * ".png")
-
-"The text file beside the picture at `png`, which holds the latitude, the longitude and the address of its place"
-facts_file(png) = splitext(png)[1] * ".txt"
+"The PNG file in `folder` that keeps the picture whose middle is `centre`"
+file(folder, centre, zoom, wide, tall, dark) = joinpath(folder, name(centre, zoom, wide, tall, dark) * ".png")
 
 """
-What Apple has for the place of the picture at `png`: its latitude, its
-longitude and its address. The address is "" when Apple has none. When the
-text file beside the picture is gone, the address is "" too, and the latitude
-and the longitude are nothing.
+The text file in `folder` that keeps what Apple has for `place`. Two blocks
+that name one place with other capitals or other spaces have the same file.
 """
-facts(png) = begin
-  none = (lat=nothing, lon=nothing, address="")
-  path = facts_file(png)
-  isfile(path) || return none
+place_file(folder, place) = joinpath(folder, "place-" * string(hash(lowercase(query(place))), base=16) * ".txt")
+
+"""
+What the text file `path` holds of a place: its latitude, its longitude and
+the address that Apple has for it, which is "" when Apple has none. It's
+nothing when the file is gone, or holds something else.
+"""
+facts(path) = begin
+  isfile(path) || return nothing
   parts = split(strip(read(path, String), ['\n', '\r']), '\t', limit=3)
-  length(parts) == 3 || return none
+  length(parts) == 3 || return nothing
   lat, lon = tryparse(Float64, parts[1]), tryparse(Float64, parts[2])
-  (lat === nothing || lon === nothing) ? none : (lat=lat, lon=lon, address=String(strip(parts[3])))
+  (lat === nothing || lon === nothing) ? nothing : (lat=lat, lon=lon, address=String(strip(parts[3])))
 end
 
 "How wide the picture in the file `png` is, in px, or nothing when the file is no PNG file"
@@ -165,8 +170,9 @@ wide(png) = begin
   length(bytes) == 24 && bytes[13:16] == b"IHDR" ? Int(ntoh(reinterpret(UInt32, bytes[17:20])[1])) ÷ SCALE : nothing
 end
 
-"A picture as an address that holds the picture itself, for a page of HTML that needs no other file"
-data_uri(png) = "data:image/png;base64," * base64encode(read(png))
+"A picture as an address that holds the picture itself, for a page of HTML that needs no other file. `png` is a PNG file, or the bytes of one."
+data_uri(png::AbstractString) = data_uri(read(png))
+data_uri(png::Vector{UInt8}) = "data:image/png;base64," * base64encode(png)
 
 # --- where each point of the picture is in the world ------------------------------------
 #
@@ -219,7 +225,7 @@ held(centre, zoom, tall) = begin
   unspot((c[1], clamp(c[2], tall / 2, w - tall / 2)), zoom)
 end
 
-# --- the program that makes the picture -------------------------------------------------
+# --- the program that asks Apple's maps -------------------------------------------------
 
 const SOURCE = joinpath(@__DIR__, "map.swift")
 
@@ -253,33 +259,46 @@ command(args; dir=programs()) = begin
   program = joinpath(dir, "map-program-" * string(hash(read(SOURCE)), base=16))
   isfile(program) && return `$program $args`
   mkpath(dir)
-  # A program compiled from older source isn't needed
-  foreach(f -> startswith(f, "map-program-") && rm(joinpath(dir, f), force=true), readdir(dir))
-  # It's compiled to another name and renamed once it's whole, so a program that's there is always whole
-  script = """swiftc -O -parse-as-library -target $(target()) "\$1" -o "\$2.part" && mv "\$2.part" "\$2" && p="\$2" && shift 2 && exec "\$p" "\$@" """
+  # A program compiled from older source isn't needed. One that's being compiled from this source now is left alone.
+  foreach(f -> startswith(f, "map-program-") && !startswith(f, basename(program)) && rm(joinpath(dir, f), force=true), readdir(dir))
+  # It's compiled to a name of this run's own and renamed once it's whole. So a program that's there is always
+  # whole, also when two pictures are asked for at once and each compiles it.
+  script = """swiftc -O -parse-as-library -target $(target()) "\$1" -o "\$2.\$\$" && mv "\$2.\$\$" "\$2" && p="\$2" && shift 2 && exec "\$p" "\$@" """
   `sh -c $script sh $SOURCE $program $args`
 end
 
 """
-Start the program that makes the picture of `place`, with `centre` in its
-middle, or the place when `centre` is nothing. It writes the picture to the
-file `png`, one line with the latitude, the longitude and the address of the
-place to the file `out`, and why it failed to the file `err`. This gives the
-program as it runs.
+Start the program that makes the picture of the map whose middle is `centre`.
+It writes the picture to the file `png`, and why it failed to the file `err`.
+This gives the program as it runs.
 """
-run_program(place, zoom, wide, tall, dark, centre, png, out, err) =
-  run(pipeline(command([(dark ? ["--dark"] : String[])..., (centre === nothing ? String[] : ["--centre", query(text(centre))])...,
-                        string(zoom), string(wide), string(tall), png, query(place)]),
-               stdout=out, stderr=err), wait=false)
+run_program(centre, zoom, wide, tall, dark, png, err) =
+  run(pipeline(command([(dark ? ["--dark"] : String[])..., string(zoom), string(wide), string(tall), png, query(text(centre))]),
+               stdout=devnull, stderr=err), wait=false)
+
+"""
+Start the program that finds `place`. It writes one line to the file `out`:
+the latitude, the longitude and the address that Apple has for the place,
+with a tab between each two. It writes why it failed to the file `err`. This
+gives the program as it runs.
+"""
+find_program(place, out, err) = run(pipeline(command(["--find", query(place)]), stdout=out, stderr=err), wait=false)
 
 """
 The function that makes a picture. It takes what `run_program` takes. It gives
 a program that runs, or the number that a program which has finished already
-ended with: 0 when the picture is written, 2 when there's no such place, and
-1 for anything else. A test puts a function of its own here, so that it uses
-neither the program nor the network.
+ended with: 0 when the picture is written, and 1 when it isn't. A test puts a
+function of its own here, so that it uses neither the program nor the network.
 """
 const HELPER = Ref{Any}(run_program)
+
+"""
+The function that finds a place. It takes what `find_program` takes. It gives
+a program that runs, or the number that a program which has finished already
+ended with: 0 when the line is written, 2 when there's no such place, and 1
+for anything else. A test puts a function of its own here.
+"""
+const FINDER = Ref{Any}(find_program)
 
 "Open the address `url` with the app that the Mac uses for it. An address that starts with maps: opens the Maps app."
 open_app(url) = (run(pipeline(`open $url`, stdout=devnull, stderr=devnull), wait=false); nothing)
@@ -290,8 +309,8 @@ const OPENER = Ref{Any}(open_app)
 "Open the Maps app of the Mac at `place`"
 open_place(place::AbstractString) = try OPENER[](app_link(place)) catch; nothing end
 
-# What's known of each picture that isn't kept yet, by its PNG file: the program that makes it, the number
-# that the program ended with, or the state that it ended in with when that was and what to say
+# What's known of each file that isn't kept yet, by the file: the program that makes it, the number that
+# the program ended with, or the state that it ended in with when that was and what to say
 const jobs = Dict{String,Any}()
 
 "What to say when Apple's maps have no such place"
@@ -300,15 +319,13 @@ const LOST = "Kaydown can't find this place. Check the address."
 const FAILED = "Kaydown can't get this map now."
 const NO_SWIFT = "Kaydown needs Swift to make a map. It comes with Xcode's command line tools."
 
-"What `picture!` gives: the state of a picture, its file, what to say when it can't be made, and in how many seconds to ask again"
-const Picture = @NamedTuple{state::Symbol, file::String, problem::String, wait::Float64}
+"What `picture!` and `found!` give: the state of a file, the file, what to say when it can't be made, and in how many seconds to ask again"
+const Kept = @NamedTuple{state::Symbol, file::String, problem::String, wait::Float64}
 
 """
-The picture of the map with the pin on `place`, `wide` px by `tall` px, kept
-in `folder`. `centre` is the latitude and the longitude in its middle, or
-nothing for the place. Its `state` is:
+The state of the file `target`, which a program makes and Kaydown keeps:
 
-- `:there` when its file is kept. `facts(p.file)` has the address.
+- `:there` when the file is kept.
 - `:coming` while the program makes it. Ask again in `wait` seconds.
 - `:failed` for a minute after the program couldn't make it, as with no
   network. Kaydown tries again after that minute.
@@ -316,17 +333,18 @@ nothing for the place. Its `state` is:
 - `:none` when it isn't kept and, with `start=false`, it wasn't asked for.
 
 `problem` is what to tell the person when the state is `:failed` or `:lost`.
+`make(part, err)` starts the program, which writes the file to `part` and why
+it failed to `err`.
 """
-picture!(folder, place, zoom, wide, tall, dark; centre=nothing, start=true) = begin
-  png = file(folder, place, zoom, wide, tall, dark, centre)
-  got(state, problem="", wait=Inf) = (state=state, file=png, problem=problem, wait=Float64(wait))
+kept!(make, target; start=true) = begin
+  got(state, problem="", wait=Inf) = (state=state, file=target, problem=problem, wait=Float64(wait))
   settle!()
-  isfile(png) && return got(:there)
-  job = get(jobs, png, nothing)
+  isfile(target) && return got(:there)
+  job = get(jobs, target, nothing)
   job isa Base.Process && return got(:coming, "", 0.2)
   if job isa Integer
-    job = jobs[png] = finish!(png, job)
-    isfile(png) && (delete!(jobs, png); return got(:there))
+    job = jobs[target] = finish!(target, job)
+    isfile(target) && (delete!(jobs, target); return got(:there))
   end
   if job isa Tuple
     state, when, problem = job
@@ -335,42 +353,57 @@ picture!(folder, place, zoom, wide, tall, dark; centre=nothing, start=true) = be
     (left > 0 || !start) && return got(:failed, problem, left > 0 ? left : Inf)
   end
   start || return got(:none)
-  part, out, err = png * ".part", png * ".out", png * ".err"
-  jobs[png] = try
-    mkpath(folder)
-    foreach(f -> rm(f, force=true), (part, out, err))
-    HELPER[](place, zoom, wide, tall, dark, centre, part, out, err)
+  part, err = target * ".part", target * ".err"
+  jobs[target] = try
+    mkpath(dirname(target))
+    foreach(f -> rm(f, force=true), (part, err))
+    make(part, err)
   catch
     1
   end
-  # A function that has made the picture already has it kept in the same call
-  jobs[png] isa Base.Process ? got(:coming, "", 0.2) : picture!(folder, place, zoom, wide, tall, dark; centre, start=false)
+  # A function that has made the file already has it kept in the same call
+  jobs[target] isa Base.Process ? got(:coming, "", 0.2) : kept!(make, target, start=false)
 end
 
 """
-Keep the picture of each program that has finished, whichever picture is asked
-for now. So a picture is kept though its block asks for another by then, as
-when the + is clicked twice.
+The picture of the map whose middle is the latitude and the longitude
+`centre`, `wide` px by `tall` px, kept in `folder`. It has no pin. `kept!`
+says what its `state` is.
 """
-settle!() = for (png, job) in collect(jobs)
+picture!(folder, centre, zoom, wide, tall, dark; start=true) =
+  kept!(file(folder, centre, zoom, wide, tall, dark); start) do part, err
+    HELPER[](rounded(centre), zoom, wide, tall, dark, part, err)
+  end
+
+"""
+What Apple has for `place`, kept in `folder`: where an address is, and the
+address of a latitude and a longitude. `kept!` says what its `state` is, and
+`facts(f.file)` reads it once it's there. A place is asked for once, however
+many pictures show it.
+"""
+found!(folder, place; start=true) = kept!((part, err) -> FINDER[](place, part, err), place_file(folder, place); start)
+
+"""
+Keep the file of each program that has finished, whichever file is asked for
+now. So a picture is kept though its block asks for another by then, as when
+the + is clicked twice.
+"""
+settle!() = for (target, job) in collect(jobs)
   (job isa Base.Process && process_exited(job)) || continue
-  # A program that was stopped didn't make the picture, whatever number it ended with
-  done = finish!(png, success(job) ? 0 : max(1, job.exitcode))
-  done[1] == :there ? delete!(jobs, png) : (jobs[png] = done)
+  # A program that was stopped didn't make the file, whatever number it ended with
+  done = finish!(target, success(job) ? 0 : max(1, job.exitcode))
+  done[1] == :there ? delete!(jobs, target) : (jobs[target] = done)
 end
 
 """
-The program that makes the picture at `png` ended with `code`. Keep the
-picture and what Apple has for its place, or note why there's no picture. It
-gives the state, when that was, and what to say.
+The program that makes the file `target` ended with `code`. Keep the file, or
+note why there's none. It gives the state, when that was, and what to say.
 """
-finish!(png, code) = begin
-  part, out, err = png * ".part", png * ".out", png * ".err"
+finish!(target, code) = begin
+  part, err = target * ".part", target * ".err"
   state = try
     if code == 0 && isfile(part) && filesize(part) > 0
-      # The text file is written first, so a picture that's kept always has it
-      write(facts_file(png), isfile(out) && filesize(out) > 0 ? readline(out) : "", "\n")
-      mv(part, png, force=true)
+      mv(part, target, force=true)
       (:there, time(), "")
     elseif code == 2
       (:lost, time(), LOST)
@@ -380,17 +413,16 @@ finish!(png, code) = begin
   catch
     (:failed, time(), FAILED)
   end
-  foreach(f -> rm(f, force=true), (part, out, err))
+  foreach(f -> rm(f, force=true), (part, err))
   state
 end
 
 """
-The picture at `png` turned out to be no picture, as a file that was cut short
-is. Take it away, so that Kaydown makes it again in a minute.
+The file `target` turned out not to hold what it should, as a picture that
+was cut short. Take it away, so that Kaydown makes it again in a minute.
 """
-spoiled!(png) = begin
-  rm(png, force=true)
-  rm(facts_file(png), force=true)
-  jobs[png] = (:failed, time(), FAILED)
+spoiled!(target) = begin
+  rm(target, force=true)
+  jobs[target] = (:failed, time(), FAILED)
   nothing
 end

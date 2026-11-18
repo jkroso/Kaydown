@@ -82,3 +82,12 @@ end
   # A slide with nothing in it, and a window with no room, don't throw
   @test S.fit(s -> 0.0, 0.0, 500) == 1.0 && S.fit(s -> 100s, 100.0, 0) == 1.0
 end
+
+@testset "a line that's held starts no slide, so a group of columns stays on one slide" begin
+  lines = ["# Plan", "", "```columns", "2", "```", "", "## A", "", "One.", "", "## B", "", "Two.", "", "---", "", "## After"]
+  @test [(s.first, s.last) for s in S.slides(lines)] == [(1, 5), (7, 9), (11, 13), (17, 17)]
+  # The two headings of the columns are held, and the line across the page still ends the slide
+  list = S.slides(lines, held=i -> 7 <= i <= 13)
+  @test [(s.first, s.last) for s in list] == [(1, 13), (17, 17)]
+  @test S.number(list, 11) == 1 && S.number(list, 17) == 2
+end

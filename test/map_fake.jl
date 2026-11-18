@@ -1,33 +1,38 @@
-# A pretend maker of map pictures, for map_test.jl and map_view_test.jl. It
+# A pretend program for Apple's maps, for map_test.jl and map_view_test.jl. It
 # takes the place of the program that map.jl runs, so the tests use neither
 # MapKit nor the network. `helper` is a function for `Maps.HELPER`: it writes
-# a picture that it draws itself, with streets, parks and a red dot on the
-# place, and the latitude, the longitude and an address. The streets are in
-# the same places of the world in every picture, as on a real map, so a
-# picture with another middle shows them moved. `opener` is a function for
-# `Maps.OPENER`: it opens nothing, and notes what it was asked to open.
+# a picture that it draws itself, with streets and parks and no pin. The
+# streets are in the same places of the world in every picture, as on a real
+# map, so a picture with another middle shows them moved. `finder` is a
+# function for `Maps.FINDER`: it says where a place is, and its address.
+# `opener` is a function for `Maps.OPENER`: it opens nothing, and notes what
+# it was asked to open.
 #
-# The place says what the helper does:
+# The place says what the finder does:
 #
 # - A place with "nowhere" in it isn't found, as Apple's maps find no such place.
 # - A place with "offline" in it fails, as with no network.
-# - A place with "slow" in it takes as long as `SLOW` seconds. So does every place while `slow[]` is true.
-# - A place with "broken" in it gets a file that isn't a picture.
+# - A place with "slow" in it takes as long as `SLOW` seconds.
 # - `-37.7701, 144.9610` and any other latitude and longitude gets the address "1 Found Street, Brunswick VIC 3056, Australia".
 # - Any other place gets itself, with ", Australia" after it, as its address, and is at `ADDRESS`.
+#
+# Three switches say what the helper does with every picture: `slow[]` makes
+# it take `SLOW` seconds, `offline[]` makes it fail, and `broken[]` makes it
+# write a file that isn't a picture. `slow[]` makes every place slow too.
 
 @use "../map" => Maps
 
-"Each picture that was asked for: the place, the zoom, how wide and how tall it is in px, whether it's dark, and its middle"
+"Each picture that was asked for: its middle, the zoom, how wide and how tall it is in px, and whether it's dark"
 const calls = NamedTuple[]
-"The latitude and the longitude of every address"
-const ADDRESS = (-37.769417, 144.940514)
+"Each place that was asked for"
+const finds = String[]
 "Each address that the Maps app was asked to open"
 const opened = String[]
-"How many seconds a slow place takes"
+"The latitude and the longitude of every address"
+const ADDRESS = (-37.769417, 144.940514)
+"How many seconds a slow place or a slow picture takes"
 const SLOW = 0.4
-"True while every place is slow"
-const slow = Ref(false)
+const slow, offline, broken = Ref(false), Ref(false), Ref(false)
 
 const CRC = [foldl((c, _) -> isodd(c) ? 0xedb88320 ⊻ (c >> 1) : c >> 1, 1:8, init=UInt32(n)) for n in 0:255]
 crc(bytes) = begin
@@ -68,16 +73,14 @@ png(colour, w, h) = begin
 end
 
 """
-A picture like a map, `wide` px by `tall` px with two pixels to the px. `centre`
-is in its middle, and a red dot is on `pin`. The streets and the parks are
-where they are on the map of the world at `zoom`.
+A picture like a map, `wide` px by `tall` px with two pixels to the px, with
+`centre` in its middle. The streets and the parks are where they are on the
+map of the world at `zoom`. It has no pin.
 """
-map_picture(wide, tall, dark, zoom, centre, pin) = begin
+map_picture(wide, tall, dark, zoom, centre) = begin
   land, street, park = dark ? ((52, 56, 66), (84, 90, 104), (40, 84, 64)) : ((236, 232, 220), (255, 255, 255), (178, 216, 160))
   left, top = Maps.spot(centre, zoom) .- (wide / 2, tall / 2)
-  dot = Maps.point(pin, centre, zoom, wide, tall)
   png(2wide, 2tall) do x, y
-    (x / 2 - dot[1])^2 + (y / 2 - dot[2])^2 <= 8^2 && return (232, 66, 54)
     wx, wy = left + x / 2, top + y / 2
     (mod(wx, 90) < 9 || mod(wy, 70) < 9) && return street
     (100 <= mod(wx, 630) < 260 && 80 <= mod(wy, 490) < 200) ? park : land
@@ -86,8 +89,18 @@ end
 
 const pictures = Dict{Any,Vector{UInt8}}()
 
-helper(place, zoom, wide, tall, dark, centre, file, out, err) = begin
-  push!(calls, (place=place, zoom=zoom, wide=wide, tall=tall, dark=dark, centre=centre))
+helper(centre, zoom, wide, tall, dark, file, err) = begin
+  push!(calls, (centre=centre, zoom=zoom, wide=wide, tall=tall, dark=dark))
+  if offline[]
+    write(err, "error: The Internet connection appears to be offline.\n")
+    return 1
+  end
+  write(file, broken[] ? b"not a picture" : get!(() -> map_picture(wide, tall, dark, zoom, centre), pictures, (wide, tall, dark, zoom, centre)))
+  slow[] ? run(`sleep $SLOW`, wait=false) : 0
+end
+
+finder(place, out, err) = begin
+  push!(finds, place)
   has(word) = occursin(word, lowercase(place))
   if has("nowhere")
     write(err, "error: Apple's maps found no such place\n")
@@ -97,10 +110,7 @@ helper(place, zoom, wide, tall, dark, centre, file, out, err) = begin
     return 1
   end
   given = Maps.coordinates(place)
-  pin = something(given, ADDRESS)
-  middle = something(centre, pin)
-  write(file, has("broken") ? b"not a picture" : get!(() -> map_picture(wide, tall, dark, zoom, middle, pin), pictures, (wide, tall, dark, zoom, middle, pin)))
-  write(out, given === nothing ? "$(ADDRESS[1])\t$(ADDRESS[2])\t$place, Australia\n" : "$(pin[1])\t$(pin[2])\t1 Found Street, Brunswick VIC 3056, Australia\n")
+  write(out, given === nothing ? "$(ADDRESS[1])\t$(ADDRESS[2])\t$place, Australia\n" : "$(given[1])\t$(given[2])\t1 Found Street, Brunswick VIC 3056, Australia\n")
   has("slow") || slow[] ? run(`sleep $SLOW`, wait=false) : 0
 end
 

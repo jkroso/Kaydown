@@ -4,6 +4,7 @@
 #     files()   # ["/Users/sam/Desktop/plan.png"]: the files that ⌘C copied in the Finder
 #     media()   # ("png", bytes) for a picture that was copied, or nothing
 #     text()    # the text that was copied, or ""
+#     vcard()   # the text of a contact that was copied in the Contacts app, or ""
 #
 # Each takes a clipboard to read, which is the Mac's own unless you give
 # another. This file only works on macOS.
@@ -55,6 +56,15 @@ files(pb::Object=board()) = begin
       ispath(path) && push!(out, path)
     end
     out
+  end
+end
+
+"The text of the vCard that the clipboard holds, or \"\": what ⌘C copies in the Contacts app"
+vcard(pb::Object=board()) = begin
+  Sys.isapple() || return ""
+  with_pool() do
+    data = msg(pb, "dataForType:", nsstring("public.vcard"))
+    data == C_NULL ? "" : String(bytes(data))
   end
 end
 

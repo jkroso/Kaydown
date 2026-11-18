@@ -1,32 +1,41 @@
-// Makes a picture of the map round a place, with a pin on the place, using
-// MapKit, which is part of macOS. macOS only offers MapKit to Swift and
-// Objective-C, so this is a program of its own, and Kaydown runs it. See map.jl.
+// Does the two things that Kaydown's maps need from MapKit, which is part of
+// macOS. macOS only offers MapKit to Swift and Objective-C, so this is a
+// program of its own, and Kaydown runs it. See map.jl.
 //
-//     map 15 720 280 site.png "8 Wattle Street, Brunswick VIC 3056"
-//     map --dark 15 720 280 site.png "-37.7701, 144.9610"
-//     map --centre -37.7681,144.9426 15 720 280 site.png "8 Wattle Street, Brunswick VIC 3056"
+// It makes a picture of the map round a point:
+//
+//     map 15 720 280 site.png -37.7681,144.9426
+//     map --dark 15 720 280 site.png -37.7681,144.9426
 //
 // The arguments are the zoom, how wide and how tall the picture is in px, the
-// PNG file to write, and the place. The place is an address, or a latitude and
-// a longitude. The zoom is the one that maps on the web use: each step shows
-// half as much from side to side, and 15 shows a few streets. The file has two
+// PNG file to write, and the latitude and the longitude in the middle of the
+// picture. The zoom is the one that maps on the web use: each step shows half
+// as much from side to side, and 15 shows a few streets. The file has two
 // pixels to the px, so the picture is sharp on a Retina screen. With --dark,
-// the map has the colours of a dark page. With --centre and a latitude and a
-// longitude, that point is in the middle of the picture, and the pin is on the
-// place wherever that is. A place that isn't in the picture has no pin there.
+// the map has the colours of a dark page. The picture has no pin: Kaydown
+// draws the pin over it.
 //
 // The picture is a rectangle of the map of the world as maps on the web draw
 // it, which is 256 px wide at zoom 0 and twice as wide at each step. So map.jl
 // can work out which latitude and longitude is at each point of the picture.
 //
-// When the picture is written, the program prints one line: the latitude, the
-// longitude and the address that Apple has for the place, with a tab between
-// each two. If it can't make the picture, it prints "error: " and why on
-// stderr. It exits with 2 when Apple finds no such place, and with 1 for
-// anything else, like no network.
+// And it finds a place:
 //
-// Apple finds an address from its words, and that needs the network. The
-// program never asks where the Mac is, so macOS asks the person for nothing.
+//     map --find "8 Wattle Street, Brunswick VIC 3056"
+//     map --find -37.7701,144.9610
+//
+// It prints one line: the latitude, the longitude and the address that Apple
+// has for the place, with a tab between each two. For a latitude and a
+// longitude, the address is the one that Apple has for that point, and it's
+// empty when Apple has none.
+//
+// If it can't do what it's asked, it prints "error: " and why on stderr. It
+// exits with 2 when Apple finds no such place, and with 1 for anything else,
+// like no network.
+//
+// Apple finds an address from its words, and that needs the network, as the
+// first picture of a part of the map does. The program never asks where the
+// Mac is, so macOS asks the person for nothing.
 
 import AppKit
 import Foundation
@@ -57,88 +66,60 @@ struct MapPicture {
       .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: ", ")
   }
 
-  /// Draw a pin whose point is at `tip`. The picture's y grows upwards.
-  static func drawPin(at tip: CGPoint) {
-    let r = 11.0                                   // of the pin's round head
-    let centre = CGPoint(x: tip.x, y: tip.y + 26)   // of the head
-    let pin = NSBezierPath()
-    pin.move(to: tip)
-    pin.curve(to: CGPoint(x: centre.x - r, y: centre.y), controlPoint1: CGPoint(x: tip.x - 2, y: tip.y + 9),
-              controlPoint2: CGPoint(x: centre.x - r, y: centre.y - 9))
-    pin.appendArc(withCenter: centre, radius: r, startAngle: 180, endAngle: 0, clockwise: true)
-    pin.curve(to: tip, controlPoint1: CGPoint(x: centre.x + r, y: centre.y - 9), controlPoint2: CGPoint(x: tip.x + 2, y: tip.y + 9))
-    pin.close()
-    // A soft shadow on the ground under the point
-    NSColor.black.withAlphaComponent(0.25).setFill()
-    NSBezierPath(ovalIn: CGRect(x: tip.x - 5, y: tip.y - 2, width: 10, height: 4)).fill()
-    NSGraphicsContext.saveGraphicsState()
-    let shadow = NSShadow()
-    shadow.shadowColor = NSColor.black.withAlphaComponent(0.35)
-    shadow.shadowBlurRadius = 3
-    shadow.shadowOffset = CGSize(width: 0, height: -1)
-    shadow.set()
-    NSColor(srgbRed: 0.92, green: 0.26, blue: 0.21, alpha: 1).setFill()
-    pin.fill()
-    NSGraphicsContext.restoreGraphicsState()
-    NSColor(srgbRed: 0.70, green: 0.16, blue: 0.13, alpha: 1).setStroke()
-    pin.lineWidth = 1
-    pin.stroke()
-    NSColor.white.setFill()
-    NSBezierPath(ovalIn: CGRect(x: centre.x - 4, y: centre.y - 4, width: 8, height: 8)).fill()
+  /// True when MapKit says that it found nothing. Any other error is the network.
+  static func nothingFound(_ error: Error) -> Bool {
+    let e = error as NSError
+    return e.domain == MKError.errorDomain && e.code == Int(MKError.placemarkNotFound.rawValue)
   }
 
-  static func main() async {
-    var args = Array(CommandLine.arguments.dropFirst())
-    var dark = false
-    var middle: CLLocationCoordinate2D? = nil
-    while let flag = args.first, flag.hasPrefix("--") {
-      args.removeFirst()
-      if flag == "--dark" {
-        dark = true
-      } else if flag == "--centre", let given = args.first, let point = coordinate(given) {
-        middle = point
-        args.removeFirst()
-      } else {
-        fail("map takes --dark, and --centre with a latitude and a longitude, like this: --centre -37.7681,144.9426")
-      }
-    }
-    guard args.count == 5, let zoom = Double(args[0]), let wide = Double(args[1]), let tall = Double(args[2]),
-          wide >= 1, tall >= 1 else {
-      fail("Say the zoom, the size, the file and the place, like this: map 15 720 280 site.png \"8 Wattle Street, Brunswick\"")
-    }
-    let out = URL(fileURLWithPath: args[3])
-    let place = args[4].trimmingCharacters(in: .whitespacesAndNewlines)
+  /// Print where `place` is, and the address that Apple has for it
+  static func find(_ place: String) async -> Never {
     guard !place.isEmpty else { fail("The place is empty", code: 2) }
-
-    // Apple gets so long to answer. A Mac with no network can wait much longer than that.
-    Task.detached {
-      try? await Task.sleep(nanoseconds: UInt64(patience * 1e9))
-      fail("Apple's maps didn't answer in \(Int(patience)) seconds")
-    }
-
-    // Where the place is, and the address that Apple has for it
-    var pin: CLLocationCoordinate2D
+    var at: CLLocationCoordinate2D
     var address = ""
     if let given = coordinate(place) {
-      pin = given
-      // The address is only to show under the map, so the map is made without it when Apple has none
-      let here = CLLocation(latitude: given.latitude, longitude: given.longitude)
-      if let request = MKReverseGeocodingRequest(location: here), let items = try? await request.mapItems, let item = items.first {
-        address = oneLine(item.address?.fullAddress)
+      at = given
+      guard let request = MKReverseGeocodingRequest(location: CLLocation(latitude: given.latitude, longitude: given.longitude)) else {
+        fail("Apple's maps can't read this latitude and longitude")
+      }
+      do {
+        address = oneLine(try await request.mapItems.first?.address?.fullAddress)
+      } catch {
+        // A point with no address, like one at sea, is found all the same
+        if !nothingFound(error) { fail(error.localizedDescription) }
       }
     } else {
       guard let request = MKGeocodingRequest(addressString: place) else { fail("Apple's maps can't read this address", code: 2) }
       let items: [MKMapItem]
       do { items = try await request.mapItems } catch {
-        // MapKit says that it found nothing with an error of its own. Any other error is the network.
-        let e = error as NSError
-        let none = e.domain == MKError.errorDomain && e.code == Int(MKError.placemarkNotFound.rawValue)
-        fail(none ? "Apple's maps found no such place" : error.localizedDescription, code: none ? 2 : 1)
+        fail(nothingFound(error) ? "Apple's maps found no such place" : error.localizedDescription, code: nothingFound(error) ? 2 : 1)
       }
       guard let item = items.first else { fail("Apple's maps found no such place", code: 2) }
-      pin = item.location.coordinate
+      at = item.location.coordinate
       address = oneLine(item.address?.fullAddress)
     }
+    print(String(format: "%.6f\t%.6f\t", at.latitude, at.longitude) + address)
+    exit(0)
+  }
+
+  static func main() async {
+    var args = Array(CommandLine.arguments.dropFirst())
+    // Apple gets so long to answer. A Mac with no network can wait much longer than that.
+    Task.detached {
+      try? await Task.sleep(nanoseconds: UInt64(patience * 1e9))
+      fail("Apple's maps didn't answer in \(Int(patience)) seconds")
+    }
+    if args.first == "--find" {
+      guard args.count == 2 else { fail("Say which place to find, like this: map --find \"8 Wattle Street, Brunswick\"") }
+      await find(args[1].trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+    let dark = args.first == "--dark"
+    if dark { args.removeFirst() }
+    guard args.count == 5, let zoom = Double(args[0]), let wide = Double(args[1]), let tall = Double(args[2]),
+          wide >= 1, tall >= 1, let middle = coordinate(args[4]) else {
+      fail("Say the zoom, the size, the file and the middle of the map, like this: map 15 720 280 site.png -37.7681,144.9426")
+    }
+    let out = URL(fileURLWithPath: args[3])
 
     // MapKit's own map of the world is the one that maps on the web draw, 2^28 of its points wide. A map on the web
     // is 256 px wide at zoom 0 and twice as wide at each step, so a px is 2^(20 - zoom) of MapKit's points.
@@ -146,7 +127,7 @@ struct MapPicture {
     var per = pow(2, 20 - min(max(zoom, 1), 20))
     // MapKit shows no more than half the width of the world, so a picture that asks for more shows a little less
     per = min(per, world.width / 2 / wide, world.height / 2 / tall)
-    let at = MKMapPoint(middle ?? pin)
+    let at = MKMapPoint(middle)
     // The map of the world has a top and a bottom, and the picture stays between them
     let top = min(max(at.y - tall * per / 2, 0), world.height - tall * per)
     let options = MKMapSnapshotter.Options()
@@ -157,7 +138,7 @@ struct MapPicture {
     let shot: MKMapSnapshotter.Snapshot
     do { shot = try await MKMapSnapshotter(options: options).start() } catch { fail(error.localizedDescription) }
 
-    // The map and the pin are drawn into a picture of our own, so the file has `scale` pixels to the px on any Mac
+    // The map is drawn into a picture of our own, so the file has `scale` pixels to the px on any Mac
     guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(wide * scale), pixelsHigh: Int(tall * scale),
                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { fail("The Mac couldn't make the picture") }
@@ -167,13 +148,9 @@ struct MapPicture {
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = context
     shot.image.draw(in: NSRect(x: 0, y: 0, width: wide, height: tall))
-    // On the Mac, MapKit counts a point's y from the bottom of the picture, as AppKit draws.
-    // A pin whose place is outside the picture is outside it too, and doesn't show.
-    drawPin(at: shot.point(for: pin))
     NSGraphicsContext.restoreGraphicsState()
     guard let png = bitmap.representation(using: .png, properties: [:]) else { fail("The Mac couldn't make the picture") }
     do { try png.write(to: out, options: .atomic) } catch { fail("The Mac couldn't write \(out.lastPathComponent)") }
-    print(String(format: "%.6f\t%.6f\t", pin.latitude, pin.longitude) + address)
     exit(0)
   }
 }

@@ -44,6 +44,15 @@ end
   rm(dir, recursive=true)
 end
 
+@testset "a contact that was copied in the Contacts app" begin
+  card = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Émile Zola\r\nEND:VCARD\r\n"
+  clear()
+  @test P.vcard(pb) == ""
+  # The Contacts app puts the vCard there as data, beside the name as text
+  clear(); put_data("public.vcard", Vector{UInt8}(card)); put_text("public.utf8-plain-text", "Émile Zola")
+  @test P.vcard(pb) == card && P.text(pb) == "Émile Zola"
+end
+
 @testset "files that were copied in the Finder" begin
   dir = mktempdir()
   file = joinpath(dir, "clip one.mp4")

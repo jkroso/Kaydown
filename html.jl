@@ -10,14 +10,13 @@
 # else, like a sheet, or nothing to show its code. `value(code)` gives the text
 # that a piece of inline code made, or nothing to show its code. `file(text)`
 # gives the HTML of a line that the editor shows as something else, like the
-# table of a CSV file, or nothing for a line of text. `card(words, url)` gives
-# the HTML of the card of a line that's written as a picture is, with the
-# address of a web page, or nothing to write the line as a picture. A formula
-# goes in as MathML, which a browser sets itself.
+# table of a CSV file, or nothing for a line of text. A formula goes in as
+# MathML, which a browser sets itself. `columns` says which lines show side by
+# side: for each group of columns, the first line, the last line and the share
+# of the width of each column.
 
 @use "./markdown" Kind Line Span classify spans tablecells isdivider front_matter isdone MATTER TOML_MATTER MATH callout opens_callout
 @use "./math" mathml
-@use "./linkcard" => Cards
 
 "`s` with the characters that mean something in HTML written as their names"
 escape(s::AbstractString) = replace(s, '&' => "&amp;", '<' => "&lt;", '>' => "&gt;", '"' => "&quot;")
@@ -143,26 +142,42 @@ video { display: block; max-height: 70vh; }
 hr { border: 0; border-top: 1px solid #d8d0bd; margin: 2em 0; }
 li.todo { list-style: none; margin-left: -1.4em; }
 .footnotes { font-size: 0.88em; color: #6b6259; border-top: 1px solid #d8d0bd; margin-top: 3em; }
+.columns { display: flex; gap: 2em; align-items: flex-start; margin: 1em 0; }
+.columns > div { min-width: 0; }
+.columns > div > :first-child { margin-top: 0; }
+@media (max-width: 34em) { .columns { display: block; } }
 """
 
 """
 The lines of a Markdown document as a page of HTML. `title` is what the
 browser's tab says.
 """
-html(lines::AbstractVector{<:AbstractString}; title="", block=(lang, first, last) -> nothing, value=code -> nothing, file=text -> nothing, card=(words, url) -> nothing) = begin
+html(lines::AbstractVector{<:AbstractString}; title="", block=(lang, first, last) -> nothing, value=code -> nothing, file=text -> nothing, columns=()) = begin
   kinds = classify(lines)
   d = Document(footnotes(lines), value)
   out = IOBuffer()
   lists = Tuple{Int,String}[]   # the lists that are open now: how far each is indented, and ul or ol
   notes = Tuple{String,String}[]
   quoted = false
-  cards = false   # true once the page has a link card, which needs its own rules in the page's style
   shut!(to=-1) = while !isempty(lists) && last(lists)[1] > to
     println(out, "</li></", pop!(lists)[2], ">")
   end
   unquote!() = quoted && (println(out, "</blockquote>"); quoted = false)
+  # The tags that open and close each column, each with the line that it goes before, in the order of the lines
+  edges = Tuple{Int,String}[]
+  for group in columns, (k, (from, to, share)) in enumerate(group)
+    push!(edges, (from, (k == 1 ? "<div class=\"columns\">\n" : "") * "<div style=\"flex: " * string(isinteger(share) ? Int(share) : share) * " 1 0\">"))
+    push!(edges, (to + 1, "</div>" * (k == length(group) ? "\n</div>" : "")))
+  end
+  # Before a column starts and after it ends, the list and the quote that are open are closed
+  edge!(i) = while !isempty(edges) && first(edges)[1] <= i
+    shut!()
+    unquote!()
+    println(out, popfirst!(edges)[2])
+  end
   i, n = 1, length(lines)
   while i <= n
+    edge!(i)
     text, line = lines[i], kinds[i]
     k = line.kind
     k in (Kind.bullet, Kind.ordered, Kind.todo) || (k == Kind.blank && !isempty(lists)) || shut!()
@@ -227,16 +242,12 @@ html(lines::AbstractVector{<:AbstractString}; title="", block=(lang, first, last
       m = match(NOTE, text)
       made = m === nothing ? file(text) : nothing   # a line that holds only a file can show as something else
       made === nothing || (println(out, made); i += 1; continue)
-      # A line that's written as a picture is, with the address of a web page, is a link card
-      asked = Cards.asked(text)
-      box = asked === nothing ? nothing : card(asked...)
-      box === nothing || (cards = true)
-      box !== nothing ? println(out, box) :
       m === nothing ? println(out, "<p>", inline(d, text), "</p>") :
                       push!(notes, (String(m[1]), inline(d, chop(text, head=length(m.match), tail=0))))
     end
     i += 1
   end
+  edge!(n + 1)
   shut!()
   unquote!()
   if !isempty(notes)
@@ -255,7 +266,7 @@ html(lines::AbstractVector{<:AbstractString}; title="", block=(lang, first, last
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>$(escape(title))</title>
   <style>
-  $(STYLE)$(cards ? Cards.STYLE : "")</style>
+  $(STYLE)</style>
   </head>
   <body>
   $(String(take!(out)))</body>

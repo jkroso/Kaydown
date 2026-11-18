@@ -1,0 +1,55 @@
+#!/bin/sh
+# Run the tests in one Julia process that stays open. test/hot.jl says how it works.
+#
+#   test/hot                          start the process, and leave it running
+#   test/hot test/board_view_test.jl  run one test in it, and print the end of its output
+#   test/hot all                      run every test in it, and list what failed
+#   test/hot stop                     end the process
+#
+# The whole output of a test is in test/.hot/logs. HOT_LINES is how many of its
+# last lines are printed: 40 if you don't say.
+cd "$(dirname "$0")/.." || exit 2
+H=test/.hot
+running() { kill -0 "$(cat $H/pid 2>/dev/null)" 2>/dev/null; }
+
+case "$1" in
+"")
+  running && { echo "The test process is already running. Run a test with: test/hot test/board_view_test.jl" >&2; exit 1; }
+  mkdir -p $H/req $H/logs
+  rm -f $H/req/*.req $H/*.done
+  echo $$ > $H/pid
+  exec julia -O0 --project=. test/hot.jl
+  ;;
+stop)
+  running || { echo "The test process isn't running."; exit 0; }
+  printf "stop\n" > $H/req/stop.req
+  ;;
+all)
+  running || { echo "The test process isn't running. Start it in another terminal with: test/hot" >&2; exit 3; }
+  failed=""
+  for t in test/*_test.jl; do
+    HOT_LINES=1 "$0" "$t"; rc=$?
+    [ $rc = 3 ] && exit 3
+    [ $rc = 0 ] || failed="$failed $t"
+  done
+  [ -z "$failed" ] && { echo "Every test passed."; exit 0; }
+  echo "These failed. Tests share the one process here, so run each by itself before you believe it:"
+  for t in $failed; do echo "  KIP_FROZEN=1 julia -O0 --project=. $t"; done
+  exit 1
+  ;;
+*)
+  running || { echo "The test process isn't running. Start it in another terminal with: test/hot" >&2; exit 3; }
+  [ -e "$1" ] || { echo "There's no file $1" >&2; exit 2; }
+  case "$1" in /*) test=$1 ;; *) test=$PWD/$1 ;; esac
+  id=$(date +%s)-$$
+  log=$PWD/$H/logs/$(basename "$1" .jl).log
+  printf "%s\n%s\n%s\n" "$test" "$log" "$PWD/$H/$id.done" > $H/req/$id.tmp && mv $H/req/$id.tmp $H/req/$id.req
+  while [ ! -e $H/$id.done ]; do
+    running || { echo "The test process stopped. The output so far:" >&2; tail -30 "$log" >&2; exit 3; }
+    sleep 0.2
+  done
+  result=$(cat $H/$id.done); rm -f $H/$id.done
+  tail -${HOT_LINES:-40} "$log"
+  [ "$result" = pass ]
+  ;;
+esac

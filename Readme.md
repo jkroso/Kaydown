@@ -647,6 +647,21 @@ The tests are in the `test` folder. Run them from Kaydown's folder, as above. Th
 
 `-O0` tells Julia not to optimise the code that it compiles while a test runs, so a test starts in about half the time. The compiled files that Kip keeps are still made with full optimisation, so the app runs at its usual speed.
 
+To test while you change the code, keep one Julia process open and run the tests in it:
+
+```sh
+test/hot                          # start the process, and leave it running
+test/hot test/board_view_test.jl  # in another terminal: run one test in it
+test/hot all                      # run every test in it, and list what failed
+test/hot stop                     # end the process
+```
+
+The first test loads Kaydown from its source, which takes about half a minute. After that a test takes seconds, and all of them take about three minutes. Before each test, the process loads what changed in the source files, with the code that UI.jl's hot reload uses. `test/hot.jl` says more.
+
+- A method that you delete stays until the process starts again.
+- The tests share the one process, so a few fail there and pass by themselves, like the ones that count the open windows. Run a test that fails there in a process of its own: `KIP_FROZEN=1 julia -O0 --project=. test/board_view_test.jl`. With `KIP_FROZEN=1`, Kip loads each file from its source and compiles none first, so the test starts in about 40 seconds whatever you changed.
+- Run the tests of what you changed in a process of their own before you call the work done.
+
 ## Change it
 
 Kaydown loads UI.jl by its GitHub path. To use your own copy of UI.jl, link it once:

@@ -192,6 +192,21 @@ struct Provider
   exchanges::Vector{String}   # the end of the name of each server that takes the email of a domain that it hosts
 end
 
+"""
+Zoho, in one of its data centres. Each data centre's servers have names that
+end in its own way, like zoho.com or zoho.eu. An address at Zoho's own
+`domains` has the plain servers. An address at a domain of its own has the pro
+servers, and it's known by the servers that take its email, like mx.zoho.eu.
+"""
+zoho(ending, domains=String[]) = begin
+  own = isempty(domains)
+  pro = own ? "pro" : ""
+  Provider("Zoho", "imap$pro.$ending:993", "smtp$pro.$ending:465", :usual, "https://accounts.$ending/home#security/app_password",
+           "Zoho Mail lets other apps in only when IMAP Access is on. Turn it on in Zoho Mail's settings, under Mail Accounts. " *
+           "If you sign in to Zoho with a second step, like a code from its OneAuth app, Zoho takes an app password here. If not, it takes your usual password.",
+           domains, own ? [ending] : String[])
+end
+
 "The email companies that Ladder knows"
 const PROVIDERS = [
   Provider("Gmail", "imap.gmail.com:993", "smtp.gmail.com:465", :app, "https://myaccount.google.com/apppasswords",
@@ -210,6 +225,8 @@ const PROVIDERS = [
   Provider("Fastmail", "imap.fastmail.com:993", "smtp.fastmail.com:465", :app, "",
            "Fastmail takes an app password, not your usual password. Make one in Fastmail's settings, under Privacy & Security.",
            ["fastmail.com", "fastmail.fm"], ["messagingengine.com"]),
+  zoho("zoho.com", ["zoho.com", "zohomail.com"]), zoho("zoho.eu", ["zoho.eu", "zohomail.eu"]), zoho("zoho.in", ["zoho.in", "zohomail.in"]),
+  zoho.(["zoho.com", "zoho.com.au", "zoho.eu", "zoho.in", "zoho.jp", "zohocloud.ca", "zoho.sa"])...,
   Provider("Telstra", "imap.telstra.com:993", "smtp.telstra.com:465", :usual, "",
            "Telstra takes the password that you sign in to Telstra Mail with.",
            ["telstra.com", "bigpond.com", "bigpond.net.au"], String[]),

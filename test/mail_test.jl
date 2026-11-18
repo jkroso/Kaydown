@@ -120,6 +120,16 @@ end
   write(answer, "other.example mail is handled by 10 mx.other.example.\n")
   while !Mail.lookup!("other.example") sleep(0.01) end
   @test Mail.provider("jo@other.example") === nothing && Mail.servers("jo@other.example") == ("imap.other.example:993", "smtp.other.example:465")
+  # A domain whose email Zoho takes has Zoho's pro servers, in the data centre that takes its email
+  write(answer, "roofs.example mail is handled by 10 mx.zoho.com.au.\nroofs.example mail is handled by 20 mx2.zoho.com.au.\n")
+  while !Mail.lookup!("roofs.example") sleep(0.01) end
+  @test Mail.servers("jo@roofs.example") == ("imappro.zoho.com.au:993", "smtppro.zoho.com.au:465")
+  @test Mail.provider("jo@roofs.example").page == "https://accounts.zoho.com.au/home#security/app_password"
+  write(answer, "tiles.example mail is handled by 10 mx.zoho.com.\ntiles.example mail is handled by 50 mx3.zoho.com.\n")
+  while !Mail.lookup!("tiles.example") sleep(0.01) end
+  @test Mail.servers("jo@tiles.example") == ("imappro.zoho.com:993", "smtppro.zoho.com:465")
+  # An address at Zoho's own domains has the plain servers
+  @test Mail.servers("jo@zohomail.com") == ("imap.zoho.com:993", "smtp.zoho.com:465") && Mail.servers("jo@zoho.eu")[1] == "imap.zoho.eu:993"
   Mail.resolver[] = domain -> `/usr/bin/false`
   while !Mail.lookup!("none.example") sleep(0.01) end
   @test isempty(Mail.exchanges["none.example"]) && Mail.lookup!("not a domain")

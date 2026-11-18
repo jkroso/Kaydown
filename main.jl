@@ -742,8 +742,9 @@ refresh!(b::Buffer) = begin
   READ[b.path] = at
   unsaved = false
   if readonly(b)
-    # A file that's only shown is read again as it was shown: as bytes, or as its kind of file
-    new = b.view == :hex ? Buffer(path=b.path, view=:hex, lines=hexlines(b.path), about=hex_about(b.path)) : look(b.path)
+    # A file that's only shown is read again as it was shown: as bytes, or as its kind of file. A JSON file that
+    # shows its text goes on showing its text.
+    new = b.view == :hex ? Buffer(path=b.path, view=:hex, lines=hexlines(b.path), about=hex_about(b.path)) : look(b.path, tree=b.view != :text)
     b.view, b.about = new.view, new.about
     lines = new.lines
   else
@@ -4042,6 +4043,8 @@ end
 #     block has. You can select the text, copy it and find words in it.
 #   - A picture, a model, a sound, a video, a PDF file, a CSV file, a Word file
 #     and a font show as they do under a file path, as big as the page has room for.
+#   - A JSON file shows as a tree of its values. "a JSON file as a tree"
+#     says more.
 #   - A zip shows the list of the files in it.
 #   - Any other file is a binary file. The page says so, and a button there
 #     shows the file's bytes in hexadecimal.
@@ -4062,13 +4065,15 @@ shown_line(line) = begin
   length(s) > MOST_LINE ? first(s, MOST_LINE) * "…" : String(s)
 end
 
-"The buffer that shows the file at `path`, which isn't Markdown"
-look(path) = begin
+"The buffer that shows the file at `path`, which isn't Markdown. A JSON file shows as a tree, or with `tree` false as its text."
+look(path; tree=true) = begin
   ext = lowercase(splitext(path)[2])
   if ext in ZIPS
     list = try zipped(path) catch; nothing end
     n = list === nothing ? 0 : length(list.lines)
     list === nothing || return Buffer(path=path, view=:text, lines=list.lines, about="$(commas(n)) file$(n == 1 ? "" : "s")")
+  elseif tree && ext in JSONS && json_of(path) !== nothing
+    return Buffer(path=path, view=:file)
   elseif !viewed(ext)
     found = try reading(path, tidy=false) catch; nothing end
     if found !== nothing
@@ -4103,6 +4108,463 @@ hex!(e) = begin
   b = e.buf
   (readonly(b) && isfile(b.path)) || return e
   b.lines, b.about, b.view = hexlines(b.path), hex_about(b.path), :hex
+  b.caret = b.anchor = (1, 0)
+  b.saved = b.version += 1
+  e.scroll.offset = 0px
+  focus(e)
+  e
+end
+
+# --- a JSON file as a tree ---------------------------------------------------------------------
+#
+# A JSON file shows as a tree of its values, as the inspector of a `ui` block
+# shows a Julia value. The first row is the file's whole value, so you can see
+# whether the file holds an object or a list. Each key of an object, and each
+# item of a list, is a row, a step in from the row of what holds it. The row
+# of an object or a list has an arrow, and a click on the row opens it or
+# closes it. ⌥-click opens or closes everything in it too. A closed one shows
+# on its row what it holds, as much as the row has room for. An open one says
+# how many keys or items it has, in its brackets: {3 keys} or [22 items]. At
+# first the tree is open as far as about a window of rows goes. The place of
+# an item in its list counts from 0, as JSON's own tools count it.
+#
+# A click also chooses the row and gives the tree the keyboard. Then ↑ and ↓
+# go from row to row, → opens a row or goes into it, ← closes it or goes to
+# the row that holds it, and Return opens or closes it. ⌘C copies the value of
+# the row: a string as its text, and an object or a list as JSON. Esc gives
+# the keyboard back to the page.
+#
+# The tree is the file at the high level, as the graphics are of a page. The
+# snake in the top bar, or ⌘E, goes down a level to the file's text, which you
+# can select and search. The ladder, or ⌘E again, goes back up to the tree,
+# open as it was. A file that isn't JSON after all, and one bigger than
+# MOST_JSON, only shows as text.
+#
+# Only the rows that are in the window are made, so a long tree costs no more
+# to draw than a short one.
+
+const JSONS = (".json", ".geojson")
+const MOST_JSON = 32_000_000   # bytes. A bigger JSON file only shows as text.
+const JSON_STEP = 18px         # how far in each level of the tree is
+const JSON_ARROW = 16px        # the room for the arrow of an object or a list
+const JSON_PAD = 6px           # between the ends of a row's highlight and its text
+const MOST_STRING = 2000       # characters. A longer string stops there on its row.
+
+"An object of a JSON file: its keys and their values, in the order that the file has them"
+struct JSONObject
+  keys::Vector{String}
+  values::Vector{Any}
+end
+
+"A number of a JSON file, as the file writes it. So 3 shows as 3, 1.50 as 1.50, and a long number loses no digits."
+struct JSONNumber
+  text::String
+end
+
+"""
+What the JSON in `data` holds: a JSONObject, a list, a string, a JSONNumber,
+true, false or nothing. It's an error if `data` isn't JSON.
+"""
+json_value(data::AbstractVector{UInt8}) = begin
+  # Some programs start a file with a mark that says it's UTF-8. It isn't part of the JSON.
+  i = length(data) >= 3 && data[1] == 0xef && data[2] == 0xbb && data[3] == 0xbf ? 4 : 1
+  value, i = json_read(data, json_blank(data, i))
+  json_blank(data, i) > length(data) || error("There's more after the JSON")
+  value
+end
+
+"The place of the first byte at or after `i` that isn't a space or a line break"
+json_blank(d, i) = begin
+  while i <= length(d) && (d[i] == 0x20 || d[i] == 0x0a || d[i] == 0x0d || d[i] == 0x09)
+    i += 1
+  end
+  i
+end
+
+"Byte `i` of `d`. It's an error if the JSON stops before it."
+json_byte(d, i) = i <= length(d) ? d[i] : error("The JSON stops early")
+
+const JSON_NUMBER = r"^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$"
+
+"The value that starts at byte `i` of `d`, and the place of the byte after it"
+json_read(d, i) = begin
+  c = json_byte(d, i)
+  if c == UInt8('{')
+    keys, values = String[], Any[]
+    i = json_blank(d, i + 1)
+    json_byte(d, i) == UInt8('}') && return JSONObject(keys, values), i + 1
+    while true
+      key, i = json_string(d, i)
+      i = json_blank(d, i)
+      json_byte(d, i) == UInt8(':') || error("A key of the JSON has no value")
+      value, i = json_read(d, json_blank(d, i + 1))
+      push!(keys, key)
+      push!(values, value)
+      i = json_blank(d, i)
+      c = json_byte(d, i)
+      c == UInt8('}') && return JSONObject(keys, values), i + 1
+      c == UInt8(',') || error("The JSON has an object that doesn't end")
+      i = json_blank(d, i + 1)
+    end
+  elseif c == UInt8('[')
+    list = Any[]
+    i = json_blank(d, i + 1)
+    json_byte(d, i) == UInt8(']') && return list, i + 1
+    while true
+      value, i = json_read(d, i)
+      push!(list, value)
+      i = json_blank(d, i)
+      c = json_byte(d, i)
+      c == UInt8(']') && return list, i + 1
+      c == UInt8(',') || error("The JSON has a list that doesn't end")
+      i = json_blank(d, i + 1)
+    end
+  elseif c == UInt8('"')
+    json_string(d, i)
+  else
+    j = i
+    while j <= length(d) && !(d[j] in (UInt8(','), UInt8('}'), UInt8(']'), 0x20, 0x0a, 0x0d, 0x09))
+      j += 1
+    end
+    word = String(d[i:j-1])
+    word == "true" ? (true, j) : word == "false" ? (false, j) : word == "null" ? (nothing, j) :
+      occursin(JSON_NUMBER, word) ? (JSONNumber(word), j) : error("The JSON has $(repr(first(word, 20))) where a value should be")
+  end
+end
+
+"The string that starts at byte `i` of `d`, and the place of the byte after it"
+json_string(d, i) = begin
+  json_byte(d, i) == UInt8('"') || error("The JSON has no string where one should be")
+  i += 1
+  j = i
+  # Most strings have no \ in them, and are copied as they are
+  while (c = json_byte(d, j)) != UInt8('"') && c != UInt8('\\')
+    j += 1
+  end
+  d[j] == UInt8('"') && return String(d[i:j-1]), j + 1
+  out = IOBuffer()
+  write(out, view(d, i:j-1))
+  while (c = json_byte(d, j)) != UInt8('"')
+    if c == UInt8('\\')
+      x = json_byte(d, j + 1)
+      j += 2
+      if x == UInt8('u')
+        n, j = json_hex(d, j)
+        # A character past U+FFFF is written as two halves
+        if 0xd800 <= n < 0xdc00 && j + 1 <= length(d) && d[j] == UInt8('\\') && d[j+1] == UInt8('u')
+          low, k = json_hex(d, j + 2)
+          0xdc00 <= low < 0xe000 && ((n, j) = (0x10000 + ((n - 0xd800) << 10) + (low - 0xdc00), k))
+        end
+        # Half of one on its own is no character
+        print(out, 0xd800 <= n < 0xe000 ? '�' : Char(n))
+      else
+        write(out, x == UInt8('n') ? UInt8('\n') : x == UInt8('t') ? UInt8('\t') : x == UInt8('r') ? UInt8('\r') :
+                   x == UInt8('b') ? UInt8('\b') : x == UInt8('f') ? UInt8('\f') : x)
+      end
+    else
+      write(out, c)
+      j += 1
+    end
+  end
+  String(take!(out)), j + 1
+end
+
+"The number that the four hexadecimal digits at byte `i` of `d` write, and the place of the byte after them"
+json_hex(d, i) = begin
+  i + 3 <= length(d) || error("The JSON stops early")
+  parse(UInt32, String(d[i:i+3]), base=16), i + 4
+end
+
+"What each JSON file that was read holds, with when the file had last changed then. Only the last few are kept."
+const JSON_READ = Dict{String,Tuple{Float64,Any}}()
+
+"""
+What the JSON file at `path` holds, or nothing if it isn't JSON or is bigger
+than MOST_JSON. A file is read once, and again when it changes.
+"""
+json_of(path) = begin
+  at = mtime(path)
+  kept = get(JSON_READ, path, nothing)
+  kept !== nothing && kept[1] == at && return kept[2]
+  value = 0 < filesize(path) <= MOST_JSON ? (try json_value(read(path)) catch; nothing end) : nothing
+  length(JSON_READ) >= 4 && empty!(JSON_READ)
+  JSON_READ[path] = (at, value)
+  value
+end
+
+"True when the page shows a JSON file that can show as a tree: as the tree, or down a level as the file's text"
+json_page(b::Buffer) = b.view in (:file, :text) && lowercase(splitext(b.path)[2]) in JSONS && isfile(b.path) && json_of(b.path) !== nothing
+
+json_items(o::JSONObject) = zip(o.keys, o.values)
+json_items(l::Vector{Any}) = zip(0:length(l)-1, l)
+"How many keys or items `v` has. A value that's neither an object nor a list has none."
+json_length(o::JSONObject) = length(o.keys)
+json_length(l::Vector{Any}) = length(l)
+json_length(_) = 0
+json_holder(v) = v isa JSONObject || v isa Vector{Any}
+
+"How many keys or items `v` has, in words"
+json_count(o::JSONObject) = (n = length(o.keys); "$(commas(n)) key$(n == 1 ? "" : "s")")
+json_count(l::Vector{Any}) = (n = length(l); "$(commas(n)) item$(n == 1 ? "" : "s")")
+
+"Write `v` as JSON. An object and a list have each key or item on a line of its own, `depth` steps of two spaces in."
+json_write(io::IO, s::AbstractString) = begin
+  print(io, '"')
+  for c in s
+    c == '"' ? print(io, "\\\"") : c == '\\' ? print(io, "\\\\") : c == '\n' ? print(io, "\\n") :
+    c == '\r' ? print(io, "\\r") : c == '\t' ? print(io, "\\t") :
+    isvalid(c) && c < ' ' ? print(io, "\\u", string(UInt32(c), base=16, pad=4)) : print(io, c)
+  end
+  print(io, '"')
+end
+json_write(io::IO, n::JSONNumber) = print(io, n.text)
+json_write(io::IO, b::Bool) = print(io, b)
+json_write(io::IO, ::Nothing) = print(io, "null")
+json_write(io::IO, v::Union{JSONObject,Vector{Any}}, depth=0) = begin
+  object = v isa JSONObject
+  json_length(v) == 0 && return print(io, object ? "{}" : "[]")
+  print(io, object ? '{' : '[')
+  for (k, (key, x)) in enumerate(json_items(v))
+    print(io, k > 1 ? ",\n" : "\n", "  "^(depth + 1))
+    object && (json_write(io, key); print(io, ": "))
+    json_write(io, x, depth + 1)
+  end
+  print(io, '\n', "  "^depth, object ? '}' : ']')
+end
+json_write(io::IO, x, depth) = json_write(io, x)
+
+"What ⌘C copies of `v`: a string as its text, and any other value as JSON"
+json_copy(v::AbstractString) = String(v)
+json_copy(v) = sprint(json_write, v)
+
+"A row of a JSON file's tree: how many steps in it is, the key of its value or its place in its list, and its value"
+struct JSONRow
+  depth::Int
+  key::Union{Nothing,String,Int}
+  value::Any
+end
+
+"The tree of the JSON file at `path`"
+@def mutable struct JSONTree <: SemanticUI
+  path::String = ""
+  root::Any = nothing
+  open::IdDict{Any,Bool} = IdDict{Any,Bool}()   # the objects and the lists that are open
+  rows::Vector{JSONRow} = JSONRow[]             # the rows that show, worked out again when one opens or closes
+  chosen::Int = 0                               # the row that the arrow keys are on, or 0 for none
+end
+
+"""
+Show the tree of `root`, open as far as about `most` rows go. The top object
+or list is always open. Then each level opens as a whole while there's room
+for all of it.
+"""
+plant!(t::JSONTree, root, most=60) = begin
+  t.root, t.chosen = root, 0
+  empty!(t.open)
+  level = json_holder(root) ? Any[root] : Any[]
+  count = 0
+  while !isempty(level)
+    n = sum(json_length, level)
+    count > 0 && count + n > most && break
+    foreach(v -> t.open[v] = true, level)
+    count += n
+    level = Any[x for v in level for (_, x) in json_items(v) if json_length(x) > 0]
+  end
+  t.rows = json_rows(t)
+  t
+end
+
+"""
+The rows that show. The first is the file's whole value, so a file that holds
+a list shows that it's a list, and with that row closed the tree is that one
+row. Under each object or list that's open are the rows of its keys or items.
+"""
+json_rows(t::JSONTree) = json_rows!(JSONRow[], t.open, 0, nothing, t.root)
+json_rows!(rows, open, depth, key, value) = begin
+  push!(rows, JSONRow(depth, key, value))
+  if json_holder(value) && get(open, value, false)
+    for (k, x) in json_items(value)
+      json_rows!(rows, open, depth + 1, k, x)
+    end
+  end
+  rows
+end
+
+"True when row `i` is an object or a list that's open"
+json_opened(t::JSONTree, i) = (v = t.rows[i].value; json_holder(v) && get(t.open, v, false))
+
+"Open row `i` if it's closed, or close it. With `all`, everything in it opens or closes with it."
+json_toggle!(t::JSONTree, i; all=false) = begin
+  v = t.rows[i].value
+  json_length(v) > 0 || return t
+  shut = json_opened(t, i)
+  set!(x) = shut ? delete!(t.open, x) : (t.open[x] = true)
+  all ? json_each(set!, v) : set!(v)
+  t.rows = json_rows(t)
+  t
+end
+
+"Call `f` on `v` and on each object and list in it that has something in it"
+json_each(f, v) = begin
+  json_length(v) > 0 || return
+  f(v)
+  for (_, x) in json_items(v)
+    json_each(f, x)
+  end
+end
+
+"How far apart the rows of the tree are: as far as the lines of the file's text"
+json_row_h(e) = code_size(e) * 1.5 / CODE_SCALE
+
+"The face of the tree's text: the font of code, in `colour`"
+json_face(e, colour=colours.ink) = Face(codefont(), codestyle(), code_size(e), colour, false)
+
+"Words of the tree, in `colour`. Each is in a box, so it's as wide as it is and no wider."
+json_words(e, s, colour) = Box(height(grow=grow), Alignment.Center,
+  Text(s, size=code_size(e), family=codefont(), subfamily=codestyle(), color=colour, wrap=WrapMode.none))
+
+"`s` as a string of JSON, in its quotes, no longer than `room` characters. A longer one stops with an …"
+json_quoted(s, room) = begin
+  q = sprint(json_write, length(s) > MOST_STRING ? first(s, MOST_STRING) : s)
+  length(q) <= room && length(s) <= MOST_STRING ? q : first(q, max(2, room - 2)) * "…\""
+end
+
+"What `x` shows as in a closed object or list: an object or a list in short, and a string no longer than 40 characters"
+json_brief(x) = json_holder(x) ? (x isa JSONObject ? (json_length(x) == 0 ? "{}" : "{…}") : (json_length(x) == 0 ? "[]" : "[…]")) :
+                x isa AbstractString ? json_quoted(x, 40) : sprint(json_write, x)
+
+"""
+What a closed object or list holds, on one line of no more than `room`
+characters, as far as there's room. The end says how many more there are.
+"""
+json_peek(v, room) = begin
+  object = v isa JSONObject
+  n = json_length(v)
+  parts = String[]
+  used = 2
+  for (key, x) in json_items(v)
+    part = (object ? key * ": " : "") * json_brief(x)
+    left = n - length(parts) - 1   # how many come after this one
+    more = left > 0 ? length(", … $(commas(left)) more") : 0
+    !isempty(parts) && used + 2 + length(part) + more > room && break
+    used += (isempty(parts) ? 0 : 2) + length(part)
+    push!(parts, part)
+  end
+  left = n - length(parts)
+  inside = join(parts, ", ") * (left > 0 ? ", … $(commas(left)) more" : "")
+  object ? "{" * inside * "}" : "[" * inside * "]"
+end
+
+"The text of the value of a row, and its colour, no longer than `room` characters"
+json_shown(t::JSONTree, i, room) = begin
+  v = t.rows[i].value
+  v isa AbstractString ? (json_quoted(v, room), colours.string) :
+  v isa JSONNumber ? (v.text, colours.number) :
+  v isa Bool || v === nothing ? (sprint(json_write, v), colours.keyword) :
+  json_length(v) == 0 ? (json_brief(v), colours.dim) :
+  json_opened(t, i) ? (v isa JSONObject ? "{" * json_count(v) * "}" : "[" * json_count(v) * "]", colours.dim) :
+                      (json_peek(v, room), colours.dim)
+end
+
+"The row of the tree that the mouse is over, or 0"
+json_under(t::JSONTree) = begin
+  ishovered(t) || return 0
+  r, w = rect(t), window_of(t)
+  (r === nothing || w === nothing) && return 0
+  i = floor(Int, (w.mouse[2] - r.top) / json_row_h(editor(t))) + 1
+  1 <= i <= length(t.rows) ? i : 0
+end
+
+"Row `i` of the tree. `over` is true while the mouse is over it, and `keys` while the tree has the keyboard."
+json_row(t::JSONTree, e, i, over, keys) = begin
+  row = t.rows[i]
+  h = json_row_h(e)
+  tint = i == t.chosen ? (keys ? colours.select : colours.active) : over ? colours.hover : clear
+  key = row.key === nothing ? () :
+        row.key isa Int ? (json_words(e, string(row.key), colours.faint), json_words(e, ": ", colours.faint)) :
+                          (json_words(e, row.key, colours.call), json_words(e, ": ", colours.dim))
+  # The code font is monospaced, so the room for the value is a number of characters
+  wide = measure(json_face(e), "0")
+  keyed = row.key === nothing ? 0 : length(string(row.key)) + 2
+  room = max(12, floor(Int, (e.width - 2JSON_PAD - JSON_STEP * row.depth - JSON_ARROW) / wide) - keyed)
+  text, colour = json_shown(t, i, room)
+  arrow = json_length(row.value) > 0 ? Icon(json_opened(t, i) ? "chevron-down" : "chevron-right", size=10px, color=colours.dim) : Box()
+  Row(width(grow=grow), height(h), Alignment.Center, padding(JSON_PAD, 0px), radius(4px), background(tint), clip=true,
+    Box(width(JSON_STEP * row.depth)), Box(width(JSON_ARROW), height(grow=grow), Alignment.Center, arrow),
+    key..., json_words(e, text, colour))
+end
+
+describe(t::JSONTree) = begin
+  e = editor(t)
+  h = json_row_h(e)
+  n = length(t.rows)
+  _, high = window_size(e)
+  # Only the rows that are in the window are made, and a few more above and below
+  lo = clamp(floor(Int, (e.scroll.offset - PAGE_TOP) / h) - 6, 0, n)
+  hi = min(n, lo + ceil(Int, high / h) + 12)
+  over = json_under(t)
+  w = window_of(t)
+  keys = w !== nothing && w.focus === t
+  Column(width(grow=grow), Alignment.Start,
+    spacer(h * lo), [json_row(t, e, i, i == over, keys) for i in lo+1:hi]..., spacer(h * (n - hi)))
+end
+
+cursor(t::JSONTree) = (i = json_under(t); i > 0 && json_length(t.rows[i].value) > 0 ? :hand : :arrow)
+
+# A click chooses a row and gives the tree the keyboard. On an object or a list it opens it or closes it,
+# and with ⌥ it opens or closes everything in it too.
+onkey(t::JSONTree, ev::KeyPress{Keys.mouse_left}) = begin
+  i = json_under(t)
+  focus(t)
+  i == 0 && return handled
+  t.chosen = i
+  json_toggle!(t, i, all=Keys.opt in ev.window.keys)
+  handled
+end
+
+"Choose row `i`, and scroll the page so that it's in the window"
+json_choose!(t::JSONTree, i) = begin
+  isempty(t.rows) && return handled
+  t.chosen = clamp(i, 1, length(t.rows))
+  e = editor(t)
+  r = rect(t)
+  r === nothing && return handled
+  h = json_row_h(e)
+  top = r.top + h * (t.chosen - 1)   # where the row is in the window
+  _, high = window_size(e)
+  top < TOPBAR_H + h ? scroll_page!(e, top - TOPBAR_H - h) : top + 2h > high ? scroll_page!(e, top + 2h - high) : nothing
+  handled
+end
+
+onkey(t::JSONTree, ::KeyPress{Keys.down}) = json_choose!(t, t.chosen + 1)
+onkey(t::JSONTree, ::KeyPress{Keys.up}) = json_choose!(t, max(1, t.chosen - 1))
+# → opens a closed row, and goes into one that's open
+onkey(t::JSONTree, ::KeyPress{Keys.right}) = begin
+  i = t.chosen
+  i == 0 && return json_choose!(t, 1)
+  json_length(t.rows[i].value) == 0 && return handled
+  json_opened(t, i) ? json_choose!(t, i + 1) : (json_toggle!(t, i); handled)
+end
+# ← closes an open row, and goes out of one that's closed, to the row that holds it
+onkey(t::JSONTree, ::KeyPress{Keys.left}) = begin
+  i = t.chosen
+  i == 0 && return json_choose!(t, 1)
+  json_opened(t, i) && return (json_toggle!(t, i); handled)
+  d = t.rows[i].depth
+  d == 0 ? handled : json_choose!(t, findprev(r -> r.depth < d, t.rows, i))
+end
+onkey(t::JSONTree, ::KeyPress{Keys.enter}) = (t.chosen > 0 && json_toggle!(t, t.chosen); handled)
+onkey(t::JSONTree, ev::KeyPress{Keys.c}) = begin
+  Keys.cmd in ev.window.keys || return nothing
+  t.chosen > 0 && clipboard(json_copy(t.rows[t.chosen].value))
+  handled
+end
+
+"Show the JSON file of the page as its text, or as a tree again"
+json_level!(e) = begin
+  b = e.buf
+  shown = look(b.path, tree=b.view == :text)
+  b.lines, b.about, b.view = shown.lines, shown.about, shown.view
   b.caret = b.anchor = (1, 0)
   b.saved = b.version += 1
   e.scroll.offset = 0px
@@ -4355,6 +4817,13 @@ viewer(v::FileView, e, note) = begin
     p.count == 0 && return nothing
     p.wide = e.width
     return p
+  elseif ext in JSONS
+    root = json_of(path)
+    root === nothing && return nothing
+    t = made(() -> JSONTree(path=path), JSONTree)
+    t.root === root || plant!(t, root)   # a file that changed shows afresh
+    json_holder(root) && note(json_count(root))
+    return t
   elseif ext in TABLES
     at = mtime(path)
     (v.table === nothing || v.table[1] != at) && (v.table = (at, tabled(path)))
@@ -4396,8 +4865,8 @@ describe(v::FileView) = begin
       return words((Icon("file-earmark-binary", size=34px, color=colours.faint), label("$(basename(v.path)) is a binary file", 15px),
                     line, Box(height(4px)), v.button))
     end
-    # A table can be long, so the line about it is over it. Anything else has the line under it.
-    lowercase(splitext(v.path)[2]) in TABLES ? Column(width(grow=grow), Alignment.Start, child_gap=10px, line, content) :
+    # A table and a tree can be long, so the line about one is over it. Anything else has the line under it.
+    lowercase(splitext(v.path)[2]) in (TABLES..., JSONS...) ? Column(width(grow=grow), Alignment.Start, child_gap=10px, line, content) :
                                                Column(width(grow=grow), child_gap=10px, content, Box(line))
   end
 end
@@ -15083,7 +15552,7 @@ text_width(e) = begin
   room = w - ((e.panel || sliding(e)) && !alone ? panel_w(e) : 0px) - 2PAGE_X - gutter(e)
   # A file of code or of text takes all the room that the window has, and so do the lines of a block
   # that fill the window. A page is no wider than the settings say.
-  numbered(e.buf) || alone ? max(room, 240px) : clamp(room, 240px, e.widest * e.zoom)
+  numbered(e.buf) || alone || json_page(e.buf) ? max(room, 240px) : clamp(room, 240px, e.widest * e.zoom)
 end
 
 """
@@ -18358,8 +18827,9 @@ describe(t::TopBar) = begin
         buttons..., Box(width(grow=grow)), arrows...)),
     Box(width(grow=grow), height(grow=grow), clip=true, node!(Title, e, :title)),
     Row(fixed(side), height(grow=grow), justify=Alignment.End, padding(0px, 10px, 0px, 0px),
-      # A file that's only shown has no words to count. The bar says that it's only shown.
-      (readonly(b) ? (Box(height(28px), padding(8px, 0px), label(isempty(b.about) ? "Read only" : b.about * "  ·  Read only", 12px, color=colours.dim)),
+      # A file that's only shown has no words to count. The bar says that it's only shown. A JSON file has
+      # the snake or the ladder too.
+      (readonly(b) ? (mode..., Box(height(28px), padding(8px, 0px), label(isempty(b.about) ? "Read only" : b.about * "  ·  Read only", 12px, color=colours.dim)),
                       # The app that the Mac uses for the file can change it, so a button opens the file there
                       button(e, :outside, "box-arrow-up-right")) :
                      (mail..., job_part(e)..., agent_part(e)..., mode...,
@@ -18420,14 +18890,15 @@ onkey(m::Mode, ::KeyPress{Keys.mouse_left}) = (e = editor(m); level!(e); hush!(m
 # The tip says what a click does, as the count's tip does
 tip(m::Mode) = begin
   e = editor(m)
-  words = low(e) ? "Go up a level, to the graphics that the symbols make" :
+  words = json_page(e.buf) ? (low(e) ? "Go up a level, to the tree of the file's values" : "Go down a level, to the file's text") :
+          low(e) ? "Go up a level, to the graphics that the symbols make" :
           full_block(e) === nothing ? "Go down a level, to the symbols of the part with the caret" :
                                       "Go down a level, to the symbols that make this"
   words * hint(e, :plain)
 end
 
-"The snake or the ladder for the top bar. Only a document has one: a file of code is always plain."
-mode_part(e) = e.buf.view == :markdown ? (node!(Mode, e, :mode),) : ()
+"The snake or the ladder for the top bar. Only a document and a JSON file have one: a file of code is always plain."
+mode_part(e) = e.buf.view == :markdown || json_page(e.buf) ? (node!(Mode, e, :mode),) : ()
 
 """
 Write the page as plain text, or with `on` false as rich text. Only the part
@@ -18462,8 +18933,8 @@ end
 # among the lines of the page, as it puts a block that fills the window back
 # in the page.
 
-"True when the window shows symbols: the page is at the low level, and no block fills the window"
-low(e) = e.plain && full_block(e) === nothing
+"True when the window shows symbols: the page is at the low level, and no block fills the window. A JSON file is there while it shows its text."
+low(e) = json_page(e.buf) ? e.buf.view == :text : e.plain && full_block(e) === nothing
 
 "The language of the block that `v` is the view of, or nothing"
 block_lang(v) = v isa TakeoffView ? TAKEOFF : v isa ScheduleView ? SCHEDULE : findfirst(kind -> v isa kind.view, BLOCKS)
@@ -18473,6 +18944,7 @@ block_span(b::Buffer, v) = (lang = block_lang(v); lang === nothing ? nothing : b
 
 "Go to the other level: down from graphics to the symbols that make them, or up again"
 level!(e) = begin
+  json_page(e.buf) && return json_level!(e)   # a JSON file goes between its tree and its text
   v = full_block(e)
   v === nothing || return lower!(e, v)
   e.plain || return plain!(e, true)

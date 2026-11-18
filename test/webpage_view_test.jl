@@ -132,10 +132,13 @@ end
 
 @testset "down a level, the email shows its words, and up again its pictures" begin
   n = length(Fake.calls)
-  @test K.sent_tip(e) == "Go down a level, to the email's words as a page"
+  # Each stop's tip is of its own level
+  @test K.stop_tip(e, 2) == "The window shows the HTML email. A click goes down a level  ⌘E"
+  @test K.stop_tip(e, 1) == "Show plain text email  ⌘E" == K.tip(e.nodes[:mode])
   K.level!(e); frames()
   @test e.plain && item() === nothing && any(l -> occursin("Hi Jake, the [quote]", l), texts())
-  @test K.sent_tip(e) == "Go up a level, to the email as it was sent"
+  @test K.stop_tip(e, 2) == "Show HTML email  ⌘E" == K.tip(e.nodes[:mode])
+  @test K.stop_tip(e, 1) == "The window shows the plain text email"
   shot("sent-3-words.png")
   K.level!(e); frames()
   # The pictures are kept, so no program runs for them again
@@ -229,12 +232,12 @@ end
   n = length(Fake.calls)
   show(plain_email)
   @test item() === nothing && any(==("No HTML here."), texts()) && length(Fake.calls) == n
-  @test K.sent_tip(e) === nothing && K.sent_html(e) === nothing
+  @test K.sent_html(e) === nothing && K.level_names(e) == K.PAGE_LEVELS
   # A page that isn't an email has nothing to do with any of this
   note = joinpath(dir, "note.md")
   write(note, "# A note\n\nSome words.\n")
   show(note)
-  @test item() === nothing && K.sent_tip(e) === nothing && length(Fake.calls) == n
+  @test item() === nothing && K.level_names(e) == K.PAGE_LEVELS && length(Fake.calls) == n
 end
 
 @testset "a tall email is drawn in strips, one under the other" begin
@@ -270,12 +273,12 @@ end
   Fake.offline[] = true
   show(email("No luck", "<p>These words show all the same.</p>"))
   @test item() === nothing && any(==("These words show all the same."), texts())
-  @test K.sent_tip(e) == W.FAILED
+  @test K.stop_tip(e, 2) == W.FAILED
   Fake.offline[] = false
   # Pictures that aren't whole are no pictures
   Fake.broken[] = true
   show(email("Cut short", "<p>These words show too.</p>"))
-  @test item() === nothing && any(==("These words show too."), texts()) && K.sent_tip(e) == W.FAILED
+  @test item() === nothing && any(==("These words show too."), texts()) && K.stop_tip(e, 2) == W.FAILED
   Fake.broken[] = false
 end
 

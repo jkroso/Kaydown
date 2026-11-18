@@ -65,7 +65,8 @@ ascode() = all(it -> it.content isa K.Flow && it.first == it.last, e.layout)
   # The file's code is the part that answers, wherever the caret is
   @test K.level_part(e) === K.julia_part(e, 1) && K.level_part(e) isa K.JuliaCode && K.level_part(e).n == 0
   @test K.level(e) == 4 && !K.low(e) && !isempty(K.mode_part(e))
-  @test K.stop_tip(e, 4) == "Go down a level, to the inferred code of what you run  ⌘E"
+  @test K.stop_tip(e, 4) == "The window shows the value of what you run. A click goes down a level  ⌘E"
+  @test K.stop_tip(e, 3) == "Go down a level, to the inferred code of what you run  ⌘E"
   @test K.stop_tip(e, 2) == "Go down 2 levels, to the LLVM code of what you run"
   @test K.stop_tip(e, 1) == "Go down 3 levels, to the assembly of what you run"
   at(middle(rect(e.nodes[:mode]))); sleep(2K.OPENS_IN); frames()

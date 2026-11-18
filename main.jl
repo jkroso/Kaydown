@@ -19765,20 +19765,35 @@ end
 "The level that ⌘E goes to: one down from the highest level, and the highest level from any other"
 other_level(node) = (n = length(levels(node)); level(node) == n ? n - 1 : n)
 
-"The level that a click on the stop of level `i` goes to. A click on the end that `node` is at goes one level in from it."
-click_level(node, i::Int) = (n = length(levels(node)); i != level(node) ? i : i == n ? n - 1 : i == 1 ? 2 : i)
+"""
+The level that a click on the stop of level `i` goes to: its own level. The
+ladder lies where the picture in the top bar is, so while the window is at the
+highest level, a click on the ladder goes down a level, as a click on the
+picture does.
+"""
+click_level(node, i::Int) = (n = length(levels(node)); i == n == level(node) ? n - 1 : i)
 
-"What the tip of the stop of level `i` says: what a click on it does"
+"What each level of the part that the top bar asks shows, as the tips of the stops say it. An email with HTML has its own words for its two levels."
+level_names(e) = level_part(e) isa Document && full_block(e) === nothing && sent_html(e) !== nothing ? SENT_LEVELS : levels(e)
+
+"""
+What the tip of the stop of level `i` says. The stop of the level that the
+window is at says what the window shows, and what a click on it does when a
+click does something. Each other stop says what a click on it does.
+"""
 stop_tip(e, i::Int) = begin
-  ls, now = levels(e), level(e)
+  ls, now = level_names(e), level(e)
+  # An email that can't show as it was sent shows its words at both levels, and its ladder says why
+  ls === SENT_LEVELS && i == now == 2 && (why = sent_problem(e)) !== nothing && return why
+  # The stop of the other level of an email with HTML says plainly what a click on it shows
+  ls === SENT_LEVELS && i != now && return (i == 2 ? "Show HTML email" : "Show plain text email") * hint(e, :plain)
   to = click_level(e, i)
-  to == now && return "The window shows $(ls[now])"
+  shows = "The window shows $(ls[now])"
+  to == now && return shows
   steps = abs(to - now)
-  words = "Go $(to > now ? "up" : "down") $(steps == 1 ? "a level" : "$steps levels"), to $(ls[to])"
-  to == other_level(e) || return words
-  # An email goes between how it was sent and its words
-  level_part(e) isa Document && full_block(e) === nothing && (words = something(sent_tip(e), words))
-  words * hint(e, :plain)
+  go = "$(to > now ? "up" : "down") $(steps == 1 ? "a level" : "$steps levels")"
+  words = i == now ? "$shows. A click goes $go" : "Go $go, to $(ls[to])"
+  to == other_level(e) ? words * hint(e, :plain) : words
 end
 
 """
@@ -25535,17 +25550,18 @@ sent_keys!(v::SentEmail, shot) = map(enumerate(shot.strips)) do (n, (file, _))
   key
 end
 
+"What the two levels of an email with HTML show, from the lower, as the tips of the snake and the ladder say it"
+const SENT_LEVELS = ("the plain text email", "the HTML email")
+
 """
-What the tooltip of the ladder and the snake says for an email with HTML, or
-nothing for any other page. When the email can't show as it was sent, the
-tooltip says why.
+Why the window shows the words of the page's email at the level where it
+should show the email as it was sent, or nothing. It's so when the email's
+pictures can't be made.
 """
-sent_tip(e) = begin
+sent_problem(e) = begin
   v = sent_html(e)
-  v === nothing && return nothing
-  e.plain && return "Go up a level, to the email as it was sent"
-  v.shown === nothing && v.got !== nothing && v.got.state == :failed && return v.got.problem
-  "Go down a level, to the email's words as a page"
+  (v === nothing || e.plain) && return nothing
+  v.shown === nothing && v.got !== nothing && v.got.state == :failed ? v.got.problem : nothing
 end
 
 "The lines of the page that the pictures of the email stand for: from the line after its card to the line before the links to its files"

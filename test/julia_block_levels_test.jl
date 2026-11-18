@@ -76,7 +76,8 @@ end
   # Every line of the block is in it, with the lines that open and close it
   @test all(i -> part(i) === part(FIRST), FIRST-1:CALL+1) && part(SECOND).n == 2 && part(WORDS) === nothing
   @test K.levels(e) == K.CODE_LEVELS && K.level(e) == 4 && !K.low(e)
-  @test K.stop_tip(e, 4) == "Go down a level, to the inferred code of what you run  ⌘E"
+  @test K.stop_tip(e, 4) == "The window shows the value of what you run. A click goes down a level  ⌘E"
+  @test K.stop_tip(e, 3) == "Go down a level, to the inferred code of what you run  ⌘E"
   @test K.stop_tip(e, 1) == "Go down 3 levels, to the assembly of what you run"
   l = hover()
   @test length(l.stops) == 4

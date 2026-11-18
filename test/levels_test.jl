@@ -71,20 +71,24 @@ tip() = (found = [p for p in popups(w) if p.key == :tooltip]; isempty(found) ? n
   @test rect(stop(2)).left == m.left && rect(stop(1)).left == s.left
   @test icons(K.describe(stop(1))) == ["snake"] && icons(K.describe(stop(2))) == ["ladder"]
   shot("levels-page.png")
-  # The mouse is over the ladder, and the tip says what a click on it does
-  @test K.stop_tip(e, 2) == "Go down a level, to the symbols of the part with the caret  ⌘E"
-  @test K.stop_tip(e, 1) == K.stop_tip(e, 2) == K.tip(mode())
+  # The mouse is over the ladder. The window is at its level, so its tip says what the window shows, and what a click on it does.
+  @test K.stop_tip(e, 2) == "The window shows the graphics that the symbols make. A click goes down a level  ⌘E"
+  # The snake's tip is of its own level
+  @test K.stop_tip(e, 1) == "Go down a level, to the symbols of the part with the caret  ⌘E" == K.tip(mode())
   # A click where the picture is goes down a level, as a click on the picture did
   click(middle(rect(mode())))
   @test e.plain && K.level(e) == 1 && K.low(e) && w.focus === e
   @test slider() === l   # the mouse is still over it
-  @test K.stop_tip(e, 2) == "Go up a level, to the graphics that the symbols make  ⌘E"
+  @test K.stop_tip(e, 2) == "Go up a level, to the graphics that the symbols make  ⌘E" == K.tip(mode())
+  @test K.stop_tip(e, 1) == "The window shows the symbols of the part with the caret"
   click(middle(rect(mode())))
   @test !e.plain && K.level(e) == 2
-  # A click on the snake goes down, and another goes up again
+  # A click on the snake goes down. Another does nothing, since the window is at the snake's level.
   click(middle(rect(stop(1))))
   @test e.plain
   click(middle(rect(stop(1))))
+  @test e.plain
+  click(middle(rect(stop(2))))
   @test !e.plain
   # The slider goes when the mouse leaves it
   leave()
@@ -104,8 +108,11 @@ end
   shot("levels-json-tree.png")
   @test K.stop_tip(e, 1) == "Go down 3 levels, to the file's bits"
   @test K.stop_tip(e, 2) == "Go down 2 levels, to the file's bytes in hexadecimal"
-  @test K.stop_tip(e, 3) == K.stop_tip(e, 4) == "Go down a level, to the file's text  ⌘E"
+  @test K.stop_tip(e, 3) == "Go down a level, to the file's text  ⌘E"
+  @test K.stop_tip(e, 4) == "The window shows the tree of the file's values. A click goes down a level  ⌘E"
   # The mouse over a stop shows its tip
+  at(middle(rect(stop(1))))
+  @test tip() == K.stop_tip(e, 1)
   at(middle(rect(stop(2))))
   @test tip() == K.stop_tip(e, 2)
   shot("levels-json-tip.png")
@@ -125,9 +132,10 @@ end
   @test e.buf.lines[2] == "00000006  00111010 00100000 00100010 01001011 01101001 01110100  : \"Kit"
   @test length(e.buf.lines) == cld(filesize(job), K.BITS_ROW)
   shot("levels-json-bits.png")
-  # A click on the snake at the lowest level goes one level up
+  # A click on the snake at the lowest level does nothing
+  @test K.stop_tip(e, 1) == "The window shows the file's bits"
   click(middle(rect(stop(1))))
-  @test e.buf.view == :hex
+  @test e.buf.view == :bits
   click(middle(rect(stop(3))))
   @test e.buf.view == :text && startswith(e.buf.lines[1], "{\"job\"")
   shot("levels-json-text.png")
@@ -221,7 +229,8 @@ end
   @test K.levels(e) == K.FILE_LEVELS && K.level(e) == 3 && !K.low(e) && icon() == "ladder"
   l = hover()
   @test length(l.stops) == 3 && rect(l).width == 2K.MODE_W + K.STOP_W
-  @test K.stop_tip(e, 3) == K.stop_tip(e, 2) == "Go down a level, to the file's bytes in hexadecimal  ⌘E"
+  @test K.stop_tip(e, 2) == "Go down a level, to the file's bytes in hexadecimal  ⌘E"
+  @test K.stop_tip(e, 3) == "The window shows the file's text. A click goes down a level  ⌘E"
   shot("levels-text.png")
   click(middle(rect(stop(1))))
   @test e.buf.view == :bits && startswith(e.buf.lines[1], "00000000  01010011 01101111")
@@ -246,7 +255,8 @@ end
   sheet.table.sort = (2, :desc); frames()
   l = hover()
   @test length(l.stops) == 4
-  @test K.stop_tip(e, 4) == "Go down a level, to the file's text  ⌘E"
+  @test K.stop_tip(e, 3) == "Go down a level, to the file's text  ⌘E"
+  @test K.stop_tip(e, 4) == "The window shows the file's table. A click goes down a level  ⌘E"
   shot("levels-csv.png")
   click(middle(rect(stop(3))))
   @test e.buf.view == :text && e.buf.lines[1] == "Item,Price" && K.numbered(e.buf)

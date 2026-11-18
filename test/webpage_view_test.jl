@@ -166,12 +166,13 @@ end
   shot("sent-7-files.png")
   click(middle(r))
   @test e.buf.path == path
-  # Down a level, the email shows the link as it's written
+  # Down a level, where the email shows its words, the file shows as its icon too
   show(quote_email)
   K.level!(e); frames()
-  @test files() === nothing && any(l -> occursin("[Roof quote.pdf]", l), texts())
+  @test e.plain && item() === nothing && files() !== nothing && !any(l -> occursin("Roof quote.pdf", l), texts())
+  shot("sent-10-files-down-a-level.png")
   K.level!(e); frames()
-  @test files() !== nothing
+  @test !e.plain && files() !== nothing
 end
 
 @testset "many files go on in the next row, and a long name on two lines" begin

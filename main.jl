@@ -16467,8 +16467,8 @@ layout!(e, width=text_width(e)) = begin
         continue
       end
     end
-    # The links at the end of an email to the files that came with it show as file icons
-    if ks[i].kind == Kind.paragraph && rich(b) && !israw(b, i) && Eml.isemail(b.path)
+    # The links at the end of an email to the files that came with it show as file icons, at both of its levels
+    if ks[i].kind == Kind.paragraph && !israw(b, i) && Eml.isemail(b.path)
       content = attached_item(e, i)
       if content !== nothing
         push!(items, Item(i, content.node.to, top, content.tall, content))

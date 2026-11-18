@@ -277,6 +277,7 @@
 @use "github.com/jkroso/UI.jl/Interface/draw" Bubble
 @use "github.com/jkroso/UI.jl/Interface/draw" popups sync_mouse!
 @use "github.com/jkroso/URI.jl/FSPath" FSPath
+@use "github.com/jkroso/URI.jl/FS" => FS FSObject AbstractDirectory
 @use Colors: @colorant_str, RGBA, Colorant
 @use InteractiveUtils: clipboard
 @use InteractiveUtils: code_native, code_llvm
@@ -949,6 +950,7 @@ isspread(g::Grid) = g.head > 0px
   folder::String = ""
   files::Vector{String} = String[]      # the Markdown files in the folder
   listed::Vector{String} = String[]     # the folders and files in the folder, as the sidebar lists them
+  entries::Dict{String,FSObject} = Dict{String,FSObject}()   # the object in the file system of the folder and of each one listed, by its path
   panel::Bool = false                   # is the sidebar showing?
   slid::Float64 = 0.0                   # when the sidebar last started to slide in or out
   slid_from::Float64 = 0.0              # how far open it was then, from 0 to 1
@@ -1178,16 +1180,75 @@ build_editor(path) = begin
   e
 end
 
+# The sidebar's folder, and each folder and file in it, is an object of the
+# file system (FS.jl): a `File`, a `Directory`, or a kind of directory, which
+# is a type under `AbstractDirectory`. Each directory makes the objects of what
+# it holds, from the directory at `/` down. The sidebar asks the folder's
+# object what to list and how to list it, and asks each object in the list for
+# its icon, for what follows its name and for what a click on it does:
+# `entries`, `folder_view`, `entry_icon`, `entry_marks` and `open!`. So code
+# from the startup page gives a kind of folder its own way in the sidebar with
+# a method for the folder's type, as it does for a component of a page.
+#
+#     @def struct NotesDirectory <: Ladder.AbstractDirectory end
+#     Ladder.FS.kinds[fs"/Users/jake/Notes"] = NotesDirectory
+#     Ladder.entry_icon(::NotesDirectory) = "box"
+
+"""
+Read the sidebar's folder again: what it lists, and the object of each one.
+The objects are new each time, so a folder that code gave a kind since the
+last time has that kind now.
+"""
 list_files!(e) = begin
-  names = isdir(e.folder) ? readdir(e.folder) : String[]
-  # A name that starts with a dot is hidden, as it is in the Finder. .DS_Store is the Finder's own file, and never shows.
-  shows(n) = e.hidden ? n != ".DS_Store" : !ishidden(n)
-  paths = [joinpath(e.folder, n) for n in sort!(names, by=lowercase) if shows(n)]
-  # The sidebar lists the folders, then each file. The file finder lists the Markdown files.
-  files = filter(isfile, paths)
-  e.listed = [filter(isdir, paths); files]
-  e.files = filter(ismarkdown, files)
+  empty!(e.entries)
+  d = isdir(e.folder) ? FS.get(FSPath(e.folder)) : nothing
+  found = d isa AbstractDirectory ? entries(e, d) : FSObject[]
+  d isa AbstractDirectory && (e.entries[e.folder] = d)
+  e.listed = String[joinpath(e.folder, o.path.name) for o in found]
+  foreach((path, o) -> e.entries[path] = o, e.listed, found)
+  # The file finder lists the Markdown files
+  e.files = String[path for (path, o) in zip(e.listed, found) if isfile(o) && ismarkdown(path)]
 end
+
+"""
+What the sidebar lists of the directory `d`: its folders, then its files, each
+in the order of their names. A name that starts with a dot is hidden, as it is
+in the Finder, unless the sidebar shows those. .DS_Store is the Finder's own
+file, and never shows. What's neither a folder nor a file isn't listed.
+"""
+entries(e, d::AbstractDirectory) = begin
+  shows(n) = e.hidden ? n != ".DS_Store" : !ishidden(n)
+  found = FSObject[]
+  for name in sort!(readdir(string(d.path)), by=lowercase)
+    shows(name) || continue
+    # A link that leads nowhere, a socket, and a file that left since the folder was read have no object to list
+    o = try FS.child(d, name) catch; nothing end
+    o === nothing || push!(found, o)
+  end
+  [filter(isdir, found); filter(isfile, found)]
+end
+
+"The object of the sidebar's folder, or nothing when no folder is there"
+directory(e) = get(e.entries, e.folder, nothing)
+
+"The object of the folder or the file at `path`: the one that the sidebar lists, or else a new one. Nothing when nothing is there."
+object(e, path) = get(() -> ispath(path) ? FS.get(FSPath(path)) : nothing, e.entries, path)
+
+"The icon that `o` has in the sidebar"
+entry_icon(o::AbstractDirectory) = "folder"
+entry_icon(o::FSObject) = file_icon(string(o.path))
+
+"What follows the name of `o` in its row of the sidebar: nodes, or `()`"
+entry_marks(e, o::FSObject) = ()
+entry_marks(e, d::AbstractDirectory) = folder_marks(e, string(d.path))
+
+"""
+How the sidebar lists the directory `d`: `(list=..., bar=...)`. `list` is a
+node that shows in place of the tree of what `entries` gives, or nothing to
+leave the tree. `bar` is a node for a line over the list, or nothing. `d` is
+nothing when the sidebar's folder isn't there.
+"""
+folder_view(e, d) = folder_list(e)
 
 """
 Show the file at `path`. A file that's already open keeps its changes. The
@@ -1275,6 +1336,10 @@ ishidden(path) = startswith(basename(path), '.')
 
 "Make the sidebar list the hidden files and folders too, or leave them out again"
 hidden!(e, on::Bool) = (e.hidden = on; list_files!(e); save_settings!(e); e)
+
+"What a click on `o` in the sidebar does: a folder shows in the sidebar, and a file shows in the page"
+open!(e, d::AbstractDirectory; record=true) = go_folder!(e, string(d.path))
+open!(e, o::FSObject; record=true) = open!(e, string(o.path); record)
 
 "Show the folders and files of `folder` in the sidebar. The document that's showing stays."
 go_folder!(e, folder) = begin
@@ -19958,7 +20023,7 @@ left out. It shows only while the sidebar lists files: a closed sidebar has none
 show, and nor has a list that code from the startup page shows in their place.
 """
 hidden_button(e) = begin
-  (e.panel && folder_list(e).list === nothing) || return ()
+  (e.panel && folder_view(e, directory(e)).list === nothing) || return ()
   b = button(e, :hidden, "eye-slash")
   b.icon = e.hidden ? "eye" : "eye-slash"
   (b,)
@@ -20961,13 +21026,15 @@ end
 
 describe(l::FileLabel) = begin
   e = editor(l)
+  o = object(e, l.path)
+  folder = o isa AbstractDirectory
   changed = haskey(e.buffers, l.path) && dirty(e.buffers[l.path])
   # While the file is renamed, a text field with its name is where the name was
   name = renaming(e, :sidebar) == l.path ?
     Box(width(grow=grow), height(22px), padding(5px, 0px), radius(4px), Alignment.Start, background(colours.bg),
         border(1px, :solid, colours.accent), renamer(e)) :
     # A hidden folder or page is fainter than the others, as it is in the Finder
-    isdir(l.path) ? Box(width(grow=grow), Alignment.Start, label(basename(l.path), color=ishidden(l.path) ? colours.dim : colours.ink)) :
+    folder ? Box(width(grow=grow), Alignment.Start, label(basename(l.path), color=ishidden(l.path) ? colours.dim : colours.ink)) :
     ismarkdown(l.path) ?
     Box(width(grow=grow), Alignment.Start, label(basename(l.path), color=ishidden(l.path) && l.path != e.buf.path ? colours.dim : colours.ink,
                                                  weight=l.path == e.buf.path ? "Semibold" : "")) :
@@ -20977,9 +21044,9 @@ describe(l::FileLabel) = begin
   # A page that an agent waits for has a dot in the colour of the Nudge button
   awaited = ismarkdown(l.path) && !isempty(agents(e, l.path))
   Row(width(grow=grow), height(grow=grow), padding(0px, 8px, 0px, 0px), child_gap=4px, clip=true, name="File",
-    mark(l, isdir(l.path) ? "folder" : ismarkdown(l.path) ? "file-earmark-text" : file_icon(l.path)),
+    mark(l, o === nothing ? file_icon(l.path) : entry_icon(o)),
     name,
-    (isdir(l.path) ? folder_marks(e, l.path) : ())...,   # what code from the startup page adds, like how many emails of a folder aren't read
+    (o === nothing ? () : entry_marks(e, o))...,   # what code from the startup page adds, like how many emails of a folder aren't read
     (awaited ? (Box(width(6px), height(6px), radius(3px), background(colours.accent)),) : ())...,
     (changed ? (Box(width(6px), height(6px), radius(3px), background(colours.dim)),) : ())...)
 end
@@ -21157,10 +21224,11 @@ to the text.
 """
 choose!(e, item) = begin
   l = item.firstchild
-  l isa FileLabel && isdir(l.path) && return (go_folder!(e, l.path); e.nodes[:chose] = true; nothing)
+  o = l isa FileLabel ? object(e, l.path) : nothing
+  o isa AbstractDirectory && return (open!(e, o); e.nodes[:chose] = true; nothing)
   # A group's name shows what's in the group. Only its icon hides that.
   item isa Tree.ItemGroup && (item.collapsed = false)
-  l.path == e.buf.path || open!(e, l.path)
+  l.path == e.buf.path || (o === nothing ? open!(e, l.path) : open!(e, o))
   focus(e)
   e.nodes[:chose] = true
   (l isa EntryLabel && l.line > 0) || return
@@ -21486,7 +21554,7 @@ describe(s::Sidebar) = begin
   wide = panel_w(e)
   shows = wide * opened(e)
   # A folder shows as a tree of its files, unless code from the startup page lists it another way, as a folder of emails is listed
-  own = folder_list(e)
+  own = folder_view(e, directory(e))
   list = own.list === nothing ? Column(width(grow=grow), Alignment.Start, padding(0px, 8px, 12px, 8px),
                                        with_theme(() -> describe!(fill_tree!(e, file_tree(e))), panel_theme())) : own.list
   Row(fixed(shows), height(grow=grow), Alignment.Start, clip=true,
@@ -26846,9 +26914,14 @@ const MATTER_CARDS = Dict{Symbol,Any}()
 How the sidebar lists its folder: `f(e)` gives nothing, or `(list=..., bar=...)`.
 `list` is a node that shows in place of the tree of the folder's files, or
 nothing to leave the tree. `bar` is a node for a line over the list, or nothing.
+A kind of folder has a method of `folder_view` in place of this.
 """
 const FOLDER_LISTS = Dict{Symbol,Any}()
-"More for the row of a folder in the sidebar's tree, after its name: `f(e, path)` gives the nodes, or `()`"
+"""
+More for the row of a folder in the sidebar's tree, after its name: `f(e, path)`
+gives the nodes, or `()`. A kind of folder has a method of `entry_marks` in
+place of this.
+"""
 const FOLDER_MARKS = Dict{Symbol,Any}()
 "More names for the code of a window's pages: `f(m, e)` adds them to the module `m` that the code runs in"
 const PAGE_NAMES = Dict{Symbol,Any}()

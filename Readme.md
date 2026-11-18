@@ -582,6 +582,33 @@ Ladder also has tables for what it does at its own times. Code puts a function i
 Ladder.EACH_FRAME[:clock] = e -> tick(e)
 ```
 
+### A kind of folder
+
+A folder and a file are objects, as a component of a page is. So code gives a kind of folder its own way in the sidebar with a method for the folder's type, and it needs no table.
+
+````
+```julia
+@def struct NotesDirectory <: Ladder.AbstractDirectory end
+Ladder.FS.kinds[fs"/Users/you/Notes"] = NotesDirectory
+Ladder.entry_marks(e, d::NotesDirectory) = (count_of_notes(d),)
+```
+````
+
+- A kind of folder is a type under `AbstractDirectory`. `FS.kinds` gives a kind to the folder at a path. A folder with no kind is a `Directory`, and a file is a `File`, whose type has the end of its name, like `File{:md}`.
+- The folder at `/` makes the objects of what it holds, and each of those folders makes its own. A kind of folder says what is in it with a method of `FS.kind` or `FS.child`. Each object keeps the folder that made it as its `parent`.
+
+The sidebar calls these functions, and each has a method for any folder or file:
+
+| Function | What it gives |
+|---|---|
+| `entries(e, d)` | The folders and files of the folder `d` that the sidebar lists, in their order. |
+| `folder_view(e, d)` | A list that shows in place of the tree of those, and a line over it. |
+| `entry_icon(o)` | The icon of the folder or the file `o` in the list. |
+| `entry_marks(e, o)` | What follows its name, like how many of a folder's emails aren't read. |
+| `open!(e, o)` | What a click on it does. A folder shows in the sidebar, and a file shows in the page. |
+
+[Mail.lad](https://github.com/jkroso/Mail.lad) does this for the folder of an email account: its `MailDirectory` lists the emails in place of the files. The tables `FOLDER_LISTS` and `FOLDER_MARKS` are the older way to do two of these, and they still work. The types are in `FS.jl` of [URI.jl](https://github.com/jkroso/URI.jl).
+
 A kind of block goes in `Ladder.BLOCKS`, as Ladder's own kinds do. `Ladder.add_insert!` puts it in the Insert menu, and `Ladder.add_commands!` adds commands, with their keys, to the ones on the Key bindings page. The comment over the tables in `main.jl` says more. [Mail.lad](https://github.com/jkroso/Mail.lad) is an example that uses each of them. If a block fails, the blocks after it don't run, Ladder opens all the same, and the window says which line of the page failed. A change to the page's code runs the next time Ladder starts.
 
 ## Go back to the file that showed before

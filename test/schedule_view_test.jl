@@ -190,6 +190,14 @@ end
   was = v.at
   onscroll(w, Vec2{px}(px(0), px(-2))); frames()
   @test v.at == was
+  # A sideways scroll over the names of the tasks moves the days too
+  name = middle(rect(v.parts[(:name, task(4).todo.key)]))
+  at(name); onscroll(w, Vec2{px}(px(-2), px(0))); frames()
+  @test v.at > was
+  # And a pinch there shows fewer days, round the first day that shows
+  zoom, first = v.zoom, v.at
+  onpinch(w, 1.5); frames()
+  @test v.zoom > zoom && v.at ≈ first
   button(:fit)
 end
 

@@ -7676,19 +7676,25 @@ onmouse(a::ChartArea, ev::MouseMove) = begin
   handled   # the drag is the schedule's, so the page's text doesn't select
 end
 
+"The place across the window that the days grow or shrink round: the mouse, or the nearest end of the days when the mouse is beside them"
+zoom_x(v::ScheduleView, w) = clamp(num(w.mouse[1]), v.box[1], v.box[1] + v.box[3])
+
 # Scrolling sideways moves the days, and scrolling with ⌘ held shows more days or fewer, round the mouse.
+# They do that anywhere on the schedule: over the bars, the days, the names of the tasks or the buttons.
 # Scrolling up and down scrolls the page that the schedule is on.
-onscroll(a::ChartArea, ev::MouseScroll) = begin
-  v, w = a.of, ev.window
+onscroll(v::ScheduleView, ev::MouseScroll) = begin
+  w = ev.window
   v.zoom > 0 || return nothing
   dx, dy = num(ev.delta[1]), num(ev.delta[2])
-  Keys.cmd in w.keys && return zoom_days!(v, exp(dy / 10), num(w.mouse[1]))
+  Keys.cmd in w.keys && return zoom_days!(v, exp(dy / 10), zoom_x(v, w))
   abs(dx) > abs(dy) || return nothing
   v.at -= 30dx / v.zoom
   handled
 end
+onscroll(a::ChartArea, ev::MouseScroll) = onscroll(a.of, ev)
 
-onpinch(a::ChartArea, ev::Pinch) = zoom_days!(a.of, ev.scale, num(ev.window.mouse[1]))
+onpinch(v::ScheduleView, ev::Pinch) = zoom_days!(v, ev.scale, zoom_x(v, ev.window))
+onpinch(a::ChartArea, ev::Pinch) = onpinch(a.of, ev)
 
 # Esc takes the selection away, then puts a schedule that fills the window back in the page, then gives the keyboard back to the text
 onkey(a::ChartArea, ::KeyPress{Keys.escape}) = begin

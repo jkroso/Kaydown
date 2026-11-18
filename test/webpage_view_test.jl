@@ -1,26 +1,25 @@
-# Tests for how the window shows an email as it was sent: the pictures of its
-# HTML in place of its words, its links, the button that gets its pictures
-# from the web, and what shows while the pictures aren't there. See "an email
-# as it was sent" in main.jl. Run them with
+# Tests for how the window shows an email as it was sent: its HTML, laid out
+# by web/, in place of its words, its links, its words that you select, and
+# the button that gets its pictures from the web. See "an email as it was
+# sent" in main.jl. Run them with
 # `julia -O0 --project=. test/webpage_view_test.jl`. They click in a window
-# that isn't on the screen. They use neither WebKit nor the web, and they
-# open no app: webpage_fake.jl takes the place of the program. Set
+# that isn't on the screen. They ask the web for nothing, and they open no
+# app: a function of webpage_fake.jl notes each link that would open. Set
 # `LADDER_SHOTS` to a folder, and they save pictures of the page there.
 
 @use Test: @test, @testset
 @use "../main" => K
 @use "./webpage_fake" => Fake
+@use "./map_fake" png
 @use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse
-@use "github.com/jkroso/UI.jl/Interface/draw" frame rect popups
+@use "github.com/jkroso/UI.jl/Interface/draw" frame rect popups clipboard
 @use "github.com/jkroso/UI.jl/Interface/save" save_png
 @use "github.com/jkroso/UI.jl/Interface/testing" pixels
 @use GeometryBasics: Vec2
 const px = K.px
 const W = K.Webpages
 
-W.HELPER[] = Fake.helper
 W.OPENER[] = Fake.opener
-empty!(Fake.calls)   # what a test before this one asked for, when the tests share a process
 K.MEDIA_CACHE[] = mktempdir()                          # the pictures are kept here, and not in the Mac's caches
 K.Eml.CACHE[] = mktempdir()                            # and the files that came with an email here
 
@@ -35,11 +34,13 @@ email(name, body; type="text/html", file=false) = begin
   write(path, file ? head * "Content-Type: multipart/mixed; boundary=m\r\n\r\n--m\r\n$text--m\r\n$pdf--m--\r\n" : head * text)
   path
 end
-const LINKS = """<p>Hi Jake, the <a href="https://example.com/quote?job=7&v=2">quote</a> is here. Write to <a href="mailto:sam@example.com">me</a>.</p>"""
+const PAPER = (204, 255, 238)   # the colour of the page of the first email
+const LINKS = """<body bgcolor="#ccffee"><p>Hi Jake, the <a href="https://example.com/quote?job=7&v=2">quote</a> is here. Write to <a href="mailto:sam@example.com">me</a>.</p></body>"""
 const quote_email = email("The quote", LINKS, file=true)
-const logo_email = email("A logo", """<p>Our logo</p><img src="https://example.com/logo.png">""")
+const LOGO = "https://example.com/logo.png"
+const logo_email = email("A logo", """<p>Our logo</p><img src="$LOGO" style="display:block">""")
 const plain_email = email("Plain words", "Hi Jake,\r\n\r\nNo HTML here.", type="text/plain")
-const tall_email = email("A long one", "<p>A long email</p><!-- tall 1500 -->")
+const tall_email = email("A long one", """<body style="margin:0"><div style="height:1500px;background:#cc0000"></div><div style="height:300px;background:#0000cc"></div></body>""")
 
 const e = K.build_editor(quote_email)
 const w = Window(e, size=(1000px, 900px))
@@ -63,18 +64,18 @@ show(path, n=3) = (K.open!(e, path); frames(n))
 sent() = e.nodes[:sent_email]
 "The part of the page that stands for the email's words, or nothing while the page shows the words"
 item() = (i = findfirst(it -> it.content isa K.Live && it.content.node isa K.SentEmail, e.layout); i === nothing ? nothing : e.layout[i])
-"True when the page shows the pictures of the email"
+"True when the page shows the email as it was sent"
 shows() = item() !== nothing && sent().shown !== nothing
-"Where the pictures are in the window"
+"The email's page as it's laid out, with its links and its words"
+laid() = sent().shown.shot
+"Where the email is in the window, with the line round it"
 page() = rect(sent().parts[:page])
 "The place in the window of a point of the email, in px from the email's top left corner, which is inside the line round it"
 spot(x, y) = (r = page(); (K.num(r.left) + 1 + x, K.num(r.top) + 1 + y))
 "The place in the window of the middle of link `i` of the email"
-link(i) = (b = Fake.box(i); spot(b.left + b.wide / 2, b.top + b.tall / 2))
-"How wide the pictures of an email are: as wide as the page's text, less the line on each side of the email"
+link(i) = (b = laid().links[i]; spot(b.left + b.wide / 2, b.top + b.tall / 2))
+"How wide an email is laid out: as wide as the page's text, less the line on each side of the email"
 wide() = round(Int, K.num(e.width)) - 2
-"What the helper is asked for a page of the window's width"
-asked(html; pictures=false, zoom=1.0) = (html=html, wide=wide(), zoom=zoom, pictures=pictures)
 "The red, the green and the blue of the window's pixel at a place, as the window was last drawn"
 colour(place) = begin
   file = joinpath(dir, "window.png")
@@ -90,19 +91,21 @@ texts() = [e.buf.lines[it.first] for it in e.layout if it.content isa K.Flow]
 files() = (i = findfirst(it -> it.content isa K.Live && it.content.node isa K.AttachedFiles, e.layout); i === nothing ? nothing : e.layout[i])
 
 @testset "an email with HTML shows as it was sent" begin
-  @test shows() && Fake.calls == [asked(LINKS)]
+  @test shows() && sent().shown.want == (wide(), round(Float64(e.zoom), digits=2), false, 0)
   it = item()
-  # The pictures stand for the email's words, and for nothing else of the page
+  # The email as it was sent stands for the email's words, and for nothing else of the page
   t = K.front_matter(e.buf.lines)
   @test it.first == t + 1 && e.buf.lines[it.last+1] == "[Roof quote.pdf]($(K.Eml.attachments(quote_email))/Roof%20quote.pdf)"
   @test !any(l -> occursin("quote", l) && occursin("Hi Jake", l), texts())
   # The link to the file shows as the file's icon
   @test !any(l -> occursin("Roof quote.pdf", l), texts()) && files().first == files().last == it.last + 1
-  # They're as wide as the page's text, and as tall as the program made them
+  # It's as wide as the page's text, and as tall as its HTML is at that width: a line of words, with the room round it
   r = page()
-  @test K.num(r.width) == wide() + 2 && K.num(r.height) == 402
-  @test colour(spot(300, 200)) == Fake.colour(false)
-  # The card of the email is over them, and the link to the file under them
+  @test laid().wide == wide() && K.num(r.width) == wide() + 2 && K.num(r.height) == laid().tall + 2 && 30 < laid().tall < 80
+  @test colour(spot(wide() - 20, 10)) == PAPER
+  # Its words are text, not a picture of text
+  @test [String(w.letters) for w in laid().words] == ["Hi Jake, the quote is here. Write to me."]
+  # The card of the email is over it, and the link to the file under it
   @test e.layout[1].first == 1 && e.layout[1].top < it.top && e.layout[end].top >= it.top + it.tall - 1px
   # An email with nothing from the web has no button that fetches it
   @test !sent().remote && !haskey(sent().parts, (:button, :pictures))
@@ -112,6 +115,7 @@ end
 @testset "a link of the email opens, and the mouse over it says where it goes" begin
   empty!(Fake.opened)
   area = sent().parts[:page]
+  @test [l.url for l in laid().links] == ["https://example.com/quote?job=7&v=2", "mailto:sam@example.com"]
   at(link(1))
   @test K.cursor(area) == :hand && K.sent_link(area).url == "https://example.com/quote?job=7&v=2" && !isempty(popups(w))
   shot("sent-2-over-a-link.png")
@@ -119,10 +123,10 @@ end
   @test Fake.opened == ["https://example.com/quote?job=7&v=2"]
   click(link(2))
   @test Fake.opened[end] == "mailto:sam@example.com" && length(Fake.opened) == 2
-  # Beside the links, the email is a picture: a click there opens nothing
-  at(spot(300, 300))
+  # Beside the words, a click opens nothing
+  at(spot(wide() - 20, 10))
   @test K.cursor(area) == :arrow && K.sent_link(area) === nothing
-  click(spot(300, 300))
+  click(spot(wide() - 20, 10))
   @test length(Fake.opened) == 2 && shows()
   # What a tooltip says of an address
   @test K.sent_address("mailto:sam@example.com") == "sam@example.com" && K.sent_address("https://example.com/a") == "https://example.com/a"
@@ -130,8 +134,87 @@ end
   @test length(K.sent_address(long)) == 86 && startswith(K.sent_address(long), "https://example.com/aaa") && endswith(K.sent_address(long), "aaa/end")
 end
 
-@testset "down a level, the email shows its words, and up again its pictures" begin
-  n = length(Fake.calls)
+"The place in the window a little into letter `k` of line `i` of the email's words. Letter 0 is the first."
+letter(i, k) = (s = laid().words[i]; spot(s.edges[k+1] + 1, s.top + s.tall / 2))
+"Press `key` with ⌘ held"
+command(key) = (w.keys |= Keys.cmd; onkey(w, KeyPress{key}(0, w)); w.keys ⊻= Keys.cmd; frames(1))
+"Press `key`"
+key(key) = (onkey(w, KeyPress{key}(0, w)); frames(1))
+"Drag from one place to another"
+drag(from, to) = (press(from); at(to); release())
+"The red, the green and the blue of an email's page where nothing is drawn on it"
+const PAGE = (255, 255, 255)
+
+@testset "the words of an email can be selected and copied" begin
+  show(email("Some words", """<p>Hi Jake, the <a href="https://example.com/quote">quote</a> is here.</p><p>Write to me.</p>"""))
+  area = sent().parts[:page]
+  @test shows() && [String(s.letters) for s in laid().words] == ["Hi Jake, the quote is here.", "Write to me."] && W.letter_count(laid()) == 39
+  # Over the words, the mouse is a bar for text. Beside them, it's an arrow.
+  at(letter(1, 3))
+  @test K.cursor(area) == :ibeam
+  at(spot(wide() - 20, laid().words[1].top + 5))
+  @test K.cursor(area) == :arrow
+  # A drag selects the words that it goes over. The email takes the keyboard, and ⌘C copies them.
+  # The colours are looked at where a space is, so that no letter's ink is there.
+  drag(letter(1, 9), letter(1, 18))
+  @test w.focus === area && (area.anchor, area.caret) == (9, 18)
+  @test colour(letter(1, 12)) != PAGE && colour(letter(1, 21)) == PAGE && colour(letter(2, 5)) == PAGE
+  shot("sent-3-words-selected.png")
+  command(Keys.c)
+  @test clipboard(w) == "the quote"
+  # From one line to the next, and back up the page
+  drag(letter(1, 13), letter(2, 5))
+  command(Keys.c)
+  @test clipboard(w) == "quote is here.\nWrite" && colour(letter(1, 21)) != PAGE
+  drag(letter(2, 2), letter(1, 22))
+  command(Keys.c)
+  @test clipboard(w) == "here.\nWr"
+  # Two clicks select a word, and three the paragraph
+  click(letter(1, 4)); click(letter(1, 4))
+  command(Keys.c)
+  @test clipboard(w) == "Jake"
+  click(letter(1, 4))
+  command(Keys.c)
+  @test clipboard(w) == "Hi Jake, the quote is here."
+  # A click with ⇧ held moves the end of the selection there
+  sleep(0.5)
+  click(letter(1, 3))
+  w.keys |= Keys.shft
+  click(letter(1, 7))
+  w.keys ⊻= Keys.shft
+  command(Keys.c)
+  @test clipboard(w) == "Jake"
+  # ⌘A selects all the words of the email
+  command(Keys.a)
+  command(Keys.c)
+  @test clipboard(w) == "Hi Jake, the quote is here.\nWrite to me."
+  # The right-click menu copies them too
+  K.clipboard!(w, "")
+  K.page_act!(e, findfirst(==("Copy"), K.PAGE_MENU))
+  @test clipboard(w) == "Hi Jake, the quote is here.\nWrite to me."
+  # Esc gives the keyboard back to the page, and the words aren't marked then
+  key(Keys.escape)
+  @test w.focus !== area && colour(letter(1, 12)) == PAGE
+  # A key like Space gives the keyboard back too, and the page takes it
+  drag(letter(1, 9), letter(1, 18))
+  @test w.focus === area
+  key(Keys.space)
+  @test w.focus !== area
+  # A click on a link opens it, and a drag from a link selects words and opens nothing
+  empty!(Fake.opened)
+  click(link(1))
+  @test Fake.opened == ["https://example.com/quote"]
+  sleep(0.5)   # so that the press isn't a second click on the link
+  drag(link(1), letter(1, 5))
+  @test Fake.opened == ["https://example.com/quote"] && area.caret == 5 && 13 <= area.anchor <= 18
+  # Another email has nothing selected
+  show(quote_email)
+  @test sent().parts[:page] === area && area.anchor == area.caret == 0
+  K.focus(e)
+end
+
+@testset "down a level, the email shows its words, and up again as it was sent" begin
+  was = sent().shown.page
   # Each stop's tip is of its own level
   @test K.stop_tip(e, 2) == "The window shows the HTML email. A click goes down a level  ⌘E"
   @test K.stop_tip(e, 1) == "Show plain text email  ⌘E" == K.tip(e.nodes[:mode])
@@ -141,8 +224,8 @@ end
   @test K.stop_tip(e, 1) == "The window shows the plain text email"
   shot("sent-3-words.png")
   K.level!(e); frames()
-  # The pictures are kept, so no program runs for them again
-  @test !e.plain && shows() && length(Fake.calls) == n
+  # The page is kept, so the email isn't laid out again
+  @test !e.plain && shows() && sent().shown.page === was
 end
 
 @testset "while the find bar is open, the email shows its words" begin
@@ -206,97 +289,86 @@ end
 
 @testset "an email asks the web for nothing until you click Load pictures" begin
   show(logo_email)
-  html = K.Eml.webpage(logo_email)
-  @test shows() && sent().remote && !sent().pictures && Fake.calls[end] == asked(html) && colour(spot(300, 200)) == Fake.colour(false)
+  @test shows() && sent().remote && !sent().pictures && !haskey(K.fetches, LOGO) && isempty(sent().waiting)
   @test !isfile(K.sent_mark(logo_email))
   button = sent().parts[(:button, :pictures)]
-  top = page().top
+  top, tall = page().top, laid().tall
   @test button.words == "Load pictures" && rect(button).top < top
   shot("sent-4-no-pictures.png")
+  # The picture is kept already, as it is once Ladder has fetched it, so that the test asks the web for nothing
+  file = joinpath(dir, "logo.png")
+  write(file, png((x, y) -> (40, 120, 220), 60, 30))
+  K.fetches[LOGO] = file
   click(middle(rect(button)))
-  @test until(() -> sent().shown.want[3])
   frames()
-  @test sent().pictures && Fake.calls[end] == asked(html, pictures=true) && colour(spot(300, 200)) == Fake.colour(true)
+  @test sent().pictures && sent().shown.want[3] && laid().tall == tall + 30
+  @test colour(spot(8 + 30, laid().tall - 8 - 15)) == (40, 120, 220)
   # The button has gone, so the email is where the button was
   @test page().top < top && isfile(K.sent_mark(logo_email))
   shot("sent-5-pictures.png")
-  # The email shows its pictures from then on, in a new window too, and with no program
-  n = length(Fake.calls)
+  # The email shows its pictures from then on, in a new window too
   other = K.build_editor(logo_email)
   second = Window(other, size=(1000px, 900px))
   foreach(_ -> frame(second), 1:3)
   v = other.nodes[:sent_email]
-  @test v.pictures && v.shown !== nothing && v.shown.want[3] && length(Fake.calls) == n
+  @test v.pictures && v.shown !== nothing && v.shown.want[3] && v.shown.shot.tall == tall + 30
+end
+
+@testset "a window that isn't on the screen asks the web for nothing" begin
+  url = "https://example.com/banner.png"
+  path = email("A banner", """<p>News</p><img src="$url" width="40" height="20">""")
+  mkpath(K.sent_dir(path))
+  touch(K.sent_mark(path))   # you asked for this email's pictures once
+  show(path)
+  @test shows() && sent().pictures && !haskey(K.fetches, url) && isempty(sent().waiting)
 end
 
 @testset "an email with no HTML shows its words" begin
-  n = length(Fake.calls)
   show(plain_email)
-  @test item() === nothing && any(==("No HTML here."), texts()) && length(Fake.calls) == n
+  @test item() === nothing && any(==("No HTML here."), texts())
   @test K.sent_html(e) === nothing && K.level_names(e) == K.PAGE_LEVELS
   # A page that isn't an email has nothing to do with any of this
   note = joinpath(dir, "note.md")
   write(note, "# A note\n\nSome words.\n")
   show(note)
-  @test item() === nothing && K.level_names(e) == K.PAGE_LEVELS && length(Fake.calls) == n
+  @test item() === nothing && K.level_names(e) == K.PAGE_LEVELS
 end
 
-@testset "a tall email is drawn in strips, one under the other" begin
+@testset "a tall email goes on down the page" begin
   show(tall_email)
-  @test shows() && length(sent().keys) == 2 && last.(sent().shown.shot.strips) == [1024, 476]
-  @test K.num(page().height) == 1502 && item().tall >= 1500px
-  @test colour(spot(300, 200)) == Fake.colour(false, 1)
-  # The second strip is under the first
-  e.scroll.offset = item().top + 900px; frames()
-  @test colour(spot(300, 1100)) == Fake.colour(false, 2)
-  shot("sent-6-strips.png")
+  @test shows() && laid().tall == 1800 && K.num(page().height) == 1802 && item().tall >= 1800px
+  @test colour(spot(300, 200)) == (204, 0, 0)
+  e.scroll.offset = item().top + 1400px; frames()
+  @test colour(spot(300, 1600)) == (0, 0, 204)
+  shot("sent-6-tall.png")
 end
 
-@testset "another width gets other pictures, once it has stayed a moment" begin
+@testset "another width or text size lays the email out again" begin
   show(quote_email)
-  was = wide()
-  n = length(Fake.calls)
+  was, page_was = wide(), sent().shown.page
   K.page_width!(e, 500); frames(1)
-  @test wide() != was
-  # The pictures that were made for the width before show, as wide as the page is now
-  @test shows() && sent().shown.want[1] == was && K.num(page().width) == wide() + 2 && length(Fake.calls) == n
-  @test until(() -> sent().shown.want[1] == wide())
-  @test Fake.calls[end] == asked(LINKS) && length(Fake.calls) == n + 1
+  @test wide() != was && shows() && sent().shown.want[1] == wide() == laid().wide && K.num(page().width) == wide() + 2
   # A bigger text size makes everything in the email bigger
-  z = e.zoom
+  z, tall = e.zoom, laid().tall
   K.zoom!(e, 1.25); frames(1)
-  @test until(() -> sent().shown.want[2] == 1.25) && Fake.calls[end] == asked(LINKS, zoom=1.25)
-  K.zoom!(e, z); K.page_width!(e, was); frames()
-  @test until(() -> sent().shown.want[1:2] == (was, round(Float64(z), digits=2)))
+  @test sent().shown.want[2] == 1.25 && laid().tall > tall
+  K.zoom!(e, z); frames()
+  # An email that takes long to lay out waits until the width has stayed a moment. Until then the page that
+  # was laid out for the width before shows, as wide as the page is now.
+  v = sent()
+  v.shown = merge(v.shown, (took=1.0,))
+  narrow = wide()
+  K.page_width!(e, was); frames(1)
+  @test wide() == was && v.shown.want[1] == narrow && K.num(page().width) == was + 2
+  @test until(() -> v.shown.want[1] == was) && laid().wide == was
 end
 
-@testset "an email whose pictures can't be made shows its words, and the ladder says why" begin
-  Fake.offline[] = true
+@testset "an email that can't be laid out shows its words, and the ladder says why" begin
+  K.SENT_PAGE[] = (html; kw...) -> error("no page")
   show(email("No luck", "<p>These words show all the same.</p>"))
   @test item() === nothing && any(==("These words show all the same."), texts())
-  @test K.stop_tip(e, 2) == W.FAILED
-  Fake.offline[] = false
-  # Pictures that aren't whole are no pictures
-  Fake.broken[] = true
-  show(email("Cut short", "<p>These words show too.</p>"))
-  @test item() === nothing && any(==("These words show too."), texts()) && K.stop_tip(e, 2) == W.FAILED
-  Fake.broken[] = false
-end
-
-@testset "while the first pictures are made, the email has an empty space" begin
-  Fake.slow[] = true
-  show(email("Slow", "<p>These words wait.</p>"), 1)
-  it = item()
-  @test it !== nothing && sent().shown === nothing && sent().got.state == :coming
-  @test !any(==("These words wait."), texts()) && abs(K.num(page().height) - K.num(K.SENT_EMPTY)) <= 1
-  @test until(shows) && K.num(page().height) == 402
-  Fake.slow[] = false
-end
-
-@testset "a window that isn't on the screen runs no program" begin
-  W.HELPER[] = W.run_program
-  n = length(K.Maps.jobs)
-  show(email("Fresh", "<p>Fresh words.</p>"))
-  @test item() === nothing && sent().got.state == :none && length(K.Maps.jobs) == n && any(==("Fresh words."), texts())
-  W.HELPER[] = Fake.helper
+  @test K.stop_tip(e, 2) == K.SENT_FAILED
+  K.SENT_PAGE[] = K.Web.page
+  show(quote_email)
+  @test shows() && K.stop_tip(e, 2) != K.SENT_FAILED
 end

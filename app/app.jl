@@ -11,7 +11,7 @@
 
 include("start.jl")
 
-@use ".." build_editor open_editor move_old_folders! run_startup! startup_page STARTUP_FOLDER STARTUP WELCOME restyle! problems pages_dir SIDEBAR_ICONS FILE_ICONS todo_at inbox Agent INSERTS PLAN_ICONS SCHEDULE_ICONS BLOCK_ICONS window! editors settings_editor theme! Update
+@use ".." build_editor open_editor move_old_folders! run_startup! startup_page STARTUP_FOLDER STARTUP WELCOME restyle! problems pages_dir SIDEBAR_ICONS FILE_ICONS todo_at inbox Agent INSERTS PLAN_ICONS SCHEDULE_ICONS BLOCK_ICONS window! editors settings_editor theme! Update open! level!
 @use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse Typed ontype
 @use "github.com/jkroso/Font.jl/units" px
 @use "github.com/jkroso/UI.jl/Interface/abstract" focus window_of
@@ -159,6 +159,32 @@ check_pages(dir) =
     isempty(problems) || error("A live block in $name failed: ", join(unique(problems), "\n"))
   end
 
+# An email for the warm-up, with the kinds of thing that email is made of: a table in a table, cells over two
+# columns, a button, a float, a list, a picture that's written into it, and CSS for a narrow window
+const WARM_EMAIL = """
+<html><head><style>
+body { margin: 0; background: #f4f4f4; font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif }
+.card { background: white; border: 1px solid #ddd; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,.15) }
+.btn { display: inline-block; background: linear-gradient(#2a7de1, #0a5cc2); color: white; padding: 10px 22px; border-radius: 6px; text-decoration: none }
+h1 { font-size: 22px; margin: 0 0 12px } .muted { color: #777; font-size: 12px; line-height: 150% }
+@media (max-width: 480px) { .wide { display: none } }
+</style></head><body bgcolor="#f4f4f4">
+<table width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding: 20px">
+<table class="card" width="560" cellpadding="16" cellspacing="0" style="max-width: 100%"><tr><td colspan="2">
+<h1>Your order has shipped 🎉</h1>
+<p>Hello <b>Sam</b>, your order <a href="https://example.com/o/1">#1042</a> is on its way.<br>It should arrive by <i>Friday</i>, and you can <u>track it</u> at any time. <s>Thursday</s> <code>AB-12</code> x<sup>2</sup></p>
+<img align="right" width="40" height="30" hspace="6" alt="A box" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAADCAIAAAA2iEnWAAAAFElEQVR4nGM8EaDBwMDAxAAGUAoAGLQBRuAULBsAAAAASUVORK5CYII=">
+<ul><li>Timber screws, a box of 500</li><li>Decking oil, 4 L</li></ul><ol type="a"><li>First</li><li>Second</li></ol>
+<blockquote style="border-left: 2px solid #ccc; margin: 0 0 0 8px; padding-left: 8px">A note from the shop, which is long enough to go onto a second line of the email when the window is narrow.</blockquote>
+<pre>one  two</pre><hr></td></tr>
+<tr bgcolor="#eef"><th align="left" width="70%">Item</th><th align="right">Price</th></tr>
+<tr><td style="border-bottom: 1px dashed #ddd">Screws <span style="display:inline-block; padding: 2px 6px; background: #eee; border-radius: 3px">new</span></td><td align="right" valign="top">\$48.00</td></tr>
+<tr><td colspan="2" align="center"><a class="btn" href="https://example.com/track">Track your order</a>
+<div style="float: left; width: 80px; height: 20px; background: #cde"></div><div style="overflow: hidden; opacity: 0.8; position: relative">Beside it<span style="position: absolute; top: 0; right: 0">●</span></div>
+<p class="muted wide" style="clear: both; text-align: center">You got this email because you ordered from us.</p></td></tr>
+</table></td></tr></table></body></html>
+"""
+
 """
 Open a copy of the welcome page in a throwaway folder and send input to a
 window that isn't on screen. While the app is built this compiles the code it
@@ -305,6 +331,25 @@ warm_up() = begin
   (u.staged === nothing && startswith(Update.says(u), "The download of Ladder 2.0.0 stopped.")) || error("A download with no file didn't fail: ", Update.says(u))
   Update.label(u) == "Get Ladder 2.0.0" || error("The app didn't offer the newer version after its download failed")
   Update.quit!(u) && error("A quit started an update with no new version ready")
+  # An email as it was sent: its HTML laid out as a page, once as a page of today's kind and once as an old one,
+  # with the mouse over it, a drag that selects its words, a bigger text size, and its words a level down. It
+  # asks the web for nothing, and nothing is copied.
+  for (name, doctype) in (("new.eml", "<!DOCTYPE html>"), ("old.eml", ""))
+    mail = joinpath(dir, name)
+    write(mail, "From: Sam Lee <sam@example.com>\r\nTo: you@example.com\r\nSubject: Warm up\r\nDate: Sat, 14 Nov 2026 09:32:00 +1100\r\n" *
+                "MIME-Version: 1.0\r\nContent-Type: text/html; charset=utf-8\r\n\r\n" * doctype * WARM_EMAIL)
+    open!(e, mail)
+    e.plain && level!(e)
+    frame(w); frame(w)
+    sent = e.nodes[:sent_email]
+    (sent.shown !== nothing && length(sent.shown.shot.links) == 2 && !isempty(sent.shown.shot.words)) || error("An email wasn't laid out as it was sent")
+    mouse(400, 300); mouse(500, 420)
+    hold((Keys.mouse_left,)); onkey(w, KeyPress{Keys.mouse_left}(0, w)); mouse(650, 470)
+    release((Keys.mouse_left,)); onkey(w, KeyRelease{Keys.mouse_left}(0, w)); frame(w)
+    press(Keys.a, Keys.cmd); press(Keys.escape)
+    press(Keys.equal, Keys.cmd); press(Keys.var"0", Keys.cmd)
+    level!(e); frame(w); level!(e); frame(w)
+  end
   # The app is built with the list of windows as the warm-up leaves it, so it must leave none
   close(w)
   isempty(editors) || error("A window that closed is still in the list of the windows that are open")

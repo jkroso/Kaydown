@@ -41,6 +41,47 @@ const HTML = """<p>Hi <a href="https://example.com/a">one</a> and <a href="mailt
   end
 end
 
+@testset "the words of a page" begin
+  dir = mktempdir()
+  out = joinpath(dir, "ab.txt")
+  write(joinpath(dir, "ab-1.png"), "x")
+  # Two lines of a paragraph that wraps, a word in bold in the second, a new line, two cells of a row, and a line of one space that can't break
+  write(out, "page\t300\t200\nstrip\t200\tab-1.png\n" *
+             "text\t-\t10\t20\t10,20,30,40,50\tHi J\n" *
+             "text\t-\t30\t20\t10,20,30,40\tak \n" *
+             "text\t-\t28\t24\t40,52,64\tes\n" *
+             "text\tline\t60\t20\t10,20,30,40\tOne\n" *
+             "text\ttab\t60\t20\t100,110,120,130\tTwo\n" *
+             "text\tline\t90\t20\t10,14\t \n" *
+             "text\tline\t120\t20\t10,20,30,40\tEnd\n" *
+             "text\t-\t150\t20\t10,20\ttwo letters, one edge\n")
+  s = W.shot(out)
+  # A line that doesn't add up is left out
+  @test length(s.words) == 7 && [w.from for w in s.words] == [0, 4, 7, 9, 12, 15, 16] && W.letter_count(s) == 19
+  @test s.words[1].before == "" && s.words[4].before == "\n" && s.words[5].before == "\t" && s.words[1].letters == collect("Hi J")
+  # What's copied: no line ends with a space, and the space that can't break is a space
+  @test W.words(s, 0, 19) == "Hi Jak es\nOne\tTwo\n\nEnd" == W.words(s, 19, 0)
+  @test W.words(s, 1, 6) == "i Jak" && W.words(s, 10, 14) == "ne\tTw" && W.words(s, 3, 3) == ""
+  # The place nearest a point: the letter's left half is before it, and its right half after it
+  @test W.place(s, 24, 15) == 1 && W.place(s, 26, 15) == 2 && W.place(s, 0, 15) == 0 && W.place(s, 290, 15) == 4
+  # A word in bold that's taller than the line is still in it, and a point between the cells of a row is in the nearer cell
+  @test W.place(s, 50, 45) == 8 && W.place(s, 60, 65) == 12 && W.place(s, 90, 65) == 12 && W.place(s, 127, 65) == 15
+  # Between two lines, the point is in the nearer one. Over the words it's their start, and under them their end.
+  @test W.place(s, 12, 55) == 4 && W.place(s, 12, 58) == 9 && W.place(s, 50, -5) == 0 && W.place(s, 50, 500) == 19
+  @test W.over_words(s, 15, 15) && !W.over_words(s, 70, 15) && !W.over_words(s, 15, 52)
+  # A rectangle for each line: the word in bold goes on the line it's in, and makes it taller. Each cell of a row has its own.
+  @test W.marks(s, 1, 9) == [(20.0, 10.0, 30.0, 20.0), (10.0, 28.0, 54.0, 24.0)]
+  @test W.marks(s, 10, 14) == [(20.0, 60.0, 20.0, 20.0), (100.0, 60.0, 20.0, 20.0)] && W.marks(s, 4, 4) == []
+  # Two clicks select a word, and three a paragraph
+  @test W.word(s, 4) == (4, 6) && W.word(s, 7) == (7, 9) && W.word(s, 2) == (2, 3) && W.word(s, 19) == (16, 19) && W.word(s, 1) == (0, 2)
+  @test W.paragraph(s, 5) == (0, 9) && W.paragraph(s, 13) == (12, 15) && W.paragraph(s, 19) == (16, 19)
+  # A page with no words
+  write(out, "page\t300\t200\nstrip\t200\tab-1.png\n")
+  s = W.shot(out)
+  @test isempty(s.words) && W.letter_count(s) == 0 && W.place(s, 10, 10) == 0 && W.words(s, 0, 5) == "" && W.marks(s, 0, 5) == []
+  @test W.word(s, 0) == (0, 0) && W.paragraph(s, 0) == (0, 0)
+end
+
 @testset "what a page has from the web" begin
   @test W.remote("""<img src="https://example.com/logo.png">""") && W.remote("""<IMG alt="x" SRC = 'http://example.com/a.gif'>""")
   @test W.remote("""<td background="https://example.com/b.png">""") && W.remote("""<div style="background: url( 'https://example.com/c.png')">""")
@@ -148,6 +189,33 @@ if Sys.isapple() && Sys.which("swiftc") !== nothing
     # A page is never shorter than its window, and the program's window was 600 px tall
     @test drawn("<p>One line.</p>").tall < 100
     @test 1000 < drawn("<p>A line.</p>" ^ 60).tall < 3000
+  end
+
+  @testset "the program says where the page's words are" begin
+    dir = mktempdir()
+    "What the program makes of `html` at the zoom `zoom`"
+    drawn(html, zoom) = begin
+      source, out = joinpath(dir, "$zoom.html"), joinpath(dir, "$zoom.txt")
+      write(source, html)
+      wait(W.run_program(source, 700, zoom, false, joinpath(dir, "$zoom"), out, joinpath(dir, "$zoom.err")))
+      W.shot(out)
+    end
+    # Text that doesn't show isn't there: hidden, cut off by a box of no height, or see-through, as the line
+    # of an email that only shows in a list of emails often is. Spaces that HTML draws as one are one.
+    html = """<p>Hi <b>Jake</b>,   the
+              quote</p><table><tr><td>One</td><td>Two</td></tr></table>
+              <div style="display:none">Hidden</div><div style="max-height:0;overflow:hidden">Cut off</div>
+              <span style="opacity:0">Clear</span><pre>a\n  b</pre><p>Line<br>break</p>"""
+    s = drawn(html, 1.0)
+    @test W.words(s, 0, W.letter_count(s)) == "Hi Jake, the quote\nOne\tTwo\na\n  b\nLine\nbreak"
+    # The first line starts at the page's margin, and its letters go left to right
+    line1 = s.words[1]
+    @test String(line1.letters) == "Hi Jake, the quote" && isapprox(line1.edges[1], 8, atol=1) && issorted(line1.edges)
+    @test 10 < line1.tall < 30 && line1.top > 0 && all(w -> w.top >= line1.top + line1.tall - 1, s.words[2:end])
+    # With a zoom, the words are where the page draws them, in its px after the zoom. A letter of a bigger
+    # font isn't quite as much wider as the zoom says, so the letters can be a px or so from that.
+    big = drawn(html, 2.0)
+    @test isapprox(big.words[1].edges ./ 2, line1.edges, atol=2) && isapprox(big.words[1].top / 2, line1.top, atol=1)
   end
 end
 

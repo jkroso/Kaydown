@@ -267,6 +267,7 @@
 @use "./mime" => Mime
 @use "./eml" => Eml
 @use "./webpage" => Webpages
+@use "./web" => Web
 @use "./slides" => Slides
 @use "github.com/jkroso/UI.jl/Interface/draw" Bubble
 @use "github.com/jkroso/UI.jl/Interface/draw" popups sync_mouse!
@@ -21505,11 +21506,14 @@ page_act!(e, i::Int, j::Int=0) = begin
   if name == "Cut"
     cut!(e)
   elseif name == "Copy"
-    copy_selection!(e)
+    # While an email as it was sent has the keyboard, what's selected is its words
+    a = sent_keys(e)
+    a === nothing ? copy_selection!(e) : sent_copy!(a)
   elseif name == "Paste"
     paste!(e)
   elseif name == "Select All"
-    select_all!(e)
+    a = sent_keys(e)
+    a === nothing || a.of.shown === nothing ? select_all!(e) : sent_select_all!(a)
   elseif name == "Find…"
     open_find!(e)
   elseif name == "Export as HTML…"
@@ -25611,50 +25615,66 @@ end
 #
 # Most email is written as HTML, with its sender's colours, layout and buttons.
 # At the high level, where the top bar shows the ladder, an email shows that
-# way: webpage.jl has WebKit make pictures of the HTML, as wide as the page's
-# text, and the page shows them under the email's card, in place of the lines
-# that mail.jl made of the same HTML. The links to the files that came with
-# the email stay under the pictures. A click on a link of the email opens it,
-# and the mouse over a link says where it goes.
+# way: web/ lays the HTML out as a page, as wide as the page's text, and the
+# window draws it under the email's card, in place of the lines that mail.jl
+# made of the same HTML. The links to the files that came with the email stay
+# under it. A click on a link of the email opens it, and the mouse over a link
+# says where it goes.
 #
 # Down a level, where the top bar shows the snake, the email shows its words
-# as a page, as an email with no HTML always does. So does an email whose
-# pictures can't be made, and any email while the find bar is open.
+# as a page, as an email with no HTML always does. So does an email that
+# can't be laid out, and any email while the find bar is open.
 #
 # Ladder asks the web for nothing to draw an email, so its sender can't tell
 # when you open it. A picture that the email has from a web site is an empty
 # box then, and a button over the email fetches those pictures. An email that
 # you asked that of once shows its pictures from then on.
 
-const SENT_EMPTY = 160px    # how tall the space of an email is while its first pictures are made
-const SENT_PATIENCE = 1.0   # seconds before that space says what it waits for
-const SENT_LINE = 1px       # how thick the line round an email is. The pictures are inside it.
+const SENT_LINE = 1px       # how thick the line round an email is. The email is drawn inside it.
+const SENT_QUICK = 0.02     # an email that takes longer than this many seconds to lay out waits until the window's width has stayed
+const SENT_FAILED = "Ladder can't draw this email as it was sent."
 
-"An email as it was sent: the pictures that WebKit made of its HTML"
+"The function that lays an email out, as `Web.page` does. A test puts a function of its own here."
+const SENT_PAGE = Ref{Any}(Web.page)
+
+"An email as it was sent: the page that web/ made of its HTML"
 @def mutable struct SentEmail <: SemanticUI
   path::String = ""                          # the email's file
   read::Float64 = -1.0                       # when the file had last changed, as its HTML was read
   html::String = ""                          # the email's HTML, or "" for an email with none
   remote::Bool = false                       # the HTML has pictures from a web site
   pictures::Bool = false                     # and you asked for them
+  store::Any = nothing                       # the pictures of the HTML that are read already, which each layout uses again
+  waiting::Set{String} = Set{String}()       # the addresses of the pictures that are on their way from the web
+  landed::Int = 0                            # how many of them have come, or couldn't be fetched
+  arrived::Int = 0                           # and how many had when the page was last asked for
   asked::Any = nothing                       # the width, the zoom and the pictures that the page needs now, and since when
-  got::Any = nothing                         # what `Webpages.picture!` last said of them
-  shown::Any = nothing                       # the pictures that show, and the width, the zoom and the pictures that they were made for
-  keys::Vector{String} = String[]            # the key, for an Image, of each strip of the pictures that show
-  since::Float64 = 0.0                       # when the email came to the window
-  parts::Dict{Any,Any} = Dict{Any,Any}()     # its button, and the part that shows the pictures
+  shown::Any = nothing                       # the page that shows, its links and words, what it was laid out for, when, and how long that took
+  failed::Any = nothing                      # what the page couldn't be laid out for
+  parts::Dict{Any,Any} = Dict{Any,Any}()     # its button, and the part that shows the page
 end
 
-"The part of an email as it was sent that shows the pictures, and takes the mouse for the email's links"
+"""
+The part of an email as it was sent that draws the page, and takes the mouse
+for the email's links and its words. A place in the words is how many of
+their letters come before it, as `Webpages.place` gives it.
+"""
 @def mutable struct SentPage <: SemanticUI
   of::Any = nothing
-  said::Bool = false   # its tooltip shows, with where a link goes
+  said::Bool = false                 # its tooltip shows, with where a link goes
+  anchor::Int = 0                    # the place where the selection of the words starts
+  caret::Int = 0                     # and the place where it ends, which the mouse moves while you drag
+  clicked::Any = (0.0, -1, 0)        # when the last click was, at which place, and how many clicks there have been there
+  grown::Tuple{Int,Int} = (0, 0)     # what the click selected, which a drag makes bigger: the place, or the word or the paragraph at it
+  grain::Int = 1                     # what a drag selects: 1 a letter at a time, 2 a word, 3 a paragraph
+  down::Any = nothing                # where the mouse went down in the window, while it's down
+  link::String = ""                  # the link that the mouse went down on. It opens when the mouse comes up on it, after no drag.
 end
 
-"The folder that keeps the pictures of the email at `path`"
+"The folder that keeps what's known of the email at `path`"
 sent_dir(path) = joinpath(media_dir(), "emails", string(hash(abspath(path)), base=16))
 
-"The file in the folder of an email's pictures that says you asked for its pictures from the web"
+"The file in an email's folder that says you asked for its pictures from the web"
 sent_mark(path) = joinpath(sent_dir(path), ".pictures")
 
 "The page's email as it was sent, when the page is an email with HTML, or nothing. Its HTML is read here, once."
@@ -25667,75 +25687,94 @@ sent_html(e) = begin
     v.path, v.read, v.html = b.path, at, Eml.webpage(b.path)
     v.remote = Webpages.remote(v.html)
     v.pictures = v.remote && isfile(sent_mark(b.path))
-    v.asked = v.got = v.shown = nothing
-    v.since = time()
+    v.asked = v.shown = v.failed = v.store = nothing
+    empty!(v.waiting)
+    v.landed = v.arrived = 0
+    # Nothing of the email that showed before stays selected
+    page = get(v.parts, :page, nothing)
+    page === nothing || (page.anchor = page.caret = 0)
   end
   isempty(v.html) ? nothing : v
 end
 
 """
 The email that shows, as it was sent, or nothing while the page shows its
-words: at the low level, for an email with no HTML, and when its pictures
-can't be made. The pictures are asked for here. While the first ones are
-made, the email has an empty space, so that its words don't show for a
-moment and then go. While the find bar is open, the page shows the email's
-words, since those are what the bar finds and marks.
+words: at the low level, for an email with no HTML, and when it can't be laid
+out. While the find bar is open, the page shows the email's words, since
+those are what the bar finds and marks.
 """
 sent_email(e) = begin
   v = e.plain || finding(e) ? nothing : sent_html(e)
   v === nothing && return nothing
-  sent_picture!(e, v)
-  v.shown !== nothing || v.got.state == :coming ? v : nothing
+  sent_page!(e, v)
+  v.shown === nothing ? nothing : v
 end
 
 """
-The pictures that the email needs now: as wide as the page's text, at the
-page's zoom. `Webpages.picture!` says what it gives. The program that makes
-them is started here, when they aren't kept. While the window changes size,
-the page has another width in each frame, so the program is only started once
-the width has stayed for a moment. Until then the pictures that were made
-for the width before show, as wide as the page is now.
+Lay the email out for what the page needs now: as wide as the page's text, at
+the page's zoom, with the pictures that have come from the web. Most email
+takes a few thousandths of a second, and is laid out again in each frame
+while the window changes size. An email that takes longer waits until the
+width has stayed for a moment. Until then the page that was laid out for the
+width before shows, as wide as the page is now.
 """
-sent_picture!(e, v::SentEmail) = begin
-  # The pictures are made for the room inside the line round the email, so each of their pixels is one of the screen's
-  want = (round(Int, num(e.width - 2SENT_LINE)), round(Float64(e.zoom), digits=2), v.pictures)
-  v.shown !== nothing && v.shown.want == want && return v
-  (v.asked === nothing || v.asked[1] != want) && (v.asked = (want, v.shown === nothing ? 0.0 : time()))
-  rest = MAP_PAUSE - (time() - v.asked[2])
-  runs = on_screen(e) || Webpages.HELPER[] !== Webpages.run_program
-  folder = sent_dir(v.path)
-  ask(start) = Webpages.picture!(folder, v.html, want[1]; zoom=want[2], pictures=want[3], start)
-  p = ask(runs && rest <= 0)
-  if p.state == :there
-    shot = Webpages.shot(p.file)
-    keys = shot === nothing ? nothing : try sent_keys!(v, shot) catch; nothing end
-    if keys === nothing
-      # A file that was cut short is no picture. It's taken away, and made again later.
-      Maps.spoiled!(p.file)
-      p = ask(false)
-    else
-      v.shown, v.keys = (shot=shot, want=want), keys
-      Webpages.tidy!(folder, p.file)
-    end
+sent_page!(e, v::SentEmail) = begin
+  sent_arrivals!(e, v)
+  # The page is laid out for the room inside the line round the email
+  want = (round(Int, num(e.width - 2SENT_LINE)), round(Float64(e.zoom), digits=2), v.pictures, v.arrived)
+  (v.shown !== nothing && v.shown.want == want) && return v
+  v.failed == want && return v
+  if v.shown !== nothing && v.shown.took > SENT_QUICK && v.shown.want[2:4] == want[2:4]
+    (v.asked === nothing || v.asked[1] != want) && (v.asked = (want, time()))
+    rest = MAP_PAUSE - (time() - v.asked[2])
+    rest > 0 && return (redraw_in!(e, max(rest, 0.05)); v)
   end
-  # The window looks again when the program may have finished, and when the width has stayed
-  wait = min(p.wait, runs && rest > 0 ? rest : Inf)
-  isfinite(wait) && redraw_in!(e, max(wait, 0.05))
-  v.got = p
+  v.store === nothing && (v.store = Web.Pictures(src -> sent_bytes(e, v, src)))
+  t = time()
+  page = try SENT_PAGE[](v.html; wide=want[1], zoom=want[2], fit=true, pictures=v.store) catch; nothing end
+  if page === nothing
+    v.failed, v.shown = want, nothing
+  else
+    # The page's links and words are kept as webpage.jl has them, so that it finds the link and the words at a point
+    shot = Webpages.Shot(round(Int, page.wide), round(Int, page.tall), Pair{String,Int}[], page.links, page.words)
+    v.failed, v.shown = nothing, (page=page, shot=shot, want=want, at=time(), took=time() - t)
+  end
   v
 end
 
 """
-Read each strip of `shot`, and give the key that an Image draws each with.
-The strips of every email that this window shows have the same keys, one
-after another, so the window keeps the pictures of one email and no more.
+The bytes of the picture at the web address `src`, for an email that you asked
+to get its pictures, or nothing while the picture isn't here. A window that
+isn't on the screen fetches nothing.
 """
-sent_keys!(v::SentEmail, shot) = map(enumerate(shot.strips)) do (n, (file, _))
-  key = "email as sent $(objectid(v)) strip $n"
-  was = has_image(key) ? image_source(key) : nothing
-  register_image(key, read(file))
-  was === nothing || Skia.sk_image_unref(was.raw)   # the picture that the key had isn't needed
-  key
+sent_bytes(e, v::SentEmail, src) = begin
+  (v.pictures && startswith(src, r"https?://"i)) || return nothing
+  (on_screen(e) || haskey(fetches, src)) || return nothing
+  file = fetched(e, src)
+  if file === nothing
+    get(fetches, src, nothing) isa Base.Process && push!(v.waiting, src)
+    return nothing
+  end
+  try read(file) catch; nothing end
+end
+
+"""
+Note which of the email's pictures have come from the web, so that the email
+is laid out again with them: once they're all here, and twice a second while
+some are still on their way.
+"""
+sent_arrivals!(e, v::SentEmail) = begin
+  for src in collect(v.waiting)
+    fetched(e, src)   # this looks whether the picture has come, and asks for another frame while it hasn't
+    get(fetches, src, nothing) isa Base.Process && continue
+    delete!(v.waiting, src)
+    v.landed += 1
+  end
+  v.landed == v.arrived && return
+  (isempty(v.waiting) || v.shown === nothing || time() - v.shown.at > 0.5) || return
+  v.arrived = v.landed
+  v.store === nothing || Web.retry!(v.store)
+  nothing
 end
 
 "What the two levels of an email with HTML show, from the lower, as the tips of the snake and the ladder say it"
@@ -25743,16 +25782,16 @@ const SENT_LEVELS = ("the plain text email", "the HTML email")
 
 """
 Why the window shows the words of the page's email at the level where it
-should show the email as it was sent, or nothing. It's so when the email's
-pictures can't be made.
+should show the email as it was sent, or nothing. It's so when the email
+can't be laid out.
 """
 sent_problem(e) = begin
   v = sent_html(e)
   (v === nothing || e.plain) && return nothing
-  v.shown === nothing && v.got !== nothing && v.got.state == :failed ? v.got.problem : nothing
+  v.shown === nothing && v.failed !== nothing ? SENT_FAILED : nothing
 end
 
-"The lines of the page that the pictures of the email stand for: from the line after its card to the line before the links to its files"
+"The lines of the page that the email as it was sent stands for: from the line after its card to the line before the links to its files"
 sent_lines(e) = begin
   b = e.buf
   first = front_matter(b.lines) + 1
@@ -25786,39 +25825,115 @@ describe(a::SentPage) = begin
   v = a.of
   e = editor(v)
   wide = e.width
-  if v.shown === nothing
-    # The first pictures of an email take a moment. When they take longer, as when the program is compiled first, words say so.
-    waited = time() - v.since
-    waited < SENT_PATIENCE && redraw_in!(v, SENT_PATIENCE - waited)
-    return Box(fixed(wide), height(SENT_EMPTY), Alignment.Center, justify=Alignment.Center,
-               (waited < SENT_PATIENCE ? () : (Text("Drawing the email…", size=13px, family=SANS, color=colours.dim),))...)
-  end
   shot = v.shown.shot
-  # The pictures are as wide as the page's text, also while new ones are made for a width that has just changed
+  # The email is as wide as the page's text, also while it waits to be laid out for a width that has just changed
   inside = wide - 2SENT_LINE
-  by = num(inside) / shot.wide
-  Column(fixed(wide), Alignment.Start, radius(6px), border(SENT_LINE, :solid, colours.line), background(colorant"white"), clip=true,
-    (Image(key, fixed(inside), height(px(tall * by))) for (key, (_, tall)) in zip(v.keys, shot.strips))...)
+  Column(fixed(wide), Alignment.Start, radius(6px), border(SENT_LINE, :solid, colours.line), background(colorant"white"),
+    Box(fixed(inside), height(px(shot.tall * num(inside) / shot.wide))))
 end
 
-"The link of the email that the mouse is over, as `Webpages.link` gives it, and its rectangle in the window, or nothing"
-sent_link(a::SentPage) = begin
+# The email is drawn inside the line round it: its page, and over that the words that are selected, while the email
+# has the keyboard. An email is written for a white page, so it's drawn on one.
+draw(ctx, size, ui::ConcreteRect, a::SentPage) = begin
+  shown = a.of.shown
+  shown === nothing && return
+  left, top, wide, tall = ui.left + SENT_LINE, ui.top + SENT_LINE, ui.width - 2SENT_LINE, ui.height - 2SENT_LINE
+  (wide > 0px && tall > 0px) || return
+  shot = shown.shot
+  by = num(wide) / shot.wide
+  w, n = window_of(a), Webpages.letter_count(shot)
+  marks = w === nothing || w.focus !== a ? () : Webpages.marks(shot, clamp(a.anchor, 0, n), clamp(a.caret, 0, n))
+  with_round_clip(ctx, left, top, wide, tall, 5px) do
+    Skia.sk_canvas_save(ctx)
+    Skia.sk_canvas_translate(ctx, Float32(num(left)), Float32(num(top)))
+    Skia.sk_canvas_scale(ctx, Float32(by), Float32(by))
+    Web.draw(ctx, shown.page)
+    for (x, y, across, high) in marks
+      rectangle(ctx, x, y, across, high, background=colours.select)
+    end
+    Skia.sk_canvas_restore(ctx)
+  end
+end
+
+"""
+Where the mouse is on the page of the email, in the px of the page as it was
+laid out, or nothing. With it are where the page starts in the window, and
+how many px of the page a px of the window is.
+"""
+sent_mouse(a::SentPage) = begin
   w, v = window_of(a), a.of
   (w === nothing || v.shown === nothing) && return nothing
   r = rect(a)
   r.width > 2SENT_LINE || return nothing
-  # The pictures start inside the line round the email
+  # The page starts inside the line round the email
   left, top = r.left + SENT_LINE, r.top + SENT_LINE
   by = v.shown.shot.wide / num(r.width - 2SENT_LINE)
-  l = Webpages.link(v.shown.shot, num(w.mouse[1] - left) * by, num(w.mouse[2] - top) * by)
-  l === nothing ? nothing : (url=l.url, box=(left + px(l.left / by), top + px(l.top / by), px(l.wide / by), px(l.tall / by)))
+  (x=num(w.mouse[1] - left) * by, y=num(w.mouse[2] - top) * by, left=left, top=top, by=by)
 end
 
-cursor(::SentEmail) = :arrow
-cursor(a::SentPage) = sent_link(a) === nothing ? :arrow : :hand
+"The link of the email that the mouse is over, as `Webpages.link` gives it, and its rectangle in the window, or nothing"
+sent_link(a::SentPage) = begin
+  m = sent_mouse(a)
+  m === nothing && return nothing
+  l = Webpages.link(a.of.shown.shot, m.x, m.y)
+  by = m.by
+  l === nothing ? nothing : (url=l.url, box=(m.left + px(l.left / by), m.top + px(l.top / by), px(l.wide / by), px(l.tall / by)))
+end
 
-# The mouse over a link says where the link goes, since the words of a link can say anything
+"The place in the email's words that's nearest the mouse, or nothing"
+sent_place(a::SentPage) = (m = sent_mouse(a); m === nothing ? nothing : Webpages.place(a.of.shown.shot, m.x, m.y))
+
+cursor(::SentEmail) = :arrow
+cursor(a::SentPage) = begin
+  sent_link(a) === nothing || return :hand
+  m = sent_mouse(a)
+  m !== nothing && Webpages.over_words(a.of.shown.shot, m.x, m.y) ? :ibeam : :arrow
+end
+
+"""
+Select the words of the email from where the click selected them to the place
+`at`. After two clicks, the drag selects whole words, and after three, whole
+paragraphs, as it does in a browser.
+"""
+sent_select!(a::SentPage, at) = begin
+  s = a.of.shown.shot
+  lo, hi = a.grown
+  from, to = a.grain == 2 ? Webpages.word(s, at) : a.grain == 3 ? Webpages.paragraph(s, at) : (at, at)
+  a.anchor, a.caret = at < lo ? (hi, from) : (lo, max(hi, to))
+  a
+end
+
+"Copy the words of the email that are selected. It's false when none are."
+sent_copy!(a::SentPage) = begin
+  v, w = a.of, window_of(a)
+  (w === nothing || v.shown === nothing || a.anchor == a.caret) && return false
+  words = Webpages.words(v.shown.shot, a.anchor, a.caret)
+  isempty(words) ? false : (clipboard!(w, words); true)
+end
+
+"Select all the words of the email"
+sent_select_all!(a::SentPage) = begin
+  a.of.shown === nothing || ((a.anchor, a.caret) = (0, Webpages.letter_count(a.of.shown.shot)))
+  a
+end
+
+"The part of the window's email that draws its page, when it has the keyboard, or nothing"
+sent_keys(e) = (w = window_of(e); w !== nothing && w.focus isa SentPage ? w.focus : nothing)
+
+# The mouse over a link says where the link goes, since the words of a link can say anything.
+# With the button down, the mouse selects the words that it goes over.
 onmouse(a::SentPage, ev::MouseMove) = begin
+  w = ev.window
+  if a.down !== nothing && Keys.mouse_left in w.keys && a.of.shown !== nothing
+    at = sent_place(a)
+    at === nothing || sent_select!(a, at)
+    # A drag is no click, so the link that it started on doesn't open
+    hypot(num(w.mouse[1] - a.down[1]), num(w.mouse[2] - a.down[2])) > 4 && (a.link = "")
+    a.said && hide_tooltip!(w)
+    a.said = false
+    return nothing
+  end
+  a.down = nothing
   l = sent_link(a)
   if l !== nothing
     show_tooltip!(ev.window, tip_label(sent_address(l.url)), l.box..., placement=:bottom, gap=6px)
@@ -25835,20 +25950,67 @@ sent_address(url) = begin
   length(url) <= 90 ? url : first(url, 60) * "…" * last(url, 25)
 end
 
-# A click on a link of the email opens it in the app that the Mac uses for it. A click anywhere else is the page's.
+"""
+A click on the email gives it the keyboard, so that ⌘C copies the words that
+it selects. One click puts the selection's start at the place, two select the
+word there, and three its paragraph. With ⇧ held, the click moves the end of
+the selection there. The page notes the click too, and leaves the keyboard
+with the email.
+"""
 onkey(a::SentPage, ev::KeyPress{Keys.mouse_left}) = begin
+  s = a.of.shown === nothing ? nothing : a.of.shown.shot
+  at = sent_place(a)
+  (s === nothing || at === nothing) && return nothing
+  focus(a)
+  w = ev.window
+  t, before, n = a.clicked
+  n = time() - t < 0.4 && before == at ? n % 3 + 1 : 1
+  a.clicked = (time(), at, n)
+  a.grain = n
+  a.grown = n == 2 ? Webpages.word(s, at) : n == 3 ? Webpages.paragraph(s, at) : held(a, Keys.shft) ? (a.anchor, a.anchor) : (at, at)
+  sent_select!(a, at)
+  a.down = (w.mouse[1], w.mouse[2])
   l = sent_link(a)
-  (l === nothing || held(a, Keys.opt)) && return nothing
+  a.link = l === nothing || held(a, Keys.opt) || held(a, Keys.shft) ? "" : l.url
+  nothing
+end
+
+# A click on a link of the email opens it in the app that the Mac uses for it, once the button comes up on the
+# link with no drag. A drag from a link selects its words.
+onkey(a::SentPage, ev::KeyRelease{Keys.mouse_left}) = begin
+  a.down = nothing
+  url, a.link = a.link, ""
+  l = isempty(url) ? nothing : sent_link(a)
+  (l === nothing || l.url != url) && return nothing
   hide_tooltip!(ev.window)
   a.said = false
-  Webpages.open_link(l.url)
+  a.caret = a.anchor
+  Webpages.open_link(url)
   handled
+end
+
+"""
+While the email has the keyboard, ⌘C copies the words that are selected, and
+⌘A selects them all. A key that isn't held with ⌘ or ⌃, like Space or ↓, gives
+the keyboard back to the page, and the page takes the key, so the keys that
+scroll an email still scroll it. Esc only gives the keyboard back.
+"""
+onkey(a::SentPage, ev::KeyPress{K}) where K = begin
+  w = ev.window
+  (ismouse(K) || K in (Keys.cmd, Keys.ctrl, Keys.opt, Keys.shft, Keys.fn, Keys.capslock)) && return nothing
+  cmd = Keys.cmd in w.keys
+  cmd && K == Keys.c && return (sent_copy!(a); handled)
+  cmd && K == Keys.a && return (sent_select_all!(a); handled)
+  (cmd || Keys.ctrl in w.keys) && return nothing
+  focus(editor(a))
+  K == Keys.escape ? handled : nothing
 end
 
 "Do what a button of the email does: get the email's pictures from the web, now and each time it shows"
 act!(v::SentEmail, action, w) = begin
   action == :pictures || return handled
   v.pictures = true
+  v.store === nothing || Web.retry!(v.store)
   try
     mkpath(sent_dir(v.path))
     touch(sent_mark(v.path))

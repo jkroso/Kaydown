@@ -31,20 +31,61 @@
 @use "./layout" layout!
 @use "./paint" => Paint
 
-"The pictures of a page: each address that it names, with the picture's size and Skia's picture, or nothing"
+"""
+The pictures of a page: each address that it names, with the picture's size
+and Skia's picture, or nothing. `Pictures(load)` makes an empty set, where
+`load(address)` gives the bytes of a picture that isn't written into the
+page. A set that's given to `page` again saves reading each picture again,
+as when the page is laid out for another width.
+"""
 mutable struct Pictures
   found::Dict{String,Any}
   load::Function
 end
+Pictures(load) = finalizer(release, Pictures(Dict{String,Any}(), load))
 
-"Skia's picture of the bytes of a picture's file, with its size, or nothing"
+"Forget the pictures that weren't there, so that they're asked for again: one may have come from the web since"
+retry!(p::Pictures) = (filter!(kv -> kv.second !== nothing, p.found); p)
+
+# No page shows a picture bigger than this many pixels across or down, so a bigger one is kept at this size
+const MOST = 2048
+const SAMPLING = Skia.sk_sampling_options_t(0, false, Skia.sk_cubic_resampler_t(0f0, 0f0), Skia.SK_FILTER_MODE_LINEAR, Skia.SK_MIPMAP_MODE_LINEAR)
+
+"""
+Skia's picture of the bytes of a picture's file, with the size that the file
+says, or nothing. The picture is read into pixels here, once. A picture that's
+left as the bytes of its file is read again each time it's drawn, which makes
+a page with a photo slow to scroll.
+"""
 decode(bytes::Vector{UInt8}) = begin
   isempty(bytes) && return nothing
   data = Skia.sk_data_new_with_copy(bytes, Csize_t(length(bytes)))
-  image = Skia.sk_image_new_from_encoded(data)
+  file = Skia.sk_image_new_from_encoded(data)
   Skia.sk_data_unref(data)
-  image == C_NULL && return nothing
-  (Int(Skia.sk_image_get_width(image)), Int(Skia.sk_image_get_height(image)), Ptr{Cvoid}(image))
+  file == C_NULL && return nothing
+  w, h = Int(Skia.sk_image_get_width(file)), Int(Skia.sk_image_get_height(file))
+  (w > 0 && h > 0) || (Skia.sk_image_unref(file); return nothing)
+  k = min(1.0, MOST / max(w, h))
+  tw, th = max(1, round(Int, w * k)), max(1, round(Int, h * k))
+  info = Ref(Skia.sk_image_info_t(C_NULL, Skia.SK_COLOR_TYPE_RGBA_8888, Skia.SK_ALPHA_TYPE_PREMUL, tw, th))
+  image = GC.@preserve info begin
+    surface = Skia.sk_surface_make_raster_n32_premul(pointer_from_objref(info), C_NULL)
+    # With no room for the pixels, the picture stays as the bytes of its file
+    surface == C_NULL && return (w, h, Ptr{Cvoid}(file))
+    canvas = Skia.sk_surface_get_canvas(surface)
+    Skia.sk_canvas_clear(canvas, 0x00000000)
+    paint = Skia.sk_paint_new()
+    Skia.sk_paint_set_antialias(paint, true)
+    from = Ref(Skia.sk_rect_t(0f0, 0f0, Float32(w), Float32(h)))
+    to = Ref(Skia.sk_rect_t(0f0, 0f0, Float32(tw), Float32(th)))
+    Skia.sk_canvas_draw_image_rect(canvas, file, from, to, Ref(SAMPLING), paint, Skia.SRC_RECT_CONSTRAINT_FAST)
+    Skia.sk_paint_delete(paint)
+    made = Skia.sk_surface_make_image_snapshot(surface)
+    Skia.sk_surface_unref(surface)
+    made
+  end
+  Skia.sk_image_unref(file)
+  image == C_NULL ? nothing : (w, h, Ptr{Cvoid}(image))
 end
 
 "The bytes that an address like `data:image/png;base64,...` holds, or nothing"
@@ -109,7 +150,8 @@ end
 
 """
 Lay out the page that `html` writes, `wide` px wide. `load(address)` gives the
-bytes of a picture that the page names, or nothing. `css` is CSS that goes
+bytes of a picture that the page names, or nothing. `pictures` is a set of
+pictures to use in place of `load`: see `Pictures`. `css` is CSS that goes
 after the page's own.
 
 With `fit`, a page whose content is wider than `wide` is made to fit: a width
@@ -119,11 +161,9 @@ round an email the width of its sender's window, which can be 2000 px. A page
 whose content still can't be that narrow is as wide as its content, up to
 `widest` px, and `p.wide` says how wide that is.
 """
-page(html::AbstractString; wide=700, zoom=1.0, load=src -> nothing, css="", fit=false, widest=2000) = begin
+page(html::AbstractString; wide=700, zoom=1.0, load=src -> nothing, pictures=Pictures(load), css="", fit=false, widest=2000) = begin
   doc = document(html)
   inner = wide / zoom
-  pictures = Pictures(Dict{String,Any}(), load)
-  finalizer(release, pictures)
   find = src -> pictures(src)
   lay(across, extra) = begin
     look = styles(doc, across; extra)

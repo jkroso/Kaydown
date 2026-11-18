@@ -26,6 +26,19 @@
 //     strip  1024 ab12-1.png                 how tall each strip is, and its file
 //     strip  286  ab12-2.png
 //     link   158  493  384  33  https://…    a rectangle of the page that's a link: left, top, wide, tall, and where it goes
+//     text   line 493  18   158,166.2,…  Hi  a line of the page's words: see below
+//
+// The page's words come last, in the order that the HTML has them, so that
+// Ladder can let you select them and copy them. Each `text` line is a piece of
+// text that's drawn in one line of the page. Its things are:
+//
+// - what goes between it and the text before it when it's copied: `line` for
+//   a new line, `tab` between two cells of a row of a table, or `-` for
+//   nothing, as between two lines of a paragraph that wraps
+// - how far down the page its top is, and how tall it is
+// - where each of its letters starts, and after them where the last one ends,
+//   in px from the left of the page, with a comma between each two
+// - its letters
 //
 // The page runs no JavaScript, and it goes nowhere: a page that asks to show
 // another page in its place is refused. Without --pictures, the program asks
@@ -109,6 +122,101 @@ let fit = """
 })()
 """
 
+/// The words of the page, in the order that the HTML has them, with where each letter is, so that Ladder can let
+/// you select them. Each piece of text, in each line that it's drawn in, is a `text` line of the text file: see the
+/// top of this file. Where each letter is, is in the px of the page after it's zoomed, so the script is given the zoom.
+/// Text that doesn't show isn't there: text that's hidden, see-through, or cut off by a box round it, as the line
+/// of an email that only shows in a list of emails often is.
+func reading(zoom: Double) -> String { """
+(() => {
+  const z = \(zoom), most = 300000
+  const root = document.body || document.documentElement
+  const styles = new Map(), clips = new Map(), seen = new Map()
+  const css = el => { let s = styles.get(el); if (!s) styles.set(el, s = getComputedStyle(el)); return s }
+  // The part of the page that an element's text shows in: inside each box round it that cuts off what overflows
+  const clip = el => {
+    if (!el || el === document.documentElement) return null
+    if (clips.has(el)) return clips.get(el)
+    let c = clip(el.parentElement)
+    const s = css(el)
+    if (s.overflowX != 'visible' || s.overflowY != 'visible') {
+      const r = el.getBoundingClientRect()
+      c = c ? {l: Math.max(c.l, r.left), t: Math.max(c.t, r.top), r: Math.min(c.r, r.right), b: Math.min(c.b, r.bottom)}
+            : {l: r.left, t: r.top, r: r.right, b: r.bottom}
+    }
+    clips.set(el, c)
+    return c
+  }
+  const shows = el => {
+    if (!seen.has(el)) seen.set(el, !el.checkVisibility || el.checkVisibility({opacityProperty: true, visibilityProperty: true}))
+    return seen.get(el)
+  }
+  const inline = d => d.startsWith('inline') || d == 'contents' || d.startsWith('ruby')
+  const block = el => { while (el && el !== root && inline(css(el).display)) el = el.parentElement; return el || root }
+  const cell = el => el && el.closest ? el.closest('td, th') : null
+  // What keeps its spaces: 'preserve', 'preserve-breaks' for new lines only, or 'collapse' for neither
+  const keeps = s => s.whiteSpaceCollapse ||
+    ({pre: 'preserve', 'pre-wrap': 'preserve', 'break-spaces': 'preserve', 'pre-line': 'preserve-breaks'}[s.whiteSpace] || 'collapse')
+  const n = x => String(Math.round(x * z * 10) / 10)
+  const lines = []
+  // The line of text that's being read, the last letter read, and where it was
+  let run = null, last = '', lastText = null, lastBlock = null, broke = false, count = 0
+  const end = () => {
+    if (run) lines.push(['text', run.before, n(run.top + scrollY), n(run.bottom - run.top), run.edges.map(x => n(x + scrollX)).join(','), run.text].join('\\t'))
+    run = null
+  }
+  const range = document.createRange()
+  const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT)
+  for (let node = walk.currentNode; node && count < most; node = walk.nextNode()) {
+    if (node.nodeType == 1) { if (node.tagName == 'BR') broke = true; continue }
+    const el = node.parentElement
+    if (!el || !node.data || !shows(el)) continue
+    const keep = keeps(css(el)), box = clip(el), b = block(el)
+    // What goes before the next letter that shows: a new line, a tab between two cells of a row, or nothing ('-')
+    let next = '-'
+    if (lastText && (broke || b !== lastBlock)) {
+      const c1 = cell(lastText.parentElement), c2 = cell(el)
+      next = !broke && c1 && c2 && c1 !== c2 && c1.parentElement === c2.parentElement ? 'tab' : 'line'
+    }
+    let at = 0
+    for (const ch of node.data) {
+      const i = at
+      at += ch.length
+      // A new line that the HTML keeps starts a line of text
+      if (ch == '\\n' && keep != 'collapse') { if (lastText) { broke = true; next = 'line' } continue }
+      const space = /[ \\t\\n\\r\\f]/.test(ch)
+      // Spaces that HTML draws as one are one, and there are none at the start of a line
+      if (space && keep != 'preserve' && (last == '' || last == ' ' || next != '-')) continue
+      range.setStart(node, i)
+      range.setEnd(node, at)
+      const r = range.getBoundingClientRect()
+      const drawn = r.width > 0 || r.height > 0
+      if (!drawn) {
+        // A space where a line wraps isn't drawn. It goes at the end of the line before, as wide as nothing.
+        if (space && run && next == '-') { run.edges.push(run.edges[run.edges.length - 1]); run.text += ' '; last = ' '; count++ }
+        continue
+      }
+      const x = (r.left + r.right) / 2, y = (r.top + r.bottom) / 2
+      if (!space && box && (x < box.l || x > box.r || y < box.t || y > box.b)) continue
+      const right = run ? run.edges[run.edges.length - 1] : 0
+      if (run && (next != '-' || r.top >= run.bottom - 1 || r.bottom <= run.top + 1 || r.left < right - 1)) end()
+      if (run) run.edges[run.edges.length - 1] = Math.min(right, r.left)
+      else run = {before: next, top: r.top, bottom: r.bottom, edges: [r.left], text: ''}
+      run.top = Math.min(run.top, r.top)
+      run.bottom = Math.max(run.bottom, r.bottom)
+      run.edges.push(r.right)
+      run.text += space ? ' ' : ch.replace(/[\\t\\r]/g, ' ')
+      last = space ? ' ' : ch
+      lastText = node, lastBlock = b, broke = false, next = '-'
+      count++
+    }
+  }
+  end()
+  return lines.join('\\n')
+})()
+"""
+}
+
 final class Painter: NSObject, WKNavigationDelegate {
   let web: WKWebView
   let wide: Double, zoom: Double
@@ -176,8 +284,14 @@ final class Painter: NSObject, WKNavigationDelegate {
           let box = link[0..<4].compactMap { ($0 as? Double).map { String(format: "%.1f", $0 * self.zoom) } }
           return box.count == 4 ? "link\t" + box.joined(separator: "\t") + "\t" + url : nil
         }
-        // The page gets a moment to lay itself out in its new room
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { self.strip(1, from: 0, across: across, tall: tall, links: links) }
+        // The page gets a moment to lay itself out in its new room. Then its words are read, where they are in it.
+        // A page whose words can't be read is still drawn: its words can't be selected then.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+          self.web.evaluateJavaScript(reading(zoom: self.zoom)) { value, _ in
+            let words = ((value as? String) ?? "").split(separator: "\n").map(String.init)
+            self.strip(1, from: 0, across: across, tall: tall, links: links + words)
+          }
+        }
       }
     }
   }

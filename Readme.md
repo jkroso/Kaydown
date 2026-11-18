@@ -649,8 +649,10 @@ julia -O0 --project=. test/folder_link_test.jl    # a link to a folder, which sh
 julia -O0 --project=. test/extend_test.jl         # what code from the startup page adds to Ladder: buttons, a list for the sidebar, commands, work in each frame
 julia -O0 --project=. test/eml_test.jl            # what Ladder shows of an email file: its page, its front matter, and the links to its files
 julia -O0 --project=. test/mime_test.jl           # how an email becomes the page that a window shows, and a page an email
-julia -O0 --project=. test/webpage_test.jl        # the pictures that are made of an email's HTML: what's read of them, their links, and how they're asked for and kept
-julia -O0 --project=. test/webpage_view_test.jl   # an email as it was sent: its pictures in the page, its links, the Load pictures button, and its words a level down
+julia -O0 --project=. test/webpage_test.jl        # webpage.jl: the link and the words at a point of a page, and the pictures that WebKit makes of a page, which the email view no longer uses
+julia -O0 --project=. test/webpage_view_test.jl   # an email as it was sent: its page in the window, its links, its words that you select, the Load pictures button, and its words a level down
+julia -O0 --project=. test/web_test.jl            # web/, which draws a page of HTML with no browser: how it reads HTML and CSS, each element's style, where layout puts each box, and a page's links and words
+julia -O0 --project=. test/web_view_test.jl       # a page of HTML in a window: its size, a click on a link, and a new width
 ```
 
 The tests are in the `test` folder. Run them from Ladder's folder, as above. The first three need no Centient. `test/centient_fake.jl` answers in its place. The last two use no network and no email account. `test/mail_fake.jl` is a pretend email server that runs in the test.
@@ -685,7 +687,9 @@ To write down what's said in a recording, Ladder runs `transcribe.swift`, which 
 
 To find the place of a map and to make its picture, Ladder runs `map.swift`, which uses MapKit, the maps that are part of macOS. It needs macOS 26 or later. Run from the source, Ladder compiles it the first time, as it does `transcribe.swift`. The app has it compiled already.
 
-To show an email as it was sent, Ladder runs `webpage.swift`, which uses WebKit, the part of macOS that draws web pages. It makes pictures of the email's HTML, and `webpage.jl` keeps them. Run from the source, Ladder compiles it the first time too. The app has it compiled already.
+To show an email as it was sent, Ladder lays its HTML out itself, with the code in `web/`: it reads the HTML and its CSS, lays out blocks, lines of text, floats and tables, and draws them with Skia, as it draws the rest of the window. No browser takes part, so an email is text that you select, and it's laid out again in a few thousandths of a second when the window's width changes. `web/main.jl` says what each file of it does. It doesn't run scripts, and it asks the web for nothing.
+
+`webpage.swift` makes pictures of a page of HTML with WebKit, the part of macOS that draws web pages. Ladder showed an email with those pictures before it had `web/`. They're a way to check `web/` against a browser: the program also says where WebKit puts each line of a page's words.
 
 UI.jl has a script that runs an app and reloads each file when you save it:
 

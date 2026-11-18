@@ -16467,6 +16467,16 @@ layout!(e, width=text_width(e)) = begin
         continue
       end
     end
+    # The links at the end of an email to the files that came with it show as file icons
+    if ks[i].kind == Kind.paragraph && rich(b) && !israw(b, i) && Eml.isemail(b.path)
+      content = attached_item(e, i)
+      if content !== nothing
+        push!(items, Item(i, content.node.to, top, content.tall, content))
+        top += content.tall
+        i = content.node.to + 1
+        continue
+      end
+    end
     # A line that holds only a picture shows the picture, unless the caret is on the line
     if ks[i].kind == Kind.paragraph && !israw(b, i) && occursin("![", b.lines[i])
       content = picture_item(e, i)
@@ -25542,9 +25552,12 @@ end
 sent_lines(e) = begin
   b = e.buf
   first = front_matter(b.lines) + 1
-  last = get!(() -> Eml.attached(b.path, b.lines), e.flows, (:attached, b.path, b.version)) - 1
+  last = attached_from(e) - 1
   first <= last ? (first, last) : nothing
 end
+
+"The first of the lines at the end of the email's page that link to its files. See `Eml.attached`."
+attached_from(e) = (b = e.buf; get!(() -> Eml.attached(b.path, b.lines), e.flows, (:attached, b.path, b.version)))
 
 "What the email as it was sent shows on the page, with how tall it is"
 sent_item(e, v::SentEmail) = begin
@@ -25638,6 +25651,160 @@ act!(v::SentEmail, action, w) = begin
   catch
   end
   redraw_in!(v, 0.0)
+  handled
+end
+
+# --- the files that came with an email --------------------------------------------------
+#
+# The lines at the end of an email's page link to the files that came with it,
+# like the PDF of an invoice. Each shows as a file's icon, with the file's name
+# and its size under it, as the Finder and Mail show a file. The icon says what
+# kind of file it is. When there are more than fit across the page, they go on
+# in the next row. A click on one opens the file, as a click on its link did.
+# A picture that came with an email isn't one of these: it shows as a picture.
+
+# The sizes of a file's icon, of its name and of its size, and the room round them, as parts of the size of the page's text
+const FILE_ICON, FILE_NAME, FILE_SIZE, FILE_PAD = 2.4, 0.76, 0.68, 0.45
+const FILE_WIDE, FILE_GAP = 7.4, 0.4   # how wide each file is, and the room between two, as parts of the same size
+const FILE_LINE = 1.3                  # how tall a line of a file's name is, as a part of the size of its text
+
+"A line that holds only a link: its words and its address"
+const FILE_LINK = r"^\[([^\]]*)\]\(([^)\s]+)\)$"
+
+"One of the files that came with an email, as its icon with its name and its size under it"
+@def mutable struct AttachedFile <: SemanticUI
+  name::String = ""
+  path::String = ""
+  lines::Vector{String} = String[]   # the name as it shows: in one line or two, and cut short when it doesn't fit
+  cut::Bool = false                  # true when the lines leave out part of the name
+  bytes::String = ""                 # how big the file is, in words
+  shown::Any = nothing               # the size of the text and the name that the lines were made for
+end
+
+"The files that the lines `from` to `to` of an email's page link to, which show as icons in rows"
+@def mutable struct AttachedFiles <: SemanticUI
+  from::Int = 0
+  to::Int = 0
+  files::Vector{AttachedFile} = AttachedFile[]
+end
+
+"How tall a file's icon is with its name and its size under it, in a page whose text is `s` tall"
+file_tall(s) = s * (2FILE_PAD + FILE_ICON + 0.35 + FILE_LINE * (2FILE_NAME + FILE_SIZE))
+
+"""
+The name and the path of the file that line `i` of an email's page links to,
+when the line is one of the links at the end to the email's own files and the
+file isn't a picture. It's nothing for any other line.
+"""
+attached_file(e, i) = begin
+  b = e.buf
+  i >= attached_from(e) || return nothing
+  m = match(FILE_LINK, b.lines[i])
+  m === nothing && return nothing
+  path = unescaped(String(m[2]))
+  startswith(path, Eml.attachments(b.path) * "/") ? (String(m[1]), path) : nothing
+end
+
+"""
+What lines `i` on show when line `i` is the first of the links to the files
+that came with an email: the icons of the files of that line and of the links
+that follow it. It's nothing for any other line.
+"""
+attached_item(e, i) = begin
+  found = attached_file(e, i)
+  found === nothing && return nothing
+  files = [found]
+  j = i
+  while j < length(e.buf.lines) && (next = attached_file(e, j + 1)) !== nothing
+    push!(files, next)
+    j += 1
+  end
+  v = node!(AttachedFiles, e, (:attached_files, i))
+  v.from, v.to = i, j
+  v.files = map(files) do (name, path)
+    k = findfirst(f -> f.path == path, v.files)
+    k === nothing || return v.files[k]
+    f = AttachedFile(name=name, path=path, bytes=isfile(path) ? bytes(filesize(path)) : "")
+    setfield!(f, :parent, v)
+    f
+  end
+  own!(node!(Document, e, :document), v)
+  s = body(e).size
+  across = files_across(e, length(files))
+  rows = cld(length(files), across)
+  Live(v, rows * file_tall(s) + (rows - 1) * FILE_GAP * s + 2LIVE_GAP)
+end
+
+"How many of `n` files fit across the page of `e`"
+files_across(e, n) = (s = body(e).size; clamp(floor(Int, num(e.width + FILE_GAP * s) / num((FILE_WIDE + FILE_GAP) * s)), 1, max(n, 1)))
+
+describe(v::AttachedFiles) = begin
+  e = editor(v)
+  across = files_across(e, length(v.files))
+  rows = Iterators.partition(v.files, across)
+  Column(width(grow=grow), Alignment.Start, child_gap=FILE_GAP * body(e).size, name="Attached files",
+    (Row(Alignment.Start, child_gap=FILE_GAP * body(e).size, row...) for row in rows)...)
+end
+
+"""
+The name of a file as it shows under its icon, as the Finder writes it: in one
+line, or in two when it's too wide for one, with each line no wider than
+`room` in `face`. A name that's too long for two lines loses letters from the
+middle of its second line, so the end of the name still shows. It's the lines,
+and whether any of the name is left out.
+"""
+icon_name(face::Face, name, room) = begin
+  fits(s) = measure(face, s) <= room
+  fits(name) && return ([String(name)], false)
+  cs = collect(name)
+  n = 1
+  while n < length(cs) - 1 && fits(String(cs[1:n+1])); n += 1 end
+  top(k) = String(rstrip(String(cs[1:k])))
+  rest(k) = String(lstrip(String(cs[k+1:end])))
+  # The first line ends after a space or a mark in the name, when one is in its second half. When the
+  # rest is then too wide for the second line, but not when the first line is as full as it can be, it ends there.
+  mark = findlast(c -> c in (' ', '-', '_', '.', ','), cs[1:n])
+  k = mark !== nothing && mark > n ÷ 2 ? mark : n
+  fits(rest(k)) && return ([top(k), rest(k)], false)
+  fits(rest(n)) && return ([top(n), rest(n)], false)
+  rs = collect(rest(k))
+  for keep in length(rs)-1:-1:1
+    head = keep ÷ 2
+    line = rstrip(String(rs[1:head])) * "…" * String(rs[end-(keep-head)+1:end])
+    fits(line) && return ([top(k), line], true)
+  end
+  ([top(k), "…"], true)
+end
+
+describe(f::AttachedFile) = begin
+  e = editor(f)
+  s = body(e).size
+  wide, pad = FILE_WIDE * s, FILE_PAD * s
+  name = Face(SANS, "", FILE_NAME * s, colours.ink, false)
+  if f.shown != (s, f.name)
+    f.lines, f.cut = icon_name(name, f.name, wide - 2pad)
+    f.shown = (s, f.name)
+  end
+  icon = FILE_ICON * s
+  line(text, size, color) = Box(height(size * FILE_LINE), Alignment.Center, label(text, size, color=color))
+  Column(fixed(wide), height(file_tall(s)), padding(pad), Alignment.Center, radius(8px), name="Attached file",
+         background(ishovered(f) ? colours.hover : clear),
+    Box(fixed(icon), height(icon), Alignment.Center, justify=Alignment.Center, Icon(file_icon(f.path), size=icon, color=colours.dim)),
+    Box(height(0.35s)),
+    (line(l, name.size, colours.ink) for l in f.lines)...,
+    (isempty(f.bytes) ? () : (line(f.bytes, FILE_SIZE * s, colours.faint),))...)
+end
+
+cursor(::AttachedFile) = :hand
+
+# A name that's cut short shows whole under the file
+onmouse(f::AttachedFile, ev::MouseMove) = f.cut ?
+  (r = rect(f); show_tooltip!(ev.window, tip_label(f.name), r.left, r.top, r.width, r.height, placement=:bottom, gap=6px)) : nothing
+
+# A click opens the file, as a click on its link did. A click with ⌥ held is the page's.
+onkey(f::AttachedFile, ::KeyPress{Keys.mouse_left}) = begin
+  held(f, Keys.opt) && return nothing
+  isfile(f.path) && open!(editor(f), f.path)
   handled
 end
 

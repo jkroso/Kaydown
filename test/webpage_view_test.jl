@@ -86,6 +86,8 @@ colour(place) = begin
 end
 "The lines of the page that show as text"
 texts() = [e.buf.lines[it.first] for it in e.layout if it.content isa K.Flow]
+"The part of the page that shows the icons of the files that came with the email, or nothing"
+files() = (i = findfirst(it -> it.content isa K.Live && it.content.node isa K.AttachedFiles, e.layout); i === nothing ? nothing : e.layout[i])
 
 @testset "an email with HTML shows as it was sent" begin
   @test shows() && Fake.calls == [asked(LINKS)]
@@ -93,7 +95,9 @@ texts() = [e.buf.lines[it.first] for it in e.layout if it.content isa K.Flow]
   # The pictures stand for the email's words, and for nothing else of the page
   t = K.front_matter(e.buf.lines)
   @test it.first == t + 1 && e.buf.lines[it.last+1] == "[Roof quote.pdf]($(K.Eml.attachments(quote_email))/Roof%20quote.pdf)"
-  @test !any(l -> occursin("quote", l) && occursin("Hi Jake", l), texts()) && any(l -> occursin("Roof quote.pdf", l), texts())
+  @test !any(l -> occursin("quote", l) && occursin("Hi Jake", l), texts())
+  # The link to the file shows as the file's icon
+  @test !any(l -> occursin("Roof quote.pdf", l), texts()) && files().first == files().last == it.last + 1
   # They're as wide as the page's text, and as tall as the program made them
   r = page()
   @test K.num(r.width) == wide() + 2 && K.num(r.height) == 402
@@ -143,6 +147,57 @@ end
   @test item() === nothing && any(l -> occursin("Hi Jake", l), texts())
   K.close_find!(e); frames()
   @test shows()
+end
+
+@testset "the files that came with an email show as icons, and a click opens one" begin
+  it = files()
+  f = it.content.node.files[1]
+  path = joinpath(K.Eml.attachments(quote_email), "Roof quote.pdf")
+  @test f.name == "Roof quote.pdf" && f.path == path && f.lines == ["Roof quote.pdf"] && !f.cut && f.bytes == "9 bytes"
+  @test K.file_icon(f.path) == "file-earmark-pdf"
+  # The icon is under the email, at the left of the page's text
+  r = rect(f)
+  @test r.top >= page().top + page().height && abs(K.num(r.left - page().left)) <= 1
+  at(middle(r))
+  @test K.cursor(f) == :hand && K.ishovered(f)
+  shot("sent-7-files.png")
+  click(middle(r))
+  @test e.buf.path == path
+  # Down a level, the email shows the link as it's written
+  show(quote_email)
+  K.level!(e); frames()
+  @test files() === nothing && any(l -> occursin("[Roof quote.pdf]", l), texts())
+  K.level!(e); frames()
+  @test files() !== nothing
+end
+
+@testset "many files go on in the next row, and a long name on two lines" begin
+  pdf(name) = "--m\r\nContent-Type: application/pdf; name=\"$name\"\r\nContent-Disposition: attachment; filename=\"$name\"\r\n" *
+              "Content-Transfer-Encoding: base64\r\n\r\nJVBERi0xLjcK\r\n"
+  names = ["Invoice-VQHURGAU-0001.pdf", "Receipt-2443-7647-3599.pdf", "A very long name of a file that goes on and on and on.pdf", "Plan.zip"]
+  path = joinpath(dir, "Files.eml")
+  write(path, "From: Sam Lee <sam@example.com>\r\nTo: you@example.com\r\nSubject: Files\r\nDate: Sat, 14 Nov 2026 09:32:00 +1100\r\n" *
+              "MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=m\r\n\r\n--m\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>Four files</p>\r\n" *
+              join(pdf.(names)) * "--m--\r\n")
+  show(path)
+  it = files()
+  v = it.content.node
+  @test [f.name for f in v.files] == names && it.last == length(e.buf.lines)
+  shot("sent-8-four-files.png")
+  # A name that's too wide goes on two lines. One that's too long for two loses letters from its middle, and keeps its end.
+  @test length(v.files[1].lines) == 2 && join(v.files[1].lines) == names[1] && !v.files[1].cut
+  long = v.files[3]
+  @test long.cut && length(long.lines) == 2 && occursin("…", long.lines[2]) && endswith(long.lines[2], ".pdf")
+  @test K.file_icon(v.files[4].path) == "file-earmark-zip"
+  # Each file is in the same row while they fit across, and they go on in the next row when they don't
+  tops() = [rect(f).top for f in v.files]
+  @test length(unique(tops())) == 1
+  was = e.widest
+  K.page_width!(e, 300); frames()
+  @test length(unique(tops())) == 2 && files().tall > it.tall
+  shot("sent-9-two-rows.png")
+  e.widest = was; K.rewrap!(e); frames()
+  show(quote_email)
 end
 
 @testset "an email asks the web for nothing until you click Load pictures" begin

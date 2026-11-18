@@ -49,7 +49,7 @@ side() = texts(K.describe(e.nodes[:sidebar]))
 "True when the page that shows is in the folder of notes"
 innotes(e) = startswith(e.buf.path, notes * "/")
 "Take the test's extension out of every table"
-forget() = foreach(t -> delete!(t, :notes), (K.EACH_FRAME, K.AT_QUIT, K.BAR_PARTS, K.BUTTONS, K.PAGE_TITLES, K.MATTER_TITLES, K.FOLDER_LISTS,
+forget() = foreach(t -> delete!(t, :notes), (K.EACH_FRAME, K.AT_QUIT, K.BAR_PARTS, K.BUTTONS, K.PAGE_TITLES, K.MATTER_TITLES, K.MATTER_CARDS, K.FOLDER_LISTS,
                                              K.FOLDER_MARKS, K.PAGE_NAMES, K.FIELD_KEYS, K.SETTINGS_FOLDERS))
 
 @testset "with nothing added, Ladder is as it was" begin
@@ -101,6 +101,22 @@ end
   K.open!(e, joinpath(dir, "page.md")); frames()
   @test K.page_title(e) === nothing && any(t -> startswith(t, "page"), bar())
   K.open!(e, joinpath(notes, "one.md")); frames()
+end
+
+@testset "a node of its own in place of the card of the front matter" begin
+  # The node gets the keys of the front matter, and the page makes room for it
+  got = Ref{Any}(nothing)
+  K.MATTER_CARDS[:notes] = (o, rows) -> innotes(o) ? (got[] = rows; K.node!(K.MatterCard, o, :note_top)) : nothing
+  frames()
+  @test got[] == [(2, "kind", "note")] && e.layout[1].content.node === e.nodes[:note_top] && e.layout[1].tall > 0px
+  # A page that the function has no node for has the card
+  write(joinpath(dir, "plain.md"), "---\nkind: page\n---\n\nText.\n")
+  K.open!(e, joinpath(dir, "plain.md")); frames()
+  @test e.layout[1].content.node === e.nodes[:matter]
+  K.open!(e, joinpath(notes, "one.md")); frames()
+  delete!(K.MATTER_CARDS, :notes)
+  frames()
+  @test e.layout[1].content.node === e.nodes[:matter]
 end
 
 @testset "a list for a folder in the sidebar, a line over it, and a mark on a folder's row" begin

@@ -529,6 +529,7 @@ Ladder also has tables for what it does at its own times. Code puts a function i
 | `BUTTONS` | What such a button does, what its tooltip says, and when it's off. |
 | `PAGE_TITLES` | `f(e)` gives what the top bar calls the page, in place of its file's name. |
 | `MATTER_TITLES` | `f(e)` gives what the card of the page's front matter is called. |
+| `MATTER_CARDS` | `f(e, rows)` gives a node that shows in place of the card of the page's front matter, or nothing. |
 | `FOLDER_LISTS` | `f(e)` gives a list for the sidebar's folder, in place of the tree of its files, and a line over it. |
 | `FOLDER_MARKS` | `f(e, path)` adds to the row of a folder in the sidebar, like how many of its emails aren't read. |
 | `PAGE_NAMES` | `f(m, e)` gives the code of a window's pages more names. |

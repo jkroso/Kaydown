@@ -16211,13 +16211,16 @@ matter_rows(lines, t) = begin
   rows
 end
 
-"The front matter that ends at line `t`, as a card, or as the top of an email"
+"The front matter that ends at line `t`, as a card, as the top of an email, or as what code from the startup page shows there"
 matter_card(e, t) = begin
   rows = matter_rows(e.buf.lines, t)
-  # An email that came or went shows the top of an email in place of its keys. That top has levels of its own.
-  card = email_shows(e, Dict(lowercase(k) => v for (_, k, v) in rows)) ? email_head!(e) : node!(MatterCard, e, :matter)
-  card.rows = rows
-  card.size = body(e).size * 0.76
+  card = first_answer(MATTER_CARDS, e, rows)
+  if card === nothing
+    # An email that came or went shows the top of an email in place of its keys. That top has levels of its own.
+    card = email_shows(e, Dict(lowercase(k) => v for (_, k, v) in rows)) ? email_head!(e) : node!(MatterCard, e, :matter)
+    card.rows = rows
+    card.size = body(e).size * 0.76
+  end
   own!(node!(Document, e, :document), card)
   # Lay it out once to learn how tall it is
   concrete = describe(Column(fixed(e.width), Alignment.Start, geometry(card)), (e.width, 9999px))
@@ -26416,6 +26419,12 @@ const BUTTONS = Dict{Symbol,Any}()
 const PAGE_TITLES = Dict{Symbol,Any}()
 "What the card of the page's front matter is called: `f(e)` gives the word, or nothing for FRONTMATTER"
 const MATTER_TITLES = Dict{Symbol,Any}()
+"""
+What shows in place of the card of the page's front matter, while the caret
+isn't in it: `f(e, rows)` gives a node, or nothing to leave the card. `rows`
+are the front matter's keys, each as its line, the key and what it's set to.
+"""
+const MATTER_CARDS = Dict{Symbol,Any}()
 """
 How the sidebar lists its folder: `f(e)` gives nothing, or `(list=..., bar=...)`.
 `list` is a node that shows in place of the tree of the folder's files, or

@@ -80,7 +80,9 @@
 #   - Type in a line and it keeps its look: that's rich text. Press ⌘E, or
 #     click the ladder in the top bar, to go down a level: the part that the
 #     caret is in shows its markup, and a snake takes the ladder's place. ⌘E
-#     again, or a click on the snake, goes back up.
+#     again, or a click on the snake, goes back up. While the mouse is over
+#     the ladder, it opens into a slider with the snake at one end and the
+#     ladder at the other, and a stop for each level that the window can show at.
 #   - Move the caret down the page onto a form, a diagram or a picture. A
 #     line goes round it. Return gives it the keyboard, ⌫ takes it away, and
 #     ↑ and ↓ go on to the lines beside it.
@@ -261,9 +263,11 @@
 @use "./webpage" => Webpages
 @use "./slides" => Slides
 @use "github.com/jkroso/UI.jl/Interface/draw" Bubble
+@use "github.com/jkroso/UI.jl/Interface/draw" popups sync_mouse!
 @use "github.com/jkroso/URI.jl/FSPath" FSPath
 @use Colors: @colorant_str, RGBA, Colorant
 @use InteractiveUtils: clipboard
+@use InteractiveUtils: code_native, code_llvm
 @use Dates: Dates, Date, Day
 
 # --- look --------------------------------------------------------------------
@@ -665,7 +669,7 @@ Base.@kwdef mutable struct Buffer
   stood::Union{Nothing,Pos} = nothing
   # How the file shows. A Markdown file is a document that you change, and :code is a file of
   # code that you change, which is one block of code. Any other file is only shown: :text shows
-  # its text, :hex shows its bytes, and :file shows a viewer of its kind.
+  # its text, :hex shows its bytes in hexadecimal, :bits shows them as bits, and :file shows a viewer of its kind.
   view::Symbol = :markdown
   # True for a page that's read, and never changed or written: an email, or a file that the Mac marks as
   # read-only. The lines of an email are the email as a page, which mail.jl makes from the file: the file
@@ -676,6 +680,9 @@ Base.@kwdef mutable struct Buffer
   # The text as an agent last knew it: what you last sent it, with every change that was made to the file from outside since
   told::Vector{String} = [""]
   sent::Vector{String} = [""]           # the text as it was when you last sent it to an agent, or when the file was opened
+  # How many levels down a file of Julia code shows what its code comes to: 0 for the value, 1 for inferred code,
+  # 2 for LLVM code, 3 for assembly. See "what a file of Julia code ran, down a level".
+  depth::Int = 0
 end
 
 "True when the file is only shown. Ladder changes Markdown files and the files of code in `CODE_FILES`, and no others."
@@ -750,7 +757,7 @@ refresh!(b::Buffer) = begin
   if readonly(b)
     # A file that's only shown is read again as it was shown: as bytes, or as its kind of file. A JSON file that
     # shows its text goes on showing its text.
-    new = b.view == :hex ? Buffer(path=b.path, view=:hex, lines=hexlines(b.path), about=hex_about(b.path)) : look(b.path, tree=b.view != :text)
+    new = look(b.path, b.view)
     b.view, b.about = new.view, new.about
     lines = new.lines
   else
@@ -778,7 +785,7 @@ end
 kinds(b::Buffer) = begin
   if b.kinds_at != b.version && b.view != :markdown
     # Each line of a file that isn't Markdown is a line of code, in the language that the end of the file's name gives
-    lang = b.view == :hex ? HEX : String(lstrip(lowercase(splitext(b.path)[2]), '.'))
+    lang = b.view == :hex ? HEX : b.view == :bits ? BITS : String(lstrip(lowercase(splitext(b.path)[2]), '.'))
     b.kinds = fill(Line(Kind.code, 0, 0, lang), length(b.lines))
     # A file that's only shown has no words to count
     b.words, b.chars = b.view == :code ? (words(b.lines), sum(length, b.lines, init=0)) : (0, 0)
@@ -994,10 +1001,21 @@ end
   action::Symbol = :none
   label::String = ""
 end
-"The picture in the top bar of the level that the window shows at: a ladder for graphics and a snake for symbols. A click goes to the other level."
+"The picture in the top bar of the level that the window shows at: a ladder at the highest level and a snake under it. While the mouse is over it, it opens into the slider of the levels."
 @def mutable struct Mode <: SemanticUI
   rect::NTuple{4,px} = (0px, 0px, 0px, 0px)
   quiet::Bool = false
+end
+"The slider that the picture of the level opens into while the mouse is over it: a stop for each level, with the snake at its low end and the ladder at its high end"
+@def mutable struct Levels <: SemanticUI
+  stops::Vector{Any} = Any[]   # the Stop of each level, from the lowest
+  since::Float64 = 0.0         # when it opened, to open out from the picture
+  pressed::Int = -1            # the level of the stop that the mouse went down on, 0 once a drag has left it, or -1 for none
+end
+"A stop of the slider of the levels. A click on it goes to its level."
+@def mutable struct Stop <: SemanticUI
+  level::Int = 1
+  quiet::Bool = false          # clicked, so no tooltip until the mouse leaves it
 end
 "The file's name in the middle of the top bar. A right-click on it shows the file's menu."
 @def mutable struct Title <: SemanticUI end
@@ -1469,10 +1487,11 @@ pieces(e, text::String, line::Line, raw::Bool, i::Int=0) = begin
       isempty(m[3]) || push!(out, piece(String(m[3]), length(m[1]) + length(m[2]), base))
     end
     return out
-  elseif k == Kind.code && line.lang == HEX
+  elseif k == Kind.code && line.lang in (HEX, BITS)
     # In a line of a file's bytes, the place in the file is faint and the bytes as characters are dim
     n = ncodeunits(text)
-    for (lo, hi, colour) in ((0, HEX_BYTES, colours.faint), (HEX_BYTES, HEX_CHARS, base.color), (HEX_CHARS, n, colours.dim))
+    chars = line.lang == HEX ? HEX_CHARS : BITS_CHARS
+    for (lo, hi, colour) in ((0, HEX_BYTES, colours.faint), (HEX_BYTES, chars, base.color), (chars, n, colours.dim))
       lo < n && push!(out, piece(text[lo+1:min(hi, n)], lo, Face(base, color=colour)))
     end
     return out
@@ -4031,7 +4050,10 @@ end
 # A Julia file is one block of code, with no lines that open and close it. You
 # type in it as in a `julia` code block of a page: ⌘Return runs the expression
 # that the caret is in, a list offers names, a bracket comes with the bracket
-# that closes it, and ⌘S writes the file.
+# that closes it, and ⌘S writes the file. What its code comes to has three
+# levels under the value: with the slider in the top bar, the box after a piece
+# of code shows the code as Julia infers it, its LLVM code or its assembly.
+# "what a file of Julia code ran, down a level" says more.
 #
 #   - A file of text shows its text. A file of code has the colours that a code
 #     block has. You can select the text, copy it and find words in it.
@@ -4041,6 +4063,9 @@ end
 #     filter by its headings. "a CSV file in the page" says more.
 #   - A JSON file shows as a tree of its values. "a JSON file as a tree"
 #     says more.
+#   - A file of text, a CSV file and a JSON file have levels under what they
+#     show: the file's text, its bytes in hexadecimal, and its bits. The
+#     slider in the top bar goes to each. "the slider of the levels" says more.
 #   - A zip shows the list of the files in it.
 #   - Any other file is a binary file. The page says so, and a button there
 #     shows the file's bytes in hexadecimal.
@@ -4050,6 +4075,10 @@ const HEX = "hex"          # the language of the lines that show a file's bytes
 const HEX_BYTES = 10       # the column of such a line where the bytes start, after their place in the file
 const HEX_CHARS = 60       # the column where the same bytes start as characters
 const MOST_HEX = 160_000   # bytes. The lines of a longer file stop there.
+const BITS = "bits"        # the language of the lines that show a file's bytes as bits
+const BITS_ROW = 6         # how many bytes such a line has, so that it's no longer than a line of hexadecimal
+const BITS_CHARS = HEX_BYTES + 9BITS_ROW + 1   # the column of such a line where its bytes start as characters
+const MOST_BITS = 80_000   # bytes. The lines of bits of a longer file stop there.
 
 "True when a file whose name ends with `ext` has a viewer of its own, so it doesn't show as text"
 viewed(ext) = ext in PICTURES || ext in MAC_PICTURES || ext in MODELS || ext in SOUNDS || ext in VIDEOS || ext == ".pdf" ||
@@ -4071,14 +4100,53 @@ look(path; tree=true) = begin
   elseif tree && ext in JSONS && json_of(path) !== nothing
     return Buffer(path=path, view=:file)
   elseif !viewed(ext)
-    found = try reading(path, tidy=false) catch; nothing end
-    if found !== nothing
-      lines, more = found
-      return Buffer(path=path, view=:text, lines=map(shown_line, lines),
-                    about=more ? "First $(bytes(MOST_TEXT)) of $(bytes(filesize(path)))" : "")
-    end
+    shown = text_look(path)
+    shown === nothing || return shown
   end
   Buffer(path=path, view=:file)
+end
+
+"The buffer that shows the text of the file at `path`, or nothing if the file isn't text"
+text_look(path) = begin
+  found = try reading(path, tidy=false) catch; nothing end
+  found === nothing && return nothing
+  lines, more = found
+  Buffer(path=path, view=:text, lines=map(shown_line, lines),
+         about=more ? "First $(bytes(MOST_TEXT)) of $(bytes(filesize(path)))" : "")
+end
+
+"Whether each file that was asked about is text, with when the file was last read then. Only the last few are kept."
+const TEXT_READ = Dict{String,Tuple{Float64,Bool}}()
+
+"""
+True when the file at `path` is text, so it can show as its text. A file is
+read once to find out, and again after the page reads it again. A zip isn't
+text: what shows for it is the list of its files.
+"""
+text_file(path) = begin
+  lowercase(splitext(path)[2]) in ZIPS && return false
+  at = get(READ, path, 0.0)
+  kept = get(TEXT_READ, path, nothing)
+  kept !== nothing && kept[1] == at && return kept[2]
+  found = isfile(path) && (try reading(path, tidy=false) !== nothing catch; false end)
+  length(TEXT_READ) >= 16 && empty!(TEXT_READ)
+  TEXT_READ[path] = (at, found)
+  found
+end
+
+"""
+The ways that the file of `b` can show, from its lowest level to its highest,
+or () for a page and for a file with one way to show. A file of text shows as
+its bits, its bytes in hexadecimal and its text. A JSON file and a CSV file
+have a level over their text: :file, which is the tree of the one and the
+table of the other.
+"""
+file_views(b::Buffer) = begin
+  b.view in FILE_VIEWS || return ()
+  json_page(b) && return FILE_VIEWS
+  ext = lowercase(splitext(b.path)[2])
+  ext in TABLES ? (text_file(b.path) ? FILE_VIEWS : ()) :
+  viewed(ext) || !text_file(b.path) ? () : FILE_VIEWS[1:3]
 end
 
 """
@@ -4098,6 +4166,40 @@ end
 
 "What the top bar says of the bytes of the file at `path`: how many of them show, when not all do"
 hex_about(path) = filesize(path) > MOST_HEX ? "First $(bytes(MOST_HEX)) of $(bytes(filesize(path)))" : ""
+
+"""
+The bytes of the file at `path` as lines of bits. Each line has the place of
+its first byte in the file, then `BITS_ROW` bytes as the 8 bits of each, then
+the same bytes as characters. A byte that isn't a character of plain text
+shows as a dot.
+"""
+bitlines(path) = begin
+  data = open(io -> read(io, MOST_BITS), path)
+  map(0:BITS_ROW:max(0, length(data) - 1)) do at
+    row = data[at+1:min(at + BITS_ROW, end)]
+    rpad(string(at, base=16, pad=8), HEX_BYTES) * rpad(join((string(x, base=2, pad=8) for x in row), ' '), BITS_CHARS - HEX_BYTES) *
+      String([0x20 <= x < 0x7f ? Char(x) : '.' for x in row])
+  end
+end
+
+"True when the page shows a file's bytes, in hexadecimal or as bits. Each line keeps its columns, so the lines never wrap."
+bytes_page(b::Buffer) = b.view in (:hex, :bits)
+
+"What the top bar says of the bits of the file at `path`: how many of its bytes show, when not all do"
+bits_about(path) = filesize(path) > MOST_BITS ? "First $(bytes(MOST_BITS)) of $(bytes(filesize(path)))" : ""
+
+"""
+The buffer that shows the file at `path` at the level `view`: :bits for its
+bytes as bits, :hex for its bytes in hexadecimal, :text for its text, and
+:file for what `look` shows, like the tree of a JSON file or the table of a
+CSV file. A file that has no text shows as `look` shows it.
+"""
+look(path, view::Symbol) = begin
+  view == :bits && return Buffer(path=path, view=:bits, lines=bitlines(path), about=bits_about(path))
+  view == :hex && return Buffer(path=path, view=:hex, lines=hexlines(path), about=hex_about(path))
+  (view == :text && text_file(path)) || return look(path)
+  something(text_look(path), look(path))
+end
 
 "Show the bytes of the file that the page shows, in hexadecimal"
 hex!(e) = begin
@@ -4130,11 +4232,14 @@ end
 # the row: a string as its text, and an object or a list as JSON. Esc gives
 # the keyboard back to the page.
 #
-# The tree is the file at the high level, as the graphics are of a page. The
-# snake in the top bar, or ⌘E, goes down a level to the file's text, which you
-# can select and search. The ladder, or ⌘E again, goes back up to the tree,
-# open as it was. A file that isn't JSON after all, and one bigger than
-# MOST_JSON, only shows as text.
+# The tree is the file at its highest level, as the graphics are of a page. ⌘E
+# goes down a level to the file's text, which you can select and search, and
+# ⌘E again goes back up to the tree, open as it was. The file has two more
+# levels under its text: its bytes in hexadecimal, and under those its bits.
+# The ladder in the top bar opens into a slider with a stop for each of the
+# four levels. See "the slider of the levels". From its bits to its bytes to
+# its text, the window stays at the same place in the file. A file that isn't
+# JSON after all, and one bigger than MOST_JSON, only shows as text.
 #
 # Only the rows that are in the window are made, so a long tree costs no more
 # to draw than a short one.
@@ -4288,8 +4393,8 @@ json_of(path) = begin
   value
 end
 
-"True when the page shows a JSON file that can show as a tree: as the tree, or down a level as the file's text"
-json_page(b::Buffer) = b.view in (:file, :text) && lowercase(splitext(b.path)[2]) in JSONS && isfile(b.path) && json_of(b.path) !== nothing
+"True when the page shows a JSON file that can show as a tree: as the tree, or at a level under it, as the file's text, its bytes in hexadecimal or its bits"
+json_page(b::Buffer) = b.view in FILE_VIEWS && lowercase(splitext(b.path)[2]) in JSONS && isfile(b.path) && json_of(b.path) !== nothing
 
 json_items(o::JSONObject) = zip(o.keys, o.values)
 json_items(l::Vector{Any}) = zip(0:length(l)-1, l)
@@ -4556,16 +4661,361 @@ onkey(t::JSONTree, ev::KeyPress{Keys.c}) = begin
   handled
 end
 
-"Show the JSON file of the page as its text, or as a tree again"
-json_level!(e) = begin
+"Show the file of the page at the level `view`: :bits, :hex, :text, or :file for the tree of a JSON file and the table of a CSV file"
+file_level!(e, view::Symbol) = begin
   b = e.buf
-  shown = look(b.path, tree=b.view == :text)
+  at = place_in_file(e)
+  shown = look(b.path, view)
   b.lines, b.about, b.view = shown.lines, shown.about, shown.view
   b.caret = b.anchor = (1, 0)
   b.saved = b.version += 1
   e.scroll.offset = 0px
+  # The window stays at the same place in the file, between its bits, its bytes and its text
+  line = line_of_byte(b, at)
+  line > 1 && (e.nodes[:hold] = (line, 0px))
   focus(e)
   e
+end
+
+"""
+How far into its file the line at the top of the window starts, in bytes, while
+the page shows a file's bits, its bytes in hexadecimal or its text. It's 0 for
+anything else. A line of text counts as its characters and its line break, so
+in a file with tabs or with very long lines it's only near the place.
+"""
+place_in_file(e) = begin
+  b = e.buf
+  (b.view in (:bits, :hex, :text) && !isempty(e.layout) && e.scroll.offset > 0px) || return 0
+  k = something(findfirst(it -> it.top + it.tall > e.scroll.offset, e.layout), 1)
+  line = e.layout[k].first
+  b.view == :bits ? BITS_ROW * (line - 1) : b.view == :hex ? 16(line - 1) : sum(l -> ncodeunits(l) + 1, @view(b.lines[1:line-1]), init=0)
+end
+
+"The line of the page that has byte `at` of its file, counted from 0, for a page that shows a file's bits, its bytes in hexadecimal or its text. It's 1 for any other page."
+line_of_byte(b::Buffer, at::Int) = begin
+  n = length(b.lines)
+  b.view == :bits && return clamp(at ÷ BITS_ROW + 1, 1, n)
+  b.view == :hex && return clamp(at ÷ 16 + 1, 1, n)
+  b.view == :text || return 1
+  upto = 0
+  for (i, l) in enumerate(b.lines)
+    upto += ncodeunits(l) + 1
+    upto > at && return i
+  end
+  n
+end
+
+# --- what a file of Julia code ran, down a level -----------------------------------------------
+#
+# A file of Julia code has four levels, and they're levels of what its code
+# comes to when it runs. At the highest, the box after a piece of code shows
+# the value that the code came to. "what a line of Julia code came to" says
+# how. A level down, the box shows the code as Julia infers it: each step,
+# with the type that Julia worked out for it. Under that it shows the LLVM
+# code that Julia makes of those steps, and under that the assembly that LLVM
+# compiles them to, with the machine code of each instruction beside it.
+#
+# The code of the file shows as it's written at every level, and you type in
+# it as always. The slider in the top bar goes to each level, and ⌘E goes
+# between the value and the inferred code. The boxes that are on the page
+# change with the level, so you can take one piece of code from its value down
+# to its machine code. Code that runs while the file is down a level has its
+# box open.
+#
+# What a box shows is the code of what ran. For the definition of a function,
+# that's the function's code for the types that it has been called with since,
+# or for the types that it's written for when it hasn't been called. When the
+# function has more than one method or set of types, a line at the top of the
+# open box says so, and a click on it shows the next. For any other code, it's
+# that code itself, compiled as a function that takes nothing. Code that can't
+# be in a function has no lower level, like `using` or the definition of a
+# struct. Neither has code that failed. Their boxes show what they show at the
+# highest level.
+#
+# A closed box shows a little: the type that the code gives at the level of
+# inferred code, and how many bytes of machine code there are at the level of
+# assembly. Only the lines of an open box that are in sight are made.
+
+const CODE_LEVELS = ("the assembly of what you run", "the LLVM code of what you run", "the inferred code of what you run", "the value of what you run")
+const MOST_LOWERED = 4000    # lines. The inferred code, the LLVM code or the assembly of longer code stops there.
+const MOST_FORMS = 12        # the most methods and sets of types that a function offers
+
+"True when the page shows a file of Julia code that you change, whose results have levels under their values"
+julia_file(b::Buffer) = b.view == :code && lowercase(splitext(b.path)[2]) == ".jl"
+
+"Show what the code of a file of Julia code comes to `depth` levels down: 0 for the value, 1 for inferred code, 2 for LLVM code and 3 for assembly"
+code_level!(e, depth::Int) = begin
+  b = e.buf
+  julia_file(b) && (b.depth = clamp(depth, 0, length(CODE_LEVELS) - 1))
+  e
+end
+
+"True when the code `lhs` is what a function's definition starts with, like `f(x)` or `f(x::T) where T`"
+calls(lhs) = Meta.isexpr(lhs, :call) || (Meta.isexpr(lhs, (:where, :(::))) && !isempty(lhs.args) && calls(lhs.args[1]))
+
+"True when the expression `ex` defines a function. Its documentation can be above it, and a macro like `@inline` can be before it."
+is_definition(ex) = Meta.isexpr(ex, :function, 2) || (Meta.isexpr(ex, :(=), 2) && calls(ex.args[1])) ||
+                    (Meta.isexpr(ex, :macrocall) && length(ex.args) > 2 && is_definition(last(ex.args)))
+
+"The definition of a function that ran: the function, and the types that each method it got then is written for"
+struct Defined
+  value::Any
+  sigs::Vector{Any}
+end
+
+"Code that ran and defined no function. The levels under its value show it compiled as a function that takes nothing."
+mutable struct Thunk
+  code::String
+  made::Any   # that function, false when the code can't be in a function, or nothing until a lower level asks for it
+end
+
+"A line of code that a box shows a level down: its pieces, each with the name of its colour"
+const CodeRow = Vector{Tuple{String,Symbol}}
+
+"What a box shows while its file is down a level: its top line, the lines under it, how wide the widest is, and how many methods and sets of types its function offers"
+struct Lowered
+  key::Any
+  title::String
+  rows::Vector{CodeRow}
+  cols::Int
+  forms::Int
+end
+
+"The code without the comments and the empty lines above it"
+bare_code(code::AbstractString) = begin
+  lines = split(code, '\n')
+  k = something(findfirst(l -> !isempty(strip(l)) && !startswith(lstrip(l), '#'), lines), 1)
+  String(rstrip(join(lines[k:end], "\n")))
+end
+
+"""
+What the levels under the value show the code of, for `code` that ran in a
+file of Julia code and came to `value`. A definition gives its function, with
+the methods that the function got after `world`. Other code gives itself.
+"""
+source_of(code::AbstractString, value, world) = begin
+  ex = try Meta.parse(bare_code(code), raise=false) catch; nothing end
+  (is_definition(ex) && value isa Union{Function,Type}) || return Thunk(String(code), nothing)
+  Defined(value, Any[x.sig for x in Base.invokelatest(methods, value) if x.primary_world > world])
+end
+
+"The function that the code of `t` makes when it's the body of a function that takes nothing, in the module `m`, or false when it can't be one"
+thunk!(t::Thunk, m::Module) = begin
+  t.made === nothing || return t.made
+  t.made = try
+    Core.eval(m, Expr(:->, Expr(:tuple), Expr(:block, Meta.parseall(t.code).args...)))
+  catch
+    false
+  end
+end
+
+"""
+The types that the function of `d` shows its code for: for each of its
+methods, each set of types that it has been called with, or the types that it's
+written for when it hasn't been called. The method with the most arguments is first.
+"""
+forms(d::Defined) = begin
+  out = Any[]
+  now = try collect(Base.invokelatest(methods, d.value)) catch; return out end
+  for sig in sort(d.sigs, by=sig -> -length(Base.unwrap_unionall(sig).parameters))
+    k = findfirst(x -> x.sig == sig, now)
+    called = k === nothing ? Any[] : Any[mi.specTypes for mi in Base.specializations(now[k]) if Base.isdispatchtuple(mi.specTypes)]
+    isempty(called) ? push!(out, sig) : append!(out, called)
+  end
+  length(out) > MOST_FORMS ? out[1:MOST_FORMS] : out
+end
+forms(t::Thunk, m::Module) = (f = thunk!(t, m); f === false ? Any[] : Any[Tuple{typeof(f)}])
+forms(d::Defined, ::Module) = forms(d)
+
+"A type as Julia writes it, with no module's name in front of a type of the module `m`"
+type_name(m::Module, T) = replace(sprint(show, T, context=:module => m), string(m) * "." => "")
+
+"The call that the types `tt` are of, like `area(w::Int64, h::Int64)`, with the names that the method of `d` gives its arguments. Code that defined no function has none."
+call_words(::Thunk, m::Module, tt) = ""
+call_words(d::Defined, m::Module, tt) = begin
+  types = Base.unwrap_unionall(tt).parameters[2:end]
+  now = try collect(Base.invokelatest(methods, d.value)) catch; Method[] end
+  k = findfirst(x -> tt <: x.sig, now)
+  names = k === nothing ? String[] : String[string(n) for n in Base.method_argnames(now[k])[2:end]]
+  args = [(length(names) == length(types) ? names[i] : "") * "::" * type_name(m, T) for (i, T) in enumerate(types)]
+  string(d.value isa Function ? nameof(d.value) : type_name(m, d.value)) * "(" * join(args, ", ") * ")"
+end
+
+"`text` as the pieces of a line of Julia code, each with the name of its colour. Pieces of one colour that touch are one piece."
+tinted(text::AbstractString) = begin
+  out = Tuple{String,Symbol}[]
+  for t in tokens(text, "julia")
+    # Julia writes the place that a step jumps to as #4, which isn't a comment
+    kind = t.kind in (:plain, :comment) ? :ink : t.kind
+    !isempty(out) && last(out)[2] == kind ? (out[end] = (last(out)[1] * t.text, kind)) : push!(out, (String(t.text), kind))
+  end
+  out
+end
+
+"""
+The code of the types `tt` as Julia infers it, with the type that it gives. The
+local variables come first, each with its type, then each step.
+"""
+inferred(m::Module, tt) = begin
+  found = Base.code_typed_by_type(tt; optimize=false, debuginfo=:none)
+  isempty(found) && error("Julia has no method for these types.")
+  ci, gives = first(found)
+  inside = string(m) * "."
+  body = split(replace(sprint(show, ci, context=:module => m), inside => ""), '\n')
+  # Julia writes the steps between a line that says CodeInfo( and a line with a )
+  length(body) > 2 && startswith(first(body), "CodeInfo(") && (body = body[2:end-1])
+  n = length(Base.unwrap_unionall(tt).parameters)
+  locals = ci.slottypes isa Vector ?
+    ["  " * string(name) * "::" * type_name(m, T) for (name, T) in zip(ci.slotnames[n+1:end], ci.slottypes[n+1:end])
+     if !startswith(string(name), '#') && !isempty(string(name))] : String[]
+  rows = CodeRow[tinted(l) for l in body]
+  # The two headings are words of Ladder's, so they're dim
+  isempty(locals) || (rows = [[[("Locals", :dim)]]; [tinted(l) for l in locals]; [[("Body", :dim)]]; rows])
+  (rows, gives)
+end
+
+"The function that the types `tt` call, and the types of its arguments, as `code_llvm` and `code_native` take them"
+callee(tt) = begin
+  inner = Base.unwrap_unionall(tt)
+  F = inner.parameters[1]
+  f = isdefined(F, :instance) ? F.instance : F isa DataType && F.name === Type.body.name ? F.parameters[1] :
+      error("Ladder can't compile a thing that's called like a function. It has no name to compile.")
+  (f, Base.rewrap_unionall(Tuple{inner.parameters[2:end]...}, tt))
+end
+
+const LLVM_WORDS = r"%[\w.\"#-]+|@\"[^\"]*\"|@[\w.]+|\b(?:define|declare|ret|br|call|load|store|alloca|getelementptr|icmp|fcmp|phi|select|switch|unreachable|invoke|bitcast|trunc|zext|sext|add|sub|mul|sdiv|udiv|srem|urem|fadd|fsub|fmul|fdiv|and|or|xor|shl|lshr|ashr)\b|(?<![\w.])-?\d+(?:\.\d+)?(?![\w.])"
+
+"A line of LLVM code as pieces, each with the name of its colour: the names of values, the names of functions, the instructions and the numbers"
+llvm_row(line::AbstractString) = begin
+  startswith(lstrip(line), ';') && return [(String(line), :comment)]
+  out = Tuple{String,Symbol}[]
+  at = 1
+  for found in eachmatch(LLVM_WORDS, line)
+    found.offset > at && push!(out, (String(line[at:prevind(line, found.offset)]), :ink))
+    word = found.match
+    push!(out, (String(word), startswith(word, '%') ? :call : startswith(word, '@') ? :type : isletter(first(word)) ? :keyword : :number))
+    at = found.offset + ncodeunits(word)
+  end
+  at <= ncodeunits(line) && push!(out, (String(line[at:end]), :ink))
+  out
+end
+
+"The LLVM code that Julia makes for the types `tt`"
+llvm(tt) = begin
+  f, types = callee(tt)
+  text = sprint(io -> Base.invokelatest(code_llvm, io, f, types; debuginfo=:none, dump_module=false, raw=false))
+  CodeRow[llvm_row(l) for l in split(rstrip(text), '\n')]
+end
+
+"""
+The assembly that Julia compiles the types `tt` to, and how many bytes of
+machine code it is. Each instruction has its place in that machine code, then
+its machine code in hexadecimal, then the instruction as assembly.
+"""
+assembly(tt) = begin
+  f, types = callee(tt)
+  text = sprint(io -> Base.invokelatest(code_native, io, f, types; debuginfo=:none, dump_module=false, binary=true))
+  rows = CodeRow[]
+  code = nothing   # the place and the machine code of the instruction on the next line
+  bytes = 0
+  wide = maximum(l -> (found = match(r"^; [0-9a-f]+: ([0-9a-f ]+)$", l); found === nothing ? 0 : length(found[1])), split(text, '\n'), init=8)
+  for line in split(text, '\n')
+    found = match(r"^; ([0-9a-f]+): ([0-9a-f ]+)$", line)
+    if found !== nothing
+      code = (String(found[1]), String(found[2]))
+    elseif startswith(line, "; code origin")
+      size = match(r"code size: (\d+)", line)
+      size === nothing || (bytes = parse(Int, size[1]))
+    elseif startswith(line, ';')
+      push!(rows, [(String(strip(line[2:end])), :comment)])
+    elseif startswith(line, '\t')
+      parts = split(strip(line), '\t', limit=2)
+      place, hex = something(code, ("", ""))
+      push!(rows, [(rpad(place, 6), :faint), (rpad(hex, wide + 2), :dim), (rpad(parts[1], 8), :keyword),
+                   (length(parts) > 1 ? replace(String(parts[2]), '\t' => ' ') : "", :ink)])
+      code = nothing
+    elseif !isempty(strip(line))
+      push!(rows, [(String(line), :dim)])   # the name of a place that an instruction jumps to
+    end
+  end
+  (rows, bytes)
+end
+
+"""
+What the box of `o` shows while its file of Julia code is down a level: the
+code of what ran, at the level of the file. It's nothing at the level of the
+value, and for code that has no lower level. The lines of a level are worked
+out once for each set of types.
+"""
+code_view(e, o) = begin
+  b = e.buf
+  (julia_file(b) && b.depth > 0 && !o.failed && o.source !== nothing) || return nothing
+  m = workspace(e)
+  found = forms(o.source, m)
+  isempty(found) && return nothing
+  o.form = clamp(o.form, 1, length(found))
+  tt = found[o.form]
+  key = (b.depth, tt)
+  title, rows = get!(o.views, key) do
+    name = call_words(o.source, m, tt)
+    try
+      if b.depth == 1
+        rows, gives = inferred(m, tt)
+        (name * "::" * type_name(m, gives), rows)
+      elseif b.depth == 2
+        (isempty(name) ? "LLVM code" : name, llvm(tt))
+      else
+        rows, bytes = assembly(tt)
+        ((isempty(name) ? "" : name * "  ") * "$(commas(bytes)) bytes", rows)
+      end
+    catch err
+      what = ("infer", "make LLVM code of", "compile")[b.depth]
+      (isempty(name) ? "No code" : name, CodeRow[[("Julia couldn't $what this: " * Base.invokelatest(sprint, showerror, err), :dim)]])
+    end
+  end
+  more = length(rows) - MOST_LOWERED
+  more > 0 && (rows = [rows[1:MOST_LOWERED]; [[("… and $(commas(more)) more lines", :dim)]]])
+  Lowered(key, title, rows, maximum(row -> sum(piece -> length(piece[1]), row, init=0), rows, init=0), length(found))
+end
+
+"The line at the top of the open box of a function that has more than one method or set of types. A click on it shows the next."
+@def mutable struct FormPick <: SemanticUI
+  of::Any = nothing   # the OutcomeBody
+end
+
+describe(p::FormPick) = begin
+  o = p.of.of
+  low = o.low
+  words = low === nothing ? "" : "$(o.form) of $(low.forms)  ·  click for the next types"
+  Row(width(grow=grow), height(o.size * 1.7), Alignment.Center, radius(4px), background(ishovered(p) ? colours.hover : clear), name="Form pick",
+    Box(label(words, o.size * 0.92, color=colours.dim)), Box(width(grow=grow)))
+end
+
+cursor(::FormPick) = :hand
+onmouse(::FormPick, ::MouseMove) = handled
+onkey(p::FormPick, ::KeyPress{Keys.mouse_left}) = (o = p.of.of; o.low === nothing || (o.form = mod1(o.form + 1, o.low.forms)); handled)
+
+"""
+The lines of code that the open box `d` shows while its file is down a level.
+A list that's taller than the room under the box shows that much of itself,
+and the wheel moves through the rest. Only the lines in sight are made.
+"""
+lowered_view(d) = begin
+  o = d.of
+  low = o.low::Lowered
+  face = outcome_face(o.size)
+  h = o.size * 1.45
+  n = length(low.rows)
+  # Other lines start at their top
+  d.showed == low.key || (d.showed = low.key; d.scroll.offset = 0px)
+  pick = low.forms > 1 ? (d.pick === nothing ? (d.pick = own!(d, FormPick(of=d))) : d.pick,) : ()
+  tall = min(h * n, d.tall)
+  lo = clamp(floor(Int, d.scroll.offset / h) - 2, 0, n)
+  hi = min(n, lo + ceil(Int, tall / h) + 4)
+  row(i) = Row(height(h), Alignment.Center,
+    [Box(Text(text, size=o.size, family=face.family, subfamily=face.style, color=getfield(colours, kind), wrap=WrapMode.none)) for (text, kind) in low.rows[i]]...)
+  inside = Column(width(grow=grow), Alignment.Start, spacer(h * lo), [row(i) for i in lo+1:hi]..., spacer(h * (n - hi)))
+  Column(width(grow=grow), Alignment.Start, pick..., Box(width(grow=grow), height(tall), Alignment.Start, clip=true, reuse!(d.scroll, inside)))
 end
 
 # A whole file of code or of text starts at the left of the page, not in the
@@ -4632,8 +5082,8 @@ const GUIDES = (0, 80, 92, 100, 120)    # the places for the line down a file of
 const CODE_SCALES = (0.4, 2.5)          # the least and most that code can be, beside the page's text
 const SIDE_ROOM = 40px   # how near the caret gets to the left or right of the window before the page scrolls sideways
 
-"True when the long lines of the page go on under themselves. Only a file of code or of text can have them go on past the window."
-wraps(e) = e.wrap || !numbered(e.buf)
+"True when the long lines of the page go on under themselves. Only a file of code or of text can have them go on past the window, and the lines of a file's bytes always do."
+wraps(e) = !bytes_page(e.buf) && (e.wrap || !numbered(e.buf))
 
 "How far the page is scrolled to the right"
 sideways(e) = wraps(e) ? 0px : e.buf.across
@@ -4891,6 +5341,11 @@ end
 # Ladder reads `FILE_ROWS` rows of the file at most. When the file changes on
 # the disk and its headings stay the same, the table keeps its order and what
 # it shows.
+#
+# The table is the file at its highest level. ⌘E, or the slider in the top
+# bar, goes down to the file's text, and the slider goes on down to its bytes
+# in hexadecimal and its bits. Back at the table, the rows are in the order
+# and show what they did. See "the slider of the levels".
 
 const FILE_ROWS = 100_000       # the most rows of a CSV file that the page reads
 const FILE_BYTES = 40_000_000   # and the most of the file that it reads
@@ -15254,7 +15709,7 @@ end
 const SOURCE = r"^\s*(?:```|~~~)\s*[^\s`]+[ \t]+((?:\.{1,2}/|~?/|github\.com/)\S+)\s*$"
 
 "True when Ladder itself says what a code block in the language `lang` shows"
-known_lang(lang) = lang in (LIVE, SHEET, SPREADSHEET, DIAGRAM, MATH, TAKEOFF, SCHEDULE, MATTER, TOML_MATTER, HEX, "julia") || haskey(BLOCKS, lang)
+known_lang(lang) = lang in (LIVE, SHEET, SPREADSHEET, DIAGRAM, MATH, TAKEOFF, SCHEDULE, MATTER, TOML_MATTER, HEX, BITS, "julia") || haskey(BLOCKS, lang)
 
 "What was found in each file that could define a kind of block: when the file was saved, and whether its text defines the function"
 const DEFINES = Dict{Tuple{String,String},Tuple{Float64,Bool}}()
@@ -15790,7 +16245,7 @@ text_width(e) = begin
   room = w - ((e.panel || sliding(e)) && !alone ? panel_w(e) : 0px) - 2PAGE_X - gutter(e)
   # A file of code or of text takes all the room that the window has, and so do a CSV file's table and
   # the lines of a block that fill the window. A page is no wider than the settings say.
-  numbered(e.buf) || alone || json_page(e.buf) || sheet_page(e.buf) ? max(room, 240px) : clamp(room, 240px, e.widest * e.zoom)
+  numbered(e.buf) || alone || json_page(e.buf) || bytes_page(e.buf) || sheet_page(e.buf) ? max(room, 240px) : clamp(room, 240px, e.widest * e.zoom)
 end
 
 """
@@ -15802,7 +16257,8 @@ scrolled to the right.
 text_left(e) = begin
   w, _ = window_size(e)
   side = lowered(e) === nothing ? panel_w(e) * opened(e) : 0px
-  numbered(e.buf) ? side + PAGE_X + gutter(e) - sideways(e) : side + max(PAGE_X, (w - side - e.width) / 2)
+  # The lines of a file's bytes start at the left too, and scroll to the right as numbered lines do
+  numbered(e.buf) || bytes_page(e.buf) ? side + PAGE_X + gutter(e) - sideways(e) : side + max(PAGE_X, (w - side - e.width) / 2)
 end
 
 "Work out what the page shows and how tall each part is, for text that's `width` wide"
@@ -19066,9 +19522,11 @@ describe(t::TopBar) = begin
         buttons..., Box(width(grow=grow)), arrows...)),
     Box(width(grow=grow), height(grow=grow), clip=true, node!(Title, e, :title)),
     Row(fixed(side), height(grow=grow), justify=Alignment.End, padding(0px, 10px, 0px, 0px),
-      # A file that's only shown has no words to count. The bar says that it's only shown. A JSON file has
-      # the snake or the ladder too.
-      (readonly(b) ? (mode..., Box(height(28px), padding(8px, 0px), label(isempty(b.about) ? "Read only" : b.about * "  ·  Read only", 12px, color=colours.dim)),
+      # A file that's only shown has no words to count. The bar says that it's only shown. A file with levels
+      # has the snake or the ladder too. It's after the words, which are longer at one level than at another,
+      # so that it stays where it is, under the mouse, when a click on its slider changes the level.
+      (readonly(b) ? (Box(height(28px), padding(8px, 0px), label(isempty(b.about) ? "Read only" : b.about * "  ·  Read only", 12px, color=colours.dim)),
+                      mode...,
                       # The app that the Mac uses for the file can change it, so a button opens the file there
                       button(e, :outside, "box-arrow-up-right")) :
                      (more..., job_part(e)..., agent_part(e)..., mode...,
@@ -19088,7 +19546,10 @@ end
 # on it goes to the other level, and ⌘E does too. See "rich text and plain
 # text" above for what each level does. While a takeoff, a schedule or a
 # sketch fills the window, the click goes down to the lines that make it,
-# and those lines fill the window as text. See `level!`.
+# and those lines fill the window as text. See `level!`. A file of text
+# that's only shown has three levels, and a JSON file and a CSV file have
+# four. While the mouse is over the picture, it opens into a slider with a
+# stop for each level. See "the slider of the levels".
 
 const MODE_W = 30px   # the room that the picture takes in the top bar
 const TITLE_ROOM = 160px   # the least room that the file's name keeps in the top bar of a narrow window
@@ -19117,6 +19578,7 @@ end
 describe(m::Mode) = begin
   e = editor(m)
   ishovered(m) || (m.quiet = false)
+  slide!(m)
   Box(width(MODE_W), height(28px), radius(6px), Alignment.Center, name=low(e) ? "Plain text" : "Rich text",
       background(ishovered(m) ? colours.hover : clear),
     # Both are drawn for a square 16 wide, so at this size their lines are on whole pixels
@@ -19127,19 +19589,180 @@ cursor(::Mode) = :hand
 # A block that the click makes fill the window again keeps the keyboard that it took
 onkey(m::Mode, ::KeyPress{Keys.mouse_left}) = (e = editor(m); level!(e); hush!(m); full_block(e) === nothing && focus(e); handled)
 # The tip says what a click does, as the count's tip does
-tip(m::Mode) = begin
-  e = editor(m)
-  words = json_page(e.buf) ? (low(e) ? "Go up a level, to the tree of the file's values" : "Go down a level, to the file's text") :
-          low(e) ? "Go up a level, to the graphics that the symbols make" :
-          full_block(e) === nothing ? "Go down a level, to the symbols of the part with the caret" :
-                                      "Go down a level, to the symbols that make this"
+tip(m::Mode) = (e = editor(m); stop_tip(e, other_level(e)))
+
+"The snake or the ladder for the top bar. A document has one, and so have a file of text that's only shown and a file of Julia code."
+mode_part(e) = e.buf.view == :markdown || !isempty(file_views(e.buf)) || julia_file(e.buf) ? (node!(Mode, e, :mode),) : ()
+
+# --- the slider of the levels --------------------------------------------------------------------
+#
+# What the window shows can have more than two levels. A file of text that's
+# only shown has three: its bits, its bytes in hexadecimal, and its text. A
+# JSON file has the tree of its values over those, and a CSV file has its
+# table. A file of Julia code has four, and they're levels of what its code
+# comes to when it runs: its assembly, its LLVM code, its inferred code, and
+# its value.
+# So while the mouse is over the picture in the top bar, the picture opens out
+# into a slider. The snake is at the slider's low end and the ladder is at its
+# high end, and each is the stop of its level. Each level between those two
+# has a dot between them. The stop of the level that the window shows is lit.
+#
+# A click on a stop goes to its level, and so does a drag along the slider.
+# The slider opens out to the left, so the ladder stays under the mouse. A
+# click on the ladder while the window is at the highest level goes one level
+# down, and a click on the snake while it's at the lowest goes one level up.
+# So with two levels, a click on the picture still goes to the other level.
+# ⌘E goes one level down from the highest level, and to the highest level
+# from any other. The tip of a stop says what a click on it does.
+
+const FILE_VIEWS = (:bits, :hex, :text, :file)   # the ways that a file with levels shows, from the lowest level
+const FILE_LEVELS = ("the file's bits", "the file's bytes in hexadecimal", "the file's text")   # and the tree or the table over them
+const PAGE_LEVELS = ("the symbols of the part with the caret", "the graphics that the symbols make")
+const BLOCK_LEVELS = ("the symbols that make this", "the graphics that the symbols make")
+const LEVELS_KEY = :levels
+const STOP_W = 24px      # the room of the dot of a level between the two ends, with the line that goes through it
+const TRACK_W = 14px     # the line between the two ends, when there's no level between them
+const OPENS_IN = 0.14    # seconds for the slider to open out from the picture
+
+"""
+The levels of abstraction that the window can show at, from the lowest to the
+highest. Each is what the window shows there, as the tip of its stop says it.
+"""
+levels(e) = begin
+  b = e.buf
+  julia_file(b) && return CODE_LEVELS
+  views = file_views(b)
+  isempty(views) && return full_block(e) === nothing ? PAGE_LEVELS : BLOCK_LEVELS
+  length(views) == 3 ? FILE_LEVELS : (FILE_LEVELS..., json_page(b) ? "the tree of the file's values" : "the file's table")
+end
+
+"The level that the window shows at: its place in `levels(e)`"
+level(e) = begin
+  julia_file(e.buf) && return length(CODE_LEVELS) - e.buf.depth
+  views = file_views(e.buf)
+  isempty(views) && return e.plain && full_block(e) === nothing ? 1 : 2
+  something(findfirst(==(e.buf.view), views), length(views))
+end
+
+"The level that ⌘E goes to: one down from the highest level, and the highest level from any other"
+other_level(e) = (n = length(levels(e)); level(e) == n ? n - 1 : n)
+
+"The level that a click on the stop of level `i` goes to. A click on the end that the window is at goes one level in from it."
+click_level(e, i::Int) = (n = length(levels(e)); i != level(e) ? i : i == n ? n - 1 : i == 1 ? 2 : i)
+
+"Go to level `i` of `levels(e)`"
+level!(e, i::Int) = begin
+  i == level(e) && return e
+  # A page has two levels, so it goes to the other one
+  julia_file(e.buf) && return code_level!(e, length(CODE_LEVELS) - i)
+  views = file_views(e.buf)
+  isempty(views) ? level!(e) : file_level!(e, views[i])
+end
+
+"What the tip of the stop of level `i` says: what a click on it does"
+stop_tip(e, i::Int) = begin
+  ls, now = levels(e), level(e)
+  to = click_level(e, i)
+  to == now && return "The window shows $(ls[now])"
+  steps = abs(to - now)
+  words = "Go $(to > now ? "up" : "down") $(steps == 1 ? "a level" : "$steps levels"), to $(ls[to])"
+  to == other_level(e) || return words
   # An email goes between how it was sent and its words
   full_block(e) === nothing && (words = something(sent_tip(e), words))
   words * hint(e, :plain)
 end
 
-"The snake or the ladder for the top bar. Only a document and a JSON file have one: a file of code is always plain."
-mode_part(e) = e.buf.view == :markdown || json_page(e.buf) ? (node!(Mode, e, :mode),) : ()
+"""
+Show the slider of the levels while the mouse is over `m`, the picture in the
+top bar, and take it away when the mouse leaves. The slider lies over the
+picture, with its high end where the picture is. It's a part of `m`, so the
+mouse is over `m` while it's over the slider.
+"""
+slide!(m::Mode) = begin
+  w = window_of(m)
+  w === nothing && return
+  e = editor(m)
+  shown = any(p -> p.key == LEVELS_KEY, popups(w))
+  # A window hears nothing of a mouse that has left it, and the top bar is at its edge. So while the slider
+  # shows, the window looks where the mouse is, and soon looks again.
+  shown && !isempty(w.glfw) && (sync_mouse!(w); redraw_in!(m, 0.2))
+  if ishovered(m)
+    shown && return
+    l = get!(() -> own!(m, Levels()), e.nodes, LEVELS_KEY)
+    l.since, l.pressed = time(), -1
+    popup!(w, l, anchor=m, placement=:left, gap=-MODE_W, key=LEVELS_KEY, modal=false)
+  elseif shown
+    close_popup!(w, LEVELS_KEY)
+  end
+  nothing
+end
+
+describe(l::Levels) = begin
+  e = editor(l)
+  n = length(levels(e))
+  # A stop for each level. A page that fills the window with a block, or a file of another kind, can have a different number.
+  length(l.stops) == n || (l.stops = Any[own!(l, Stop(level=i)) for i in 1:n])
+  # A line goes from the snake to the ladder. The stop of each level between them has its part of the line.
+  parts = n == 2 ? Any[l.stops[1], track(TRACK_W), l.stops[2]] : l.stops
+  full = 2MODE_W + (n == 2 ? TRACK_W : STOP_W * (n - 2))
+  # It opens out from the picture: quick at first, then slower
+  t = clamp((time() - l.since) / OPENS_IN, 0.0, 1.0)
+  t < 1 && redraw_in!(l, 1/60)
+  wide = MODE_W + (full - MODE_W) * (1 - (1 - t)^2)
+  Row(fixed(wide), height(28px), radius(6px), Alignment.Start, background(colours.float), clip=true, name="Levels",
+    Box(Alignment.Start, offset_x=wide - full, Row(fixed(full), height(28px), Alignment.Center, parts...)))
+end
+
+"A part of the line that the stops of the slider are on. With no width, it takes the room that it's given."
+track(wide=nothing) = Box(wide === nothing ? width(grow=grow) : width(wide), height(2px), background(colours.line))
+
+# A click between two stops does nothing, and the picture under the slider doesn't get it
+onkey(l::Levels, ::KeyPress{Keys.mouse_left}) = (l.pressed = 0; handled)
+onmouse(l::Levels, ev::MouseMove) = (Keys.mouse_left in ev.window.keys || (l.pressed = -1); handled)
+
+describe(s::Stop) = begin
+  e = editor(s)
+  here = s.level == level(e)
+  over = ishovered(s)
+  over || (s.quiet = false)
+  tint = here ? colours.active : over ? colours.hover : clear
+  # The two ends are the snake and the ladder. Both are drawn for a square 16 wide, so at this size their lines are on whole pixels.
+  s.level in (1, length(levels(e))) &&
+    return Box(width(MODE_W), height(28px), radius(6px), Alignment.Center, background(tint), name="Stop",
+             Icon(s.level == 1 ? snake() : "ladder", size=16px, color=here ? colours.ink : colours.dim))
+  # A level between the ends is a dot on the line: bigger and darker for the level that the window is at
+  d = here ? 10px : over ? 8px : 6px
+  Row(fixed(STOP_W), height(28px), Alignment.Center, name="Stop",
+    track(), Box(width(d), height(d), radius(d / 2), background(here ? colours.ink : over ? colours.dim : colours.marker)), track())
+end
+
+cursor(::Stop) = :hand
+
+"Go to the level that a click on `s` goes to, and give the page the keyboard. A block that fills the window again keeps the keyboard that it took."
+go!(s::Stop) = begin
+  e = editor(s)
+  level!(e, click_level(e, s.level))
+  s.quiet = true
+  hide_tooltip!(window_of(s))
+  full_block(e) === nothing && focus(e)
+  handled
+end
+
+onkey(s::Stop, ::KeyPress{Keys.mouse_left}) = ((s.parent::Levels).pressed = s.level; go!(s))
+
+onmouse(s::Stop, ev::MouseMove) = begin
+  l = s.parent::Levels
+  if Keys.mouse_left in ev.window.keys
+    # A drag along the slider goes to the level of each stop that the mouse comes to
+    l.pressed < 0 || l.pressed == s.level || (l.pressed = 0; s.level == level(editor(s)) || go!(s))
+    return handled
+  end
+  l.pressed = -1
+  r = rect(s)
+  (s.quiet || r === nothing) && return handled
+  show_tooltip!(ev.window, tip_label(stop_tip(editor(s), s.level)), r.left, r.top, r.width, r.height, placement=:bottom, gap=6px)
+  handled
+end
 
 """
 Write the page as plain text, or with `on` false as rich text. Only the part
@@ -19174,8 +19797,8 @@ end
 # among the lines of the page, as it puts a block that fills the window back
 # in the page.
 
-"True when the window shows symbols: the page is at the low level, and no block fills the window. A JSON file is there while it shows its text."
-low(e) = json_page(e.buf) ? e.buf.view == :text : e.plain && full_block(e) === nothing
+"True when the window shows under its highest level: a page shows its symbols and no block fills the window, or a file shows its bytes, or its text when it has a tree or a table"
+low(e) = level(e) < length(levels(e))
 
 "The language of the block that `v` is the view of, or nothing"
 block_lang(v) = v isa TakeoffView ? TAKEOFF : v isa ScheduleView ? SCHEDULE : findfirst(kind -> v isa kind.view, BLOCKS)
@@ -19185,7 +19808,8 @@ block_span(b::Buffer, v) = (lang = block_lang(v); lang === nothing ? nothing : b
 
 "Go to the other level: down from graphics to the symbols that make them, or up again"
 level!(e) = begin
-  json_page(e.buf) && return json_level!(e)   # a JSON file goes between its tree and its text
+  # A file goes between its highest level and the one under it
+  (isempty(file_views(e.buf)) && !julia_file(e.buf)) || return level!(e, other_level(e))
   v = full_block(e)
   v === nothing || return lower!(e, v)
   e.plain || return plain!(e, true)
@@ -22346,14 +22970,19 @@ outcome_face(size, ink=colours.ink) = Face(codefont(), codestyle(), size, ink, f
   whole::Any = nothing              # the value itself, when the open box lists its parts: a struct, or a UI node in a file of code
   open::Bool = false                # the rest shows under the box
   body::Any = nothing               # the OutcomeBody that shows the rest
+  source::Any = nothing             # what the levels under the value show the code of: a Defined or a Thunk, or nothing
+  form::Int = 1                     # which of a function's methods and sets of types those levels show
+  views::Dict{Any,Any} = Dict{Any,Any}()   # the top line and the lines of each level that has shown, for each set of types
   # Each frame sets these, for the room that the window has
   shown::String = ""                # as much of `brief` as fits
   rest::String = ""                 # what shows under the box when it's open
   from::Int = 1                     # the line of `full` that `rest` starts at
   more::Bool = false                # there's more than the box shows
+  low::Any = nothing                # the Lowered that it shows while the file is down a level, or nothing at the level of the value
   size::px = 12px                   # of its text
   high::px = 20px
   across::px = 0px                  # how wide the box is while it's open
+  steps::Tuple{px,px} = (0px, 0px)  # how far the rest under an open box goes on past the left of the box, and past its right
 end
 
 "What shows under the box of an outcome that's open: the rest of the value, the node that the value is, or the parts of the value"
@@ -22361,6 +22990,8 @@ end
   of::Any = nothing
   detail::Any = nothing    # the Detail of a function or a module, made when the box first opens
   members::Any = nothing   # the Member of each part of a value that has parts, made when the box first opens
+  pick::Any = nothing      # the FormPick of a function that offers more than one method or set of types
+  showed::Any = nothing    # what the lines of a level were last shown for, so that new lines start at their top
   scroll::Scroll = Scroll(width(grow=grow), height(grow=grow))   # moves through a list of parts that's taller than `MEMBERS_H`
   wide::px = 0px           # how wide that list is. Each frame sets it.
   across::px = 0px         # how wide all of it is, with the space around what it shows. Each frame sets it.
@@ -22645,7 +23276,10 @@ last of them. `code` is the part of those lines that runs.
 outcome!(e, r::UnitRange{Int}, code::String=join(e.buf.lines[r], "\n")) = begin
   b = e.buf
   was = b.lines[r]
+  world = Base.get_world_counter()
   value, printed, failed = run_code(e, code)
+  # In a file of Julia code, the levels under the value show the code of what ran
+  source = !failed && julia_file(b) ? source_of(code, value, world) : nothing
   # Code that ends with a semicolon shows no value, as it does at Julia's prompt
   !failed && endswith(rstrip(code), ';') && (value = nothing)
   node = whole = nothing
@@ -22672,6 +23306,9 @@ outcome!(e, r::UnitRange{Int}, code::String=join(e.buf.lines[r], "\n")) = begin
   o = own!(e, Outcome(first=first(r), last=last(r), code=was, total=length(b.lines), brief=String(first(split(full, '\n'))),
                       full=full, printed=isempty(said) ? 0 : count('\n', said) + 1, failed=failed, node=node, subject=subject,
                       whole=whole, open=node !== nothing || whole isa Union{SemanticUI,GeometricUI}))
+  o.source = source
+  # Code that runs while the file is down a level has its box open, since the code under it is what the level is for
+  source !== nothing && b.depth > 0 && (o.open = true)
   list = outcomes(e)
   # It takes the place of what any of those lines came to before
   Base.filter!(p -> p.last < o.first || p.first > o.last, list)
@@ -22775,20 +23412,27 @@ outcome_over(e) = begin
     left = x0 + xcol(vl, vl.to) + OUTCOME_GAP
     top = y0 + it.top + line_top(f, length(f.lines)) + (vl.high - high) / 2
     # A line that ends too near the edge of the window has the box under it
-    fits(left) < min(length(o.brief), 16) && ((left, top) = (x0 + vl.x, top + vl.high))
+    # While the file is down a level, the box shows the code of what ran, and not its value
+    o.low = code_view(e, o)
+    brief = o.low === nothing ? o.brief : o.low.title
+    fits(left) < min(length(brief), 16) && ((left, top) = (x0 + vl.x, top + vl.high))
     top = px(round(num(top)))
     # On a page that's scrolled sideways, a box that would go over the numbers of the lines doesn't show
     (top >= TOPBAR_H && top + high <= h && left >= x0 + sideways(e)) || continue
     n = max(fits(left), 1)
-    o.shown = length(o.brief) > n ? first(o.brief, n - 1) * "…" : o.brief
+    o.shown = length(brief) > n ? first(brief, n - 1) * "…" : brief
     # The box of an outcome that's open shows the first line, so the rest starts at the second
-    o.rest = o.shown == o.brief ? String(chopprefix(chopprefix(o.full, o.brief), "\n")) : o.full
+    o.rest = o.low !== nothing ? "" : o.shown == o.brief ? String(chopprefix(chopprefix(o.full, o.brief), "\n")) : o.full
     o.from = o.shown == o.brief ? 2 : 1
-    o.more = o.node !== nothing || o.subject !== nothing || o.whole !== nothing || !isempty(o.rest)
+    o.more = o.low !== nothing || o.node !== nothing || o.subject !== nothing || o.whole !== nothing || !isempty(o.rest)
     o.size, o.high = size, high
     (o.open && o.more) || (push!(boxes, at(top, left, o)); continue)
     o.body === nothing && (o.body = own!(e, OutcomeBody(of=o)))
-    if o.whole !== nothing
+    if o.low !== nothing
+      # The lines of the code: as wide as the widest, and no taller than the room under the box
+      o.body.wide = min(wide * max(o.low.cols, 28), w - side - 2OUTCOME_EDGE - 38px)
+      o.body.tall = clamp(h - (top + high) - OUTCOME_EDGE - 10px, size * 1.45 * MEMBERS_LEAST, MEMBERS_H)
+    elseif o.whole !== nothing
       o.body.members === nothing && (o.body.members = member_lines(o.body, o.whole, 0))
       # As wide as the widest line that shows, and no wider than the window has room for
       cols = max(maximum(length, printed_rest(o), init=0), maximum(member_cols, unfolded(o.body.members), init=0))
@@ -22797,7 +23441,8 @@ outcome_over(e) = begin
       o.body.tall = clamp(h - (top + high) - OUTCOME_EDGE - 10px, size * 1.45 * MEMBERS_LEAST, MEMBERS_H)
     end
     # How wide the rest is, with the space around what it shows
-    across = o.subject !== nothing ? detail_wide(e) :
+    across = o.low !== nothing ? o.body.wide + 19px :
+             o.subject !== nothing ? detail_wide(e) :
              o.node !== nothing ? OUTCOME_NODE_W + 22px :
              (o.whole !== nothing ? o.body.wide : wide * maximum(length, split(o.rest, '\n'))) + 19px
     under = max(side + 8px, min(left, w - across - OUTCOME_EDGE))
@@ -22811,6 +23456,7 @@ outcome_over(e) = begin
     corner(gap) = gap >= OUTCOME_ROUND ? OUTCOME_ROUND : 0px
     o.body.across = across
     o.body.corners = radius(corner(left - under), corner(under + across - left - o.across), OUTCOME_ROUND, OUTCOME_ROUND)
+    o.steps = (left - under, under + across - left - o.across)
     # The box is over the top line of the rest, so no line shows between them
     push!(bodies, at(top + high - 1px, under, o.body), at(top, left, o))
   end
@@ -22848,7 +23494,8 @@ isvalue(o::Outcome, k::Int) = !o.failed && k > o.printed
 
 describe(o::Outcome) = begin
   arrow = o.more ? (Icon(o.open ? "chevron-down" : "chevron-right", size=o.size * 0.8, color=colours.dim),) : ()
-  what = isempty(o.full) && o.node === nothing ? Box(Icon("check", size=o.size, color=colours.dim)) :
+  what = o.low !== nothing ? value_row(o.shown, o) :
+         isempty(o.full) && o.node === nothing ? Box(Icon("check", size=o.size, color=colours.dim)) :
          value_row(o.shown, o, code=isvalue(o, 1) && o.node === nothing)
   joined = o.open && o.more
   fill = o.more && ishovered(o) ? colours.hover : colours.float
@@ -22866,12 +23513,13 @@ end
 
 describe(d::OutcomeBody) = begin
   o = d.of
-  o.subject === nothing || return detail_view(editor(d), d)
-  inner = d.members !== nothing ? members_view(d) :
+  (o.subject === nothing || o.low !== nothing) || return detail_view(editor(d), d)
+  inner = o.low !== nothing ? lowered_view(d) :
+          d.members !== nothing ? members_view(d) :
           o.node !== nothing ? Box(fixed(OUTCOME_NODE_W), Alignment.Start, o.node) :
           Column(Alignment.Start, [value_row(line, o, code=isvalue(o, o.from + k - 1)) for (k, line) in enumerate(split(o.rest, '\n'))]...)
   # Text and the lines of a list start under the arrow of the box
-  around = o.node !== nothing ? padding(10px, 8px) : padding(3px, 10px, 6px, 7px)
+  around = o.node !== nothing && o.low === nothing ? padding(10px, 8px) : padding(3px, 10px, 6px, 7px)
   Box(fixed(d.across), around, d.corners, background(colours.float), border(1px, :solid, outcome_line(o)), lifted, Alignment.Start,
       name="Outcome body", inner)
 end
@@ -22915,6 +23563,49 @@ onkey(m::Member, ::KeyPress{Keys.mouse_left}) = begin
   handled
 end
 
+# Where the rest under an open box goes on past a side of the box, the box and the rest meet in an inside
+# corner. That corner is round too, as the outside corners are, so the outline of the two has no sharp turn.
+draw(ctx, size, ui::ConcreteRect, o::Outcome) = begin
+  (o.open && o.more) || return
+  y = num(ui.top + ui.height) - 0.5   # the middle of the line along the top of the rest
+  for (gap, x, way) in ((o.steps[1], num(ui.left) + 0.5, -1), (o.steps[2], num(ui.left + ui.width) - 0.5, 1))
+    # The rest has a round corner of its own at its end, so a short step leaves less room for this one
+    r = min(num(gap) - num(OUTCOME_ROUND), num(OUTCOME_ROUND))
+    r >= 2 && inside_corner(ctx, x, y, r, way, colours.float, outcome_line(o))
+  end
+end
+
+"""
+Round the inside corner where the side of a box, at `x`, comes down onto a line
+across, at `y`. `way` is -1 when the line goes on to the left of the box and 1
+when it goes on to the right. The corner is filled with `fill`, which covers
+the two lines where they met, and a quarter circle of radius `r` joins them in
+the colour `line`.
+"""
+inside_corner(ctx, x, y, r, way, fill, line) = begin
+  cx, cy = x + way * r, y - r   # the middle of the circle
+  oval = Ref(Skia.sk_rect_t(Float32(cx - r), Float32(cy - r), Float32(cx + r), Float32(cy + r)))
+  # Skia measures angles clockwise from 3 o'clock. The quarter goes from the side of the box down to the line across.
+  from, sweep = way < 0 ? (0f0, 90f0) : (180f0, -90f0)
+  shape = Skia.sk_path_new()
+  Skia.sk_path_move_to(shape, Float32(x - way * 0.6), Float32(y - r))
+  Skia.sk_path_line_to(shape, Float32(x), Float32(y - r))
+  Skia.sk_path_arc_to_with_oval(shape, oval, from, sweep, false)
+  Skia.sk_path_line_to(shape, Float32(x + way * r), Float32(y + 0.6))
+  Skia.sk_path_line_to(shape, Float32(x - way * 0.6), Float32(y + 0.6))
+  Skia.sk_path_close(shape)
+  paint = ink(fill)
+  Skia.sk_canvas_draw_path(ctx, shape, paint)
+  Skia.sk_paint_delete(paint)
+  Skia.sk_path_delete(shape)
+  curve = Skia.sk_path_new()
+  Skia.sk_path_arc_to_with_oval(curve, oval, from, sweep, true)
+  paint = ink(line, 1.0)
+  Skia.sk_canvas_draw_path(ctx, curve, paint)
+  Skia.sk_paint_delete(paint)
+  Skia.sk_path_delete(curve)
+end
+
 cursor(o::Outcome) = o.more ? :hand : :arrow
 cursor(::OutcomeBody) = :arrow
 # A click on a box shows the rest of what the code came to, or hides it. It doesn't move the caret.
@@ -22925,9 +23616,12 @@ onkey(::OutcomeBody, ::KeyPress{Keys.mouse_left}) = handled
 onmouse(::OutcomeBody, ::MouseMove) = handled
 # The wheel moves through the documentation and the table of a function or a module, not through the page under them
 onscroll(d::OutcomeBody, ev::MouseScroll) = begin
+  # The lines of code that a box shows while the file is down a level move as a list of parts does
+  low = d.of.low !== nothing
+  low && d.scroll.content_height <= d.scroll.viewport && return nothing
   # A list of parts that all shows leaves the wheel to the page
-  (d.detail === nothing && (d.members === nothing || d.scroll.content_height <= d.scroll.viewport)) && return nothing
-  s = d.detail === nothing ? d.scroll : d.detail.scroll
+  (!low && d.detail === nothing && (d.members === nothing || d.scroll.content_height <= d.scroll.viewport)) && return nothing
+  s = low || d.detail === nothing ? d.scroll : d.detail.scroll
   s.offset = clamp(s.offset - ev.delta[2] * 30, 0px, max(0px, s.content_height - s.viewport))
   handled
 end
@@ -23594,7 +24288,7 @@ end
 const NAMES_SHOWN = 8                         # the most names in the list
 const NAME = r"[\p{L}_][\p{L}\p{N}_!]*"       # a name in code
 # The blocks that aren't code, and a block with no language
-const NO_NAMES = (MATTER, TOML_MATTER, HEX, SHEET, SPREADSHEET, DIAGRAM, MATH, TAKEOFF, SCHEDULE, keys(BLOCKS)..., "")
+const NO_NAMES = (MATTER, TOML_MATTER, HEX, BITS, SHEET, SPREADSHEET, DIAGRAM, MATH, TAKEOFF, SCHEDULE, keys(BLOCKS)..., "")
 
 "The language that code in `lang` shares its names with. `jl` and a live block are Julia."
 shared_lang(lang) = (l = lowercase(lang); l in JULIA || l == LIVE ? "julia" : l)

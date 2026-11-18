@@ -550,10 +550,9 @@ end
   @test K.tip(e.nodes[:mode]) == "Go up a level, to the graphics that the symbols make  ⌘E"
   click(w, e.nodes[:mode])
   @test !e.plain
-  # A file of code has no snake and no ladder
+  # A file of Julia code has a ladder of its own, for what its code comes to. test/julia_levels_test.jl has its levels.
   e2, w2 = window("x = 1\n", name="code.jl")
-  @test !haskey(e2.nodes, :mode)
-  @test isempty(K.mode_part(e2))
+  @test haskey(e2.nodes, :mode) && K.levels(e2) == K.CODE_LEVELS && K.level(e2) == 4
 end
 
 @testset "the settings file keeps how the page shows" begin

@@ -109,6 +109,11 @@ end
   K.MATTER_CARDS[:notes] = (o, rows) -> innotes(o) ? (got[] = rows; K.node!(K.MatterCard, o, :note_top)) : nothing
   frames()
   @test got[] == [(2, "kind", "note")] && e.layout[1].content.node === e.nodes[:note_top] && e.layout[1].tall > 0px
+  # The node has no levels of its own. While it has the keyboard, the top bar's ladder is still the page's: the page answers for it.
+  K.focus(e.nodes[:note_top]); frames()
+  @test w.focus === e.nodes[:note_top] && K.head_in_charge(e) === nothing
+  @test K.levels(e) == K.PAGE_LEVELS && K.level(e) == K.level(K.node!(K.Document, e, :document))
+  K.focus(e); frames()
   # A page that the function has no node for has the card
   write(joinpath(dir, "plain.md"), "---\nkind: page\n---\n\nText.\n")
   K.open!(e, joinpath(dir, "plain.md")); frames()

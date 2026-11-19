@@ -16722,9 +16722,10 @@ level!(h::EmailHead, i::Int) = (h.full = i == 1; h)
 What shows the page's front matter, like the top of an email, while the top
 bar asks it for its levels: while it or a part of it has the keyboard, or
 while the caret is on it as a whole. Otherwise it's nothing. One with no
-levels of its own, like the card of front matter, passes the question on to
-the page, as any part does. So code from the startup page can show front
-matter as a part with levels of its own: see `MATTER_CARDS`.
+levels of its own, like the card of front matter, is never in charge: the
+page answers for it, as it does for any part with none. So code from the
+startup page can show front matter as a part with levels of its own: see
+`MATTER_CARDS`.
 """
 head_in_charge(e) = begin
   w = window_of(e)
@@ -16732,8 +16733,13 @@ head_in_charge(e) = begin
   it = e.layout[1]
   (it.content isa Live && it.first == 1 && it.last == front_matter(e.buf.lines)) || return nothing
   h = it.content.node
+  # A part with none passes the question up to the window. If the window asked that part again, the two would ask each other without end.
+  own_levels(h) || return nothing
   (part_of(w.focus, h) || ((w.focus === e || w.focus === input(e)) && picked(e.buf) == (it.first, it.last))) ? h : nothing
 end
+
+"True when `node` has levels of its own: its type has a method of `levels`, and not only the one that passes the question on to the part that it's in"
+own_levels(node) = which(levels, Tuple{typeof(node)}) !== which(levels, Tuple{SemanticUI})
 
 "True when `node` is `part`, or is in it"
 part_of(node, part) = begin

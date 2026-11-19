@@ -27102,7 +27102,7 @@ page_title(e) = something(first_answer(PAGE_TITLES, e), email_title(e), Some(not
 "The name of the page of a folder that says the folder's kind"
 const FOLDER_PAGE = ".ladder"
 "What each folder's page gave when it last ran, by the folder's path: when the page was saved, and the folder's kind, or nothing"
-const FOLDER_PAGES = Dict{String,Tuple{Float64,Any}}()
+const FOLDER_PAGE_KINDS = Dict{String,Tuple{Float64,Any}}()
 "The paths of the folders whose page waits to run, because it's new or it was saved again"
 const FOLDER_PAGES_DUE = String[]
 "How many times the kind of a folder with a page can have changed. A window lists its folder again when this has grown."
@@ -27124,10 +27124,10 @@ page, so to that code the folder is plain.
 """
 page_kind(path::AbstractString) = begin
   st = stat(joinpath(path, FOLDER_PAGE))
-  kept = get(FOLDER_PAGES, path, nothing)
+  kept = get(FOLDER_PAGE_KINDS, path, nothing)
   if !isfile(st)
     # The folder lost its page, so it's plain from now on
-    kept === nothing || (delete!(FOLDER_PAGES, path); FOLDER_PAGES_RAN[] += 1)
+    kept === nothing || (delete!(FOLDER_PAGE_KINDS, path); FOLDER_PAGES_RAN[] += 1)
     return nothing
   end
   if (kept === nothing || kept[1] != mtime(st)) && !(path in FOLDER_PAGES_DUE)
@@ -27165,7 +27165,7 @@ run_folder_pages!() = begin
       FOLDER_PAGE_STOPPED[] = ("The $FOLDER_PAGE page of $(basename(path)) stopped. " * trouble(err), time())
       nothing
     end
-    FOLDER_PAGES[path] = (at, kind)
+    FOLDER_PAGE_KINDS[path] = (at, kind)
   end
   FOLDER_PAGES_RAN[] += 1
   FOLDER_PAGES_WORLD[] = Base.get_world_counter()

@@ -118,7 +118,7 @@ end
   @test kind(notes) == :NotesDirectory
   rm(joinpath(notes, ".ladder"))
   K.list_files!(e); frames()
-  @test kind(notes) == :Directory && icon("notes") == "folder" && !haskey(K.FOLDER_PAGES, notes)
+  @test kind(notes) == :Directory && icon("notes") == "folder" && !haskey(K.FOLDER_PAGE_KINDS, notes)
 end
 
 @testset "a link to a folder runs the folder's page first, and does what the kind says" begin
@@ -131,7 +131,7 @@ end
     """)
   # A sidebar that lists another folder hasn't met the folder of the films
   K.go_folder!(e, notes); frames()
-  @test !haskey(K.FOLDER_PAGES, films)
+  @test !haskey(K.FOLDER_PAGE_KINDS, films)
   K.follow!(e, films)
   @test CLICKS == ["films"] && e.folder == films
   frames()

@@ -1,6 +1,7 @@
 # Tests for what code from the startup page can add to Ladder: the tables that
 # Ladder calls at its own times, a command with its key, and an item of the
-# Insert menu. See "what code from the startup page adds to" in main.jl. Run
+# Insert menu. A folder has no table: test/folder_kind_test.jl has the tests
+# for a kind of folder. See "what code from the startup page adds to" in main.jl. Run
 # them with `julia -O0 --project=. test/extend_test.jl`. They add a small
 # extension of their own, called `:notes`, and click in a window that isn't on
 # the screen.
@@ -45,16 +46,15 @@ texts(node, out=String[]) = begin
   out
 end
 bar() = texts(K.describe(e.nodes[:topbar]))
-side() = texts(K.describe(e.nodes[:sidebar]))
 "True when the page that shows is in the folder of notes"
 innotes(e) = startswith(e.buf.path, notes * "/")
 "Take the test's extension out of every table"
-forget() = foreach(t -> delete!(t, :notes), (K.EACH_FRAME, K.AT_QUIT, K.BAR_PARTS, K.BUTTONS, K.PAGE_TITLES, K.MATTER_TITLES, K.MATTER_CARDS, K.FOLDER_LISTS,
-                                             K.FOLDER_MARKS, K.PAGE_NAMES, K.FIELD_KEYS, K.SETTINGS_FOLDERS))
+forget() = foreach(t -> delete!(t, :notes), (K.EACH_FRAME, K.AT_QUIT, K.BAR_PARTS, K.BUTTONS, K.PAGE_TITLES, K.MATTER_TITLES, K.MATTER_CARDS,
+                                             K.PAGE_NAMES, K.FIELD_KEYS, K.SETTINGS_FOLDERS))
 
 @testset "with nothing added, Ladder is as it was" begin
   forget()
-  @test K.bar_parts(e) == () && K.folder_marks(e, notes) == () && K.folder_list(e) == (list=nothing, bar=nothing)
+  @test K.bar_parts(e) == ()
   @test K.page_title(e) === nothing && K.first_answer(K.MATTER_TITLES, e) === nothing
   @test "one.md" in bar() || "one" in bar()
 end
@@ -117,26 +117,6 @@ end
   delete!(K.MATTER_CARDS, :notes)
   frames()
   @test e.layout[1].content.node === e.nodes[:matter]
-end
-
-@testset "a list for a folder in the sidebar, a line over it, and a mark on a folder's row" begin
-  e.panel || K.toggle_panel!(e)
-  frames(3)
-  @test any(t -> occursin("two", t), side()) && K.hidden_button(e) != ()
-  K.FOLDER_LISTS[:notes] = o -> o.folder == notes ? (list=K.Box(K.Text("The notes, listed my way", size=13px)), bar=K.Box(K.Text("2 notes", size=12px))) : nothing
-  K.FOLDER_MARKS[:notes] = (o, path) -> basename(path) == "old" ? (K.Box(K.Text("9 old", size=11px)),) : ()
-  frames(3)
-  @test "The notes, listed my way" in side() && "2 notes" in side() && !any(t -> occursin("two", t), side())
-  # The eye that shows hidden files is for a list of files
-  @test K.hidden_button(e) == ()
-  # A line with no list leaves the tree of the folder's files, where the folder's row has its mark
-  K.FOLDER_LISTS[:notes] = o -> o.folder == notes ? (list=nothing, bar=K.Box(K.Text("2 notes", size=12px))) : nothing
-  frames(3)
-  @test "2 notes" in side() && any(t -> occursin("two", t), side()) && "9 old" in side() && K.hidden_button(e) != ()
-  # Another folder is listed as ever
-  K.go_folder!(e, dir); frames(3)
-  @test !("2 notes" in side()) && any(t -> occursin("page", t), side())
-  K.go_folder!(e, notes); frames(3)
 end
 
 @testset "a command with a key, in a group of the key bindings page" begin

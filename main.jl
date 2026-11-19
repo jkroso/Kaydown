@@ -1238,9 +1238,8 @@ object(e, path) = get(() -> ispath(path) ? FS.get(FSPath(path)) : nothing, e.ent
 entry_icon(o::AbstractDirectory) = "folder"
 entry_icon(o::FSObject) = file_icon(string(o.path))
 
-"What follows the name of `o` in its row of the sidebar: nodes, or `()`"
+"What follows the name of `o` in its row of the sidebar, like how many emails of a folder aren't read: nodes, or `()`"
 entry_marks(e, o::FSObject) = ()
-entry_marks(e, d::AbstractDirectory) = folder_marks(e, string(d.path))
 
 """
 How the sidebar lists the directory `d`: `(list=..., bar=...)`. `list` is a
@@ -1248,7 +1247,7 @@ node that shows in place of the tree of what `entries` gives, or nothing to
 leave the tree. `bar` is a node for a line over the list, or nothing. `d` is
 nothing when the sidebar's folder isn't there.
 """
-folder_view(e, d) = folder_list(e)
+folder_view(e, d) = (list=nothing, bar=nothing)
 
 """
 Show the file at `path`. A file that's already open keeps its changes. The
@@ -21046,7 +21045,7 @@ describe(l::FileLabel) = begin
   Row(width(grow=grow), height(grow=grow), padding(0px, 8px, 0px, 0px), child_gap=4px, clip=true, name="File",
     mark(l, o === nothing ? file_icon(l.path) : entry_icon(o)),
     name,
-    (o === nothing ? () : entry_marks(e, o))...,   # what code from the startup page adds, like how many emails of a folder aren't read
+    (o === nothing ? () : entry_marks(e, o))...,   # what a kind of folder or of file adds, like how many emails of a folder aren't read
     (awaited ? (Box(width(6px), height(6px), radius(3px), background(colours.accent)),) : ())...,
     (changed ? (Box(width(6px), height(6px), radius(3px), background(colours.dim)),) : ())...)
 end
@@ -26885,7 +26884,9 @@ end
 # Ladder has no table for a kind of block, a command or a key, because it has
 # those already: a kind of block goes in `BLOCKS`, `add_insert!` puts it in
 # the Insert menu, and `add_commands!` adds commands, with their keys, to the
-# ones that the key bindings page lists.
+# ones that the key bindings page lists. It has no table for a folder or a
+# file either. Each is an object, and a kind of folder is a type, so code
+# writes a method for the type: see `list_files!`.
 
 "What code does in each frame of each window: `f(e)`"
 const EACH_FRAME = Dict{Symbol,Any}()
@@ -26910,19 +26911,6 @@ isn't in it: `f(e, rows)` gives a node, or nothing to leave the card. `rows`
 are the front matter's keys, each as its line, the key and what it's set to.
 """
 const MATTER_CARDS = Dict{Symbol,Any}()
-"""
-How the sidebar lists its folder: `f(e)` gives nothing, or `(list=..., bar=...)`.
-`list` is a node that shows in place of the tree of the folder's files, or
-nothing to leave the tree. `bar` is a node for a line over the list, or nothing.
-A kind of folder has a method of `folder_view` in place of this.
-"""
-const FOLDER_LISTS = Dict{Symbol,Any}()
-"""
-More for the row of a folder in the sidebar's tree, after its name: `f(e, path)`
-gives the nodes, or `()`. A kind of folder has a method of `entry_marks` in
-place of this.
-"""
-const FOLDER_MARKS = Dict{Symbol,Any}()
 "More names for the code of a window's pages: `f(m, e)` adds them to the module `m` that the code runs in"
 const PAGE_NAMES = Dict{Symbol,Any}()
 "A key that code takes while a field of a live block has the keyboard: `f(e, w, K)` is true when it took the key `K`"
@@ -26958,12 +26946,6 @@ end
 
 "The buttons that code from the startup page adds to the top bar for the page that shows"
 bar_parts(e) = Tuple(Iterators.flatten(f(e) for f in values(BAR_PARTS)))
-
-"What code from the startup page adds to the row of the folder at `path` in the sidebar"
-folder_marks(e, path) = Tuple(Iterators.flatten(f(e, path) for f in values(FOLDER_MARKS)))
-
-"How code from the startup page lists the sidebar's folder: its `list` and its `bar`, each nothing when the code has none"
-folder_list(e) = something(first_answer(FOLDER_LISTS, e), (list=nothing, bar=nothing))
 
 """
 Add `commands` to Ladder's commands, in the group called `group` on the key

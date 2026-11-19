@@ -572,8 +572,6 @@ Ladder also has tables for what it does at its own times. Code puts a function i
 | `PAGE_TITLES` | `f(e)` gives what the top bar calls the page, in place of its file's name. |
 | `MATTER_TITLES` | `f(e)` gives what the card of the page's front matter is called. |
 | `MATTER_CARDS` | `f(e, rows)` gives a node that shows in place of the card of the page's front matter, or nothing. |
-| `FOLDER_LISTS` | `f(e)` gives a list for the sidebar's folder, in place of the tree of its files, and a line over it. |
-| `FOLDER_MARKS` | `f(e, path)` adds to the row of a folder in the sidebar, like how many of its emails aren't read. |
 | `PAGE_NAMES` | `f(m, e)` gives the code of a window's pages more names. |
 | `FIELD_KEYS` | `f(e, w, K)` takes a key while a field of a live block has the keyboard. |
 | `SETTINGS_FOLDERS` | A folder whose pages show in the settings window. |
@@ -607,7 +605,7 @@ The sidebar calls these functions, and each has a method for any folder or file:
 | `entry_marks(e, o)` | What follows its name, like how many of a folder's emails aren't read. |
 | `open!(e, o)` | What a click on it does. A folder shows in the sidebar, and a file shows in the page. |
 
-[Mail.lad](https://github.com/jkroso/Mail.lad) does this for the folder of an email account: its `MailDirectory` lists the emails in place of the files. The tables `FOLDER_LISTS` and `FOLDER_MARKS` are the older way to do two of these, and they still work. The types are in `FS.jl` of [URI.jl](https://github.com/jkroso/URI.jl).
+[Mail.lad](https://github.com/jkroso/Mail.lad) does this for the folder of an email account: its `MailDirectory` lists the emails in place of the files. The types are in `FS.jl` of [URI.jl](https://github.com/jkroso/URI.jl).
 
 A kind of block goes in `Ladder.BLOCKS`, as Ladder's own kinds do. `Ladder.add_insert!` puts it in the Insert menu, and `Ladder.add_commands!` adds commands, with their keys, to the ones on the Key bindings page. The comment over the tables in `main.jl` says more. [Mail.lad](https://github.com/jkroso/Mail.lad) is an example that uses each of them. If a block fails, the blocks after it don't run, Ladder opens all the same, and the window says which line of the page failed. A change to the page's code runs the next time Ladder starts.
 

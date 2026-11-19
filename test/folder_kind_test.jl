@@ -111,16 +111,9 @@ end
   @test clicks == ["notes", "old"] && e.folder == joinpath(notes, "old") && isempty(listed())
 end
 
-@testset "the tables still add to a folder with no kind" begin
-  K.go_folder!(e, dir); frames()
-  K.FOLDER_MARKS[:kind_test] = (o, path) -> basename(path) == "plain" ? (K.Box(K.Text("a plain one", size=11px)),) : ()
-  K.FOLDER_LISTS[:kind_test] = o -> o.folder == dir ? (list=nothing, bar=K.Box(K.Text("The top", size=12px))) : nothing
-  frames()
-  @test "a plain one" in side() && "The top" in side() && "3 in here" in side()
-  delete!(K.FOLDER_MARKS, :kind_test); delete!(K.FOLDER_LISTS, :kind_test)
-end
-
 @testset "a folder that loses its kind is plain again" begin
+  K.go_folder!(e, dir); frames()
+  @test "3 in here" in side()
   delete!(FS.kinds, FSPath(notes))
   K.list_files!(e); frames()
   @test K.object(e, notes) isa FS.Directory && icon("notes") == "folder" && !any(t -> occursin("in here", t), side())

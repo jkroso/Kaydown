@@ -389,6 +389,29 @@ end
   b.path = was
 end
 
+@testset "a function with the name of a unit is a function of the page" begin
+  # A unit, like bar, is a type, so Julia would take `bar(x) = …` as a new way to make the unit
+  pressure = joinpath(dir, "pressure.md")
+  write(pressure, "# Pressure\n")
+  ep = K.build_editor(pressure)
+  value, _, failed = K.run_code(ep, "bar(x::String) = length(x)")
+  @test !failed && value isa Function && nameof(value) == :bar
+  @test K.run_code(ep, "bar(\"four\")")[1] == 4
+  bar = Base.invokelatest(getglobal, K.units(), :bar)
+  @test !hasmethod(bar, Tuple{String})
+  # The other units are still there
+  @test endswith(K.value_text(K.run_code(ep, "2kg")[1]), "kg")
+  # With documentation, a macro, and in a begin block
+  value, _, failed = K.run_code(ep, "begin\n  \"half of x\"\n  @inline ms(x) = x / 2\nend")
+  @test !failed && value isa Function && K.run_code(ep, "ms(3)")[1] == 1.5
+  # In a live block, and in the julia blocks of a page that defines a kind of block
+  @test K.evaluate(ep, "day(x) = 2x; day(4)"; inline=true)[1] == "8"
+  write(joinpath(dir, "yr.md"), "```julia\nyr(lines) = length(lines)\n```\n")
+  from = K.source_module(e, "./yr.md")
+  @test Base.invokelatest(getglobal, from, :yr) isa Function
+  @test Base.invokelatest(Base.invokelatest(getglobal, from, :yr), ["a", "b"]) == 2
+end
+
 @testset "a line that ends near the edge of the window has its box under it" begin
   # A line of code that's as wide as the page, and comes to a value that's as long
   vl = K.item(e, 4).content.lines[1]

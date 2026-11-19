@@ -3497,7 +3497,7 @@ evaluate(e, code::String; key=(:live, e.buf.path, code), inline=false) = begin
     # Kip finds a path like "./widgets.jl" from the folder of the document, and so does a relative FSPath
     cd(isdir(docdir(e)) ? docdir(e) : pwd()) do
       # The code runs in the page's module, with the page's other code
-      value = running_code(m -> include_string(m, code, isempty(path) ? joinpath(e.folder, "untitled.md") : path), e)
+      value = running_code(m -> run_in(m, code, isempty(path) ? joinpath(e.folder, "untitled.md") : path), e)
       node = inline ? present_inline(value) : present(value)
       node !== nothing ? node : inline ? (said(value), false) : note(repr("text/plain", value), colours.ink)
     end
@@ -16372,12 +16372,53 @@ page_value(m::Module, path::AbstractString) = begin
   for (line, code) in page_code(path)
     try
       # Empty lines before the code give each line of it the number that it has in the page
-      value = include_string(m, "\n"^(line - 1) * code, path)
+      value = run_in(m, "\n"^(line - 1) * code, path)
     catch err
       error("Line $(err isa LoadError ? err.line : line) of $(basename(path)): $(trouble(err))")
     end
   end
   value
+end
+
+"""
+Run the code `code` of the page at `path` in the page's module `m`, as
+`include_string` does, and give the value that it comes to. A function that
+the code defines with the name of a unit, like `bar(p) = …`, is a new function
+of the page. Julia gives a unit that new method instead: a unit is a type, and
+a page has the units with `using`, so Julia takes the code as a new way to make
+the unit. A name that the page loads or makes itself is as Julia has it.
+"""
+run_in(m::Module, code::AbstractString, path::AbstractString) = include_string(ex -> own_units(m, ex), m, code, path)
+
+"The expression `ex` of a page's code, with `function bar end` before it for each unit, like `bar`, that it defines a function of. See `run_in`."
+own_units(m::Module, ex) = begin
+  found = filter(n -> unit_of(m, n), defined_names!(Symbol[], ex))
+  isempty(found) ? ex : Expr(:toplevel, (Expr(:function, n) for n in unique(found))..., ex)
+end
+
+"The names of the functions that the expression `ex` defines, like `f` for `f(x) = x`, added to `out`. A definition can be inside a `begin` block, and have documentation or a macro before it."
+defined_names!(out::Vector{Symbol}, ex) = begin
+  if Meta.isexpr(ex, (:block, :toplevel))
+    foreach(x -> defined_names!(out, x), ex.args)
+  elseif Meta.isexpr(ex, :macrocall) && length(ex.args) > 2
+    defined_names!(out, last(ex.args))
+  elseif is_definition(ex)
+    lhs = ex.args[1]
+    while Meta.isexpr(lhs, (:where, :(::))) && !isempty(lhs.args)
+      lhs = lhs.args[1]
+    end
+    Meta.isexpr(lhs, :call) && lhs.args[1] isa Symbol && push!(out, lhs.args[1])
+  end
+  out
+end
+
+"True when the name `n` in the module `m` is a unit of a sheet that `m` has with `using`, and not a name of its own or one that it loaded"
+unit_of(m::Module, n::Symbol) = begin
+  sheet = units()
+  Base.invokelatest(isdefined, sheet, n) && Base.invokelatest(isdefined, m, n) || return false
+  # The names that `m` has made, and the ones that it loaded by name, like `@use "…/Units.jl" bar`
+  n in Base.invokelatest(names, m; all=true, imported=true) && return false
+  Base.invokelatest(getglobal, m, n) === Base.invokelatest(getglobal, sheet, n)
 end
 
 """
@@ -24235,7 +24276,7 @@ run_code(e, code::String) = begin
   rd, wr = redirect_stdout()
   printed = @async read(rd, String)
   value, failed = try
-    (cd(() -> running_code(m -> include_string(m, code, path), e), dir), false)
+    (cd(() -> running_code(m -> run_in(m, code, path), e), dir), false)
   catch err
     (err isa LoadError ? err.error : err, true)
   finally

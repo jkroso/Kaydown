@@ -32,7 +32,11 @@
 # the block is still a diff that `git apply` reads. Between two changes of
 # one file such lines would stop it, so they're never written there. An agent
 # writes the block, and reads your choices and your comments in the lines that
-# you changed. Ladder changes no file but the page.
+# you changed.
+#
+# When you accept a change, Ladder makes it in its file. When you take your
+# choice away, or reject the change, Ladder takes it out of the file again.
+# `located` says which file a change's path names, and `apply!` changes it.
 #
 # This file reads those lines and writes your choices. It also says which
 # line that comes is a new version of which line that goes, and which of their
@@ -53,6 +57,7 @@ end
 "One change: some lines of a file that go, and the lines that come in their place"
 mutable struct Hunk
   file::String        # the file that it changes, or ""
+  kind::Symbol        # :changed, or :made for a file that the diff makes, or :deleted for one that it deletes
   at::Int             # the line of the block that its @@ line is on, or 0 when it has none
   head::String        # its @@ line, without your choice
   about::String       # what its @@ line says after the numbers, like the function that the lines are in
@@ -100,13 +105,15 @@ changes(lines) = begin
     text = join(words, " ")
     isempty(strip(text)) || (c.notes[(parse(Int, m[1]), parse(Int, m[2]))] = text)
   end
-  file = ""
+  file, kind = "", :changed
   i = 1
   while i <= n
     line = c.lines[i]
     if startswith(line, "--- ") && i < n && startswith(c.lines[i+1], "+++ ")
-      # A file that's deleted has its name in the first of the two lines only
-      file = something(filter(!isempty, [filename(c.lines[i+1]), filename(line)])..., "")
+      # A file that's deleted has its name in the first of the two lines only, and one that's made in the second
+      from, to = filename(line), filename(c.lines[i+1])
+      file = isempty(to) ? from : to
+      kind = isempty(file) ? :changed : isempty(from) ? :made : isempty(to) ? :deleted : :changed
       i += 2
       continue
     end
@@ -130,7 +137,7 @@ changes(lines) = begin
         left = (m[2] === nothing ? 1 : parse(Int, m[2]), m[4] === nothing ? 1 : parse(Int, m[4]))
       end
     end
-    h = Hunk(file, m === nothing ? 0 : i, head, about, Row[], m === nothing ? i : i + 1, state)
+    h = Hunk(file, kind, m === nothing ? 0 : i, head, about, Row[], m === nothing ? i : i + 1, state)
     j = h.first
     while j <= n
       text = c.lines[j]
@@ -218,6 +225,152 @@ summary(c::Changes) = begin
   said = length(c.notes)
   said > 0 && push!(parts, said == 1 ? "1 comment" : "$said comments")
   join(parts, "  ·  ")
+end
+
+# --- making a change in its file --------------------------------------------------------------
+#
+# A change is made where its old lines are in the file. The @@ line says where
+# they were when the diff was written, but the file can have changed since: an
+# earlier change can have added lines over them. So Ladder looks for the old
+# lines in the whole file, and takes the place that's nearest to where the @@
+# line says. Spaces at the end of a line don't count, and a line that stays
+# keeps the file's own spaces.
+
+"The lines that a change takes away, and the lines that it puts in their place. Each list has the lines that stay too."
+before(h::Hunk) = [r.text for r in h.rows if r.sign != '+']
+after(h::Hunk) = [r.text for r in h.rows if r.sign != '-']
+
+"The line where the @@ line of `h` says that its old lines start, and the line where its new lines start, or 0 and 0 when it has no numbers"
+starts(h::Hunk) = begin
+  m = match(HEAD, h.head)
+  m === nothing || m[1] === nothing ? (0, 0) : (parse(Int, m[1]), parse(Int, m[3]))
+end
+
+"True when two lines are the same but for the spaces at their ends"
+same_line(a, b) = rstrip(a) == rstrip(b)
+
+"Each line of `lines` where the run of lines `run` starts"
+places(lines, run) = isempty(run) ? Int[] :
+  [p for p in 1:length(lines)-length(run)+1 if all(k -> same_line(lines[p+k-1], run[k]), eachindex(run))]
+
+"""
+The lines of a file after the change `h` is made in `lines`, or after it's
+taken out again with `back`. The first result says what happened:
+
+- `:made`: the second result is the new lines.
+- `:already`: the file is as the change wants it, so nothing changes.
+- `:missing`: the lines that the change takes away aren't in the file.
+- `:twice`: those lines are in the file at more than one place, and the
+  change has no numbers to say which.
+"""
+apply(lines::Vector{String}, h::Hunk; back=false) = begin
+  from, to = back ? (after(h), before(h)) : (before(h), after(h))
+  gone = back ? '+' : '-'   # the sign of the lines that go
+  at = starts(h)[back ? 2 : 1]
+  if isempty(from)
+    # The change only adds lines. The @@ line says which line they come after.
+    made = places(lines, to)
+    p = clamp(at + 1, 1, length(lines) + 1)
+    (p in made || (at == 0 && !isempty(made))) && return (:already, lines)
+    # With no numbers, only a file with no lines says where they go
+    at == 0 && !isempty(lines) && return (:missing, lines)
+  else
+    found, made = places(lines, from), places(lines, to)
+    # Old lines that are part of the new lines are the change made already, as when it only adds lines at their end
+    filter!(p -> !any(q -> q <= p && p + length(from) <= q + length(to), made), found)
+    isempty(found) && return (isempty(made) ? :missing : :already, lines)
+    at == 0 && length(found) > 1 && return (:twice, lines)
+    p = found[argmin(abs.(found .- at))]
+  end
+  out = lines[1:p-1]
+  i = p
+  for r in h.rows
+    if r.sign == ' '
+      push!(out, lines[i])   # the file's own line, with its own spaces
+      i += 1
+    elseif r.sign == gone
+      i += 1
+    else
+      push!(out, r.text)
+    end
+  end
+  append!(out, lines[i:end])
+  :made, out
+end
+
+"""
+The lines of the file at `path`, how it ends its lines, and whether it ends
+its last line. A file that isn't there has no lines.
+"""
+read_lines(path) = begin
+  isfile(path) || return String[], "\n", true
+  text = read(path, String)
+  isempty(text) && return String[], "\n", true
+  crlf = occursin("\r\n", text)
+  ends = endswith(text, '\n')
+  lines = String.(split(ends ? text[1:prevind(text, end)] : text, '\n'))
+  crlf && (lines = [String(chop(l, tail=endswith(l, '\r') ? 1 : 0)) for l in lines])
+  lines, crlf ? "\r\n" : "\n", ends
+end
+
+"""
+Make the change `h` in the file at `path`, or take it out again with `back`.
+The result is one of the words that `apply` gives, or `:nofile` when the
+change needs a file that isn't there. A change that makes a file makes its
+folders too. A file that's left with no lines is deleted, when it was the
+diff that made it, or when the diff deletes it.
+"""
+apply!(path, h::Hunk; back=false) = begin
+  there = isfile(path)
+  # A change that makes a file starts from no lines. Any other needs the file to be there.
+  there || isempty(back ? after(h) : before(h)) || return :nofile
+  lines, eol, ends = read_lines(path)
+  done, out = apply(lines, h; back)
+  done == :made || return done
+  if isempty(out) && (h.kind == (back ? :made : :deleted))
+    there && rm(path)
+  else
+    mkpath(dirname(path))
+    write(path, join(out, eol) * (isempty(out) || !ends ? "" : eol))
+  end
+  :made
+end
+
+"The top folder of the git repository that holds the folder `dir`, or nothing"
+repository(dir) = begin
+  d = abspath(dir)
+  while true
+    ispath(joinpath(d, ".git")) && return d
+    dirname(d) == d && return nothing
+    d = dirname(d)
+  end
+end
+
+"""
+The file that the path `file` of a change names, for a page in the folder
+`dir`. A path that starts at / is that file. Any other is looked for in `dir`,
+and in each folder above it up to the top of the git repository that holds
+`dir`, because git names a file from the top of its repository. A page in a
+`.ladder` folder is about the folder that holds it, so that folder is looked
+in too. A file that's in none of them is to be made at the top of the
+repository, or in the folder that the page is about.
+"""
+located(file, dir) = begin
+  isabspath(file) && return normpath(file)
+  dir = abspath(dir)
+  top = repository(dir)
+  about = basename(dir) == ".ladder" ? dirname(dir) : dir
+  folders = [dir]
+  d = dir
+  while top !== nothing && d != top && dirname(d) != d
+    d = dirname(d)
+    push!(folders, d)
+  end
+  about in folders || push!(folders, about)
+  for d in folders
+    ispath(joinpath(d, file)) && return joinpath(d, file)
+  end
+  joinpath(something(top, about), file)
 end
 
 # --- which lines are versions of each other ---------------------------------------------------

@@ -77,6 +77,7 @@
 #   - An agent writes a code block in the language `ask` to ask you a
 #     question with answers to click, and one in the language `changes` to
 #     show you a diff, with a button on each change that accepts or rejects it.
+#     Accept makes the change in its file, and Reject takes it out again.
 #     The diff has the colours of its code, and a mark on the words that are
 #     different. Two buttons put the new lines under the old or beside them.
 #     Click a line of the diff to say something about it to the agent.
@@ -11301,7 +11302,11 @@ BLOCKS[ASK] = BlockKind("Question", "question-circle", AskView, ask_html)
 # changes.jl says how the block is written. Each change has an Accept and a
 # Reject button. Your choice is written at the end of the change's @@ line,
 # so an agent that waits for the page reads it in the lines that you changed.
-# Ladder doesn't change the files that the diff is of.
+#
+# Accept makes the change in the file that the diff names. A click on
+# Accepted, or on Reject, takes the change out of the file again. A change
+# that Ladder can't make, because its file has other lines now, keeps the
+# choice that it had, and a line under its row says why.
 #
 # The lines have the colours of code in the language of their file. Where a
 # line that comes is a new version of a line that goes, the words that are
@@ -11322,7 +11327,7 @@ const DIFF_SIZE = 12px       # how big the text of those lines is
 const BESIDE_LEAST = 600.0   # px: the narrowest block that shows the old lines beside the new
 const NOTE_ROW = 17.0        # px: how tall a line of a comment is
 const NOTE_FIELD = 30.0      # px: how tall the field for a comment is
-push!(BLOCK_ICONS, "file-diff", "check-lg", "x-lg", "view-stacked", "layout-split")
+push!(BLOCK_ICONS, "file-diff", "check-lg", "x-lg", "view-stacked", "layout-split", "exclamation-triangle")
 
 "What a `changes` block shows: each change of a diff, with buttons that accept it and reject it"
 @def mutable struct ChangesView <: SemanticUI
@@ -11335,6 +11340,7 @@ push!(BLOCK_ICONS, "file-diff", "check-lg", "x-lg", "view-stacked", "layout-spli
   laid::Dict{Any,Any} = Dict{Any,Any}()    # the lines of each change as they're drawn, kept until the block is read again
   noting::Union{Nothing,Tuple{Int,Int}} = nothing   # the line that you're writing a comment on: its change, and which of the change's lines
   before::String = ""                      # what that comment said when its field opened, for Esc to put back
+  failed::Dict{Int,String} = Dict{Int,String}()   # why Ladder couldn't make a change in its file, or take it out, by the change's number
 end
 
 "The lines of one change"
@@ -11355,6 +11361,8 @@ reread!(v::ChangesView, lines) = begin
   v.lines = lines
   v.data = Diffs.changes(lines)
   empty!(v.laid)
+  # What went wrong was about the changes that the block had
+  v.failed = Dict{Int,String}()
   v.noting === nothing && return v
   k, j = v.noting
   # The line that the field is under can go, when an agent writes the block again
@@ -11585,8 +11593,8 @@ describe(v::ChangesView) = begin
     isempty(c.hunks) && return Column(block_look()..., clip=true, name="Changes",
       block_note("This block has no changes yet. Put a diff in it, as git diff writes one: a line that starts with @@, then the lines that go with a - before each, and the lines that come with a +."))
     all = length(c.hunks) > 1 ?
-      (rule(), block_button!(v, :accept_all, (:all, :accepted), icon="check-lg", words="Accept all", tip="Accept every change"),
-       block_button!(v, :reject_all, (:all, :rejected), icon="x-lg", words="Reject all", tip="Reject every change")) : ()
+      (rule(), block_button!(v, :accept_all, (:all, :accepted), icon="check-lg", words="Accept all", tip="Make every change in its file"),
+       block_button!(v, :reject_all, (:all, :rejected), icon="x-lg", words="Reject all", tip="Reject every change, and take the ones that you accepted out of their files")) : ()
     # The button of the way that the lines show now is lit. A block that's too narrow shows the new lines under the old.
     two = beside(v)
     narrow = diff_wide(v) < BESIDE_LEAST
@@ -11599,6 +11607,7 @@ describe(v::ChangesView) = begin
     for (k, h) in enumerate(c.hunks)
       state = h.state
       file, place = change_words(h)
+      name = isempty(h.file) ? "its file" : basename(h.file)
       push!(rows, Row(width(grow=grow), height(34px), padding(0px, 6px, 0px, 12px), child_gap=8px, Alignment.Center, clip=true,
                       border(1px, :solid, colours.line)[:top], background(colours.stripe),
         Row(child_gap=5px, (isempty(file) ? () : (Box(label(file, 12px, weight="Semibold")),))...,
@@ -11607,9 +11616,15 @@ describe(v::ChangesView) = begin
             Box(Text(h.about, size=11.5px, family=codefont(), subfamily=codestyle(), color=colours.faint, wrap=WrapMode.none))),
         tally_words(Diffs.counts(h)...)...,
         block_button!(v, (:accept, k), (:choose, k, :accepted), icon="check-lg", words=state == :accepted ? "Accepted" : "Accept",
-                      on=state == :accepted, tip=state == :accepted ? "Take your choice away" : "Accept this change"),
+                      on=state == :accepted, tip=state == :accepted ? "Take this change out of $name again" : "Make this change in $name"),
         block_button!(v, (:reject, k), (:choose, k, :rejected), icon="x-lg", words=state == :rejected ? "Rejected" : "Reject",
-                      on=state == :rejected, tip=state == :rejected ? "Take your choice away" : "Reject this change")))
+                      on=state == :rejected, tip=state == :rejected ? "Take your choice away" :
+                                                 state == :accepted ? "Reject this change, and take it out of $name" : "Reject this change")))
+      # Why Ladder couldn't change the file, under the row
+      haskey(v.failed, k) && push!(rows, Row(width(grow=grow), padding(8px, 12px), child_gap=8px, Alignment.Start,
+                                             border(1px, :solid, colours.line)[:top], background(RGBA(removed_colour(), 0.08)),
+        Icon("exclamation-triangle", size=14px, color=removed_colour()),
+        beside_mark(14px, Text(v.failed[k], size=12.5px, family=SANS, color=removed_colour(), wrap=WrapMode.words))))
       push!(rows, block_part!(() -> HunkArea(of=v, k=k), v, (:hunk, k)))
     end
     Column(block_look()..., clip=true, name="Changes", bar, rows...)
@@ -11651,9 +11666,55 @@ act!(v::ChangesView, action, w) = begin
   action[1] == :beside && return (beside!(editor(v), action[2]); handled)
   action[1] == :unsay && return (note_input(v).text = ""; stop_noting!(v); handled)
   stop_noting!(v)
-  action[1] == :choose ? Diffs.choose!(v.data, action[2], action[3]) : Diffs.choose!(v.data, action[2])
+  readonly(editor(v).buf) && return handled
+  empty!(v.failed)
+  if action[1] == :choose
+    k, state = action[2], action[3]
+    # A click on the choice that a change has takes it away
+    decide!(v, k, v.data.hunks[k].state == state ? :open : state)
+  else
+    foreach(k -> decide!(v, k, action[2]), eachindex(v.data.hunks))
+  end
+  failed = v.failed
   write_block!(v, CHANGES, Diffs.written(v.data))
+  v.failed = failed   # reading the block again forgets them
   handled
+end
+
+"""
+Give change `k` of `v` the choice `state`, and make its file agree: an
+accepted change is in the file, and any other is not. When Ladder can't make
+the change in the file, or take it out again, the change keeps the choice
+that it had, and `v.failed` says why.
+"""
+decide!(v::ChangesView, k, state) = begin
+  h = v.data.hunks[k]
+  h.state == state && return v
+  # A choice that's taken away from a rejected change changes no file
+  h.state == :rejected && state == :open && return (h.state = state; v)
+  back = state != :accepted
+  why = change_file!(v, h; back)
+  # A change that wasn't accepted is rejected whatever Ladder finds in its file. It's
+  # there only when ⌘Z took the choice away after Ladder made it, and then it comes out.
+  why === nothing || (back && h.state != :accepted) ? (h.state = state) : (v.failed[k] = why)
+  v
+end
+
+"Make the change `h` of `v` in its file, or take it out again with `back`. The result is nothing, or words that say why Ladder couldn't."
+change_file!(v::ChangesView, h; back=false) = begin
+  isempty(h.file) && return "This change doesn't name its file, so Ladder can't make it. A diff names the file in a line that starts with +++, over the change."
+  path = Diffs.located(h.file, dirname(abspath(editor(v).buf.path)))
+  name = basename(h.file)
+  done = try
+    Diffs.apply!(path, h; back)
+  catch err
+    return "Ladder couldn't change $path. " * sprint(showerror, err)
+  end
+  done in (:made, :already) ? nothing :
+  done == :nofile ? "There's no file at $path, so Ladder didn't make this change." :
+  done == :twice ? "The lines that this change takes away are in $name more than once, and the change has no line numbers to say which. Ladder didn't change the file." :
+  back ? "The lines that this change put in $name aren't there now, so Ladder didn't change the file." :
+         "The lines that this change takes away aren't in $name now, so Ladder didn't change the file."
 end
 
 "Show the old lines of every block of changes beside the new lines, or the new lines under the old"

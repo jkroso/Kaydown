@@ -43,7 +43,7 @@ How to read it:
 - It lists only the user's changes. A change that you made to the file is not in it.
 - A box that changed from `[ ]` to `[x]` is a choice that the user made. So is an answer of an `ask` block that changed from `( )` to `(x)`.
 - A new line that starts with `>` in an `ask` block is what the user typed as their answer.
-- `[accepted]` or `[rejected]` at the end of an `@@` line of a `changes` block is the user's choice for that change.
+- `[accepted]` or `[rejected]` at the end of an `@@` line of a `changes` block is the user's choice for that change. Ladder has already made each accepted change in its file.
 - Two new lines that start with `#` at the end of a `changes` block are the user's comment on one line of the diff. The first starts with `# Comment on change 2, line 3:` and has that line of the diff after it. The second has the user's words.
 - A new line that talks to you, like the question above, is a note. Do what it asks, or answer it, and then take the note out of the page.
 - Any other changed text is the user's own wording. Keep it. Do not put your wording back.
@@ -253,7 +253,14 @@ A `changes` code block holds a diff, as `git diff` or `diff -u` writes one. Ladd
 ```
 ````
 
-Ladder writes the user's choice at the end of the change's `@@` line: `[accepted]` or `[rejected]`. It changes no file but the page. So show the changes before you make them, and then make only the ones that the user accepted. Give each change that the user can choose apart from the others its own `@@` line.
+When the user accepts a change, Ladder makes it in the file and writes `[accepted]` at the end of the change's `@@` line. When the user rejects a change, Ladder writes `[rejected]` there and leaves the file as it is. If the user takes back an acceptance, Ladder takes the change out of the file again.
+
+- Show the changes before you make them. Do not make them yourself.
+- A change marked `[accepted]` is in the file already. Do not make it again. Read the file before you change it more.
+- A change with no mark is one that the user has not chosen yet. It can also be one that Ladder could not make, because the file's lines are different now. Ladder tells the user why on the page.
+- Give each change that the user can choose apart from the others its own `@@` line.
+- Name each file as `git diff` does, from the top of the repository, or give its whole path. Ladder looks for the file in the page's folder and in each folder above it, up to the top of the repository.
+- Put `--- /dev/null` over a change that makes a new file, and `+++ /dev/null` over one that deletes a file.
 
 The user can click a line of the diff and say something about it. Ladder writes that at the end of the block, in two lines:
 
@@ -262,7 +269,7 @@ The user can click a line of the diff and say something about it. Ladder writes 
 # Keep this line, and log the job that's missing.
 ```
 
-The changes are counted from the top of the block, and the lines from the first line under the change's `@@` line. The first line also has the line of the diff that the comment is about. Do what the comment asks before you make the change. When you write the block again with new changes, leave the old comments out.
+The changes are counted from the top of the block, and the lines from the first line under the change's `@@` line. The first line also has the line of the diff that the comment is about. Do what the comment asks. If the change is accepted, Ladder has made it already, so start from the file as it is now. When you write the block again with new changes, leave the old comments out.
 
 ### A chart
 
@@ -457,5 +464,5 @@ A code block in the language `ui`, and code between backticks straight after a `
 
 - Put the answer or the decision first, then the detail.
 - Ask each question in an `ask` block. Use `( )` answers when the user picks one, and `[ ]` answers when they can pick many.
-- Show changes to code in a `changes` block before you make them, when the user may want only some of them.
+- Show changes to code in a `changes` block before you make them, when the user may want only some of them. Ladder makes the ones that the user accepts.
 - Use a diagram for how things connect, a table to compare options, and a sheet for numbers that the user may want to change.

@@ -585,7 +585,7 @@ Which should the agent do first?
 [ ] Tell me when it's done
 ```
 
-An agent can show you its changes to a file too. Accept or reject each one, and send the page. Ladder changes no file: the agent reads your choices and makes the changes that you accepted.
+An agent can show you its changes to a file too. Accept makes a change in its file, and Reject leaves the file as it is. A click on Accepted, or on Reject, takes an accepted change out of the file again. When you send the page, the agent reads your choices. If a file has other lines now than the agent's diff expects, Ladder doesn't change it, and a red line under the change says why. The file of the changes below isn't on your Mac, so try it with a change from an agent.
 
 The lines have the colours of their code. Where a new line is another version of an old line, a darker mark shows the words that are different. The two buttons at the top of the block choose how the lines show: the new lines under the old lines, or the old lines at the left and the new lines at the right. A window that's too narrow for two columns shows the new lines under the old.
 

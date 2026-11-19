@@ -1,5 +1,6 @@
 # Tests for the `changes` block of main.jl: the changes of a diff, with
-# buttons that accept and reject each one. Run them with
+# buttons that accept and reject each one. Accept makes a change in its
+# file, and the tests check those files too. Run them with
 # `julia -O0 --project=. test/changes_view_test.jl`. They click in a window
 # that isn't on the screen. Set `LADDER_SHOTS` to a folder, and they save a
 # picture of the page there.
@@ -54,6 +55,19 @@ The end.
 ```
 """)
 
+# The files that the diffs change, as they are before any change is made
+const APP = ["// line $i" for i in 1:35]
+APP[10:12] = ["  const a = 1", "  const b = 2", "  return a"]
+APP[30] = "  stop()"
+const README = "# App\nIt starts with `start()`.\n"
+const GREET = "greet(name) = begin\n  println(\"Hello \", name)   # say hello to the person whose name it is, and end the line with a mark that shows how glad we are to see them\nend\n"
+mkpath(joinpath(dir, "src"))
+write(joinpath(dir, "src", "app.js"), join(APP, "\n") * "\n")
+write(joinpath(dir, "Readme.md"), README)
+write(joinpath(dir, "greet.jl"), GREET)
+app() = readlines(joinpath(dir, "src", "app.js"))
+readme() = read(joinpath(dir, "Readme.md"), String)
+
 const e = K.build_editor(page)
 const w = Window(e, size=(1000px, 900px))
 frames(n=2) = foreach(_ -> frame(w), 1:n)
@@ -88,25 +102,59 @@ block(n=1) = (s = K.block_lines(e.buf, K.CHANGES, n); e.buf.lines[s[1]+1:s[2]-1]
 end
 
 @testset "the buttons accept and reject a change" begin
+  # Accept makes the change in its file
   button((:accept, 1))
   @test block()[3] == "@@ -10,4 +10,5 @@ function start() { [accepted]" && view(1).data.hunks[1].state == :accepted && K.dirty(e.buf)
+  @test app()[10:13] == ["  const a = 1", "  const b = 3", "  const c = 4", "  return a"] && length(app()) == 36
+  # Reject changes no file
   button((:reject, 2))
   @test block()[9] == "@@ -30 +31 @@ [rejected]" && K.Diffs.summary(view(1).data) == "3 changes  ·  1 accepted  ·  1 rejected"
+  @test app()[31] == "  stop()"
   shot("changes.png")
   # A click on the choice that a change has takes it away
   button((:reject, 2))
   @test block()[9] == "@@ -30 +31 @@"
+  # Rejecting a change that was accepted takes it out of the file again
   button((:reject, 1))
-  @test endswith(block()[3], "{ [rejected]")
+  @test endswith(block()[3], "{ [rejected]") && app() == APP
+  # ⌘Z changes only the page, so the file doesn't have the change that the page says is accepted
   K.undo!(e.buf); frames()
-  @test endswith(block()[3], "{ [accepted]") && view(1).data.hunks[1].state == :accepted
+  @test endswith(block()[3], "{ [accepted]") && view(1).data.hunks[1].state == :accepted && app() == APP
   button(:reject_all)
   @test all(h -> h.state == :rejected, view(1).data.hunks) && count(l -> endswith(l, "[rejected]"), block()) == 3
+  @test app() == APP && readme() == README && isempty(view(1).failed)
   button(:accept_all)
   @test count(l -> endswith(l, "[accepted]"), block()) == 3 && length(block()) == 17
+  # The first change added a line, so the second is a line lower than its @@ line says
+  @test app()[11:12] == ["  const b = 3", "  const c = 4"] && app()[31] == "  stop(now)" && readme() == "# The app\nIt starts with `start()`.\n"
   @test e.buf.lines[findfirst(==("The end."), e.buf.lines)] == "The end."
   html = K.page_html(e)
   @test occursin("<strong>src/app.js · Lines 10 to 13 · Accepted</strong>", html) && occursin("+   const c = 4</span>", html)
+end
+
+@testset "a change that doesn't fit its file" begin
+  v = view(1)
+  # A click on Accepted takes the change out of its file
+  button((:accept, 3))
+  @test v.data.hunks[3].state == :open && readme() == README
+  top = rect(v.parts[(:hunk, 3)]).top
+  # The file changed after the diff was written, so the change keeps the choice that it had, and a line says why
+  write(joinpath(dir, "Readme.md"), "# Something else\n")
+  button((:accept, 3))
+  @test v.data.hunks[3].state == :open && block()[14] == "@@ -1,2 +1,2 @@" && readme() == "# Something else\n"
+  @test v.failed[3] == "The lines that this change takes away aren't in Readme.md now, so Ladder didn't change the file."
+  @test rect(v.parts[(:hunk, 3)]).top > top
+  shot("changes-failed.png")
+  # A change can be rejected whatever is in its file. The next click forgets what went wrong.
+  button((:reject, 3))
+  @test v.data.hunks[3].state == :rejected && isempty(v.failed) && rect(v.parts[(:hunk, 3)]).top == top && readme() == "# Something else\n"
+  # A file that isn't there
+  rm(joinpath(dir, "Readme.md"))
+  button((:accept, 3))
+  @test v.data.hunks[3].state == :rejected && v.failed[3] == "There's no file at $(joinpath(dir, "Readme.md")), so Ladder didn't make this change."
+  write(joinpath(dir, "Readme.md"), README)
+  button((:accept, 3))
+  @test v.data.hunks[3].state == :accepted && isempty(v.failed) && readme() == "# The app\nIt starts with `start()`.\n"
 end
 
 @testset "the lines of a change" begin
@@ -186,6 +234,7 @@ end
   button3(key) = click(middle(rect(v.parts[(:button, key)])))
   button3((:accept, 1))
   @test block(3)[3] == "@@ -1,3 +1,4 @@ [accepted]" && block(3)[end] == "# Throw an error"
+  @test readlines(joinpath(dir, "greet.jl"))[2:3] == ["  isempty(name) && return", "  println(\"Hello, \", name, \"!\")   # say hello to the person whose name it is, and end the line with a mark that shows how glad we are to see them"]
   @test occursin("<blockquote><code>+  isempty(name) &amp;&amp; return</code><br>Throw an error</blockquote>", K.page_html(e))
   # A long comment goes on under itself
   click(row(2)); type("This line said hello to the person whose name it is, and that was all that it did, so say why it has to say more now than it did")

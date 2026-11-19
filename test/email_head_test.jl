@@ -57,7 +57,7 @@ key(k) = (onkey(w, KeyPress{k}(0, w)); frames())
 "Press ⌘E"
 cmd_e() = (w.keys |= Keys.cmd; onkey(w, KeyPress{Keys.e}(0, w)); w.keys ⊻= Keys.cmd; frames())
 "The slider, or nothing while it's closed"
-slider() = (found = [p.content for p in popups(w) if p.key == K.LEVELS_KEY]; isempty(found) ? nothing : only(found))
+slider() = (l = get(e.nodes, K.LEVELS_KEY, nothing); l !== nothing && l.open ? l : nothing)
 "Put the mouse over the picture in the top bar, and wait until the slider has opened all the way"
 hover() = (at(middle(rect(e.nodes[:mode]))); sleep(2K.OPENS_IN); frames(); slider())
 
@@ -114,9 +114,11 @@ end
 end
 
 @testset "a click on the ladder, or on a stop of the slider, keeps the top's keyboard" begin
-  click(middle(rect(e.nodes[:mode])))
+  # The slider opens out from the picture with the ladder where the picture was, so a click there is on the ladder
+  picture = middle(rect(e.nodes[:mode]))
+  click(picture)
   @test head().full && w.focus === head() && K.level_part(e) === head()
-  click(middle(rect(e.nodes[:mode])))
+  click(picture)
   @test !head().full && w.focus === head()
   l = hover()
   @test length(l.stops) == 2

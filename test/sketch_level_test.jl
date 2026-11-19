@@ -50,7 +50,8 @@ key(k) = (onkey(w, KeyPress{k}(0, w)); frames())
 "Press ⌘E"
 level() = (w.keys |= Keys.cmd; onkey(w, KeyPress{Keys.e}(0, w)); w.keys ⊻= Keys.cmd; frames())
 "Click the snake or the ladder in the top bar"
-mode() = click(middle(rect(e.nodes[:mode])))
+# After a click, the mouse is still over the picture, so the slider has opened out from it with the ladder where the picture was
+mode() = (r = rect(e.nodes[:mode]); click((K.num(r.left + r.width - K.MODE_W / 2), K.num(r.top + r.height / 2))))
 span() = K.block_lines(e.buf, K.SKETCH, 1)
 "True when the lines of the sketch show as text"
 astext() = (it = K.item(e, span()[1]); !(it.content isa K.Live))
@@ -65,7 +66,7 @@ icons(node, out=String[]) = begin
   foreach(n -> icons(n, out), node.children)
   out
 end
-icon() = only(icons(K.describe(e.nodes[:mode])))
+icon() = only(icons(K.level_picture(e.nodes[:mode])))   # the picture that shows while the slider is closed
 
 @testset "a click on the ladder while a sketch fills the window" begin
   s, t = span()

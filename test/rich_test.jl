@@ -538,7 +538,7 @@ end
     foreach(n -> icons(n, out), node.children)
     out
   end
-  icon() = only(icons(K.describe(e.nodes[:mode])))
+  icon() = only(icons(K.level_picture(e.nodes[:mode])))   # the picture that shows while the slider is closed
   @test icon() == "ladder"
   @test K.tip(e.nodes[:mode]) == "Go down a level, to the symbols of the part with the caret  ⌘E"
   click(w, e.nodes[:mode])
@@ -548,7 +548,8 @@ end
   @test icon() == "snake"
   @test !isempty(K.icon_cache["snake"].paths)   # UI.jl has no snake among its icons, so Ladder gives it the shape
   @test K.tip(e.nodes[:mode]) == "Go up a level, to the graphics that the symbols make  ⌘E"
-  click(w, e.nodes[:mode])
+  # The mouse is still over the picture, so the slider has opened out from it. Its ladder is where the picture was.
+  click(w, e.nodes[K.LEVELS_KEY].stops[end])
   @test !e.plain
   # A file of Julia code has a ladder of its own, for what its code comes to. test/julia_levels_test.jl has its levels.
   e2, w2 = window("x = 1\n", name="code.jl")

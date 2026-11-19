@@ -54,7 +54,7 @@ caret(i) = (K.move!(e, (i, 0), false); frames())
 "Run the expression on the lines `r`, as ⌘Return does, and give its box"
 run(r) = (o = K.outcome!(e, r); frames(); o)
 "The slider, or nothing while it's closed"
-slider() = (found = [p.content for p in popups(w) if p.key == K.LEVELS_KEY]; isempty(found) ? nothing : only(found))
+slider() = (l = get(e.nodes, K.LEVELS_KEY, nothing); l !== nothing && l.open ? l : nothing)
 "Put the mouse over the picture in the top bar, and wait until the slider has opened all the way"
 hover() = (at(middle(rect(e.nodes[:mode]))); sleep(2K.OPENS_IN); frames(); slider())
 "Take the mouse off the slider"

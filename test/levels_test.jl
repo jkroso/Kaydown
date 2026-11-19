@@ -35,17 +35,22 @@ press(place) = (at(place); w.keys |= Keys.mouse_left; onkey(w, KeyPress{Keys.mou
 release() = (w.keys ⊻= Keys.mouse_left; onkey(w, KeyRelease{Keys.mouse_left}(0, w)); frames())
 click(place) = (press(place); release())
 middle(r) = (K.num(r.left + r.width / 2), K.num(r.top + r.height / 2))
+middle(r::Tuple) = (K.num(r[1] + r[3] / 2), K.num(r[2] + r[4] / 2))
+"Where a rectangle is, as numbers that a later frame doesn't change"
+place(r) = (r.left, r.top, r.width, r.height)
 "Press ⌘E"
 other() = (w.keys |= Keys.cmd; onkey(w, KeyPress{Keys.e}(0, w)); w.keys ⊻= Keys.cmd; frames())
 
 "The picture in the top bar"
 mode() = e.nodes[:mode]
 "The slider, or nothing while it's closed"
-slider() = (found = [p.content for p in popups(w) if p.key == K.LEVELS_KEY]; isempty(found) ? nothing : only(found))
+slider() = (l = get(e.nodes, K.LEVELS_KEY, nothing); l !== nothing && l.open ? l : nothing)
 "Put the mouse over the picture, and wait until the slider has opened all the way"
 hover() = (at(middle(rect(mode()))); sleep(2K.OPENS_IN); frames(); slider())
 "Take the mouse off the slider"
-leave() = (at((500, 400)); frames())
+away() = (at((500, 400)); frames())
+"Take the mouse off the slider, and wait until it has closed all the way"
+leave() = (away(); sleep(2K.OPENS_IN); frames())
 "The stop of level `i`"
 stop(i) = slider().stops[i]
 # An icon is in the button as the box that it draws in, and the box knows the icon that it came from
@@ -60,28 +65,40 @@ icon() = only(icons(K.describe(mode())))
 "What the tooltip says, or nothing when there's none"
 tip() = (found = [p for p in popups(w) if p.key == :tooltip]; isempty(found) ? nothing : only(found).content.content.children[1].content)
 
+# A button that code from the startup page puts in the top bar. It's before the picture.
+K.BAR_PARTS[:levels_test] = e -> (K.button(e, :levels_test, "star"),)
+frames()
+"Where the button before the picture is"
+before() = rect(e.nodes[:levels_test])
+
 @testset "a page has two levels, and the slider has the snake and the ladder" begin
   @test slider() === nothing && icon() == "ladder"
   @test K.levels(e) == K.PAGE_LEVELS && K.level(e) == 2
+  m, b, c = place(rect(mode())), place(before()), place(rect(e.nodes[:count]))
+  @test b[1] + b[3] <= m[1]
   l = hover()
   @test l isa K.Levels && length(l.stops) == 2
-  # The slider lies over the picture, with the ladder where the picture is
-  m, s = rect(mode()), rect(l)
-  @test s.left + s.width == m.left + m.width && s.top == m.top && s.width == 2K.MODE_W + K.TRACK_W
-  @test rect(stop(2)).left == m.left && rect(stop(1)).left == s.left
+  # The slider takes the picture's place in the top bar, with the ladder where the picture was. It covers
+  # nothing: the button before it moves to the left, by as much as the slider is wider than the picture.
+  s = rect(l)
+  @test s.left + s.width == m[1] + m[3] && s.top == m[2] && s.width == 2K.MODE_W + K.TRACK_W
+  @test place(rect(stop(2))) == m && rect(stop(1)).left == s.left
+  @test before().left == b[1] - (s.width - K.MODE_W) && before().left + before().width <= s.left
+  # The count after it stays where it is
+  @test place(rect(e.nodes[:count])) == c
   @test icons(K.describe(stop(1))) == ["snake"] && icons(K.describe(stop(2))) == ["ladder"]
   shot("levels-page.png")
   # The mouse is over the ladder. The window is at its level, so its tip says what the window shows, and what a click on it does.
   @test K.stop_tip(e, 2) == "The window shows the graphics that the symbols make. A click goes down a level  ⌘E"
   # The snake's tip is of its own level
   @test K.stop_tip(e, 1) == "Go down a level, to the symbols of the part with the caret  ⌘E" == K.tip(mode())
-  # A click where the picture is goes down a level, as a click on the picture did
-  click(middle(rect(mode())))
+  # A click where the picture was goes down a level, as a click on the picture did
+  click(middle(m))
   @test e.plain && K.level(e) == 1 && K.low(e) && w.focus === e
   @test slider() === l   # the mouse is still over it
   @test K.stop_tip(e, 2) == "Go up a level, to the graphics that the symbols make  ⌘E" == K.tip(mode())
   @test K.stop_tip(e, 1) == "The window shows the symbols of the part with the caret"
-  click(middle(rect(mode())))
+  click(middle(m))
   @test !e.plain && K.level(e) == 2
   # A click on the snake goes down. Another does nothing, since the window is at the snake's level.
   click(middle(rect(stop(1))))
@@ -90,9 +107,30 @@ tip() = (found = [p for p in popups(w) if p.key == :tooltip]; isempty(found) ? n
   @test e.plain
   click(middle(rect(stop(2))))
   @test !e.plain
-  # The slider goes when the mouse leaves it
-  leave()
-  @test slider() === nothing && icon() == "ladder"
+  # The slider closes when the mouse leaves it, and the button comes back to its place
+  away()
+  @test slider() === nothing
+  sleep(2K.OPENS_IN); frames()
+  @test icon() == "ladder" && place(rect(mode())) == m && place(before()) == b
+end
+
+@testset "the slider closes into the picture, and opens again from where it is" begin
+  b = place(before())
+  l = hover()
+  away()
+  # Half way through the closing, the slider is still there, narrower, and the button is on its way back
+  sleep(K.OPENS_IN / 2); frames()
+  @test 0 < K.openness(l) < 1 && K.MODE_W < rect(l).width < 2K.MODE_W + K.TRACK_W
+  @test b[1] - (K.MODE_W + K.TRACK_W) < before().left < b[1]
+  # The mouse comes back over it, and it opens again from there
+  part = K.openness(l)
+  at(middle(rect(l.stops[2]))); frames()
+  @test l.open && K.openness(l) >= part
+  sleep(2K.OPENS_IN); frames()
+  @test K.openness(l) == 1 && rect(l).width == 2K.MODE_W + K.TRACK_W
+  leave(); sleep(2K.OPENS_IN); frames()
+  @test K.openness(l) == 0 && place(before()) == b
+  delete!(K.BAR_PARTS, :levels_test); frames()
 end
 
 @testset "a JSON file has four levels" begin
@@ -293,3 +331,23 @@ end
 end
 
 close(w)
+
+@testset "in a narrow window the ladder stays under the mouse, and the words before the slider lose their start" begin
+  K.open!(e, file("prices-with-a-long-name.csv", "Item,Price\n" * join(("Thing $i,$i.50" for i in 1:400), "\n") * "\n"))
+  n = Window(e, size=(640px, 600px))
+  draw(k=2) = foreach(_ -> frame(n), 1:k)
+  draw(3)
+  r = rect(mode())
+  was = (r.left, r.width)
+  spot = Vec2{px}(r.left + r.width / 2, r.top + r.height / 2)
+  n.mouse = typeof(n.mouse)(spot...); onmouse(n, MouseMove(spot, n)); draw(1)
+  sleep(2K.OPENS_IN); draw()
+  l = e.nodes[K.LEVELS_KEY]
+  @test l.open && K.openness(l) == 1 && length(l.stops) == 4
+  ladder = rect(l.stops[end])
+  @test (ladder.left, ladder.width) == was
+  # The right end of the bar is still in the window, with the button that opens the file in another app
+  out = rect(e.nodes[:outside])
+  @test out.left + out.width <= 640px
+  close(n)
+end

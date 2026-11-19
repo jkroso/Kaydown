@@ -1024,7 +1024,9 @@ end
 "The slider that the picture of the level opens into while the mouse is over it: a stop for each level, with the snake at its low end and the ladder at its high end"
 @def mutable struct Levels <: SemanticUI
   stops::Vector{Any} = Any[]   # the Stop of each level, from the lowest
-  since::Float64 = 0.0         # when it opened, to open out from the picture
+  open::Bool = false           # true from when the mouse comes over the picture until it leaves the slider
+  since::Float64 = 0.0         # when it started to open or to close
+  from::Float64 = 0.0          # how far open it was then, from 0 to 1
   pressed::Int = -1            # the level of the stop that the mouse went down on, 0 once a drag has left it, or -1 for none
 end
 "A stop of the slider of the levels. A click on it goes to its level."
@@ -20280,8 +20282,10 @@ describe(t::TopBar) = begin
   # The buttons that code from the startup page adds for the page that shows, like the ones that answer an email
   more = bar_parts(e)
   mode = mode_part(e)
-  # What a file that's only shown says of itself, like how many rows a CSV file has, can need more room than that
-  said = readonly(b) && !isempty(b.about) ? measure(Face(SANS, "", 12px, colours.dim, false), b.about * "  ·  Read only") + 70px : 0px
+  # What a file that's only shown says of itself, like how many rows a CSV file has, can need more room than that.
+  # The words move aside as the slider of the levels opens, so then they need its room too.
+  grown = isempty(mode) ? 0px : slider_grown(e)
+  said = readonly(b) && !isempty(b.about) ? measure(Face(SANS, "", 12px, colours.dim, false), b.about * "  ·  Read only") + 70px + grown : 0px
   side = max(isempty(more) ? 250px : 330px, said) + (isempty(mode) ? 0px : MODE_W)
   ended_rename!(e)
   # The two ends of the bar are as wide as each other, so the file's name is in the middle of the space beside
@@ -20303,6 +20307,9 @@ describe(t::TopBar) = begin
   need = 84px + 32px * length(buttons) + (isempty(arrows) ? 8px : 72px) + (!full && waiting_dot(e) ? DOT_GAP + DOT_W : 0px)
   over = max(need, panel_w(e) * showing)
   left = max(150px * (1 - showing), need - panel_w(e) * showing, min(side, wide - panel_w(e) * showing - side - TITLE_ROOM))
+  # The slider never pushes the right end out of a narrow window, so the ladder stays under the mouse. The words
+  # before the slider lose their start then: see `said_part`.
+  side = min(side, max(side - grown, wide - panel_w(e) * showing - left))
   e.nodes[:title_room] = wide - panel_w(e) * showing - left - side   # the name is cut short to fit in it
   # The top bar lies over the top of the sidebar. The file's name is in the
   # middle of the space beside the sidebar, so it moves as the sidebar slides.
@@ -20315,8 +20322,10 @@ describe(t::TopBar) = begin
     Row(fixed(side), height(grow=grow), justify=Alignment.End, padding(0px, 10px, 0px, 0px),
       # A file that's only shown has no words to count. The bar says that it's only shown. A file with levels
       # has the snake or the ladder too. It's after the words, which are longer at one level than at another,
-      # so that it stays where it is, under the mouse, when a click on its slider changes the level.
-      (readonly(b) ? (Box(height(28px), padding(8px, 0px), label(isempty(b.about) ? "Read only" : b.about * "  ·  Read only", 12px, color=colours.dim)),
+      # so that it stays where it is, under the mouse, when a click on its slider changes the level. The
+      # slider opens out to the left, and the parts before it move aside to make room.
+      # The words have the room that the picture or the slider, the button after it and the edge leave them.
+      (readonly(b) ? (said_part(isempty(b.about) ? "Read only" : b.about * "  ·  Read only", side - 40px - (isempty(mode) ? 0px : MODE_W + grown)),
                       mode...,
                       # The app that the Mac uses for the file can change it, so a button opens the file there
                       button(e, :outside, "box-arrow-up-right")) :
@@ -20324,6 +20333,20 @@ describe(t::TopBar) = begin
                       # A page that's never changed says so where the count of its words would be
                       b.fixed ? Box(height(28px), padding(8px, 0px), label("Read only", 12px, color=colours.dim)) :
                                 node!(Count, e, :count)))...))
+end
+
+"""
+What a file that's only shown says of itself, for the top bar, in `room` at
+most. With less room than the words need, their start is cut off. That
+happens in a narrow window, when the slider of the levels takes their room as
+it opens.
+"""
+said_part(words, room) = begin
+  tag = Box(height(28px), padding(8px, 0px), label(words, 12px, color=colours.dim))
+  wide = measure(Face(SANS, "", 12px, colours.dim, false), words) + 16px
+  wide <= room && return tag
+  room = max(room, 0px)
+  Row(fixed(room), height(28px), Alignment.Start, clip=true, Box(Alignment.Start, offset_x=room - wide, Row(fixed(wide), height(28px), tag)))
 end
 
 # --- the snake and the ladder in the top bar ---------------------------------------------------
@@ -20371,7 +20394,16 @@ end
 describe(m::Mode) = begin
   e = editor(m)
   ishovered(m) || (m.quiet = false)
-  slide!(m)
+  l = slide!(m)
+  # While the slider is open, and while it opens out or closes, it's what shows here. It's a part of the row of
+  # the top bar, so the parts before it move aside as it opens, and come back as it closes.
+  (l.open || openness(l) > 0) && return Box(height(28px), name="Levels", l)
+  level_picture(m)
+end
+
+"The picture that `m` shows while its slider is closed: the ladder at the highest level, and the snake under it"
+level_picture(m::Mode) = begin
+  e = editor(m)
   Box(width(MODE_W), height(28px), radius(6px), Alignment.Center, name=low(e) ? "Plain text" : "Rich text",
       background(ishovered(m) ? colours.hover : clear),
     # Both are drawn for a square 16 wide, so at this size their lines are on whole pixels
@@ -20400,6 +20432,9 @@ mode_part(e) = e.buf.view == :markdown || !isempty(file_views(e.buf)) || julia_f
 # into a slider. The snake is at the slider's low end and the ladder is at its
 # high end, and each is the stop of its level. Each level between those two
 # has a dot between them. The stop of the level that the window shows is lit.
+# The slider takes the picture's place in the top bar, so the buttons and
+# words before it move to the left as it opens, and come back as it closes.
+# It covers none of them.
 #
 # A click on a stop goes to its level, and so does a drag along the slider.
 # The slider opens out to the left, so the ladder stays under the mouse. A
@@ -20521,29 +20556,40 @@ stop_tip(e, i::Int) = begin
 end
 
 """
-Show the slider of the levels while the mouse is over `m`, the picture in the
-top bar, and take it away when the mouse leaves. The slider lies over the
-picture, with its high end where the picture is. It's a part of `m`, so the
-mouse is over `m` while it's over the slider.
+Open the slider of the levels while the mouse is over `m`, the picture in the
+top bar, and close it when the mouse leaves. The slider takes the picture's
+place in the row of the top bar, with its high end where the picture was. It's
+a part of `m`, so the mouse is over `m` while it's over the slider. Returns the
+slider.
 """
 slide!(m::Mode) = begin
-  w = window_of(m)
-  w === nothing && return
   e = editor(m)
-  shown = any(p -> p.key == LEVELS_KEY, popups(w))
-  # A window hears nothing of a mouse that has left it, and the top bar is at its edge. So while the slider
-  # shows, the window looks where the mouse is, and soon looks again.
-  shown && !isempty(w.glfw) && (sync_mouse!(w); redraw_in!(m, 0.2))
-  if ishovered(m)
-    shown && return
-    l = get!(() -> own!(m, Levels()), e.nodes, LEVELS_KEY)
-    l.since, l.pressed = time(), -1
-    popup!(w, l, anchor=m, placement=:left, gap=-MODE_W, key=LEVELS_KEY, modal=false)
-  elseif shown
-    close_popup!(w, LEVELS_KEY)
+  l = get!(() -> own!(m, Levels()), e.nodes, LEVELS_KEY)
+  over = ishovered(m)
+  if over != l.open
+    # It opens or closes from where it is, so a mouse that comes back while it closes opens it again from there
+    l.from, l.since, l.open = openness(l), time(), over
+    l.pressed = -1
   end
-  nothing
+  # A window hears nothing of a mouse that has left it, and the top bar is at its edge. So while the slider
+  # is open, the window looks where the mouse is, and soon looks again.
+  w = window_of(m)
+  l.open && w !== nothing && !isempty(w.glfw) && (sync_mouse!(w); redraw_in!(m, 0.2))
+  l
 end
+
+"How far the slider of the levels is open, from 0 for the picture to 1. It opens out quick at first, then slower, and closes the same way."
+openness(l::Levels) = begin
+  t = clamp((time() - l.since) / OPENS_IN, 0.0, 1.0)
+  k = 1 - (1 - t)^2
+  l.open ? l.from + (1 - l.from) * k : l.from * (1 - k)
+end
+
+"How wide the slider of `n` levels is when it's all the way open"
+slider_w(n) = 2MODE_W + (n == 2 ? TRACK_W : STOP_W * (n - 2))
+
+"How much wider than the picture the slider of the levels is now: none while it's closed"
+slider_grown(e) = (l = get(e.nodes, LEVELS_KEY, nothing); l === nothing ? 0px : (slider_w(length(levels(e))) - MODE_W) * openness(l))
 
 describe(l::Levels) = begin
   e = editor(l)
@@ -20552,11 +20598,10 @@ describe(l::Levels) = begin
   length(l.stops) == n || (l.stops = Any[own!(l, Stop(level=i)) for i in 1:n])
   # A line goes from the snake to the ladder. The stop of each level between them has its part of the line.
   parts = n == 2 ? Any[l.stops[1], track(TRACK_W), l.stops[2]] : l.stops
-  full = 2MODE_W + (n == 2 ? TRACK_W : STOP_W * (n - 2))
-  # It opens out from the picture: quick at first, then slower
-  t = clamp((time() - l.since) / OPENS_IN, 0.0, 1.0)
-  t < 1 && redraw_in!(l, 1/60)
-  wide = MODE_W + (full - MODE_W) * (1 - (1 - t)^2)
+  full = slider_w(n)
+  time() - l.since < OPENS_IN && redraw_in!(l, 1/60)
+  # It opens out to the left from the picture, so the ladder stays where the picture was
+  wide = MODE_W + (full - MODE_W) * openness(l)
   Row(fixed(wide), height(28px), radius(6px), Alignment.Start, background(colours.float), clip=true, name="Levels",
     Box(Alignment.Start, offset_x=wide - full, Row(fixed(full), height(28px), Alignment.Center, parts...)))
 end
@@ -20566,7 +20611,25 @@ track(wide=nothing) = Box(wide === nothing ? width(grow=grow) : width(wide), hei
 
 # A click between two stops does nothing, and the picture under the slider doesn't get it
 onkey(l::Levels, ::KeyPress{Keys.mouse_left}) = (l.pressed = 0; handled)
-onmouse(l::Levels, ev::MouseMove) = (Keys.mouse_left in ev.window.keys || (l.pressed = -1); handled)
+onmouse(l::Levels, ev::MouseMove) = (drag!(l, ev); handled)
+
+"""
+While the mouse button is down, go to the level of each stop of `l` that the
+mouse comes to, and return true. The part of the window that the button went
+down on hears each move of the mouse until the button comes up, so the stop
+under the mouse isn't always the one that hears the move.
+"""
+drag!(l::Levels, ev::MouseMove) = begin
+  Keys.mouse_left in ev.window.keys || (l.pressed = -1; return false)
+  x, y = ev.position
+  i = findfirst(l.stops) do s
+    r = rect(s)
+    r !== nothing && r.left <= x < r.left + r.width && r.top <= y < r.top + r.height
+  end
+  # The stop that the button went down on does nothing more until the mouse has left it
+  i === nothing || l.pressed < 0 || l.pressed == i || (l.pressed = 0; i == level(editor(l)) || go!(l.stops[i]))
+  true
+end
 
 describe(s::Stop) = begin
   e = editor(s)
@@ -20599,13 +20662,7 @@ end
 onkey(s::Stop, ::KeyPress{Keys.mouse_left}) = ((s.parent::Levels).pressed = s.level; go!(s))
 
 onmouse(s::Stop, ev::MouseMove) = begin
-  l = s.parent::Levels
-  if Keys.mouse_left in ev.window.keys
-    # A drag along the slider goes to the level of each stop that the mouse comes to
-    l.pressed < 0 || l.pressed == s.level || (l.pressed = 0; s.level == level(editor(s)) || go!(s))
-    return handled
-  end
-  l.pressed = -1
+  drag!(s.parent::Levels, ev) && return handled
   r = rect(s)
   (s.quiet || r === nothing) && return handled
   show_tooltip!(ev.window, tip_label(stop_tip(editor(s), s.level)), r.left, r.top, r.width, r.height, placement=:bottom, gap=6px)

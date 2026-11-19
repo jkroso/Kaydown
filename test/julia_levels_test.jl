@@ -70,7 +70,8 @@ ascode() = all(it -> it.content isa K.Flow && it.first == it.last, e.layout)
   @test K.stop_tip(e, 2) == "Go down 2 levels, to the LLVM code of what you run"
   @test K.stop_tip(e, 1) == "Go down 3 levels, to the assembly of what you run"
   at(middle(rect(e.nodes[:mode]))); sleep(2K.OPENS_IN); frames()
-  l = only(p.content for p in popups(w) if p.key == K.LEVELS_KEY)
+  l = e.nodes[K.LEVELS_KEY]
+  @test l.open
   @test length(l.stops) == 4
   at((400, 500)); frames()
 end

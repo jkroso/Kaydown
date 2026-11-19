@@ -79,12 +79,14 @@ end
   caret!((words, 0)); arrive()
   start = glide().to
   caret!((words, 20))
-  far = glide().to
-  sleep(K.GLIDE_TIME / 3)
-  shot("glide-on-its-way.png")
-  caret!((words, 10))
   g = glide()
-  @test start[1] < g.from[1] < far[1] && g.to[1] < far[1]
+  far = g.to
+  shot("glide-on-its-way.png")
+  # Half of the time later, it's sent to a place between the two
+  e.buf.caret = e.buf.anchor = (words, 10)
+  to = (start[1] + 5, start[2], start[3])
+  at = K.glide_to!(e, 1, to, g.left_at + K.GLIDE_TIME / 2)
+  @test start[1] < at[1] < far[1] && g.from == at && g.to == to
   arrive()
 end
 

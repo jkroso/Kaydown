@@ -17552,7 +17552,7 @@ end
 # is at its new place at once. So is the caret of a page that has just opened.
 # The settings page turns the glide off.
 
-const GLIDE_TIME = 0.15   # seconds the caret takes to get to a new place
+const GLIDE_TIME = 0.07   # seconds the caret takes to get to a new place
 
 "Where a caret is at the time `now`: its left, its top and its height"
 glided(g::Glide, now) = begin

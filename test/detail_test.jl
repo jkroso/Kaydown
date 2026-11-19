@@ -261,3 +261,20 @@ end
   @test isempty(K.outcomes(e))
   @test b.lines[4] == "length"
 end
+
+@testset "a module whose documentation can't be read doesn't stop a box" begin
+  # The built app leaves out the documentation of the code built into it, like Base's, and Julia
+  # throws when it's asked for that. A module whose table of documentation isn't a table throws here.
+  stripped = Module(:Stripped)
+  Core.eval(stripped, :(const $(Base.Docs.META) = 1))
+  push!(Base.Docs.modules, stripped)
+  try
+    t = opened!(4)
+    @test any(line -> occursin("length(", line), t.lines)
+    @test length(t.rows) == length(methods(length))
+    t = opened!(7)
+    @test !isempty(t.rows)
+  finally
+    filter!(m -> m !== stripped, Base.Docs.modules)
+  end
+end

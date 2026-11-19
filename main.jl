@@ -24780,6 +24780,14 @@ end
 detail_wide(e) = (w = window_size(e)[1]; clamp(w - panel_w(e) * opened(e) - 2OUTCOME_EDGE - 16px, 280px, DETAIL_W))
 
 """
+The documentation that the module `mod` wrote, by the name that it's for. An app
+built with APP_STRIP=metadata (see app/bundle.jl) leaves out the documentation
+of the code that was built into it, like Base's. Julia then throws when it's
+asked for it, so such a module has none here.
+"""
+doc_table(mod::Module) = try Base.invokelatest(Base.Docs.meta, mod) catch; IdDict{Any,Any}() end
+
+"""
 The documentation that Julia has for the name `name` of the module `m`, as
 Markdown: each piece that a module that's loaded wrote for it. Julia writes
 what a function takes on lines that start with four spaces. They become a
@@ -24790,7 +24798,7 @@ doc_lines(m::Module, name::Symbol) = begin
   binding = Base.Docs.Binding(m, name)
   lines = String[]
   for mod in Base.Docs.modules
-    multi = get(Base.invokelatest(Base.Docs.meta, mod), binding, nothing)
+    multi = get(doc_table(mod), binding, nothing)
     multi === nothing && continue
     for sig in multi.order
       doc = multi.docs[sig]
@@ -24860,7 +24868,7 @@ documented() = begin
   world = Base.get_world_counter()
   documents[][1] == world && return documents[][2]
   found = Dict{Any,Vector{Any}}()
-  for mod in Base.Docs.modules, (binding, multi) in Base.invokelatest(Base.Docs.meta, mod)
+  for mod in Base.Docs.modules, (binding, multi) in doc_table(mod)
     push!(get!(() -> Any[], found, binding), multi)
   end
   documents[] = (world, found)

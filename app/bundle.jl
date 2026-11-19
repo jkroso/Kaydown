@@ -22,8 +22,10 @@
 #                        this. Without it, the app is marked as built on this Mac, and it
 #                        doesn't update itself. See update.jl.
 #   APP_CPU=apple-m1     the CPUs to compile for. apple-m1 runs on every Apple Silicon Mac.
-#   APP_STRIP=metadata   leave out docstrings and line numbers. Add `ir` to leave out the
-#                        code Julia would need to compile anything new while the app runs.
+#   APP_STRIP=           what to leave out: `metadata` leaves out docstrings and line numbers,
+#                        and `ir` the code Julia would need to compile anything new while
+#                        the app runs. Ladder keeps both. The open box of a function or a
+#                        module shows its documentation, and an error says where it happened.
 #   APP_TRIM=no          JuliaC's trimming: no, safe, unsafe or unsafe-warn. Trimming leaves out
 #                        the code the app doesn't use. The app is first run with
 #                        `--record`, and opens its window for a few seconds. See record.jl.
@@ -39,7 +41,7 @@ const out = joinpath(root, "build")
 
 option(name, default) = get(ENV, "APP_$name", default)
 const cpu = option("CPU", "apple-m1")
-const strips = split(option("STRIP", "metadata"), ',', keepempty=false)
+const strips = split(option("STRIP", ""), ',', keepempty=false)
 const trim = option("TRIM", "no")
 const prune = option("PRUNE", "1") == "1"
 

@@ -7,6 +7,7 @@
 @use "github.com/jkroso/MiniFB.jl" Window KeyPress MouseMove Keys onkey onmouse Typed ontype
 @use "github.com/jkroso/UI.jl/Interface/draw" frame rect
 @use "github.com/jkroso/UI.jl/Interface/save" save_png
+@use "github.com/jkroso/UI.jl/Interface/testing" pixels
 @use GeometryBasics: Vec2
 const px = K.px
 
@@ -143,6 +144,32 @@ end
   @test b.caret == (12, 0)   # the click didn't move the caret
   shot("open")
   click(middle(rect(o)))
+  @test !o.open
+end
+
+"The colour of the window at the point (x, y), as it draws now"
+colour_at((x, y)) = begin
+  file = joinpath(dir, "colour.png")
+  save_png(file, w)
+  p = pixels(file)
+  s = size(p, 2) / 1000   # the picture can have more than one pixel for each point
+  p[round(Int, y * s) + 1, round(Int, x * s) + 1]
+end
+
+@testset "an open box keeps its colour under the mouse" begin
+  fresh!(12)
+  run!()
+  o = outcome(12)
+  "A point in the box, left of its arrow, where only its colour shows"
+  inside() = (r = rect(o); (K.num(r.left) + 3, K.num(r.top) + K.num(r.height) / 2))
+  away = (900, 700)
+  at(away); plain = colour_at(inside())
+  at(inside()); @test colour_at(inside()) != plain   # a closed box shows that a click opens it
+  click(inside())
+  @test o.open
+  at(away); plain = colour_at(inside())
+  at(inside()); @test colour_at(inside()) == plain
+  click(inside())
   @test !o.open
 end
 

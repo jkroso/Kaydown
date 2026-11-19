@@ -23906,7 +23906,9 @@ end
 #
 # The box shows the first line of the value. A value that has more, like a
 # matrix, has an arrow in its box: click the box to show the rest under it, and
-# click again to hide it. Text that the code printed shows before the value.
+# click again to hide it. Such a box changes colour under the mouse while it's
+# closed. An open box doesn't, since it's one piece with the rest under it.
+# Text that the code printed shows before the value.
 # An open box and the rest under it are one piece, with one line around both
 # and nothing between them. The rest starts under the left of the box. When the
 # window has no room for it there, it starts further left, and the box stands
@@ -24580,7 +24582,8 @@ describe(o::Outcome) = begin
          isempty(o.full) && o.node === nothing ? Box(Icon("check", size=o.size, color=colours.dim)) :
          value_row(o.shown, o, code=isvalue(o, 1) && o.node === nothing)
   joined = o.open && o.more
-  fill = o.more && ishovered(o) ? colours.hover : colours.float
+  # An open box keeps its colour under the mouse, because the colour would fill only the box and not the rest
+  fill = o.more && !joined && ishovered(o) ? colours.hover : colours.float
   box(parts...; name="") = Row(parts..., padding(7px, 0px), child_gap=4px, Alignment.Center, name=name,
                                joined ? radius(OUTCOME_ROUND, OUTCOME_ROUND, 0px, 0px) : radius(5px),
                                background(fill), border(1px, :solid, outcome_line(o)), arrow..., what)

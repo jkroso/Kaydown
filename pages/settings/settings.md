@@ -81,6 +81,14 @@ Checkbox(label="Check spelling", checked=page_spelling(), onchange=box -> page_s
 
 With this on, a word that the Mac's dictionary doesn't have gets a line of red dots under it. Right-click the word to see the words it may have been meant to be, or to teach the dictionary the word. Code isn't checked.
 
+## Caret
+
+```ui
+Checkbox(label="Move the caret smoothly", checked=page_glide(), onchange=box -> page_glide!(box.checked))
+```
+
+With this on, the caret doesn't jump to a new place. It moves there in a short time, as you type, press an arrow key or click.
+
 ## Saving
 
 ```ui

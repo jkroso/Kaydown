@@ -172,6 +172,8 @@
 #     page go to the other pages of the settings: Code editor, for how code
 #     shows, and Key bindings, for the keys of each command. ⌘, again
 #     closes that window.
+#   - The caret doesn't jump to a new place. It moves there in a short time.
+#     A box in the settings turns that off.
 #   - An .eml file, which holds one email as a server sends it, opens as a
 #     page that's read and not changed. eml.jl says how. The email shows as
 #     it was sent, with its sender's colours, layout and buttons. ⌘E goes
@@ -943,6 +945,19 @@ Grid(rows, widths, heights, cells, flows) = Grid(rows, widths, heights, cells, f
 "True when `g` is a spreadsheet, not a table"
 isspread(g::Grid) = g.head > 0px
 
+"""
+Where one caret is drawn while it moves to a new place. A place is how far the
+caret's left and top are from the top left of the page's text, and its height,
+so it stays the same while the page scrolls.
+"""
+mutable struct Glide
+  from::NTuple{3,Float64}   # the place it left
+  to::NTuple{3,Float64}     # the place it's going to
+  left_at::Float64          # when it left
+  buf::UInt                 # the page it's on
+  key::Tuple{Pos,Int}       # where the caret was in the text when it left, and the version of the text
+end
+
 @def mutable struct Editor <: SemanticUI
   buf::Buffer = Buffer()
   buffers::Dict{String,Buffer} = Dict{String,Buffer}()
@@ -969,6 +984,7 @@ isspread(g::Grid) = g.head > 0px
   spelling::Bool = true                 # put a line of dots under each word that's spelt wrong
   updates::Bool = true                  # the app looks for a newer version of itself, and gets it, without being asked
   autosave::Bool = false                # a page is written to its file when its window stops being the front window
+  glide::Bool = true                    # the caret moves to a new place in a short time, and doesn't jump there
   wrap::Bool = true                     # a line of a file of code that's too long for the window goes on under itself
   numbers::Bool = true                  # a file of code shows the number of each line beside it
   shade::Bool = false                   # the line of a file of code that the caret is on is shaded
@@ -995,6 +1011,9 @@ isspread(g::Grid) = g.head > 0px
   goal::Union{Nothing,px} = nothing     # where ↑ and ↓ try to keep the caret
   reveal::Bool = false                  # scroll to the caret before the next frame
   blink::Float64 = time()
+  glides::Dict{Int,Glide} = Dict{Int,Glide}()   # where each caret is drawn while it moves: 1 is the main one. See `glide_to!`.
+  gliding::Int = 1                      # the number of the caret that's being drawn
+  carets::Int = 1                       # how many carets the last frame had
   clicked::Tuple{Float64,Pos,Int} = (0.0, (0, 0), 0)
   size::Tuple{px,px} = (1100px, 800px)  # the window's size, until there is a window to ask
 end
@@ -3315,6 +3334,9 @@ sandbox(e) = get!(e.nodes, :sandbox) do
   # ... and whether a page is written to its file when its window stops being the front window
   Core.eval(m, :(const page_autosave = $(() -> (reads!(e, :autosave); e.autosave))))
   Core.eval(m, :(const page_autosave! = $(on -> autosave!(e, Bool(on)))))
+  # ... and whether the caret moves to a new place in a short time, and doesn't jump there
+  Core.eval(m, :(const page_glide = $(() -> (reads!(e, :glide); e.glide))))
+  Core.eval(m, :(const page_glide! = $(on -> glide!(e, Bool(on)))))
   # ... and whether a line of a file of code that's too long for the window goes on under itself
   Core.eval(m, :(const code_wrap = $(() -> (reads!(e, :wrap); e.wrap))))
   Core.eval(m, :(const code_wrap! = $(on -> wrap!(e, Bool(on)))))
@@ -17520,15 +17542,67 @@ rounded(points, radius) = begin
   path
 end
 
+# --- the caret's glide ------------------------------------------------------------------
+#
+# The caret doesn't jump to a new place. It moves there in a short time, fast
+# at first and then slower, and its height changes on the way. A caret that's
+# sent somewhere else before it arrives goes on from where it is. It only moves
+# this way when a key or the mouse moved it, or when the text changed. When the
+# page is laid out again, because the window changed its width, say, the caret
+# is at its new place at once. So is the caret of a page that has just opened.
+# The settings page turns the glide off.
+
+const GLIDE_TIME = 0.15   # seconds the caret takes to get to a new place
+
+"Where a caret is at the time `now`: its left, its top and its height"
+glided(g::Glide, now) = begin
+  t = clamp((now - g.left_at) / GLIDE_TIME, 0.0, 1.0)
+  g.from .+ (g.to .- g.from) .* (1 - (1 - t)^3)   # fast at first, then slower
+end
+
+"True while a caret of the page is on its way to a new place"
+gliding(e, now=time()) = any(g -> g.from != g.to && now - g.left_at < GLIDE_TIME, values(e.glides))
+
+"""
+Where to draw the caret numbered `slot` at the time `now`, when its place in
+the text is at `to` on the page. A caret that has a new place in the text sets
+off for it from where it's drawn now.
+"""
+glide_to!(e, slot, to, now=time()) = begin
+  b = e.buf
+  key = (b.caret, b.version)
+  g = get(e.glides, slot, nothing)
+  if g !== nothing && e.glide && g.buf == objectid(b)
+    if g.key != key
+      g.from, g.to, g.left_at, g.key = glided(g, now), to, now, key
+      return g.from
+    end
+    # The same place in the text, at the same place on the page: it goes on with its move
+    maximum(abs, g.to .- to) < 0.01 && return glided(g, now)
+  end
+  e.glides[slot] = Glide(to, to, now, objectid(b), key)
+  to
+end
+
+"Turn the caret's glide on or off"
+glide!(e, on::Bool) = (e.glide = on; save_settings!(e); rerun!(e, :glide); e)
+
 "Draw the caret at column `col` of `f`, whose top left corner is at (x, y)"
 caret(ctx, e, f::Flow, x, y, col) = begin
   w = window_of(e)
   (w !== nothing && w.focus === e) || return
-  since = time() - e.blink
-  (since < 0.5 || mod(since - 0.5, 1.0) >= 0.5) || return
   k, cx = spot(f, col)
   high = f.size * 1.25
-  rectangle(ctx, x + cx - 0.75px, y + line_top(f, k) + (f.lines[k].high - high)/2, 1.5px, high, background=colours.ink, border=0px)
+  left, top = e.origin
+  at = glide_to!(e, e.gliding, (num(x + cx - left), num(y + line_top(f, k) + (f.lines[k].high - high)/2 - top), num(high)))
+  g = e.glides[e.gliding]
+  moving = g.from != g.to && time() - g.left_at < GLIDE_TIME
+  # The window draws each frame as soon as it can until the caret arrives
+  moving && (w.animating = true)
+  # A caret that's moving doesn't blink
+  since = time() - e.blink
+  (moving || since < 0.5 || mod(since - 0.5, 1.0) >= 0.5) || return
+  rectangle(ctx, left + px(at[1]) - 0.75px, top + px(at[2]), 1.5px, px(at[3]), background=colours.ink, border=0px)
 end
 
 # The caret and the selection are drawn over the text, once it has been placed
@@ -17544,8 +17618,13 @@ draw(ctx, size, ui::ConcreteRect, d::Document) = begin
   glow_bracket_pair(ctx, e, ui)
   # A file that's only shown has a selection and no caret. So has a page that's never changed.
   if !(caretless(b) || readonly(b))
+    # Each caret has a number, so that it moves from its own last place. When there are more carets or fewer, the others start again.
+    n = 1 + length(others(b))
+    n == e.carets || (filter!(kv -> kv.first == 1, e.glides); e.carets = n)
+    e.gliding = 1
     carets(ctx, e, ui)
-    with_others(() -> carets(ctx, e, ui), b)
+    with_others(() -> (e.gliding += 1; carets(ctx, e, ui)), b)
+    e.gliding = 1
   end
   margin(ctx, e, ui)
 end
@@ -26924,8 +27003,8 @@ describe_window(e::Editor) = begin
   # typing shows without waiting for a frame that was already under way. Between
   # times it only wakes to blink the caret.
   if win !== nothing
-    # While the sidebar slides, each frame is drawn as soon as it can be
-    win.animating = sliding(e)
+    # While the sidebar slides, or the caret moves to a new place, each frame is drawn as soon as it can be
+    win.animating = sliding(e) || gliding(e)
     # A part of a live block that has the keyboard, like a text field, blinks its own caret
     win.wake = pop!(e.nodes, :ran, false) ? 0.05 : win.focus === e ? 0.51 - mod(time() - e.blink, 0.5) :
                win.focus === nothing ? 0.0 : 0.25
@@ -27005,7 +27084,7 @@ end
 const pages_dir = Ref(joinpath(@__DIR__, "pages"))
 
 "The settings that every window has the same: each is a field of the editor"
-const SHARED = (:theme, :font, :weight, :zoom, :widest, :stat, :plain, :spelling, :updates, :autosave, :wrap, :numbers, :shade, :beside, :indent, :code_scale, :code_font, :code_weight, :guide, :bundle, :rebound, :side, :hidden)
+const SHARED = (:theme, :font, :weight, :zoom, :widest, :stat, :plain, :spelling, :updates, :autosave, :glide, :wrap, :numbers, :shade, :beside, :indent, :code_scale, :code_font, :code_weight, :guide, :bundle, :rebound, :side, :hidden)
 
 "The folder of the pages that have the settings"
 settings_dir() = joinpath(pages_dir[], "settings")
@@ -27118,7 +27197,7 @@ save_settings!(e) = begin
     mkpath(dirname(settings_file()))
     # After the bundle of key bindings comes a line for each command that has other keys than the bundle's, like key.save=ctrl+s
     changed = join(["key.$name=$(e.rebound[name])\n" for name in sort!(collect(keys(e.rebound)))])
-    write(settings_file(), "theme=$(e.theme)\nfont=$(e.font)\nweight=$(e.weight)\nzoom=$(e.zoom)\nwidth=$(e.widest.value)\ncount=$(e.stat)\nplain=$(e.plain)\nspelling=$(e.spelling)\nupdates=$(e.updates)\nautosave=$(e.autosave)\nwrap=$(e.wrap)\nnumbers=$(e.numbers)\nshade=$(e.shade)\nbeside=$(e.beside)\nindent=$(e.indent)\ncode=$(e.code_scale)\ncodefont=$(e.code_font)\ncodeweight=$(e.code_weight)\nguide=$(e.guide)\nsidebar=$(e.side.value)\nhidden=$(e.hidden)\nkeys=$(e.bundle)\n$changed")
+    write(settings_file(), "theme=$(e.theme)\nfont=$(e.font)\nweight=$(e.weight)\nzoom=$(e.zoom)\nwidth=$(e.widest.value)\ncount=$(e.stat)\nplain=$(e.plain)\nspelling=$(e.spelling)\nupdates=$(e.updates)\nautosave=$(e.autosave)\nglide=$(e.glide)\nwrap=$(e.wrap)\nnumbers=$(e.numbers)\nshade=$(e.shade)\nbeside=$(e.beside)\nindent=$(e.indent)\ncode=$(e.code_scale)\ncodefont=$(e.code_font)\ncodeweight=$(e.code_weight)\nguide=$(e.guide)\nsidebar=$(e.side.value)\nhidden=$(e.hidden)\nkeys=$(e.bundle)\n$changed")
   catch
     # A file that can't be written only means the settings last as long as the window
   end
@@ -27217,6 +27296,8 @@ load_settings!(e) = begin
       e.updates = value != "false"
     elseif name == "autosave"
       e.autosave = value == "true"
+    elseif name == "glide"
+      e.glide = value != "false"
     elseif name == "wrap"
       e.wrap = value != "false"
     elseif name == "numbers"

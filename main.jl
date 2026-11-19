@@ -1145,7 +1145,8 @@ unlist!(d::Document) = begin
 end
 
 const MARKDOWN = (".md", ".markdown", ".mdx")
-ismarkdown(path) = lowercase(splitext(path)[2]) in MARKDOWN
+# A folder's own page, `.ladder`, is Markdown too: see "a folder's own page" below
+ismarkdown(path) = lowercase(splitext(path)[2]) in MARKDOWN || basename(path) == FOLDER_PAGE
 
 # The files of code that the page changes, as it changes a Markdown file. The whole file is one block of code.
 const CODE_FILES = (".jl",)
@@ -1195,6 +1196,9 @@ end
 #     @def struct NotesDirectory <: Ladder.AbstractDirectory end
 #     Ladder.FS.kinds[fs"/Users/jake/Notes"] = NotesDirectory
 #     Ladder.entry_icon(::NotesDirectory) = "box"
+#
+# A folder gets its kind from `FS.kinds`, by its path, or from a page of its
+# own, the file `.ladder` in it: see "a folder's own page".
 
 """
 Read the sidebar's folder again: what it lists, and the object of each one.
@@ -16150,16 +16154,20 @@ end
 Run the code of the Markdown page at `path` in the module `m`: each of its
 `julia` blocks, from the top. An error names the line of the page that it's on.
 """
-run_page!(m::Module, path::AbstractString) = begin
+run_page!(m::Module, path::AbstractString) = (page_value(m, path); m)
+
+"Run the code of the Markdown page at `path` in the module `m`, as `run_page!` does. It gives the value of the last `julia` block, or nothing when the page has none."
+page_value(m::Module, path::AbstractString) = begin
+  value = nothing
   for (line, code) in page_code(path)
     try
       # Empty lines before the code give each line of it the number that it has in the page
-      include_string(m, "\n"^(line - 1) * code, path)
+      value = include_string(m, "\n"^(line - 1) * code, path)
     catch err
       error("Line $(err isa LoadError ? err.line : line) of $(basename(path)): $(trouble(err))")
     end
   end
-  m
+  value
 end
 
 "The module that the `julia` blocks of the Markdown page at `path` define. It's made the first time, and kept."
@@ -17788,10 +17796,19 @@ follow!(e, url) = begin
   (isdir(path) && !ispackage(path)) || return open_url(isdir(path) ? path : url)
   # A folder does what a click on it in the sidebar does. A folder of no kind shows in the sidebar, and a kind can show in the page too.
   path = String(rstrip(path, '/'))
-  o = try object(e, path) catch; nothing end
-  o isa AbstractDirectory ? open!(e, o) : go_folder!(e, path)
+  # The folder's own page says its kind, and loads the code of the kind. It runs now if it hasn't, and
+  # the rest goes on with that code.
+  folder_pages!(path)
+  Base.invokelatest(follow_folder!, e, path)
   e.panel || toggle_panel!(e)
   e
+end
+
+"Do what a click on the folder at `path` does in the sidebar"
+follow_folder!(e, path) = begin
+  folder_pages_tick!(e)   # the sidebar can have listed the folder before its page ran
+  o = try object(e, path) catch; nothing end
+  o isa AbstractDirectory ? open!(e, o) : go_folder!(e, path)
 end
 
 drag!(e, pos) = begin
@@ -26548,6 +26565,15 @@ end
 # --- the whole window ---------------------------------------------------------------------
 
 describe(e::Editor) = begin
+  scene = describe_window(e)
+  # A folder's page that waits runs when the frame is made, so that no part of a frame meets code that's
+  # newer than the frame. The next frame is drawn with what the page loaded.
+  isempty(FOLDER_PAGES_DUE) || run_folder_pages!()
+  scene
+end
+
+"What the window shows, and what Ladder does in each frame before it"
+describe_window(e::Editor) = begin
   use!(getproperty(THEMES, e.theme))
   use_code_font!(e)
   win = window_of(e)
@@ -26569,6 +26595,7 @@ describe(e::Editor) = begin
   confine!(e)   # while the lines of a block fill the window, the caret stays in them
   job_tick!(e)
   update_tick!(e)
+  folder_pages_tick!(e)
   startup_tick!(e)
   foreach(f -> f(e), values(EACH_FRAME))   # what code from the startup page does in each frame, like a look for new email
   zoom_tick!(e)
@@ -27036,6 +27063,140 @@ end
 "What the top bar calls the page that shows, when that isn't its file's name: what code from the startup page calls it, or an email's subject"
 page_title(e) = something(first_answer(PAGE_TITLES, e), email_title(e), Some(nothing))
 
+# --- a folder's own page ----------------------------------------------------------------
+#
+# A folder says what kind of folder it is with a page of its own: a file
+# called `.ladder`, in the folder. The page is Markdown, as the startup page
+# is, and Ladder runs its `julia` blocks the same way: from the top, in one
+# module, where `Ladder` is this module. The value of the last block is the
+# folder's kind, a type under `AbstractDirectory`.
+#
+#     This disk is a media library.
+#
+#     ```julia
+#     @use "github.com/jkroso/Media.lad" => Media
+#     Media.library(Ladder)
+#     ```
+#
+# The startup page is for code that works all the time that Ladder is open,
+# like a look for new email. A folder's page is for code that only its folder
+# needs. Ladder runs it when it first meets the folder: when the sidebar lists
+# the folder, or a link leads to it. So the code isn't loaded when Ladder
+# starts, and the folder is the same kind of folder on each Mac that opens it.
+#
+# A page that's saved again runs again, in a new module, and a folder that
+# loses its page is plain. Code that fails leaves the folder plain, and the
+# window says which line of the page failed, under its top bar. A kind that
+# code gave the folder by its path, in `FS.kinds`, comes before the page's. A
+# folder of a kind doesn't ask the pages of the folders in it: the kind says
+# what they are, with its method of `FS.kind`.
+#
+# A page loads code, and that code is newer than the frame or the click that
+# met the folder, which can't call it. So the page doesn't run where the
+# folder is met. It waits, the folder is plain until the frame is made, and
+# then the page runs: see `describe(e::Editor)`. Each window lists its folder
+# again in the next frame. A link to a folder can't wait, because what it does
+# is the kind's to say, so `follow!` runs the page first and goes on with
+# `Base.invokelatest`.
+
+"The name of the page of a folder that says the folder's kind"
+const FOLDER_PAGE = ".ladder"
+"What each folder's page gave when it last ran, by the folder's path: when the page was saved, and the folder's kind, or nothing"
+const FOLDER_PAGES = Dict{String,Tuple{Float64,Any}}()
+"The paths of the folders whose page waits to run, because it's new or it was saved again"
+const FOLDER_PAGES_DUE = String[]
+"How many times the kind of a folder with a page can have changed. A window lists its folder again when this has grown."
+const FOLDER_PAGES_RAN = Ref(0)
+"What failed in a folder's page when it last ran, or \"\", and when"
+const FOLDER_PAGE_STOPPED = Ref(("", 0.0))
+"The age of Julia's code when the last page had run. Code that started before then can't call what a page loaded."
+const FOLDER_PAGES_WORLD = Ref{UInt}(0)
+
+"True when the code that asks started after the last page ran, so it can call what the pages loaded"
+pages_callable() = Base.tls_world_age() >= FOLDER_PAGES_WORLD[]
+
+"""
+The kind that the page of the folder at `path` gives the folder, or nothing
+when the folder has no page, or its page gave none. A page that hasn't run
+since it was saved waits to run, and the folder keeps the kind that it had.
+Code that started before a page ran can't make a folder of a kind from a
+page, so to that code the folder is plain.
+"""
+page_kind(path::AbstractString) = begin
+  st = stat(joinpath(path, FOLDER_PAGE))
+  kept = get(FOLDER_PAGES, path, nothing)
+  if !isfile(st)
+    # The folder lost its page, so it's plain from now on
+    kept === nothing || (delete!(FOLDER_PAGES, path); FOLDER_PAGES_RAN[] += 1)
+    return nothing
+  end
+  if (kept === nothing || kept[1] != mtime(st)) && !(path in FOLDER_PAGES_DUE)
+    push!(FOLDER_PAGES_DUE, path)
+    foreach(e -> redraw_in!(e, 0), editors)   # the page runs when a frame is made
+  end
+  kept !== nothing && pages_callable() ? kept[2] : nothing
+end
+
+# A folder of no kind asks the page of each folder in it. A kind that code gave a folder by its path comes first.
+FS.kind(d::FS.Directory, path::FSPath) = begin
+  k = get(FS.kinds, path, nothing)
+  k === nothing || return k
+  something(page_kind(string(path)), FS.Directory)
+end
+
+"""
+Run the page of each folder that waits. The kind that a page gives is its
+folder's from now on. Code that was running before this can't call what the
+pages loaded, so it goes on with `Base.invokelatest`, or leaves the folder to
+the next frame.
+"""
+run_folder_pages!() = begin
+  while !isempty(FOLDER_PAGES_DUE)
+    path = popfirst!(FOLDER_PAGES_DUE)
+    file = joinpath(path, FOLDER_PAGE)
+    isfile(file) || continue
+    at = mtime(file)
+    kind = try
+      value = Base.invokelatest(page_value, code_module(FOLDER_PAGE * " of " * basename(path)), file)
+      value === nothing || (value isa Type && value <: AbstractDirectory) ||
+        error("The last `julia` block of the page gave $(Base.invokelatest(repr, value)), which isn't a kind of folder.")
+      value
+    catch err
+      FOLDER_PAGE_STOPPED[] = ("The $FOLDER_PAGE page of $(basename(path)) stopped. " * trouble(err), time())
+      nothing
+    end
+    FOLDER_PAGES[path] = (at, kind)
+  end
+  FOLDER_PAGES_RAN[] += 1
+  FOLDER_PAGES_WORLD[] = Base.get_world_counter()
+  foreach(e -> redraw_in!(e, 0), editors)
+  nothing
+end
+
+"""
+Run the page of the folder at `path`, and of each folder that it's in, when
+it waits. Code that calls this goes on with `Base.invokelatest`, because what
+the pages loaded is newer than the call.
+"""
+folder_pages!(path::AbstractString) = begin
+  # A folder is met only when the folders that it's in have their kinds, so each look can find one more page
+  for _ in 1:length(splitpath(path))
+    try FS.get(FSPath(path)) catch end
+    isempty(FOLDER_PAGES_DUE) && break
+    run_folder_pages!()
+  end
+  nothing
+end
+
+"List the sidebar's folder again when the kind of a folder with a page can have changed since the window last listed it"
+folder_pages_tick!(e) = begin
+  (get(e.nodes, :folder_pages, 0) == FOLDER_PAGES_RAN[] || !pages_callable()) && return
+  e.nodes[:folder_pages] = FOLDER_PAGES_RAN[]
+  list_files!(e)
+  delete!(e.nodes, :page_object)   # the folder that the page shows is found again too
+  nothing
+end
+
 # --- the startup page ------------------------------------------------------------------
 #
 # Ladder has one page that's yours from the start: the startup page. It does
@@ -27106,18 +27267,28 @@ const STARTUP = Ref(("", 0.0))
 const STARTUP_SHOWS = 12.0   # seconds that the window says what failed
 
 """
-Run the code of the startup page: each of its `julia` blocks, from the top, in
-one module, which this gives. In that module `Ladder` is this module. Code
-that fails stops the code after it, and `STARTUP[]` then says what failed.
+A new module for the code of the startup page, or of a folder's page. It has
+what a Julia file that Kip loads has, like `@use`, and the name `Ladder`,
+which is this module.
 """
-run_startup!(path=startup_page()) = begin
+code_module(name::AbstractString) = begin
   # A module holds its own name, so the name has a ⭒ in front, as Kip's modules have
-  m = Module(Symbol("⭒startup"))
+  m = Module(Symbol("⭒", name))
   Core.eval(m, :(const Kip = $Kip))
   Core.eval(m, :(using .Kip))
   Core.eval(m, :(eval(x) = Core.eval($m, x)))
   Core.eval(m, :(include(file) = Base.include($m, file)))
   Core.eval(m, :(const Ladder = $(@__MODULE__)))
+  m
+end
+
+"""
+Run the code of the startup page: each of its `julia` blocks, from the top, in
+one module, which this gives. In that module `Ladder` is this module. Code
+that fails stops the code after it, and `STARTUP[]` then says what failed.
+"""
+run_startup!(path=startup_page()) = begin
+  m = code_module("startup")
   STARTUP[] = try
     isfile(path) && Base.invokelatest(run_page!, m, path)
     ("", time())
@@ -27127,21 +27298,27 @@ run_startup!(path=startup_page()) = begin
   m
 end
 
-"Say what failed in the code of the startup page, under the top bar, for a while after Ladder starts"
+"Say what failed in the code of the startup page, under the top bar, for a while after Ladder starts. A folder's page that failed is said the same way."
 startup_tick!(e) = begin
   words, since = STARTUP[]
+  stopped_tick!(e, :startup, isempty(words) ? "" : "The startup page stopped. " * words, since)
+  stopped_tick!(e, :folder_page, FOLDER_PAGE_STOPPED[]...)
+end
+
+"Say `words` under the top bar for a while after the time `since`. `key` names what failed, and \"\" says nothing."
+stopped_tick!(e, key::Symbol, words, since) = begin
   win = window_of(e)
-  (isempty(words) || win === nothing || get(e.nodes, :startup_told, 0.0) == since) && return
+  (isempty(words) || win === nothing || get(e.nodes, (key, :told), 0.0) == since) && return
   left = STARTUP_SHOWS - (time() - since)
   if left <= 0
-    close_popup!(win, :startup)
-    e.nodes[:startup_told] = since
+    close_popup!(win, key)
+    e.nodes[(key, :told)] = since
   else
     # The words look as a tooltip does, under the middle of the top bar
     wide, _ = window_size(e)
     spot = (wide / 2, 0px, 1px, TOPBAR_H - 8px)
-    popup!(win, Bubble(content=Box(padding(8px, 5px), label("The startup page stopped. " * words, 12px, color=TIP_INK)), target=spot),
-           anchor=spot, placement=:bottom, gap=6px, key=:startup, input=false)
+    popup!(win, Bubble(content=Box(padding(8px, 5px), label(words, 12px, color=TIP_INK)), target=spot),
+           anchor=spot, placement=:bottom, gap=6px, key=key, input=false)
     redraw_in!(e, left)
   end
   nothing

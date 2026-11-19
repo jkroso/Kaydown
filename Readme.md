@@ -592,7 +592,7 @@ Ladder.entry_marks(e, d::NotesDirectory) = (count_of_notes(d),)
 ```
 ````
 
-- A kind of folder is a type under `AbstractDirectory`. `FS.kinds` gives a kind to the folder at a path. A folder with no kind is a `Directory`, and a file is a `File`, whose type has the end of its name, like `File{:md}`.
+- A kind of folder is a type under `AbstractDirectory`. `FS.kinds` gives a kind to the folder at a path, and a folder's own page gives one to its folder: see "A folder's own page". A folder with no kind is a `Directory`, and a file is a `File`, whose type has the end of its name, like `File{:md}`.
 - The folder at `/` makes the objects of what it holds, and each of those folders makes its own. A kind of folder says what is in it with a method of `FS.kind` or `FS.child`. Each object keeps the folder that made it as its `parent`.
 
 The sidebar and the page call these functions, and each has a method for any folder or file:
@@ -612,6 +612,37 @@ A folder can show in the page as a file does. `open!(e, path)` with the path of 
 [Mail.lad](https://github.com/jkroso/Mail.lad) does this for the folder of an email account: its `MailDirectory` lists the emails in place of the files. [Media.lad](https://github.com/jkroso/Media.lad) does it for a folder of films and shows: the folder shows in the page as posters, and a video in it shows as a player that knows how far you got. The types are in `FS.jl` of [URI.jl](https://github.com/jkroso/URI.jl).
 
 A kind of block goes in `Ladder.BLOCKS`, as Ladder's own kinds do. `Ladder.add_insert!` puts it in the Insert menu, and `Ladder.add_commands!` adds commands, with their keys, to the ones on the Key bindings page. The comment over the tables in `main.jl` says more. [Mail.lad](https://github.com/jkroso/Mail.lad) is an example that uses each of them. If a block fails, the blocks after it don't run, Ladder opens all the same, and the window says which line of the page failed. A change to the page's code runs the next time Ladder starts.
+
+### A folder's own page
+
+A folder can say what kind of folder it is. Put a file called `.ladder` in the folder. The file is a page, as the startup page is: words, and `julia` blocks. Ladder runs the blocks from the top, in one module, with `@use` and the name `Ladder`. The value of the last block is the folder's kind.
+
+````
+This disk is a media library.
+
+```julia
+@use "github.com/jkroso/Media.lad" => Media
+Media.library(Ladder)
+```
+````
+
+A page can define the kind itself:
+
+````
+```julia
+Ladder.@def struct NotesDirectory <: Ladder.AbstractDirectory end
+Ladder.entry_icon(::NotesDirectory) = "box"
+NotesDirectory
+```
+````
+
+- Ladder runs the page when it first meets the folder: when the sidebar lists the folder, or when you follow a link to it. So the code isn't loaded when Ladder starts. The first look at the folder waits while the code loads.
+- The startup page is for code that works all the time that Ladder is open, like Mail.lad's look for new email. A folder's page is for code that only that folder needs.
+- The page goes where the folder goes. A folder on a disk is the same kind of folder on each Mac that opens the disk.
+- Ladder runs the page of any folder that it meets, and doesn't ask first. So a `.ladder` file that someone else wrote runs on your Mac when the sidebar lists its folder.
+- A page that you save again runs again, and a folder whose page is gone is plain again. If the code fails, the folder is plain, and the window says which line of the page failed.
+- A kind that `FS.kinds` gives the folder comes before the page's. A folder inside a kind of folder is what that kind says, and Ladder doesn't run its page.
+- The Finder hides a file whose name starts with a dot. ⌘⇧. shows it there, and in Ladder's sidebar too. The file opens in Ladder as a page.
 
 ## Go back to the file that showed before
 
@@ -716,6 +747,7 @@ julia -O0 --project=. test/children_test.jl       # the parts of the page as the
 julia -O0 --project=. test/timelog_test.jl        # how a time log is read and written, and how its hours and its money are added up
 julia -O0 --project=. test/timelog_view_test.jl   # the rows of a time log, the button that starts and stops the clock, and a time changed in its row
 julia -O0 --project=. test/startup_test.jl        # the startup page: the page that Ladder writes the first time, its code that runs when Ladder starts, and what the window says when the code fails
+julia -O0 --project=. test/folder_page_test.jl    # a folder's own page, `.ladder`: its code that runs when Ladder first meets the folder, the kind that it gives the folder, and what the window says when the code fails
 julia -O0 --project=. test/folder_link_test.jl    # a link to a folder, which shows the folder in the sidebar
 julia -O0 --project=. test/extend_test.jl         # what code from the startup page adds to Ladder: buttons, a list for the sidebar, commands, work in each frame
 julia -O0 --project=. test/eml_test.jl            # what Ladder shows of an email file: its page, its front matter, and the links to its files

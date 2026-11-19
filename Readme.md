@@ -5,7 +5,7 @@ A Markdown editor for the Mac, made with [UI.jl](https://github.com/jkroso/UI.jl
 A code block does more than show code. What it does depends on its language:
 
 - `ui` runs its Julia code and shows what the code makes.
-- `julia` runs the line that the caret is in when you press ⌘Return, and shows what it comes to in a box after the line. It offers the names that code at the caret can use as you type, and says what each one is: the type of a value, or `function`, `struct`, `module` or `macro`.
+- `julia` runs the line that the caret is in when you press ⌘Return, and shows what it comes to in a box after the line. It offers the names that code at the caret can use as you type, and says what each one is: the type of a value, or `function`, `struct`, `module` or `macro`. The code of a page runs in one module for its file, as Kip has one module for each Julia file. So each window that shows the page has the same names, and an error names the module by the file's path.
 - In any code, a bracket or a quote that you type comes with the one that closes it, and the caret stays between the two. With text selected, the pair goes round the text. The two brackets that the caret is between glow.
 - `sheet` works things out, a row at a time.
 - `spreadsheet` is a grid of cells with formulas.

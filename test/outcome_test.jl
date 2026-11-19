@@ -380,3 +380,38 @@ end
   @test K.num(rect(o).left) + K.num(rect(o).width) <= 1000
   shot("under")
 end
+
+@testset "a page has one module, named by its path, for each window that shows it" begin
+  fresh!(4)
+  run!()
+  @test outcome(4).brief == "3"
+  m = K.workspace(e)
+  @test nameof(m) == Symbol("⭒", Base.Filesystem.contractuser(realpath(page)))
+  # A second window with the page has the same module, so what the first one ran is there
+  e2 = K.build_editor(page)
+  w2 = Window(e2, size=(800px, 600px))
+  frame(w2); frame(w2)
+  @test K.workspace(e2) === m
+  value, _, failed = K.run_code(e2, "x * 2")
+  @test !failed && value == 6
+  # A name that acts on a window acts on the one whose code ran in the module last
+  was = e.theme, e2.theme
+  e.theme, e2.theme = :paper, :night
+  @test K.run_code(e2, "page_theme()")[1] == "Night"
+  @test K.run_code(e, "page_theme()")[1] == "Paper"
+  e.theme, e2.theme = was
+  # Another page has a module of its own
+  third = joinpath(dir, "third.md")
+  write(third, "# Third\n")
+  @test K.workspace(K.build_editor(third)) !== m
+  @test K.run_code(K.build_editor(third), "x")[3]
+  # A page that defines a kind of block has one module too. Its blocks and the code that you run on it share it,
+  # whichever of the two made the module first.
+  write(joinpath(dir, "stars.md"), "```julia\nstars(lines) = length(lines)\n```\n")
+  from = K.source_module(e, "./stars.md")
+  @test isdefined(from, :stars) && K.workspace(K.build_editor(joinpath(dir, "stars.md"))) === from
+  write(joinpath(dir, "moons.md"), "```julia\nmoons(lines) = 2\n```\n")
+  mine = K.workspace(K.build_editor(joinpath(dir, "moons.md")))
+  @test !isdefined(mine, :moons)
+  @test K.source_module(e, "./moons.md") === mine && isdefined(mine, :moons)
+end

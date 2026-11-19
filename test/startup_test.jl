@@ -152,7 +152,8 @@ end
   frame(w); frame(w)
   o = shown(2)
   @test !o.failed && o.brief == repr(K.FOLDER_PAGE)
-  @test nameof(K.workspace(e)) == Symbol("⭒.ladder of notes")
+  # Its name is its path, as a module that Kip makes for a file is named by the file
+  @test nameof(K.workspace(e)) == Symbol("⭒", Base.Filesystem.contractuser(realpath(file)))
   # Any other page has no such name
   other = joinpath(folder, "other.md")
   write(other, "```julia\nLadder\n```\n")

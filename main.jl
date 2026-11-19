@@ -16195,8 +16195,25 @@ block_source(text::AbstractString, lang::AbstractString, folder::AbstractString)
   k === nothing ? nothing : "./$lang$((".jl", ".md")[k])"
 end
 
-"The Markdown pages that define a kind of block, with the module that each one's code runs in"
+"""
+The module of each Markdown page's `julia` code, by the real path of the
+page's file. There's one for each file, as Kip has one for each Julia file.
+The code that you run on the page, in any window, and the kinds of block that
+the page defines, are in the same module. See `page_module`.
+"""
 const PAGE_MODULES = Dict{String,Module}()
+
+"The window whose code ran last in the module of each page, by the page's path. A name of the module that acts on a window, like `page_theme!`, acts on that one."
+const PAGE_WINDOWS = Dict{String,Any}()
+
+"The pages whose code has all run in their module, by path, as the kinds of block that a page defines need"
+const PAGES_RUN = Set{String}()
+
+"The path that the module of the page at `path` is kept by: the file's real path, as Kip keeps a module by"
+page_key(path::AbstractString) = isfile(path) ? realpath(path) : abspath(path)
+
+"The name of the module of the page at `path`: its path, with ~ for your home folder, and a ⭒ in front, as Kip's modules have"
+page_module_name(path::AbstractString) = Symbol("⭒", Base.Filesystem.contractuser(page_key(path)))
 
 "The code of each `julia` block of the Markdown page at `path`, with the line of the page that it starts on"
 page_code(path::AbstractString) = begin
@@ -16231,17 +16248,32 @@ page_value(m::Module, path::AbstractString) = begin
   value
 end
 
-"The module that the `julia` blocks of the Markdown page at `path` define. It's made the first time, and kept."
-page_module(path::AbstractString) = get!(PAGE_MODULES, path) do
-  # A module holds its own name, so the name has a ⭒ in front, as Kip's modules have. A page called
-  # `stars` can then define a function called `stars`.
-  m = Module(Symbol("⭒", title(path)))
-  # What a Julia file that Kip loads starts with: Kip, for `@use`, and its own `eval` and `include`
-  Core.eval(m, :(const Kip = $Kip))
-  Core.eval(m, :(using .Kip))
-  Core.eval(m, :(eval(x) = Core.eval($m, x)))
-  Core.eval(m, :(include(file) = Base.include($m, file)))
-  run_page!(m, path)
+"""
+The module of the page at `path`, which the window `e` asks for. It's made the
+first time, and kept by the page's real path. It has what a Julia file that
+Kip loads has, like `@use`, and more names by the kind of page:
+
+  - The startup page and a folder's page have `Ladder`, as they have when
+    Ladder runs their code. Each time Ladder runs one, the page has a new
+    module: see `code_module!`.
+  - Any other page has each name that a live block has, and each unit of a
+    sheet: see `usual_module`.
+
+The module's name is the page's path. So a page called `stars` can define a
+function called `stars`, and two pages with the same name have two modules.
+"""
+page_module(e, path::AbstractString) = begin
+  key = page_key(path)
+  get!(PAGE_WINDOWS, key, e)
+  get!(() -> ladder_runs(key) ? code_module(key) : usual_module(e, page_module_name(key), key), PAGE_MODULES, key)
+end
+
+"The module of the page at `path`, as `page_module` gives it, with all of the page's code run in it, as a kind of block that the page defines needs"
+page_run(e, path::AbstractString) = begin
+  m = page_module(e, path)
+  key = page_key(path)
+  key in PAGES_RUN || (run_page!(m, path); push!(PAGES_RUN, key))
+  m
 end
 
 """
@@ -16340,7 +16372,7 @@ source_module(e, source::AbstractString) = begin
   if ismarkdown(source)
     file = repository(source) === nothing ? source_file(e, source) : repository_file(source)
     isfile(file) || error("Ladder can't find the page $source.")
-    return cd(() -> Base.invokelatest(page_module, realpath(file)), folder)
+    return cd(() -> Base.invokelatest(page_run, e, realpath(file)), folder)
   end
   cd(() -> Base.invokelatest(Kip.require, source, folder), folder)
 end
@@ -16380,7 +16412,7 @@ reload!(v::FileBlock) = begin
     write_blocks!(editor(v))   # what the blocks hold goes into their lines first, since they're made again from those
     LOADED[v.file] = at
     delete!(BROKEN, v.file)
-    m = get(Kip.modules, v.file, get(PAGE_MODULES, v.file, nothing))
+    m = get(Kip.modules, v.file, get(PAGE_MODULES, page_key(v.file), nothing))
     try
       # The file's new code goes into the module that it has. A file that didn't load the first time has none yet.
       m === nothing || (ismarkdown(v.file) ? Base.invokelatest(run_page!, m, v.file) : Base.include(m, v.file))
@@ -23817,36 +23849,59 @@ statements(lines::AbstractVector{<:AbstractString}) = begin
 end
 
 """
-The module that the `julia` code blocks of the page run in. It has each name
-that a live block has, and each unit of a sheet that has no such name. They
-come in with `using`, so the page's code can give any of them a new meaning.
-
-Ladder runs the code of two kinds of page itself: the startup page and a
-folder's page. Their code runs in the window as Ladder runs it, with the name
-`Ladder` and nothing more: see `ladder_module`.
+The module that the `julia` code blocks of the page run in: the page's own,
+which each window that shows the page uses. See `page_module`. A page with no
+file has one in its window.
 """
-workspace(e) = get!(e.nodes, (:workspace, e.buf.path)) do
-  own = ladder_module(e.buf.path)
-  own === nothing || return own
+workspace(e) = isempty(e.buf.path) ? get!(() -> usual_module(e, Symbol("⭒untitled")), e.nodes, :workspace) :
+               page_module(e, e.buf.path)
+
+"The module of the page's `julia` code, or nothing when it has none yet"
+made_workspace(e) = isempty(e.buf.path) ? get(e.nodes, :workspace, nothing) : get(PAGE_MODULES, page_key(e.buf.path), nothing)
+
+"""
+A new module called `name`, with what a Julia file that Kip loads has, like
+`@use`, and each name that a live block of the window `e` has, and each unit
+of a sheet that has no such name. They come in with `using`, so the module's
+code can give any of them a new meaning.
+
+With `key`, the path of a page, the module is for each window that shows the
+page. A name that acts on a window, like `page_theme!`, then acts on the
+window whose code ran in the module last: `PAGE_WINDOWS[key]`.
+"""
+usual_module(e, name::Symbol, key=nothing) = begin
   from = sandbox(e)
   usual = Module(:Usual)
   # The modules can be new, so their names are asked for as they are now
-  share(source, name) = begin
-    hidden = startswith(string(name), '#') || name in (nameof(source), :eval, :include, :Kip, :SheetUnits)
-    (hidden || isdefined(usual, name) || !Base.invokelatest(isdefined, source, name)) && return
-    Core.eval(usual, :(const $name = $(Base.invokelatest(getglobal, source, name))))
-    Core.eval(usual, Expr(:export, name))
+  share(source, n) = begin
+    hidden = startswith(string(n), '#') || n in (nameof(source), :eval, :include, :Kip, :SheetUnits)
+    (hidden || isdefined(usual, n) || !Base.invokelatest(isdefined, source, n)) && return
+    value = Base.invokelatest(getglobal, source, n)
+    key !== nothing && acts_on_window(value) && (value = window_call(key, n))
+    Core.eval(usual, :(const $n = $value))
+    Core.eval(usual, Expr(:export, n))
   end
-  foreach(name -> share(from, name), Base.invokelatest(names, from, all=true, imported=true))
+  foreach(n -> share(from, n), Base.invokelatest(names, from, all=true, imported=true))
   units = Base.invokelatest(getglobal, from, :SheetUnits)
-  foreach(name -> share(units, name), Base.invokelatest(names, units))
-  m = Module(:Page)
+  foreach(n -> share(units, n), Base.invokelatest(names, units))
+  m = Module(name)
   # Kip by the module that's loaded here, not by name, as the live blocks' module has it
   Core.eval(m, :(const Kip = $Kip))
   Core.eval(m, :(using .Kip))
+  Core.eval(m, :(eval(x) = Core.eval($m, x)))
+  Core.eval(m, :(include(file) = Base.include($m, file)))
   Core.eval(m, :(const Usual = $usual))
   Core.eval(m, :(using .Usual))
   m
+end
+
+"True when `f` is a function that acts on one window, as `page_theme!` does: it holds the window"
+acts_on_window(f) = f isa Function && any(i -> isdefined(f, i) && getfield(f, i) isa Editor, 1:nfields(f))
+
+"A function that calls the function `name` of the live blocks of the window whose code ran last in the module of the page at `key`"
+window_call(key::String, name::Symbol) = (args...; kw...) -> begin
+  live = sandbox(PAGE_WINDOWS[key])
+  Base.invokelatest(Base.invokelatest(getglobal, live, name), args...; kw...)
 end
 
 """
@@ -23859,6 +23914,8 @@ run_code(e, code::String) = begin
   # Kip finds a path like "./widgets.jl" from the folder of the document, as it does for a live block
   dir = isdir(docdir(e)) ? docdir(e) : pwd()
   m = workspace(e)
+  # The names of the module that act on a window act on this one now
+  isempty(e.buf.path) || (PAGE_WINDOWS[page_key(e.buf.path)] = e)
   # The code can load the drawing methods of a node, so the window draws one more frame soon after
   e.nodes[:ran] = true
   screen = stdout
@@ -25078,7 +25135,7 @@ A page whose code hasn't run has Julia's own names. The lists are kept until
 something makes a new name.
 """
 scope_names(e) = begin
-  m = something(get(e.nodes, (:workspace, e.buf.path), nothing), get(e.nodes, :sandbox, nothing), Some(nothing))
+  m = something(made_workspace(e), get(e.nodes, :sandbox, nothing), Some(nothing))
   world = Base.get_world_counter()
   kept = get(e.nodes, :scope, nothing)
   kept !== nothing && kept[1] === m && kept[2] == world && return kept[3]
@@ -25683,7 +25740,7 @@ caret_brackets(e) = begin
 end
 
 "The module whose names the page's Julia code can use: the one that the code runs in, or Julia's own before any code ran"
-scope(e) = something(get(e.nodes, (:workspace, e.buf.path), nothing), get(e.nodes, :sandbox, nothing), Base)
+scope(e) = something(made_workspace(e), get(e.nodes, :sandbox, nothing), Base)
 
 "The value that code in the module `m` calls `name`, like `length` or `Base.length`. Nothing when it has no such name."
 named_value(m::Module, name::AbstractString) = begin
@@ -25910,7 +25967,7 @@ call_shown(e) = begin
     isempty(fitting) && (fitting = lines)
     # The methods that the page's own code made come first, then the ones in the module that the function is from.
     # Among those, the shortest come first: they take the plainest values, like length(s::String).
-    mine = get(e.nodes, (:workspace, b.path), nothing)
+    mine = made_workspace(e)
     home = f isa Union{Function,Type} ? parentmodule(f) : nothing
     long(line) = sum(length, line.params, init=0) + sum(length, line.keys, init=0)
     fitting = sort(fitting, by=line -> (line.mod !== mine, line.mod !== home, long(line)))
@@ -27226,7 +27283,7 @@ run_folder_pages!() = begin
     isfile(file) || continue
     at = mtime(file)
     kind = try
-      value = Base.invokelatest(page_value, code_module(FOLDER_PAGE * " of " * basename(path)), file)
+      value = Base.invokelatest(page_value, code_module!(file), file)
       value === nothing || (value isa Type && value <: AbstractDirectory) ||
         error("The last `julia` block of the page gave $(Base.invokelatest(repr, value)), which isn't a kind of folder.")
       value
@@ -27336,13 +27393,12 @@ const STARTUP = Ref(("", 0.0))
 const STARTUP_SHOWS = 12.0   # seconds that the window says what failed
 
 """
-A new module for the code of the startup page, or of a folder's page. It has
-what a Julia file that Kip loads has, like `@use`, and the name `Ladder`,
-which is this module.
+A new module for the code of the startup page, or of a folder's page, at
+`path`. It has what a Julia file that Kip loads has, like `@use`, and the
+name `Ladder`, which is this module. Its name is the page's path.
 """
-code_module(name::AbstractString) = begin
-  # A module holds its own name, so the name has a ⭒ in front, as Kip's modules have
-  m = Module(Symbol("⭒", name))
+code_module(path::AbstractString) = begin
+  m = Module(page_module_name(path))
   Core.eval(m, :(const Kip = $Kip))
   Core.eval(m, :(using .Kip))
   Core.eval(m, :(eval(x) = Core.eval($m, x)))
@@ -27351,27 +27407,16 @@ code_module(name::AbstractString) = begin
   m
 end
 
-"The module that the code of the startup page ran in when Ladder last started, or nothing before that"
-const STARTUP_MODULE = Ref{Union{Module,Nothing}}(nothing)
-
 """
-The module that code from the page at `path` runs in when you run it in the
-window, if Ladder runs the page's code itself. It's nothing for any other page.
-
-  - The startup page's code runs in the module that the page ran in when
-    Ladder started. So what that code loaded is there, like `Mail`.
-  - A folder's page gets a new module, as it does each time Ladder runs it.
+A new module for the code of the startup page, or of a folder's page, at
+`path`, for Ladder to run the page in now. It's the page's module from now on,
+so code that you run on the page in a window runs where Ladder ran it: what
+the startup page loaded, like `Mail`, is there.
 """
-ladder_module(path::AbstractString) = begin
-  isfile(path) || return nothing
-  home = startup_page()
-  if isfile(home) && samefile(path, home)
-    m = STARTUP_MODULE[]
-    m === nothing ? code_module("startup") : m
-  elseif basename(path) == FOLDER_PAGE
-    code_module(FOLDER_PAGE * " of " * basename(dirname(abspath(path))))
-  end
-end
+code_module!(path::AbstractString) = (PAGE_MODULES[page_key(path)] = code_module(path))
+
+"True when Ladder runs the code of the page at `path` itself: the startup page, and a folder's page"
+ladder_runs(path::AbstractString) = basename(path) == FOLDER_PAGE || page_key(path) == page_key(startup_page())
 
 """
 Run the code of the startup page: each of its `julia` blocks, from the top, in
@@ -27379,8 +27424,7 @@ one module, which this gives. In that module `Ladder` is this module. Code
 that fails stops the code after it, and `STARTUP[]` then says what failed.
 """
 run_startup!(path=startup_page()) = begin
-  m = code_module("startup")
-  STARTUP_MODULE[] = m
+  m = code_module!(path)
   STARTUP[] = try
     isfile(path) && Base.invokelatest(run_page!, m, path)
     ("", time())

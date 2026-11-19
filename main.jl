@@ -15999,9 +15999,11 @@ end
 #   - The last button puts the block back in the document. So does Esc, once
 #     no field of the page has the keyboard.
 #
-# The pages that you go to aren't written into the block: its line stays the
-# page that it starts at. ⌘E, while the block fills the window, shows that
-# line.
+# The block's lines always say the page that shows. When you go to another
+# page, the block's line becomes that page's address, and ⌘Z in the document
+# takes it back. A page that the block held is among the pages that the arrow
+# goes back to, and going back to it puts its HTML back in the block. So ⌘E,
+# while the block fills the window, shows the source of the page that shows.
 #
 # A page of an email asks the web for nothing, so a `web` block there shows no
 # page. A window that isn't on the screen asks for nothing either, unless a
@@ -16063,6 +16065,41 @@ reread!(v::WebView, lines) = begin
   v.lines = lines
   b = web_browser(v)
   b.address, b.html, b.base = web_source(editor(v), lines)
+  v
+end
+
+"The lines of a `web` block that say `page`: its address, or the HTML of a page that was written in the block. A file in the document's folder is said by its name there."
+web_lines(e, page) = begin
+  page isa Browsers.Written && return String.(split(page.html, '\n'))
+  file = Webfiles.path(page)
+  dir = joinpath(abspath(docdir(e)), "")
+  file !== nothing && startswith(file, dir) && isfile(file) && return [relpath(file, dir)]
+  [String(page)]
+end
+
+"True when `lines`, the lines of a `web` block, say `page`"
+web_says(e, lines, page) = begin
+  src = web_source(e, lines)
+  page isa Browsers.Written && return src.html == page.html && src.base == page.base
+  isempty(src.html) || return false
+  said = Browsers.whole(src.address)
+  # A file can be said by its path or by a file:// address
+  file = Webfiles.path(said)
+  file === nothing ? said == page : file == Webfiles.path(page)
+end
+
+# When you go to another page in the web view, or back to one, the block's lines change to say it. They change once
+# the view has read them: until then, they're what the view goes by.
+block_tick!(v::WebView) = begin
+  b = v.browser
+  (b === nothing || v.lines === nothing) && return v
+  page = Browsers.page_now(b)
+  (page === nothing || b.asked != (b.address, b.html, b.base)) && return v
+  e = editor(v)
+  (readonly(e.buf) || e.buf.fixed || web_says(e, v.lines, page)) && return v
+  write_block!(v, WEBVIEW, web_lines(e, page))
+  # The view is at that page already, so it doesn't get it again
+  Browsers.asked!(b)
   v
 end
 

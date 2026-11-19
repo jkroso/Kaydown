@@ -58,6 +58,10 @@ beside.html
 ```web
 ```
 
+```web
+<body style="margin:0"><a id=away href="https://julialang.org/" style="display:block;height:30px">Away</a></body>
+```
+
 The end.
 """)
 
@@ -88,6 +92,8 @@ button(name) = click(middle(rect(v.parts[(:button, name)])))
 "Where a point of the page of the web is in the window"
 spot(x, y) = (r = rect(b); (K.num(r.left) + x, K.num(r.top) + y - K.Browsers.scrolled(b)))
 live(code) = K.Browsers.Live.evaluate(b.view.live, code)
+"The lines of the `n`th web block of the document"
+block_text(n) = (span = K.block_lines(e.buf, K.WEBVIEW, n); span === nothing ? nothing : e.buf.lines[span[1]+1:span[2]-1])
 
 @testset "the block shows the page" begin
   @test b.shown == "https://example.com/" && !b.failed && !K.Browsers.loading(b)
@@ -144,24 +150,26 @@ end
   @test K.Browsers.scrolled(b) == 90 && live("scrollY") == 90
   key(Keys.home)
   @test K.Browsers.scrolled(b) == 0
-  # A click follows a link, and the field shows where the page is
+  @test !K.dirty(e.buf)
+  # A click follows a link, and the field shows where the page is. The block's line says it too.
   click(spot(20, 80))
   @test b.shown == "https://example.com/more" && b.title == "More" && K.web_input(v).text == "https://example.com/more"
-  # Back, forward, and the keys for them
+  @test block_text(1) == ["https://example.com/more"] && K.dirty(e.buf)
+  # Back, forward, and the keys for them. The block's line goes with them, and the page isn't got again for it.
+  n = length(asked)
   button(:back)
-  @test b.shown == "https://example.com/"
+  @test b.shown == "https://example.com/" && block_text(1) == ["https://example.com/"]
   button(:forward)
-  @test b.shown == "https://example.com/more"
+  @test b.shown == "https://example.com/more" && block_text(1) == ["https://example.com/more"]
   key(Keys.left_bracket, Keys.cmd)
-  @test b.shown == "https://example.com/"
+  @test b.shown == "https://example.com/" && block_text(1) == ["https://example.com/"] && K.Browsers.can_forward(b)
+  @test length(asked) == n
   # Typing in a field of the page, and Return sends its form
   click(spot(30, 112))
   @test K.Browsers.field(b) !== nothing
   typed("wood")
   key(Keys.enter)
-  @test b.shown == "https://example.com/find?q=wood" && b.title == "Found"
-  # The document's text didn't change under it
-  @test !K.dirty(e.buf)
+  @test b.shown == "https://example.com/find?q=wood" && b.title == "Found" && block_text(1) == ["https://example.com/find?q=wood"]
 end
 
 @testset "another address, and back to the document" begin
@@ -182,9 +190,8 @@ end
   @test v.full && w.focus === b
   key(Keys.escape)
   @test !v.full && w.focus === e
-  # The block's line is still the page that it starts at, and the view shows where you went
-  @test K.block_lines(e.buf, K.WEBVIEW, 1) !== nothing && e.buf.lines[K.block_lines(e.buf, K.WEBVIEW, 1)[1]+1] == "https://example.com"
-  @test b.shown == "https://julialang.org/" && !K.dirty(e.buf)
+  # The block's line is the page that shows
+  @test block_text(1) == ["https://julialang.org/"] && b.shown == "https://julialang.org/"
   # The button of the bar does the same
   click(middle(rect(b)))
   @test v.full
@@ -192,8 +199,39 @@ end
   @test !v.full
 end
 
+@testset "the lines of a page that the block holds" begin
+  v5 = e.nodes[(:block, K.WEBVIEW, page, 5)]
+  b5 = v5.browser
+  written = block_text(5)
+  @test !K.Browsers.can_back(b5)
+  K.full!(v5, true)
+  frames()
+  # A link out of the page that the block holds puts the address of its page in the block, in place of the HTML
+  r = rect(b5)
+  click((K.num(r.left) + 10, K.num(r.top) + 15))
+  @test b5.shown == "https://julialang.org/" && block_text(5) == ["https://julialang.org/"]
+  # ⌘E shows the lines of the block: the address of the page that shows
+  key(Keys.e, Keys.cmd)
+  @test e.plain && !v5.full && e.buf.lines[e.buf.caret[1]] == "https://julialang.org/"
+  key(Keys.e, Keys.cmd)
+  @test v5.full && !e.plain
+  # Back goes to the page that the block held, and puts its HTML back
+  K.act!(v5, :back, w)
+  frames()
+  @test block_text(5) == written && K.Browsers.can_forward(b5) && startswith(b5.shown, "file://")
+  K.act!(v5, :forward, w)
+  frames()
+  @test block_text(5) == ["https://julialang.org/"] && b5.shown == "https://julialang.org/"
+  # ⌘Z in the document takes the line back, and the view shows the page that the block holds again
+  K.undo!(e.buf)
+  frames()
+  @test block_text(5) == written && b5.html == join(written, "\n") && startswith(b5.shown, "file://")
+  K.full!(v5, false)
+  frames()
+end
+
 @testset "the block as HTML, and an email" begin
-  @test K.web_html(e, v) == "<p><a href=\"https://example.com/\">https://example.com/</a></p>"
+  @test K.web_html(e, v) == "<p><a href=\"https://julialang.org/\">https://julialang.org/</a></p>"
   @test startswith(K.web_html(e, e.nodes[(:block, K.WEBVIEW, page, 2)]), "<iframe srcdoc=\"<h2 style=&quot;margin:0;height:40px&quot;>Written here</h2>")
   @test K.web_html(e, e.nodes[(:block, K.WEBVIEW, page, 4)]) === nothing
   # A page of an email asks the web for nothing

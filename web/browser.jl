@@ -12,10 +12,16 @@
 #     b.shown                              # the address of the page that shows, where its site moved it to
 #     b.title                              # what the page says its title is
 #     loading(b)                           # true while a page is on its way
+#     page_now(b)                          # the address that was asked for the page that shows, or that's on its way
 #     scroll!(b, 400)                      # put the top of the window 400 px down the page
 #
 # In place of an address, `html` is the HTML of a page to show, and `base` is
-# the address that the addresses in it are from.
+# the address that the addresses in it are from. That page has a place among
+# the pages that the view goes back to, as a `Written` page.
+#
+# The owner of the view can make its `address`, `html` and `base` say the
+# page that the view went to, and then call `asked!(b)`. The view doesn't get
+# that page again, and its pages to go back to stay.
 #
 # While it's `active`, the mouse and the keyboard reach the page:
 #
@@ -94,6 +100,12 @@ mutable struct Coming
   failed::Bool
 end
 
+"A page that was written in place of an address: its HTML, and the address that the addresses in it are from"
+struct Written
+  html::String
+  base::String
+end
+
 @def mutable struct Browser <: SemanticUI
   address::String = ""      # the address of the page to show. Change it, or call `go!`, to show another.
   html::String = ""         # the HTML of a page to show in place of what's at `address`
@@ -108,7 +120,7 @@ end
   say::Any = (level, text) -> nothing   # called with each line that a script prints
   files::Files = Files()
   view::View = View()       # the page, laid out
-  trail::Vector{String} = String[]   # the addresses that it has shown, in order
+  trail::Vector{Any} = Any[]   # the pages that it has shown, in order: their addresses, and a `Written` page
   at::Int = 0               # which of them shows now, or is on its way
   asked::Any = nothing      # the address and the HTML that it was last asked to show
   coming::Any = nothing     # the page that's on its way, or nothing
@@ -168,17 +180,35 @@ go!(b::Browser, address::AbstractString; note=true) = begin
   to = whole(address)
   isempty(to) && return b
   shows(to) || return (b.open(to); b)
-  if note
-    resize!(b.trail, b.at)
-    push!(b.trail, to)
-    b.at = length(b.trail)
-  end
+  note && note!(b, to)
   b.files.held > Fetch.MOST && Fetch.forget!(b.files)
   Fetch.ask!(b.files, to)
   b.coming = Coming(to, time(), nothing, to, String[], false)
   redraw_in!(b, 0)
   b
 end
+
+"Show the `Written` page `page`"
+go!(b::Browser, page::Written; note=true) = begin
+  note && note!(b, page)
+  b.coming = arrive!(b, Coming(page.base, time(), nothing, page.base, String[], false), page.html, page.base)
+  redraw_in!(b, 0)
+  b
+end
+
+"Put `page` after the page that shows, among the pages that the view goes back to. The pages that were after that one go."
+note!(b::Browser, page) = begin
+  resize!(b.trail, b.at)
+  push!(b.trail, page)
+  b.at = length(b.trail)
+  b
+end
+
+"The page that shows, or that's on its way: the address that was asked for it, or a `Written` page. Nothing before the view was asked for one."
+page_now(b::Browser) = 1 <= b.at <= length(b.trail) ? b.trail[b.at] : nothing
+
+"Say that `b.address`, `b.html` and `b.base` are of the page that shows, so that the view doesn't get it again"
+asked!(b::Browser) = (b.asked = (b.address, b.html, b.base); b)
 
 "Show the page that showed before this one, or the one that showed after it"
 back!(b::Browser) = can_back(b) ? go!(b, b.trail[b.at -= 1]; note=false) : b
@@ -187,8 +217,7 @@ forward!(b::Browser) = can_forward(b) ? go!(b, b.trail[b.at += 1]; note=false) :
 "Get the page that shows again, with all of its files"
 reload!(b::Browser) = begin
   Fetch.forget!(b.files)
-  isempty(b.html) || return (b.asked = nothing; b)
-  b.at > 0 ? go!(b, b.trail[b.at]; note=false) : b
+  b.at > 0 ? go!(b, b.trail[b.at]; note=false) : (b.asked = nothing; b)
 end
 
 """
@@ -296,10 +325,10 @@ tick!(b::Browser) = begin
   if b.asked != want
     b.asked = want
     if !isempty(b.html)
-      # The page is written here, so there's nowhere to go back to
+      # The page is written here. It's the first of the pages to go back to.
       empty!(b.trail)
       b.at = 0
-      b.coming = arrive!(b, Coming(b.base, time(), nothing, b.base, String[], false), b.html, b.base)
+      go!(b, Written(b.html, b.base))
     elseif !isempty(b.address)
       empty!(b.trail)
       b.at = 0

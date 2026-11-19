@@ -223,14 +223,14 @@
 @use "github.com/jkroso/UI.jl/Interface/fonts" skia_font register_font weight_of weight_name isitalic installed_faces
 @use "github.com/jkroso/UI.jl/Interface/image" image_aspect image_source has_image
 @use "github.com/jkroso/UI.jl/Interface/inspector" toggle_inspector!
-@use "github.com/jkroso/UI.jl/Interface/window" hide_titlebar! place_window_buttons! drag_window! set_dark! nswindow system_menu
+@use "github.com/jkroso/UI.jl/Interface/window" hide_titlebar! place_window_buttons! drag_window! set_dark! nswindow system_menu fills_screen fill_screen!
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Icon" Icon icon_cache
 @use "github.com/jkroso/UI.jl/Interface/Semantic/SVG" SVGPath
 @use "github.com/jkroso/UI.jl/Interface/Semantic/TextInput" TextInput
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Link" Link
 @use "github.com/jkroso/UI.jl/Interface/Semantic/ListTree" => Tree
 @use "github.com/jkroso/UI.jl/Interface/Semantic/STLViewer" STLViewer Mesh load!
-@use "github.com/jkroso/UI.jl/Interface/Semantic/Player" AudioPlayer VideoPlayer pause! card_bottom
+@use "github.com/jkroso/UI.jl/Interface/Semantic/Player" AudioPlayer VideoPlayer pause! card_bottom controls_show
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Recorder" AudioRecorder record! stop! plays
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Mermaid" Mermaid problem
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Mermaid" => Diagrams
@@ -9534,6 +9534,9 @@ const PAGE_COMMANDS = (:save, :open, :print, :close, :settings, :sidebar, :sideb
   block::Int = 0                            # which `mermaid` block of the page its diagram is, so that it can be changed. 0 for a diagram that can't.
   tool::Any = nothing                       # the tool of its diagram that waits for a click, whose button is lit
   parts::Dict{Any,Any} = Dict{Any,Any}()    # its buttons and its area, kept between frames
+  screen::Bool = false                      # its video fills the screen: the window is full screen, and the video is all that it shows
+  was_full::Bool = false                    # the window filled its screen before the video did, so it stays so after
+  screen_at::Float64 = 0.0                  # when the video began to fill the screen
 end
 
 "The part of a ZoomView that shows the picture. It takes the mouse and the keys."
@@ -9749,10 +9752,44 @@ zoom_in!(e, what, from=nothing) = begin
   handled
 end
 
+"True while a video fills the screen"
+screening(e) = (v = zooming(e); v !== nothing && v.screen)
+
+"""
+Make the video that fills the window fill the screen, or with `on` false put
+it back to filling the window. The window fills a screen of its own, as the
+green button of its title bar makes it, and the video is all that it shows:
+black is round the picture, and the top bar is gone. The video's controls lie
+over the foot of the picture while the mouse moves. A window that filled its
+screen before stays so after.
+"""
+screen!(v::ZoomView, on::Bool) = begin
+  what = v.what
+  (what !== nothing && what[1] == :node && what[2] isa VideoPlayer) || return handled
+  v.screen == on && return handled
+  v.screen = what[2].screen = on
+  w = window_of(editor(v))
+  if w !== nothing
+    if on
+      v.was_full = fills_screen(w)
+      v.screen_at = time()
+      fill_screen!(w, true)
+    else
+      v.was_full || fill_screen!(w, false)
+    end
+  end
+  on && (what[2].stirred = time())   # its controls show at first
+  handled
+end
+
+"Make the video `p`, which the node `from` shows in the page, fill the screen"
+screen_video!(e, p::VideoPlayer, from=nothing) = (zoom_in!(e, (:node, p), from); screen!(node!(ZoomView, e, :zoom), true))
+
 "Put the page back, with a model or a video back in it. `refocus` gives the keyboard back to the text."
 zoom_out!(v::ZoomView, refocus=true) = begin
   what = v.what
   what === nothing && return handled
+  v.screen && screen!(v, false)   # a video that filled the screen leaves it
   # Words that were being typed into a diagram are taken
   m = changing(v)
   m === nothing || Diagrams.settle!(m)
@@ -9775,6 +9812,9 @@ zoom_tick!(e) = begin
   # The mouse button that started a drag has come up
   w = window_of(e)
   v.grab === nothing || w === nothing || Keys.mouse_left in w.keys || let_go!(v, w)
+  # A window that left its screen another way, as the green button does, has its video fill the window again.
+  # macOS takes a moment to make a window fill a screen, so the first seconds don't count.
+  v.screen && w !== nothing && !isempty(w.glfw) && time() - v.screen_at > 2 && !fills_screen(w) && screen!(v, false)
   m = changing(v)
   if m !== nothing && w !== nothing
     m.joining === nothing || Keys.mouse_left in w.keys || Diagrams.let_go_at!(m, picture_spot(v, w.mouse)...)
@@ -9841,6 +9881,8 @@ end
 
 "What fills the window, over the page and the sidebar and under the top bar"
 zoom_over(e) = zooming(e) === nothing ? () :
+  # A video that fills the screen has the top bar's room too, and black round it
+  screening(e) ? (Box(width(grow=grow), height(grow=grow), background(RGBA(0, 0, 0, 1)), geometry(e.nodes[:zoom])),) :
   (Box(width(grow=grow), height(grow=grow), padding(TOPBAR_H, 0px, 0px, 0px), background(colours.bg), geometry(e.nodes[:zoom])),)
 
 "The button of `v` that's kept under `key`, with what it does and shows now"
@@ -9858,6 +9900,7 @@ act!(v::ZoomView, action, w) = begin
   a == :fit && return fit_now!(v)
   a == :page && return turn!(v, action[2])
   a == :close && return zoom_out!(v)
+  a == :screen && return screen!(v, !v.screen)
   handled
 end
 
@@ -9872,11 +9915,24 @@ describe(v::ZoomView) = begin
     # A model or a video is as tall as the window has room for. Its own bar is under its picture.
     node = what[2]
     _, h = window_size(e)
+    if v.screen
+      # A video that fills the screen is as tall as the window. Its two buttons are in the top right corner, while it shows its own controls.
+      node.height = h
+      shows = with_theme(() -> geometry(node), component_theme(e.zoom))
+      corner = controls_show(node) ?
+        (Column(width(grow=grow), height(grow=grow), Alignment.End, padding(16px),
+           Row(height(36px), padding(4px), child_gap=2px, radius(8px), Alignment.Center, background(colours.float), border(1px, :solid, colours.line),
+               button!(v, :screen, :screen, icon="fullscreen-exit", tip="Back to the window  F"), close)),) : ()
+      return Stack(width(grow=grow), height(grow=grow), Alignment.Start,
+        Box(width(grow=grow), height(grow=grow), background(RGBA(0, 0, 0, 1)), shows), corner...)
+    end
     node.height = max(160px, h - TOPBAR_H - BAR_ROOM - px(2ZOOM_EDGE) - 44px)
     shows = with_theme(() -> geometry(node), component_theme(e.zoom))
+    # A video has a button that makes it fill the screen
+    buttons = node isa VideoPlayer ? (button!(v, :screen, :screen, icon="arrows-fullscreen", tip="Fill the screen  F"), close) : (close,)
     return Stack(width(grow=grow), height(grow=grow), Alignment.Start,
       Column(width(grow=grow), height(grow=grow), Alignment.Center, padding(px(ZOOM_EDGE)), shows),
-      bar(close))
+      bar(buttons...))
   end
   what[1] == :diagram && lay_diagram!(v)
   # The view is the whole window under the top bar, so it's fitted here, and the bar says how big the picture is in this frame
@@ -10198,6 +10254,11 @@ zoom_key!(v::ZoomView, K, w, command) = begin
   end
   K == Keys.escape && return zoom_out!(v)
   command in PAGE_COMMANDS && return nothing
+  if v.what[1] == :node && v.what[2] isa VideoPlayer && !(Keys.cmd in w.keys)
+    # F makes a video fill the screen, and puts it back. The keys of the video are its own here too.
+    K == Keys.f && return screen!(v, !v.screen)
+    K in (Keys.space, Keys.left, Keys.right) && return onkey(v.what[2], KeyPress{K}(0, w))
+  end
   v.what[1] == :node && return handled
   command == :bigger && return zoom_by!(v, ZOOM_STEP, view_middle(v)...)
   command == :smaller && return zoom_by!(v, 1 / ZOOM_STEP, view_middle(v)...)
@@ -26636,7 +26697,9 @@ describe_window(e::Editor) = begin
       node!(Page, e, :page)))
   popup = e.popup == :none ? () : (node!(Backdrop, e, :backdrop), finder(e))
   Stack(width(grow=grow), height(grow=grow), Alignment.Start, name="Editor",
-    body, panel_edge(e)..., tablebar(e)..., outcome_over(e)..., callbox(e)..., suggestbox(e)..., findbar(e)..., sound_over(e)..., fill_over(e)..., task_over(e)..., slides_over(e)..., takeoff_over(e)..., zoom_over(e)..., node!(TopBar, e, :topbar), popup...)
+    body, panel_edge(e)..., tablebar(e)..., outcome_over(e)..., callbox(e)..., suggestbox(e)..., findbar(e)..., sound_over(e)..., fill_over(e)..., task_over(e)..., slides_over(e)..., takeoff_over(e)..., zoom_over(e)...,
+    (screening(e) ? () : (node!(TopBar, e, :topbar),))...,   # a video that fills the screen is all that the window shows
+    popup...)
 end
 
 # --- windows ------------------------------------------------------------------------------

@@ -37,6 +37,7 @@ A page shows more than text:
 - A line that holds only a picture, a video or a sound file shows it, or a player for it. The page's Insert menu records a sound from the microphone, and a button under the player writes down what's said in it, on the Mac.
 - A line that holds only the address of a web page, written as a picture is, like `![Julia](https://julialang.org)`, shows the page as a card. [Show a web page as a card](#show-a-web-page-as-a-card) says more.
 - A button beside a diagram, a picture or a page of a PDF file makes it fill the window, where you zoom it with a pinch.
+- A video fills the window too. There, F or the button under it makes the video fill the screen: the window is full screen, and the video is all that it shows. Its controls lie over the foot of the picture, and go while it plays and the mouse is still. F puts it back in the window, and esc in the page.
 - A diagram that fills the window can be changed there. Click a box or a line to select it, click it twice to type its words, drag the point on a box's edge onto another box to draw a line, and use the buttons under it to add a box, draw a line, change a shape or take a part away. Each change is written in the code of the block.
 - A Julia file opens as one block of code, which you change and run as you do a `julia` block. There, the box of a value that's a part of a window lists the value's fields and its children.
 - ⌃⌘⇧P shows the page as slides, one at a time, for when you show a plan to someone. [Show a page as slides](#show-a-page-as-slides) says how.
@@ -706,6 +707,7 @@ julia -O0 --project=. test/rich_test.jl           # rich text and plain text: wh
 julia -O0 --project=. test/spelling_test.jl       # the red dots under a word that's spelt wrong, and what the page's menu does with it
 julia -O0 --project=. test/sound_test.jl          # a line that holds only a sound file, and the Transcribe button under its player
 julia -O0 --project=. test/video_test.jl          # a line that holds only a video file. It needs ffmpeg to make the video.
+julia -O0 --project=. test/video_screen_test.jl   # a video that fills the screen: F, the top bar that goes, and the controls over the picture
 julia -O0 --project=. test/html_test.jl           # the page of HTML that ⌘⇧E saves
 julia -O0 --project=. test/merge_test.jl          # your changes and an agent's changes to one page put together, and how the two talk
 julia -O0 --project=. test/pasteboard_test.jl     # what the Mac's clipboard holds: text, files and pictures

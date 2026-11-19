@@ -1,6 +1,6 @@
 # Tests for a kind of folder in the sidebar: a type under `AbstractDirectory`
 # that code gives to a folder, with methods that say how the sidebar shows
-# that folder. See the comment over `list_files!` in main.jl. Run them with
+# that folder, and how the page shows it. See the comment over `list_files!` in main.jl. Run them with
 # `julia -O0 --project=. test/folder_kind_test.jl`. They draw a window that
 # isn't on the screen.
 
@@ -109,6 +109,43 @@ end
   @test e.buf.path == joinpath(notes, "two.md") && e.folder == notes
   K.choose!(e, item("old")); frames()
   @test clicks == ["notes", "old"] && e.folder == joinpath(notes, "old") && isempty(listed())
+end
+
+@testset "a kind of folder shows itself, and a file that it holds, in the page" begin
+  K.go_folder!(e, dir); K.open!(e, joinpath(dir, "page.md")); frames()
+  # Without a method of `page_view`, a file shows as it did, and the page is as wide as a page's text
+  @test K.page_view(e, K.object(e, notes)) === nothing && !K.own_page(e)
+  narrow = e.width
+  # The kind shows its folder as a line of words, as wide as the window, and its CSV files as words too
+  K.page_view(e, d::NotesDirectory) = K.Box(K.Text("The notes of $(d.path.name)", size=14px))
+  K.page_view(e, f::FS.File{:csv}) = f.parent isa NotesDirectory ? K.Box(K.Text("A list of notes", size=14px)) : nothing
+  K.page_fills(e, ::NotesDirectory) = true
+  page() = texts(K.describe(e.nodes[(:fileview, e.buf.path)]))
+  K.open!(e, notes); frames()
+  # The folder is what the page shows, and the sidebar lists the folder that it's in, as it does for a file
+  @test e.buf.path == notes && e.buf.view == :file && e.folder == dir
+  @test page() == ["The notes of notes"]
+  @test K.page_object(e) isa NotesDirectory
+  @test K.own_page(e)
+  @test e.width >= narrow && e.width == K.text_width(e)
+  @test K.file_views(e.buf) == ()
+  # A file of the kind shows the kind's way, and the same kind of file in a plain folder shows as it did
+  K.open!(e, joinpath(notes, "list.csv")); frames()
+  @test page() == ["A list of notes"] && !K.own_page(e)
+  write(joinpath(dir, "plain", "list.csv"), "a,b\n1,2\n")
+  K.open!(e, joinpath(dir, "plain", "list.csv")); frames()
+  @test page() != ["A list of notes"]
+  # Going back shows the folder again
+  K.go_back!(e); K.go_back!(e); frames()
+  @test e.buf.path == notes && page() == ["The notes of notes"]
+  # A link to a folder does what a click on the folder does: this kind's `open!` shows it in the sidebar
+  empty!(clicks)
+  K.open!(e, joinpath(dir, "page.md")); K.follow!(e, notes); frames()
+  @test clicks == ["notes"] && e.folder == notes && e.buf.path == joinpath(dir, "page.md")
+  # A folder with no kind that's opened as a page says what it is
+  K.open!(e, joinpath(dir, "plain")); frames()
+  @test page() == ["plain"]
+  K.go_folder!(e, dir); K.open!(e, joinpath(dir, "page.md")); frames()
 end
 
 @testset "a folder that loses its kind is plain again" begin

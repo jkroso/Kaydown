@@ -1188,7 +1188,9 @@ end
 # its icon, for what follows its name and for what a click on it does:
 # `entries`, `folder_view`, `entry_icon`, `entry_marks` and `open!`. So code
 # from the startup page gives a kind of folder its own way in the sidebar with
-# a method for the folder's type, as it does for a component of a page.
+# a method for the folder's type, as it does for a component of a page. The
+# page asks too: `page_view` gives what it shows for a file or a folder of a
+# kind, and `page_fills` says whether that's as wide as the window.
 #
 #     @def struct NotesDirectory <: Ladder.AbstractDirectory end
 #     Ladder.FS.kinds[fs"/Users/jake/Notes"] = NotesDirectory
@@ -1250,8 +1252,41 @@ nothing when the sidebar's folder isn't there.
 folder_view(e, d) = (list=nothing, bar=nothing)
 
 """
+What the page shows for `o`, a file or a folder, in place of Ladder's own
+viewer: a node, or nothing to leave Ladder's viewer. A kind of folder has a
+method of this to show itself in the page, as a folder of films shows their
+posters, or to show a file that it holds its own way. A folder shows in the
+page after `open!(e, path)` with the folder's path.
+"""
+page_view(e, o) = nothing
+
+"True when what `page_view` gives for `o` is as wide as the window has room for, as a table is, and not as wide as a page's text"
+page_fills(e, o) = false
+
+"""
+The object of the file or the folder that the page shows in a viewer, or
+nothing when it isn't there. One that the sidebar doesn't list is found again
+after a second, and not in each frame.
+"""
+page_object(e) = begin
+  path = e.buf.path
+  (e.buf.view == :file && !isempty(path)) || return nothing
+  haskey(e.entries, path) && return e.entries[path]
+  kept = get(e.nodes, :page_object, nothing)
+  kept !== nothing && kept[1] == path && time() - kept[2] < 1 && return kept[3]
+  o = try object(e, path) catch; nothing end
+  e.nodes[:page_object] = (path, time(), o)
+  o
+end
+
+"True when a kind of folder or of file shows the page its own way, as wide as the window has room for"
+own_page(e) = (o = page_object(e); o !== nothing && page_fills(e, o))
+
+"""
 Show the file at `path`. A file that's already open keeps its changes. The
 file that leaves goes on the list that `go_back!` reads, unless `record` is false.
+A folder shows too, when its kind has a method of `page_view`. The sidebar
+then lists the folder that it's in, as it does for a file.
 """
 open!(e, path; record=true) = begin
   # A sound that the last page was playing stops. A new window has no last page, and another window's sound plays on.
@@ -1263,7 +1298,7 @@ open!(e, path; record=true) = begin
   # A new file ends the list of files to go forward to, as a new address does in a web browser
   record && !isempty(from) && from != path && (push!(e.back, from); empty!(e.ahead))
   e.buf = get!(e.buffers, path) do
-    isfile(path) ? load(path) : Buffer(path=path)
+    isfile(path) ? load(path) : isdir(path) ? Buffer(path=path, view=:file) : Buffer(path=path)
   end
   if e.folder != dirname(path)
     e.folder = dirname(path)
@@ -1293,7 +1328,7 @@ end
 # the place that it was scrolled to, because its buffer keeps that. A link to
 # a heading of the page that shows adds nothing, because the file is the same.
 
-"True when the window can show the file at `path` again: it's on the disk, or it's a new page that has no file yet"
+"True when the window can show the file at `path` again: it's on the disk, or it's a new page that has no file yet, or a folder that showed in the page"
 showable(e, path) = haskey(e.buffers, path) || isfile(path)
 
 """
@@ -4228,7 +4263,7 @@ have a level over their text: :file, which is the tree of the one and the
 table of the other.
 """
 file_views(b::Buffer) = begin
-  b.view in FILE_VIEWS || return ()
+  (b.view in FILE_VIEWS && !isdir(b.path)) || return ()   # a folder that shows in the page has one way to show
   json_page(b) && return FILE_VIEWS
   ext = lowercase(splitext(b.path)[2])
   ext in TABLES ? (text_file(b.path) ? FILE_VIEWS : ()) :
@@ -5405,6 +5440,11 @@ describe(v::FileView) = begin
   e = editor(v)
   # A Text on its own would take the whole width and start at the left, so each is in a box that the column centres
   words(parts) = Column(width(grow=grow), padding(90px, 0px, 30px, 0px), child_gap=10px, [p isa Text ? Box(p) : p for p in parts]...)
+  # A kind of folder can show a file that it holds, or itself, its own way
+  o = e.buf.path == v.path ? page_object(e) : object(e, v.path)
+  own = o === nothing ? nothing : with_theme(() -> page_view(e, o), component_theme(e.zoom))
+  own === nothing || return Box(width(grow=grow), Alignment.Start, own)
+  isdir(v.path) && return words((Icon("folder", size=34px, color=colours.faint), label(basename(v.path), 15px)))
   isfile(v.path) || return words((label("$(basename(v.path)) isn't there any more", 15px),))
   about = bytes(filesize(v.path)) * "  ·  Changed " * Libc.strftime("%-d %b %Y, %H:%M", mtime(v.path))
   filesize(v.path) == 0 && return words((label("$(basename(v.path)) is empty", 15px), label(about, 12px, color=colours.dim)))
@@ -16785,7 +16825,7 @@ text_width(e) = begin
   room = w - ((e.panel || sliding(e)) && !alone ? panel_w(e) : 0px) - 2PAGE_X - gutter(e)
   # A file of code or of text takes all the room that the window has, and so do a CSV file's table and
   # the lines of a block that fill the window. A page is no wider than the settings say.
-  numbered(e.buf) || alone || json_page(e.buf) || bytes_page(e.buf) || sheet_page(e.buf) ? max(room, 240px) : clamp(room, 240px, e.widest * e.zoom)
+  numbered(e.buf) || alone || json_page(e.buf) || bytes_page(e.buf) || sheet_page(e.buf) || own_page(e) ? max(room, 240px) : clamp(room, 240px, e.widest * e.zoom)
 end
 
 """
@@ -17736,8 +17776,8 @@ end
 """
 Open a link. A file on the Mac shows in this editor, like a page, or a file
 that came with an email. A folder on the Mac shows in the sidebar, which opens
-if it's closed, and the page stays. Anything else opens in the app that the
-Mac uses for it. A path can start at the home folder, like `~/Mail`.
+if it's closed, and the page stays, unless the folder is of a kind that shows
+in the page. Anything else opens in the app that the Mac uses for it. A path can start at the home folder, like `~/Mail`.
 """
 follow!(e, url) = begin
   startswith(url, '^') && return follow_note!(e, url[2:end])
@@ -17746,7 +17786,10 @@ follow!(e, url) = begin
   isfile(path) && return open!(e, path)
   # A folder that the Finder shows as one file, like an app, opens as that file does
   (isdir(path) && !ispackage(path)) || return open_url(isdir(path) ? path : url)
-  go_folder!(e, String(rstrip(path, '/')))
+  # A folder does what a click on it in the sidebar does. A folder of no kind shows in the sidebar, and a kind can show in the page too.
+  path = String(rstrip(path, '/'))
+  o = try object(e, path) catch; nothing end
+  o isa AbstractDirectory ? open!(e, o) : go_folder!(e, path)
   e.panel || toggle_panel!(e)
   e
 end

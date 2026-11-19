@@ -724,7 +724,8 @@ click!(b::Browser, x, y) = begin
   end
   list = e === nothing ? nothing : Forms.within(e, "select")
   list === nothing || haskey(list.attrs, "disabled") || return choose!(b, list)
-  link === nothing || follow!(b, link.url)
+  # A video in a frame opens in a browser, since no player runs here
+  link === nothing || (e !== nothing && e.tag == "iframe" ? b.open(link.url) : follow!(b, link.url))
   b
 end
 

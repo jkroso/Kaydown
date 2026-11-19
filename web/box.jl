@@ -111,8 +111,9 @@ Base.@kwdef mutable struct Box
   natural::Tuple{Float64,Float64} = (0.0, 0.0)   # of a picture: how big the picture itself is, or zeros when it isn't known
   shape::Float64 = NaN                 # of a picture that isn't there: its width over its height, as its tag's `width` and `height` say
   picture::Any = nothing               # of a picture: what the page's pictures have for it
+  keeps::Any = nothing                 # of a picture of an SVG file: how it keeps its shape in a box of another shape, as `kept` of svg.jl gives it. Nothing for a picture that's stretched to its box.
   fills::Bool = false                  # of a drawing with a shape and no size: it's as wide as the box that it's in
-  widget::Symbol = :none               # of an :image that's no picture: :svg, :checkbox, :radio, :range, :color, :progress, :meter, :video, :audio, :frame, :canvas, or :select for the arrows of a <select>. A video's `picture` is the `Frame` that it shows, and the `picture` of a picture file that moves is its `Reel`.
+  widget::Symbol = :none               # of an :image that's no picture: :svg, :checkbox, :radio, :range, :color, :progress, :meter, :video, :audio, :frame, :canvas, :poster for a frame that shows a video of another site, or :select for the arrows of a <select>. A video's `picture` is the `Frame` that it shows, and the `picture` of a picture file that moves is its `Reel`. A poster's `picture` is its picture's width, its height and Skia's picture, and its `text` is the video's name.
   value::Float64 = NaN                 # of a tick box: 1 when it's ticked. Of a slider or a bar: how much of it is full, from 0 to 1.
   grid::Any = nothing                  # of a table: its rows and its columns
   cbh::Float64 = NaN                   # how tall the content of the box that it's in is, when that's known before its content is laid out: a height in percent is of this
@@ -376,6 +377,7 @@ struct Env
   pictures::Function
   films::Function                    # the video at an address, as video.jl reads it, or nothing
   reels::Function                    # the pictures of a picture file that moves, like a GIF, as video.jl reads it, or nothing for any other picture
+  embeds::Function                   # what stands for the page at an address in an <iframe>, as `embed` of main.jl gives it, or nothing
   at::Union{Float64,Nothing}         # how many seconds ago the page was first shown, or nothing for the page as it comes to rest
   counters::Counters
   wide::Float64                      # how wide and how high the window is, for a picture that has a file for each size of window
@@ -606,11 +608,19 @@ control(e::Element, s::Style, env, link) = begin
   elseif tag == "audio"
     return piece(e, s, link; natural=(300.0, 54.0), widget=:audio)
   elseif tag in ("iframe", "embed")
-    return piece(e, s, link; natural=(300.0, 150.0), widget=:frame)
+    shown = tag == "iframe" ? env.embeds(attr(e, "src")) : nothing
+    shown === nothing && return piece(e, s, link; natural=(300.0, 150.0), widget=:frame)
+    # A video that plays on another site shows as its picture, with its name and an arrow. The frame is a link to the video's page.
+    b = piece(e, s, shown.watch; natural=(300.0, 150.0), widget=:poster, picture=shown.picture)
+    b.text = shown.title
+    return b
   elseif tag == "object"
     found = isempty(strip(attr(e, "data"))) ? nothing : env.pictures(attr(e, "data"))
     # With no picture, what's in the <object> stands for it
-    return found === nothing ? nothing : piece(e, s, link; natural=(Float64(found[1]), Float64(found[2])), picture=found[3])
+    found === nothing && return nothing
+    b = piece(e, s, link; natural=(Float64(found[1]), Float64(found[2])), picture=found[3])
+    b.keeps = get(found, 4, nothing)
+    return b
   end
   nothing
 end
@@ -656,6 +666,7 @@ add!(out, e::Element, parent::Style, env::Env, link) = begin
       # A picture that moves, like a GIF, is drawn as it is at the moment that the page is drawn
       moving = env.reels(src)
       b.picture = moving === nothing ? found[3] : moving
+      b.keeps = get(found, 4, nothing)
     end
     if found === nothing
       # Until a picture is there, its tag's width and height say what shape it has
@@ -806,9 +817,9 @@ The box of the page's <html> element, with the boxes of all that's in it.
 `wide` and `high` are how big the window is, for a picture that has a file
 for each size of window.
 """
-boxes(doc::Document, look; pictures=no_pictures, films=no_pictures, reels=no_pictures, at=nothing, wide=1024.0, high=800.0) = begin
+boxes(doc::Document, look; pictures=no_pictures, films=no_pictures, reels=no_pictures, embeds=no_pictures, at=nothing, wide=1024.0, high=800.0) = begin
   out = Box[]
-  env = Env(look, pictures, films, reels, at, Counters(), Float64(wide), Float64(high), IdDict{Style,Style}())
+  env = Env(look, pictures, films, reels, embeds, at, Counters(), Float64(wide), Float64(high), IdDict{Style,Style}())
   add!(out, doc.root, Style(), env, "")
   isempty(out) ? Box(kind=:block, style=Style(display=:block)) : (out[1].kind = :block; out[1])
 end

@@ -353,3 +353,21 @@ end
     close(w)
   end
 end
+
+@testset "a video in a frame" begin
+  # A script gives the frame its address, as YouTube's own script does. A click on the frame opens the video's page in a browser: the view stays where it is.
+  site = Dict("https://example.com/" => ("text/html", """<!DOCTYPE html><body style="margin:0"><iframe id=v width="320" height="180" frameborder="0"></iframe>
+    <script>document.getElementById('v').src = 'https://www.youtube.com/embed/abc?enablejsapi=1'</script></body>"""))
+  asked, opened = String[], String[]
+  b = Browser(address="example.com", wide=500px, high=300px, files=Fetch.Files(getter=fake(site; asked)), open=url -> push!(opened, url))
+  w = Window(b, size=(500px, 300px))
+  for _ in 1:8
+    frame(w)
+  end
+  @test !loading(b) && "https://www.youtube.com/oembed?format=json&url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Dabc" in asked
+  click!(w, (100px, 100px))
+  @test opened == ["https://www.youtube.com/watch?v=abc"] && b.shown == "https://example.com/" && !loading(b)
+  shot("browser_video.png", w)
+  close(w)
+end
+

@@ -808,7 +808,11 @@ tags('HTMLTableSectionElement', ['tbody', 'thead', 'tfoot'], HTMLElement, {get r
 tags('HTMLTableRowElement', ['tr'], HTMLElement, {get cells() { return this.children.filter(e => e.localName === 'td' || e.localName === 'th') }})
 reflect(tags('HTMLTableCellElement', ['td', 'th']), ['colSpan', 'rowSpan'], 'number')
 tags('HTMLStyleElement', ['style'])
-tags('HTMLIFrameElement', ['iframe'])
+// No page is shown in a frame, so a frame has no window of its own
+const HTMLIFrameElement = tags('HTMLIFrameElement', ['iframe'], HTMLElement, {get contentWindow() { return null }, get contentDocument() { return null }})
+reflect(HTMLIFrameElement, ['name', 'width', 'height', 'allow', 'loading', 'srcdoc', ['referrerPolicy', 'referrerpolicy']])
+reflect(HTMLIFrameElement, ['src'], 'address')
+reflect(HTMLIFrameElement, [['allowFullscreen', 'allowfullscreen']], 'flag')
 tags('HTMLVideoElement', ['video'])
 tags('HTMLAudioElement', ['audio'])
 tags('HTMLUnknownElement', [])

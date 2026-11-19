@@ -19,6 +19,7 @@
 @use "../web/paint" => Paint
 @use "../web/svg" => Svg
 @use "../web/video" => Film
+@use "../web/embed" => Embed
 
 "The first element of `e`'s tree that `ok` is true of"
 function element(ok, e::Dom.Element)
@@ -366,6 +367,11 @@ end
   p = laid("""<!DOCTYPE html><body style="margin:0"><span id="i" style="display:inline-flex;gap:5px"><span style="width:20px;height:10px"></span><span style="width:30px"></span></span>
     <div id="c" style="display:flex;flex-direction:column;min-height:200px"><div id="h" style="height:30px"></div><div id="g" style="flex:1"></div><div id="t" style="height:20px"></div></div></body>""")
   @test p.box("i").width == 55 && p.box("g").height == 150 && place(p.root, p.box("t"))[2] == place(p.root, p.box("c"))[2] + 180
+  # A drawing is no narrower than its size, though its style cuts off what's outside it. So a button with an icon keeps its padding in a row
+  # that's too full, and the box beside it, which has a width and nothing in it, gives up the room.
+  p = laid("""<!DOCTYPE html><body style="margin:0"><div style="display:flex;width:100px"><div id="a" style="width:90px;height:5px"></div>
+    <a id="n" style="display:inline-flex;gap:5px;padding:0 10px"><svg width="16" height="16"></svg><span style="width:30px"></span></a></div></body>""")
+  @test p.box("n").width == 71 && p.box("a").width == 29
 end
 
 @testset "grids" begin
@@ -476,6 +482,14 @@ end
     <rect width="20" height="10" fill="url(#g)"/><path d="M2 2 L8 8" stroke="#000"/><g transform="translate(5 5) rotate(45)"><circle r="2"/></g><text x="10" y="8" font-size="4" text-anchor="middle">Hi</text><use href="#g"/></svg>"""))
   @test found !== nothing && (found[1], found[2]) == (40, 20) && found[3] != C_NULL
   @test Svg.transform("translate(10 20) scale(2)") == (2.0, 0.0, 0.0, 2.0, 10.0, 20.0) && Svg.image(Vector{UInt8}("not a drawing")) === nothing
+  # A drawing from a file keeps its shape in a box of another shape, where a photo is stretched: it's as big as fits, in the middle, unless its tag says otherwise
+  shown(tag) = begin
+    q = Web.page("""<!DOCTYPE html><body style="margin:0"><img style="width:100px;height:20px" src="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' $tag><rect width='20' height='10' fill='red'/></svg>"></body>"""; wide=300)
+    i = only(filter(i -> i isa Paint.Picture, q.list.items))
+    (i.dx, i.dy, i.dw, i.dh)
+  end
+  @test shown("viewBox='0 0 20 10'") == (30, 0, 40, 20) && shown("width='40' height='20' viewBox='0 0 20 10' preserveAspectRatio='xMinYMid slice'") == (0, -15, 100, 50)
+  @test shown("viewBox='0 0 20 10' preserveAspectRatio='none'") == (0, 0, 100, 20) && shown("width='20' height='10'") == (0, 0, 100, 20)
   q = Web.page("""<!DOCTYPE html><style>.i { fill: none; stroke: currentColor }</style><p style="color:red"><svg class="i" width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>
     <input type="range"><input type="radio"><meter value=".5"></meter><input type="color" value="#ff0000"><video width="80" height="40"></video><audio controls></audio><input type="file"></p>"""; wide=400)
   @test count(i -> i isa Paint.Drawing, q.list.items) == 1 && count(i -> i isa Paint.Widget, q.list.items) == 6
@@ -518,6 +532,40 @@ pixel(p, x, y; at=p.at) = begin
     Skia.sk_surface_unref(surface)
   end
   (Int(out[1]), Int(out[2]), Int(out[3]))
+end
+
+@testset "a video of another site" begin
+  # What the address of a frame says of a video of YouTube: one video, a list of videos, or a video of a list
+  v = Embed.video("https://www.youtube.com/embed/kc9HwsxE1OY?start=10")
+  @test v.watch == "https://www.youtube.com/watch?v=kc9HwsxE1OY" && v.picture == "https://i.ytimg.com/vi/kc9HwsxE1OY/hqdefault.jpg"
+  @test v.about == "https://www.youtube.com/oembed?format=json&url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Dkc9HwsxE1OY"
+  @test Embed.video("//www.youtube-nocookie.com/embed/videoseries?list=PL_1").watch == "https://www.youtube.com/playlist?list=PL_1"
+  list = Embed.video("https://www.youtube.com/embed/?listType=playlist&list=PL_1&enablejsapi=1")
+  @test list.watch == "https://www.youtube.com/playlist?list=PL_1" && list.picture == "" && Embed.video("https://www.youtube.com/embed/abc?list=PL_1").watch == "https://www.youtube.com/watch?v=abc&list=PL_1"
+  @test Embed.video("https://example.com/embed/abc") === nothing && Embed.video("https://www.youtube.com/embed/") === nothing && Embed.video("https://www.youtube.com/embed/a%22b") === nothing
+  # What YouTube's JSON says of a video, and the bigger pictures of it
+  said = Vector{UInt8}("""{"title":"Caf\\u00e9 \\"one\\" \\ud83d\\ude00","height":113,"thumbnail_url":"https:\\/\\/i.ytimg.com\\/vi\\/abc\\/hqdefault.jpg"}""")
+  @test Embed.facts(said) == ("Café \"one\" 😀", "https://i.ytimg.com/vi/abc/hqdefault.jpg") && Embed.facts(Vector{UInt8}("not JSON")) == ("", "")
+  @test Embed.sharper("https://i.ytimg.com/vi/abc/hqdefault.jpg") == ["https://i.ytimg.com/vi/abc/maxresdefault.jpg", "https://i.ytimg.com/vi/abc/sddefault.jpg", "https://i.ytimg.com/vi/abc/hqdefault.jpg"]
+  @test Embed.sharper("https://example.com/a.jpg") == ["https://example.com/a.jpg"]
+  # The frame shows the biggest picture that there is of the video, cut to fill it, with the video's name and an arrow. It's a link to the video's page.
+  asked = String[]
+  green = Vector{UInt8}("<svg xmlns='http://www.w3.org/2000/svg' width='40' height='30'><rect width='40' height='30' fill='lime'/></svg>")
+  load = src -> begin
+    push!(asked, src)
+    startswith(src, "https://www.youtube.com/oembed") ? Vector{UInt8}("""{"title":"A talk","thumbnail_url":"https://i.ytimg.com/vi/abc/hqdefault.jpg"}""") : endswith(src, "/sddefault.jpg") ? green : nothing
+  end
+  html = """<!DOCTYPE html><body style="margin:0"><iframe src="//www.youtube.com/embed/abc" width="320" height="180" frameborder="0"></iframe><iframe src="other.html"></iframe></body>"""
+  p = Web.page(html; wide=400, load, base="https://example.com/")
+  @test asked == ["https://www.youtube.com/oembed?format=json&url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Dabc", "https://i.ytimg.com/vi/abc/maxresdefault.jpg", "https://i.ytimg.com/vi/abc/sddefault.jpg"]
+  shown = only(filter(i -> i isa Paint.Picture, p.list.items))
+  @test (shown.dx, shown.dy, shown.dw, shown.dh) == (0, -30, 320, 240) && [i.kind for i in p.list.items if i isa Paint.Widget] == [:poster, :frame]
+  @test Web.link(p, 100, 100).url == "https://www.youtube.com/watch?v=abc" && Web.link(p, 100, 190) === nothing
+  # The picture, the dark band behind the name, and the white arrow in the middle
+  @test pixel(p, 20, 150)[2] > 200 && pixel(p, 20, 150)[1] < 50 && pixel(p, 300, 5)[2] < 150 && all(>(200), pixel(p, 162, 90))
+  # With no word from YouTube, the frame is black, with the arrow, and still a link
+  bare = Web.page(html; wide=400, base="https://example.com/")
+  @test count(i -> i isa Paint.Picture, bare.list.items) == 0 && all(<(20), pixel(bare, 20, 150)) && all(>(200), pixel(bare, 162, 90)) && Web.link(bare, 100, 100).url == "https://www.youtube.com/watch?v=abc"
 end
 
 @testset "what moves" begin

@@ -153,6 +153,9 @@ gaps(b::Box, cw) = (g = b.style.gap; (isauto(g[1]) ? 0.0 : max(0.0, px(g[1], cw)
 "The things that are laid out in a flex box or a grid, in the order that their styles ask for"
 things(b::Box) = sort!(Box[k for k in b.children if !placed(k)]; by=k -> k.style.order, alg=MergeSort)
 
+"True for a thing in a flex box that can be narrower than its content, since it cuts off or scrolls what doesn't fit. A picture has nothing to scroll, so it's as wide as it is."
+tight(k::Box) = k.kind != :image && k.style.overflow != :visible
+
 """
 How narrow the border of `b` can be, and how wide it is when no line of its
 text is broken. Without `own`, what `b`'s own style says of its width is left
@@ -176,7 +179,7 @@ extent(b::Box, p::Pass; own=true) = begin
       a, z = outer_extent(k, p)
       ks = k.style
       # A thing that's let shrink past its content can be as narrow as its style says
-      isauto(ks.minwidth) && ks.overflow == :visible || (a = min(a, max(0.0, ks.minwidth.px) + (z - extent(k, p)[2]) + (ks.borderbox ? 0.0 :
+      isauto(ks.minwidth) && !tight(k) || (a = min(a, max(0.0, ks.minwidth.px) + (z - extent(k, p)[2]) + (ks.borderbox ? 0.0 :
         max(0.0, ks.padding[2].px) + max(0.0, ks.padding[4].px) + border(ks, 2) + border(ks, 4))))
       if row
         lo = s.flexwrap == :nowrap ? lo + a : max(lo, a)
@@ -1345,7 +1348,9 @@ flex!(b::Box, p::Pass, cw, sure) = begin
     if row
       a, z = extent(k, p)
       base = known(use) ? inside(use) : z - edge
-      lo = isauto(ks.minwidth) ? (ks.overflow != :visible ? 0.0 : min(a - edge, known(ks.width) ? inside(ks.width) : Inf, known(ks.maxwidth) ? inside(ks.maxwidth) : Inf)) :
+      # With no least width said, a thing shrinks to its content, though its style gives it a width
+      content = k.kind == :image ? a : extent(k, p; own=false)[1]
+      lo = isauto(ks.minwidth) ? (tight(k) ? 0.0 : min(content - edge, known(ks.width) ? inside(ks.width) : Inf, known(ks.maxwidth) ? inside(ks.maxwidth) : Inf)) :
            iskey(ks.minwidth) ? (ks.minwidth.how == :max_content ? z - edge : a - edge) : inside(ks.minwidth)
       hi = isauto(ks.maxwidth) || iskey(ks.maxwidth) ? Inf : inside(ks.maxwidth)
     else
@@ -1370,7 +1375,7 @@ flex!(b::Box, p::Pass, cw, sure) = begin
       end
       natural = k.height - edge
       base = known(use) ? inside(use) : natural
-      lo = isauto(ks.minheight) ? (ks.overflow != :visible ? 0.0 : min(natural, known(ks.height) ? inside(ks.height) : Inf)) : known(ks.minheight) ? inside(ks.minheight) : 0.0
+      lo = isauto(ks.minheight) ? (tight(k) ? 0.0 : min(natural, known(ks.height) ? inside(ks.height) : Inf)) : known(ks.minheight) ? inside(ks.minheight) : 0.0
       hi = known(ks.maxheight) ? inside(ks.maxheight) : Inf
     end
     push!(items, Flexed(k, max(0.0, base), max(0.0, lo), hi, 0.0, false, edge, m, 0.0))

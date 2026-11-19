@@ -152,7 +152,7 @@ struct Stroke <: Item
   color::UInt32
 end
 
-"A part of a form, or the stand-in for a video: `value` is how full it is, or whether it's ticked"
+"A part of a form, the stand-in for a video, or with `:poster` the arrow over the picture of a video of another site: `value` is how full it is, or whether it's ticked"
 struct Widget <: Item
   x::Float64; y::Float64; w::Float64; h::Float64
   kind::Symbol
@@ -834,9 +834,48 @@ picture!(l::List, b::Box, image, cx, cy, iw, ih, radii) = begin
     dw, dh = nw * k, nh * k
   end
   at = (cx + px(s.objectat[1], iw - dw), cy + px(s.objectat[2], ih - dh), dw, dh)
+  # A drawing from an SVG file isn't stretched: it's as big as fits in the rectangle, or as covers it, with its own shape
+  if b.keeps !== nothing && nw > 0 && nh > 0
+    ax, ay, covers = b.keeps
+    k = covers ? max(dw / nw, dh / nh) : min(dw / nw, dh / nh)
+    at = (at[1] + ax * (dw - nw * k), at[2] + ay * (dh - nh * k), nw * k, nh * k)
+  end
   sharp = s.rendering == :pixelated
   push!(l.items, image isa Board ? Sketch(cx, cy, iw, ih, radii, image, at..., sharp) : image isa Reel ? Moving(cx, cy, iw, ih, radii, image, l.now, at..., sharp) :
                  Picture(cx, cy, iw, ih, radii, image, at..., sharp))
+end
+
+"""
+Add what stands for a video that plays on another site, in the frame `b`
+whose content is the rectangle `(cx, cy, iw, ih)`: the video's picture, as
+big as covers the frame, the video's name on a dark band at the top, and the
+arrow that a player shows before it plays.
+"""
+poster!(l::List, b::Box, cx, cy, iw, ih, radii) = begin
+  push!(l.items, Fill(cx, cy, iw, ih, radii, 0xff000000))
+  found = b.picture
+  if found !== nothing && found[1] > 0 && found[2] > 0
+    k = max(iw / found[1], ih / found[2])
+    dw, dh = found[1] * k, found[2] * k
+    push!(l.items, Picture(cx, cy, iw, ih, radii, found[3], cx + (iw - dw) / 2, cy + (ih - dh) / 2, dw, dh, false))
+  end
+  f = font(b.style.family, 14.0, 500, false)
+  edge = 12.0
+  band = f.ascent + f.descent + 2edge
+  if !isempty(b.text) && band < ih / 2 && iw > 6edge
+    # A name that's too long for the frame ends with three dots
+    chars = collect(b.text)
+    widths = [drawn(f, c)[3] for c in chars]
+    room = iw - 2edge
+    if sum(widths) > room
+      dots = drawn(f, '\u2026')[3]
+      n = something(findlast(<=(room - dots), cumsum(widths)), 0)
+      chars, widths = [chars[1:n]; '\u2026'], [widths[1:n]; dots]
+    end
+    push!(l.items, Fill(cx, cy, iw, band, SQUARE, 0x99000000))
+    glyphs!(l, f, chars, widths, cx + edge, cy + edge + f.ascent, 0xffffffff)
+  end
+  push!(l.items, Widget(cx, cy, iw, ih, :poster, 1.0, 0xffffffff, 0x00000000))
 end
 
 "Add what the box `b` draws, and what's in it, in the order of the text. `(ox, oy)` is the corner of the border of the box that `b` is in."
@@ -888,6 +927,8 @@ draw!(l::List, b::Box, ox, oy) = begin
       # What a script has drawn on it. With no script, a canvas shows nothing.
       sketch = s.visible && iw > 0 && ih > 0 ? found(b.element) : nothing
       sketch === nothing || picture!(l, b, sketch, cx, cy, iw, ih, radii)
+    elseif b.widget == :poster
+      s.visible && iw > 0 && ih > 0 && poster!(l, b, cx, cy, iw, ih, radii)
     elseif b.widget != :none
       # A video's picture is a `Frame` of video.jl, which the box keeps for as long as the page is drawn
       b.picture !== nothing && s.visible && iw > 0 && ih > 0 && picture!(l, b, b.picture isa Ptr ? b.picture : b.picture.image, cx, cy, iw, ih, radii)
@@ -1620,12 +1661,15 @@ paint!(canvas, i::Widget) = begin
     c = (i.color & 0x00ffffff) | 0xb0000000
     line(canvas, ((mx - 3, my - 2), (mx, my - 5), (mx + 3, my - 2)), 1.4, c)
     line(canvas, ((mx - 3, my + 2), (mx, my + 5), (mx + 3, my + 2)), 1.4, c)
-  elseif i.kind in (:video, :audio)
+  elseif i.kind in (:video, :audio, :poster)
     i.kind == :audio ? round_fill(canvas, x, y, w, h, min(h / 2, 27.0), 0xfff1f3f4) : (isnan(i.value) && with_paint(paint -> Skia.sk_canvas_draw_rect(canvas, rect(x, y, w, h), paint), 0xff000000))
     # The arrow that starts it
-    size = i.kind == :audio ? min(h * 0.3, 12.0) : clamp(d * 0.18, 10.0, 36.0)
+    size = i.kind == :audio ? min(h * 0.3, 12.0) : i.kind == :poster ? clamp(d * 0.04, 7.0, 14.0) : clamp(d * 0.18, 10.0, 36.0)
     mx, my = i.kind == :audio ? x + min(h / 2, 27.0) + 4 : x + w / 2, y + h / 2
-    if i.kind == :video
+    if i.kind == :poster
+      # A dark plate, as the player of a video site shows, so that the arrow reads over any picture
+      round_fill(canvas, mx - 2.8size, my - 2size, 5.6size, 4size, size, 0xe6212121)
+    elseif i.kind == :video
       round_fill(canvas, mx - 1.6size, my - 1.6size, 3.2size, 3.2size, 1.6size, 0x80000000)
     else
       round_fill(canvas, mx + 2size, my - 2, max(0.0, w - (mx - x) - 2size - 16), 4.0, 2.0, 0xffc4c7c5)

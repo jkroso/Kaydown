@@ -316,9 +316,27 @@ fitted(e::Element, view, w, h) = begin
   if !startswith(how, "none")
     sx = sy = occursin("slice", how) ? max(sx, sy) : min(sx, sy)
   end
-  ax = occursin("xmin", how) ? 0.0 : occursin("xmax", how) ? 1.0 : 0.5
-  ay = occursin("ymin", how) ? 0.0 : occursin("ymax", how) ? 1.0 : 0.5
+  ax, ay = sits(how)
   times(shift((w - view[3] * sx) * ax, (h - view[4] * sy) * ay), times(stretch(sx, sy), shift(-view[1], -view[2])))
+end
+
+"Where a tag's `preserveAspectRatio` puts a drawing in a box of another shape: how far across and how far down, from 0 to 1"
+sits(how) = (occursin("xmin", how) ? 0.0 : occursin("xmax", how) ? 1.0 : 0.5, occursin("ymin", how) ? 0.0 : occursin("ymax", how) ? 1.0 : 0.5)
+
+"""
+How a picture of the <svg> `e`, `w` by `h` px, keeps its shape in a box of
+another shape, as a browser draws an SVG file in an <img>: where it sits
+across and down the box, from 0 to 1, and whether it covers the box and is
+cut off. Nothing for a drawing that's stretched to the box as a photo is: one
+with no `viewBox`, or whose tag says `none`.
+"""
+kept(e::Element, w, h) = begin
+  view = viewbox(e)
+  how = lowercase(strip(attr(e, "preserveaspectratio", "xMidYMid meet")))
+  (view === nothing || startswith(how, "none")) && return nothing
+  # A picture with another shape than the drawing's space has bands beside the drawing already, so it's left as it is
+  abs(w * view[4] - h * view[3]) > 0.01 * h * view[3] && return nothing
+  (sits(how)..., occursin("slice", how))
 end
 
 "Draw the letters of `chars` in the font of the style `s`, with the first at `x` on the line at `y`. It gives how wide they are."
@@ -524,8 +542,9 @@ end
 
 """
 A picture of the SVG file with the bytes `bytes`: its width and its height in
-px, and Skia's picture of it with `scale` pixels to the px. Nothing when the
-bytes are no SVG.
+px, Skia's picture of it with `scale` pixels to the px, and how it keeps its
+shape in a box of another shape (see `kept`). Nothing when the bytes are no
+SVG.
 """
 image(bytes; scale=2.0, most=2048) = begin
   doc = try document(String(copy(bytes))) catch; return nothing end
@@ -550,5 +569,5 @@ image(bytes; scale=2.0, most=2048) = begin
     Skia.sk_surface_unref(surface)
     out
   end
-  made == C_NULL ? nothing : (w, h, Ptr{Cvoid}(made))
+  made == C_NULL ? nothing : (w, h, Ptr{Cvoid}(made), kept(e, w, h))
 end

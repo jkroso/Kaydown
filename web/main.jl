@@ -32,7 +32,9 @@
 # What it doesn't draw yet: text from right to left in its own order, and text
 # down the page. Letters that join, as in Arabic, and an emoji that's made of
 # several characters. `::first-letter` and `::first-line`. `backdrop-filter`.
-# A picture as a border (`border-image: url(...)`). The page in an <iframe>.
+# A picture as a border (`border-image: url(...)`). The page in an <iframe>:
+# a video of YouTube in one shows as its picture, with its name and an arrow,
+# and the frame is a link to the video's page (see embed.jl).
 #
 # What moves: with `at`, the page is drawn as it is that many seconds after
 # it was first shown. Each animation of its CSS is as far as it has got then.
@@ -61,6 +63,7 @@
 @use "./css" resolve
 @use "./svg" => Svg
 @use "./video" => Film
+@use "./embed" => Embed
 @use "./box" boxes Box
 @use "./style" styles isauto ispercent Clock commit!
 @use "./layout" layout!
@@ -175,6 +178,31 @@ moment(p::Pictures, src::AbstractString, at, held) = begin
   shown = at === nothing ? found.first : Film.frame(found, at)
   push!(held, shown)
   ((found.wide, found.high, shown.image), Film.stops(found), Film.after(found, something(at, 0.0)))
+end
+
+"""
+What stands for the page at the address `src` in an <iframe>, when that page
+is a video that embed.jl knows: `watch` is the address of the video's page
+for a browser, `title` is the video's name, and `picture` is its picture as
+`p` has it, or nothing. YouTube says the name and the picture in a file of
+JSON, which `p`'s `load` is asked for. Until that has come, a video has no
+name, and a list of videos has no picture. The picture is the biggest that
+YouTube has of the video. Nothing for any other page.
+"""
+embed(p::Pictures, src::AbstractString) = begin
+  v = Embed.video(src)
+  v === nothing && return nothing
+  said = p.load(v.about)
+  title, picture = said === nothing ? ("", "") : Embed.facts(said)
+  isempty(picture) && (picture = v.picture)
+  isempty(picture) && return (watch=v.watch, title=title, picture=nothing)
+  # The biggest picture that has come: a video with no big picture gives no file at that address
+  shown = nothing
+  for address in Embed.sharper(picture)
+    shown = p(address)
+    shown === nothing || break
+  end
+  (watch=v.watch, title=title, picture=shown)
 end
 
 "The video at the address `src`, as video.jl reads it, or nothing"
@@ -309,7 +337,8 @@ page(doc::Document; wide=700, zoom=1.0, load=src -> nothing, pictures=Pictures(l
   lay(across, extra) = begin
     make(containers) = begin
       look = styles(doc, across; extra, high=seen, load=pictures.load, base=String(base), containers, at, clock, commit=false)
-      root = boxes(doc, look; pictures=find, films=src -> film(pictures, resolve(from, src)), reels, at, wide=across, high=seen)
+      root = boxes(doc, look; pictures=find, films=src -> film(pictures, resolve(from, src)), reels, embeds=src -> embed(pictures, resolve(from, src)), at,
+                   wide=across, high=seen)
       until = look.until
       (look, root, layout!(root, across, doc.mode; high=window))
     end

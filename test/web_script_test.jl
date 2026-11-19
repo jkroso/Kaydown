@@ -348,5 +348,7 @@ end
   @test js(l, "typeof XMLHttpRequest + typeof AbortController + typeof IntersectionObserver + navigator.userAgent.includes('AppleWebKit') + (window === self && window === globalThis)") == "functionfunctionfunctiontruetrue"
   @test js(l, "document.createRange().createContextualFragment('<i>x</i><b>y</b>').childNodes.length") == 2
   @test js(l, "var img = new Image(); img.src = 'a.png'; img.tagName + img.getAttribute('src')") == "IMGa.png"
+  # A frame's address is its tag's `src`, and a frame has no window of its own here
+  @test js(l, "var f = document.createElement('iframe'); f.src = 'https://example.com/a'; f.width = 300; f.getAttribute('src') + ' ' + f.getAttribute('width') + ' ' + f.contentWindow") == "https://example.com/a 300 null"
   close(l)
 end

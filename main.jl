@@ -172,8 +172,9 @@
 #     page go to the other pages of the settings: Code editor, for how code
 #     shows, and Key bindings, for the keys of each command. ⌘, again
 #     closes that window.
-#   - The caret doesn't jump to a new place. It moves there in a short time.
-#     A box in the settings turns that off.
+#   - As you type or press an arrow key, the caret doesn't jump to its new
+#     place. It moves there in a short time. A click still puts it there at
+#     once. A box in the settings turns the move off.
 #   - An .eml file, which holds one email as a server sends it, opens as a
 #     page that's read and not changed. eml.jl says how. The email shows as
 #     it was sent, with its sender's colours, layout and buttons. ⌘E goes
@@ -1013,6 +1014,7 @@ end
   blink::Float64 = time()
   glides::Dict{Int,Glide} = Dict{Int,Glide}()   # where each caret is drawn while it moves: 1 is the main one. See `glide_to!`.
   gliding::Int = 1                      # the number of the caret that's being drawn
+  by_step::Bool = false                 # a key has just taken the caret a step, so it moves to its new place in a short time
   carets::Int = 1                       # how many carets the last frame had
   clicked::Tuple{Float64,Pos,Int} = (0.0, (0, 0), 0)
   size::Tuple{px,px} = (1100px, 800px)  # the window's size, until there is a window to ask
@@ -17544,13 +17546,17 @@ end
 
 # --- the caret's glide ------------------------------------------------------------------
 #
-# The caret doesn't jump to a new place. It moves there in a short time, fast
-# at first and then slower, and its height changes on the way. A caret that's
-# sent somewhere else before it arrives goes on from where it is. It only moves
-# this way when a key or the mouse moved it, or when the text changed. When the
-# page is laid out again, because the window changed its width, say, the caret
-# is at its new place at once. So is the caret of a page that has just opened.
-# The settings page turns the glide off.
+# When you type, or press a key that takes the caret a step, the caret doesn't
+# jump to its new place. It moves there in a short time, fast at first and then
+# slower, and its height changes on the way. A caret that's sent somewhere else
+# before it arrives goes on from where it is. A step is a character, a word or
+# a line: what the arrow keys do, with ⌥ or without.
+#
+# Anything else that moves the caret puts it at its new place at once: a click,
+# a drag, a key that goes to the end of the line or of the page, a link to a
+# heading. So does a page that's laid out again, because the window changed
+# its width, say, and a page that has just opened. The settings page turns the
+# glide off.
 
 const GLIDE_TIME = 0.07   # seconds the caret takes to get to a new place
 
@@ -17565,20 +17571,21 @@ gliding(e, now=time()) = any(g -> g.from != g.to && now - g.left_at < GLIDE_TIME
 
 """
 Where to draw the caret numbered `slot` at the time `now`, when its place in
-the text is at `to` on the page. A caret that has a new place in the text sets
-off for it from where it's drawn now.
+the text is at `to` on the page. A caret that a step or a change to the text
+gave a new place sets off for it from where it's drawn now.
 """
 glide_to!(e, slot, to, now=time()) = begin
   b = e.buf
   key = (b.caret, b.version)
   g = get(e.glides, slot, nothing)
   if g !== nothing && e.glide && g.buf == objectid(b)
-    if g.key != key
+    if g.key == key
+      # The same place in the text, at the same place on the page: it goes on with its move
+      maximum(abs, g.to .- to) < 0.01 && return glided(g, now)
+    elseif e.by_step || g.key[2] != b.version
       g.from, g.to, g.left_at, g.key = glided(g, now), to, now, key
       return g.from
     end
-    # The same place in the text, at the same place on the page: it goes on with its move
-    maximum(abs, g.to .- to) < 0.01 && return glided(g, now)
   end
   e.glides[slot] = Glide(to, to, now, objectid(b), key)
   to
@@ -17626,6 +17633,7 @@ draw(ctx, size, ui::ConcreteRect, d::Document) = begin
     with_others(() -> (e.gliding += 1; carets(ctx, e, ui)), b)
     e.gliding = 1
   end
+  e.by_step = false   # the step has been drawn. What moves the caret next may be a click.
   margin(ctx, e, ui)
 end
 
@@ -17881,6 +17889,7 @@ end
 
 press!(e, pos) = begin
   slideshow(e) === nothing || return slide_press!(e, pos)   # a click on a slide goes to the next one, or back
+  empty!(e.glides)   # a click puts the caret at its new place at once, even a click that changes the text
   b = e.buf
   box = held(e, Keys.opt) ? nothing : todo_at(e, pos)
   if box !== nothing
@@ -19338,12 +19347,12 @@ const COMMAND_GROUPS = [
     Command(:indent, "Indent, or go to the next cell of a table", :type, "tab", (e, w, _) -> indent!(e, false)),
     Command(:outdent, "Take an indent away, or go back a cell", :type, "shift+tab", (e, w, _) -> indent!(e, true))],
   "The caret" => [
-    Command(:left, "Left", :move, "left", (e, w, select) -> caret_step!(e, -1, select)),
-    Command(:right, "Right", :move, "right", (e, w, select) -> caret_step!(e, 1, select)),
-    Command(:up, "Up", :move, "up", (e, w, select) -> move!(e, vertical(e, -1), select; keep_goal=true, by=-1)),
-    Command(:down, "Down", :move, "down", (e, w, select) -> move!(e, vertical(e, 1), select; keep_goal=true, by=1)),
-    Command(:word_left, "To the word before", :move, "opt+left", (e, w, select) -> move!(e, word_step(e.buf, e.buf.caret, -1), select; by=-1)),
-    Command(:word_right, "To the next word", :move, "opt+right", (e, w, select) -> move!(e, word_step(e.buf, e.buf.caret, 1), select; by=1)),
+    Command(:left, "Left", :move, "left", (e, w, select) -> (e.by_step = true; caret_step!(e, -1, select))),
+    Command(:right, "Right", :move, "right", (e, w, select) -> (e.by_step = true; caret_step!(e, 1, select))),
+    Command(:up, "Up", :move, "up", (e, w, select) -> (e.by_step = true; move!(e, vertical(e, -1), select; keep_goal=true, by=-1))),
+    Command(:down, "Down", :move, "down", (e, w, select) -> (e.by_step = true; move!(e, vertical(e, 1), select; keep_goal=true, by=1))),
+    Command(:word_left, "To the word before", :move, "opt+left", (e, w, select) -> (e.by_step = true; move!(e, word_step(e.buf, e.buf.caret, -1), select; by=-1))),
+    Command(:word_right, "To the next word", :move, "opt+right", (e, w, select) -> (e.by_step = true; move!(e, word_step(e.buf, e.buf.caret, 1), select; by=1))),
     Command(:line_start, "To the start of the line", :move, "cmd+left, home", (e, w, select) -> move!(e, screen_edge(e, -1), select; by=-1)),
     Command(:line_end, "To the end of the line", :move, "cmd+right, end", (e, w, select) -> move!(e, screen_edge(e, 1), select; by=1)),
     Command(:doc_start, "To the top of the page", :move, "cmd+up", (e, w, select) -> move!(e, (1, 0), select; by=-1)),

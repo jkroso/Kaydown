@@ -87,7 +87,7 @@ With this on, a word that the Mac's dictionary doesn't have gets a line of red d
 Checkbox(label="Move the caret smoothly", checked=page_glide(), onchange=box -> page_glide!(box.checked))
 ```
 
-With this on, the caret doesn't jump to a new place. It moves there in a short time, as you type, press an arrow key or click.
+With this on, the caret doesn't jump to its new place as you type or press an arrow key. It moves there in a short time. A click still puts it there at once, and so does a key that goes to the end of a line.
 
 ## Saving
 

@@ -6,7 +6,8 @@
 
 @use Test: @test, @testset
 @use "../main" => K
-@use "github.com/jkroso/MiniFB.jl" Window KeyPress Keys onkey Typed ontype
+@use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse Typed ontype
+@use GeometryBasics: Vec2
 @use "github.com/jkroso/UI.jl/Interface/draw" frame
 @use "github.com/jkroso/UI.jl/Interface/save" save_png
 const px = K.px
@@ -26,6 +27,19 @@ frames(n=2) = foreach(_ -> frame(w), 1:n)
 key(k, held=Keys(0)) = (w.keys = held; onkey(w, KeyPress{k}(0, w)); w.keys = Keys(0); frame(w))
 type(text) = (foreach(c -> ontype(e, Typed(c, w)), text); frame(w))
 caret!(p) = (e.buf.caret = e.buf.anchor = p; K.touch!(e); frame(w))
+"Where column `col` of line `i` is in the window: the middle of its line on the screen"
+place(i, col) = begin
+  it = K.item(e, i)
+  f = it.content::K.Flow
+  k, x = K.spot(f, col)
+  (K.num(e.origin[1] + x), K.num(e.origin[2] + it.top + K.line_top(f, k) + f.lines[k].high / 2))
+end
+"Click at a place in the window"
+click((x, y)) = begin
+  w.mouse = typeof(w.mouse)(px(x), px(y)); onmouse(w, MouseMove(Vec2{px}(px(x), px(y)), w)); frame(w)
+  w.keys |= Keys.mouse_left; onkey(w, KeyPress{Keys.mouse_left}(0, w)); frame(w)
+  w.keys ⊻= Keys.mouse_left; onkey(w, KeyRelease{Keys.mouse_left}(0, w)); frame(w)
+end
 line(text) = findfirst(==(text), e.buf.lines)
 "Draw frames until the caret has arrived"
 arrive() = (sleep(K.GLIDE_TIME + 0.02); frames())
@@ -78,12 +92,14 @@ end
   words = line("Some words on a line.")
   caret!((words, 0)); arrive()
   start = glide().to
-  caret!((words, 20))
+  key(Keys.right, Keys.opt)   # a word to the right
   g = glide()
   far = g.to
+  @test e.buf.caret == (words, 4) && far[1] > start[1] && K.gliding(e)
   shot("glide-on-its-way.png")
-  # Half of the time later, it's sent to a place between the two
-  e.buf.caret = e.buf.anchor = (words, 10)
+  # Half of the time later, a step sends it to a place between the two
+  e.buf.caret = e.buf.anchor = (words, 2)
+  e.by_step = true
   to = (start[1] + 5, start[2], start[3])
   at = K.glide_to!(e, 1, to, g.left_at + K.GLIDE_TIME / 2)
   @test start[1] < at[1] < far[1] && g.from == at && g.to == to
@@ -97,6 +113,32 @@ end
   type("!")
   @test e.buf.lines[last] == "And a last line of words.!"
   @test glide().from == was && glide().to[1] > was[1] && K.gliding(e)
+  arrive()
+end
+
+@testset "a click, and a key that goes to the end of the line, put the caret there at once" begin
+  words, last = line("Some words on a line."), line("And a last line of words.!")
+  caret!((words, 0)); arrive()
+  was = glide().to
+  click(place(last, 10))
+  @test e.buf.caret == (last, 10)
+  @test glide().from == glide().to && glide().to[2] > was[2] && !K.gliding(e) && !w.animating
+  # A click while the caret is on its way stops the move
+  key(Keys.right)
+  @test K.gliding(e)
+  click(place(words, 3))
+  @test e.buf.caret == (words, 3) && glide().from == glide().to && !K.gliding(e)
+  # ⌘→ and ⌘←, and ⌘↓ to the bottom of the page
+  was = glide().to
+  key(Keys.right, Keys.cmd)
+  @test e.buf.caret == K.line_end(e.buf, words) && glide().from == glide().to && glide().to[1] > was[1] && !K.gliding(e)
+  key(Keys.left, Keys.cmd)
+  @test e.buf.caret == (words, 0) && glide().from == glide().to && !K.gliding(e)
+  key(Keys.down, Keys.cmd)
+  @test e.buf.caret == K.line_end(e.buf, length(e.buf.lines)) && glide().from == glide().to && !K.gliding(e)
+  # The step after one of these moves in a short time again
+  key(Keys.left)
+  @test K.gliding(e)
   arrive()
 end
 

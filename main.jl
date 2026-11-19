@@ -16225,7 +16225,7 @@ BLOCKS[WEBVIEW] = BlockKind("Web page", "globe", WebView, web_html)
 # changes as you write it. Each block that the file defines is then made again.
 
 "The file or the repository that follows the language on the line that opens a code block"
-const SOURCE = r"^\s*(?:```|~~~)\s*[^\s`]+[ \t]+((?:\.{1,2}/|~?/|github\.com/)\S+)\s*$"
+const SOURCE = r"^\s*(?:`{3,}|~{3,})\s*[^\s`]+[ \t]+((?:\.{1,2}/|~?/|github\.com/)\S+)\s*$"
 
 "True when Ladder itself says what a code block in the language `lang` shows"
 known_lang(lang) = lang in (LIVE, SHEET, SPREADSHEET, DIAGRAM, MATH, TAKEOFF, SCHEDULE, MATTER, TOML_MATTER, HEX, BITS, "julia") || haskey(BLOCKS, lang)

@@ -34,7 +34,7 @@ const ORDERED = r"^(\s*)\d+[.)]\s+"
 const QUOTE   = r"^\s*>\s?"
 const CALLOUTS = ("note", "tip", "important", "warning", "caution")   # the kinds of callout
 const CALLOUT = Regex("^\\s*>\\s?\\[!(" * join(CALLOUTS, '|') * ")\\][ \\t]*", "i")   # what starts the first line of one
-const FENCE   = r"^\s*(```|~~~)\s*([^\s`]*)"
+const FENCE   = r"^\s*(`{3,}|~{3,})\s*([^\s`]*)"
 const RULE    = r"^\s*([-*_])(\s*\1){2,}\s*$"
 const DIVIDER = r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$"
 
@@ -125,6 +125,7 @@ matter_lang(lines) = rstrip(lines[1]) == "+++" ? TOML_MATTER : MATTER
 "What each line of a document is"
 classify(lines) = begin
   lang = nothing
+  opened = ""   # the backticks or tildes of the fence that opened the code block being read
   dollars = 0   # the line of $$ that closes the formula whose lines are being read, or 0 outside one
   noted, quoted = "", -1   # the kind of callout that the quote being read is, and the last line of a quote that was read
   matter = front_matter(lines)
@@ -156,11 +157,21 @@ classify(lines) = begin
     end
     # The line that opens a code block names its language
     line.kind == Kind.fence || return line
-    closes = lang !== nothing
-    lang = closes ? nothing : line.lang
-    Line(Kind.fence, closes ? 1 : 0, 0, line.lang)
+    run, after = fence_parts(text)
+    if lang !== nothing
+      # Only a fence like the one that opened the block closes it, as on GitHub: the same character, at least
+      # as many of them, and no language. So a block that opens with ```` can show a block that opens with ```.
+      (run[1] == opened[1] && length(run) >= length(opened) && isempty(strip(after))) || return Line(Kind.code, 0, 0, lang)
+      lang = nothing
+      return Line(Kind.fence, 1, 0, line.lang)
+    end
+    opened, lang = run, line.lang
+    Line(Kind.fence, 0, 0, line.lang)
   end
 end
+
+"The backticks or tildes that start a line of a fence, and the text after them"
+fence_parts(text) = (m = match(r"^\s*(`+|~+)(.*)$", text); (String(m[1]), String(m[2])))
 
 "A run of a line's text that is all drawn one way"
 struct Span

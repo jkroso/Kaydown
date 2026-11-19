@@ -31,6 +31,7 @@
 @use "./svg" => Svg
 @use "./canvas" Board found image!
 @use "./video" Reel frame
+@use "./select" Words OPEN
 
 abstract type Item end
 
@@ -198,7 +199,6 @@ end
 struct Unmove <: Item end
 
 const Link = @NamedTuple{left::Float64, top::Float64, wide::Float64, tall::Float64, url::String}
-const Words = @NamedTuple{before::String, top::Float64, tall::Float64, edges::Vector{Float64}, letters::Vector{Char}, from::Int}
 # Where the border of an element's box is on the page. An element in lines of text has one of these for each line that it's in.
 const Place = @NamedTuple{element::Element, left::Float64, top::Float64, wide::Float64, tall::Float64}
 
@@ -233,6 +233,7 @@ mutable struct List
   places::Vector{Place}                       # where each element's box is, in the order that the boxes are met
   floats::Vector{Vector{Vector{Item}}}        # for each box that's drawn apart and is open, the floats in it: they're drawn over its text's boxes
   now::Base.RefValue{Any}                     # how many seconds after the page was first shown it's drawn, for its pictures that move, or nothing
+  seen::Vector{NTuple{4,Float64}}             # for each cut that's open, the part of the page that it and the cuts round it let be seen
 end
 
 const SAME = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
@@ -580,17 +581,18 @@ words!(l::List, line, q::Piece, x, top, tall) = begin
     edges = [x0 + (e - edges[1]) / wide * w0 for e in edges]
     top, tall = y0, h0
   end
+  seen = isempty(l.seen) ? OPEN : l.seen[end]
   last = isempty(l.words) ? nothing : l.words[end]
-  if last !== nothing && l.line === line && isempty(l.before) && abs(last.edges[end] - edges[1]) < 0.5
+  if last !== nothing && l.line === line && isempty(l.before) && abs(last.edges[end] - edges[1]) < 0.5 && last.seen == seen
     # It goes on from the words before it
     append!(last.edges, @view edges[2:end])
     append!(last.letters, q.chars)
     l.words[end] = (before=last.before, top=min(last.top, top), tall=max(last.top + last.tall, top + tall) - min(last.top, top),
-                    edges=last.edges, letters=last.letters, from=last.from)
+                    edges=last.edges, letters=last.letters, from=last.from, seen=seen)
   else
     from = last === nothing ? 0 : last.from + length(last.letters)
     before = last === nothing ? "" : l.before
-    push!(l.words, (before=before, top=top, tall=tall, edges=edges, letters=copy(q.chars), from=from))
+    push!(l.words, (before=before, top=top, tall=tall, edges=edges, letters=copy(q.chars), from=from, seen=seen))
   end
   l.line = line
   l.before = ""
@@ -722,8 +724,11 @@ emit!(l::List, b::Box, ox, oy; cuts=nothing) = begin
   saved = l.items
   l.items = Item[]
   # What cuts the text here cuts this too. A box with a place of its own is cut only by what cuts the box that it's placed from.
-  open = l.clips[order.clips+1:(cuts === nothing ? length(l.clips) : max(order.clips, min(cuts, length(l.clips))))]
+  limit = cuts === nothing ? length(l.clips) : max(order.clips, min(cuts, length(l.clips)))
+  open = l.clips[order.clips+1:limit]
   append!(l.items, open)
+  kept = l.seen
+  l.seen = l.seen[1:limit]
   if whole
     piece!(l, b, ox, oy)
   else
@@ -733,6 +738,7 @@ emit!(l::List, b::Box, ox, oy; cuts=nothing) = begin
     foreach(f -> append!(l.items, f), pop!(l.floats))
   end
   foreach(_ -> push!(l.items, Unclip()), open)
+  l.seen = kept
   made = l.items
   l.items = saved
   z = s.zindex == NO_Z || (s.position == :static && !b.item) ? 0 : s.zindex
@@ -957,6 +963,10 @@ draw!(l::List, b::Box, ox, oy) = begin
     clip = Clip(x + b.border[4], y + b.border[1], w - b.border[2] - b.border[4], h - b.border[1] - b.border[3], inner(corners(s, w, h), b.border))
     push!(l.items, clip)
     push!(l.clips, clip)
+    # The words in it can be seen where it and each box round it that cuts let them be
+    cx0, cy0, cw, ch = around(l, clip.x, clip.y, clip.w, clip.h)
+    o = isempty(l.seen) ? OPEN : l.seen[end]
+    push!(l.seen, (max(o[1], cx0), max(o[2], cy0), min(o[3], cx0 + cw), min(o[4], cy0 + ch)))
   end
   isempty(b.over) || (l.corners[b] = (x, y, length(l.clips)))
   # In lines of text, the boxes with a place of their own come first. Among blocks, each comes where the HTML has it.
@@ -1012,14 +1022,20 @@ draw!(l::List, b::Box, ox, oy) = begin
     end
     for j in words+1:length(l.words)
       k = l.words[j]
-      mx, my = by(column(k.top))
-      l.words[j] = (before=k.before, top=k.top + my, tall=k.tall, edges=k.edges .+ mx, letters=k.letters, from=k.from)
+      col = column(k.top)
+      mx, my = by(col)
+      # A column is cut to its own part of the page, inside what cuts the box of the columns
+      o = isempty(l.seen) ? OPEN : l.seen[end]
+      x0, y0, cw, ch = around(l, cx + mx - cols.gap / 2, cy, cols.wide + cols.gap, cols.ends[col] - cols.starts[col] + 0.01)
+      l.words[j] = (before=k.before, top=k.top + my, tall=k.tall, edges=k.edges .+ mx, letters=k.letters, from=k.from,
+                    seen=(max(o[1], x0), max(o[2], y0), min(o[3], x0 + cw), min(o[4], y0 + ch)))
     end
   end
   # The arrows of a list of choices
   b.widget == :select && s.visible && push!(l.items, Widget(x + w - b.border[2] - 18, y + b.border[1], 16.0, h - b.border[1] - b.border[3], :select, 0.0, s.color, s.accent))
   if clipped
     pop!(l.clips)
+    pop!(l.seen)
     push!(l.items, Unclip())
   end
   nothing
@@ -1078,7 +1094,7 @@ address, as `boxes` takes it.
 """
 list(root::Box, wide, tall; pictures=src -> nothing, base="", at=nothing) = begin
   l = List(Item[], Link[], Words[], Float64(wide), Float64(tall), 0x00000000, pictures, "", nothing, nothing, Clip[], Order[], nothing, 0,
-           IdDict{Box,Tuple{Float64,Float64}}(), IdDict{Box,Tuple{Float64,Float64,Int}}(), SAME, 0, String(base), Place[], Vector{Vector{Item}}[], Ref{Any}(at))
+           IdDict{Box,Tuple{Float64,Float64}}(), IdDict{Box,Tuple{Float64,Float64,Int}}(), SAME, 0, String(base), Place[], Vector{Vector{Item}}[], Ref{Any}(at), NTuple{4,Float64}[])
   # The background of the page is the <html> element's, or the <body>'s when that has none
   body = findfirst(k -> k.element !== nothing && k.element.tag == "body", root.children)
   from = alpha(root.style.background) > 0 || !isempty(root.style.image) || body === nothing ? root : root.children[body]

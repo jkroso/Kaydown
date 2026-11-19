@@ -8,8 +8,8 @@
 @use "github.com/jkroso/MiniFB.jl" Window Keys KeyPress KeyRelease Typed onkey ontype onscroll
 @use "github.com/jkroso/Font.jl/units" px
 @use "github.com/jkroso/UI.jl/Interface/Geometric"...
-@use "github.com/jkroso/UI.jl/Interface/draw" frame rect popups
-@use "github.com/jkroso/UI.jl/Interface/testing" click! move! press! type!
+@use "github.com/jkroso/UI.jl/Interface/draw" frame rect popups clipboard
+@use "github.com/jkroso/UI.jl/Interface/testing" click! move! press! type! holding
 @use "github.com/jkroso/UI.jl/Interface/save" save_png
 @use "../web/dom" document Element attr
 @use "../web/form" => Forms
@@ -17,6 +17,7 @@
 @use "../web/live" => Live
 @use "../web/browser" Browser go! back! forward! reload! can_back can_forward loading scroll!
 @use "../web/browser" => Browsers
+@use "../web/select" => Select
 
 shot(name, w) = haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], name), w)
 
@@ -371,3 +372,109 @@ end
   close(w)
 end
 
+@testset "selecting the words of a page" begin
+  opened = String[]
+  b = Browser(html="""<!DOCTYPE html><body style="margin:0;font:16px/20px sans-serif">
+    <p style="margin:0">One two three, and <a href="mailto:jake@example.com">a link</a> here.</p><p style="margin:0">A second paragraph</p>
+    <input id=q value="in a field" style="margin:0">
+    <div style="height:20px;width:120px;overflow:hidden"><p style="margin:0;white-space:nowrap">Cut at the right edge of its box</p><p style="margin:0">Hidden under</p></div>
+    <div style="height:600px"></div><p style="margin:0">The end</p></body>""",
+    base="https://example.com/", wide=400px, high=200px, open=url -> push!(opened, url))
+  w = Window(b, size=(400px, 200px))
+  frame(w); frame(w)
+  ws = b.view.page.words
+  letters = join(String(p.letters) for p in ws)
+  # The places before and after the first `words` in the page's words
+  around(words) = (r = findfirst(words, letters); (first(r) - 1, last(r)))
+  # A point of the window just inside the left of the letter after place `a`, where the page is scrolled to now
+  spot(a) = (p = ws[findlast(p -> p.from <= a, ws)]; (px(p.edges[a - p.from + 1] + 1), px(p.top + p.tall / 2 - Browsers.scrolled(b))))
+  # Hold the button down at `from`, move to `to`, and let it go there
+  drag!(from, to) = begin
+    move!(w, from)
+    w.keys |= Keys.mouse_left
+    onkey(w, KeyPress{Keys.mouse_left}(0, w))
+    move!(w, to)
+    w.keys ⊻= Keys.mouse_left
+    onkey(w, KeyRelease{Keys.mouse_left}(0, w))
+    frame(w)
+  end
+
+  # A drag over words selects them, and ⌘C copies them
+  a, z = around("One two three")
+  move!(w, spot(a))
+  @test Browsers.cursor(b) == :ibeam
+  move!(w, (390px, 150px))
+  @test Browsers.cursor(b) == :arrow
+  drag!(spot(a), spot(z))
+  @test Browsers.selected_words(b) == "One two three" && b.drag == :none && b.down === nothing
+  press!(w, Keys.c, Keys.cmd)
+  @test clipboard(w) == "One two three"
+  shot("web-browser-selected.png", w)
+  # A drag that starts on a link selects its words, and doesn't follow it
+  drag!(spot(around("a link")[1]), spot(around("a link")[2]))
+  @test Browsers.selected_words(b) == "a link" && isempty(opened)
+  # A click selects nothing. Two select a word, three its paragraph, and four start again.
+  at = spot(around("second")[1] + 2)
+  click!(w, at)
+  @test Browsers.selected_words(b) == ""
+  click!(w, at)
+  @test Browsers.selected_words(b) == "second"
+  click!(w, at)
+  @test Browsers.selected_words(b) == "A second paragraph"
+  click!(w, at)
+  @test Browsers.selected_words(b) == ""
+  # A drag after two clicks selects whole words
+  click!(w, spot(a + 1))
+  move!(w, spot(a + 1))
+  w.keys |= Keys.mouse_left
+  onkey(w, KeyPress{Keys.mouse_left}(0, w))
+  move!(w, spot(around("three")[1] + 1))
+  @test Browsers.selected_words(b) == "One two three"
+  w.keys ⊻= Keys.mouse_left
+  onkey(w, KeyRelease{Keys.mouse_left}(0, w))
+  # A click with ⇧ held moves the end of the selection there
+  sleep(0.5)
+  click!(w, spot(a))
+  click!(w, spot(around("second")[2]), Keys.shft)
+  @test Browsers.selected_words(b) == "One two three, and a link here.\nA second"
+  # ⌘A selects all of the page's words
+  press!(w, Keys.a, Keys.cmd)
+  @test startswith(Browsers.selected_words(b), "One two") && endswith(Browsers.selected_words(b), "The end")
+
+  # A box that cuts what's in it hides its words. They have no marks where they can't be seen, and the mouse doesn't
+  # land on them. A selection over them copies them, as a browser does.
+  hid, cut = around("Hidden under"), around("Cut at the right edge of its box")
+  @test isempty(Select.marks(ws, hid...))
+  m = Select.marks(ws, cut...)
+  @test length(m) == 1 && 100 < m[1][1] + m[1][3] <= 120.5
+  under = ws[findlast(p -> p.from <= hid[1], ws)]
+  @test !(hid[1] < Select.place(ws, 20, under.top + under.tall / 2) < hid[2]) && !Select.over_words(ws, 20, under.top + under.tall / 2)
+  @test Select.copied(ws, cut[1], hid[2]) == "Cut at the right edge of its box\nHidden under"
+
+  # A drag below the view scrolls the page, and selects what comes into view. The button can come up where the view doesn't hear it.
+  start = around("A second")[1]
+  move!(w, spot(start))
+  w.keys |= Keys.mouse_left
+  onkey(w, KeyPress{Keys.mouse_left}(0, w))
+  move!(w, (200px, 260px))
+  for _ in 1:12
+    sleep(0.03)
+    frame(w)
+  end
+  @test Browsers.scrolled(b) > 100 && Browsers.selection(b)[1] == start && Browsers.selection(b)[2] > around("in a field")[2]
+  w.keys ⊻= Keys.mouse_left
+  frame(w)
+  far = Browsers.scrolled(b)
+  frame(w)
+  @test b.drag == :none && b.down === nothing && Browsers.scrolled(b) == far
+  scroll!(b, 0)
+  frame(w)
+
+  # A drag in a field selects its letters, and the page's words are no longer selected
+  f = around("in a field")[1]
+  drag!(spot(f), spot(f + 4))
+  @test Browsers.field(b) !== nothing && (b.anchor, b.caret) == (0, 4) && Browsers.selected_words(b) == ""
+  press!(w, Keys.c, Keys.cmd)
+  @test clipboard(w) == "in a"
+  close(w)
+end

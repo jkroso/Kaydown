@@ -371,7 +371,7 @@ page(doc::Document; wide=700, zoom=1.0, load=src -> nothing, pictures=Pictures(l
   # The styles of the last time are the page's: the clock keeps what they noted
   clock === nothing || commit!(clock)
   z(link::Paint.Link) = (left=link.left * zoom, top=link.top * zoom, wide=link.wide * zoom, tall=link.tall * zoom, url=link.url)
-  z(w::Paint.Words) = (before=w.before, top=w.top * zoom, tall=w.tall * zoom, edges=w.edges .* zoom, letters=w.letters, from=w.from)
+  z(w::Paint.Words) = (before=w.before, top=w.top * zoom, tall=w.tall * zoom, edges=w.edges .* zoom, letters=w.letters, from=w.from, seen=w.seen .* zoom)
   Page(ceil(inner * zoom), ceil(tall * zoom), Float64(zoom), l, zoom == 1 ? l.links : map(z, l.links), zoom == 1 ? l.words : map(z, l.words), pictures, root, at, max(until, flicker), held,
        at === nothing ? Inf : at < until ? at : soon)
 end

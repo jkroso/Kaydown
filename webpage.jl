@@ -43,6 +43,7 @@
 # Swift, which comes with Xcode and its command line tools.
 
 @use "./map" => Maps
+@use "./web/select" => Select
 
 const SOURCE = joinpath(@__DIR__, "webpage.swift")
 
@@ -105,12 +106,11 @@ open_link(url::AbstractString) = try OPENER[](url) catch; nothing end
 const Link = @NamedTuple{left::Float64, top::Float64, wide::Float64, tall::Float64, url::String}
 
 """
-A piece of the page's words that's drawn in one line: what goes before it when
-it's copied (a new line `"\\n"`, a tab `"\\t"` between two cells of a row, or
-`""`), its top and how tall it is in px, where each of its letters starts and
-the last one ends, its letters, and its place in the words.
+A piece of the page's words that's drawn in one line, as web/select.jl has
+it. WebKit's text file doesn't say what cuts the words, so each can be seen
+anywhere on the page.
 """
-const Words = @NamedTuple{before::String, top::Float64, tall::Float64, edges::Vector{Float64}, letters::Vector{Char}, from::Int}
+const Words = Select.Words
 
 """
 The pictures of a page: how wide and how tall the page is in px, each strip's
@@ -152,7 +152,7 @@ shot(path) = begin
       letters = collect(parts[6])
       (top === nothing || tall === nothing || any(isnothing, edges) || isempty(letters) || length(edges) != length(letters) + 1) && continue
       before = parts[2] == "line" ? "\n" : parts[2] == "tab" ? "\t" : ""
-      push!(pieces, (before=before, top=top, tall=tall, edges=Float64.(edges), letters=letters, from=letter_count(pieces)))
+      push!(pieces, (before=before, top=top, tall=tall, edges=Float64.(edges), letters=letters, from=Select.letter_count(pieces), seen=Select.OPEN))
     end
   end
   (size === nothing || any(isnothing, size) || isempty(strips) || sum(last, strips) != size[2]) && return nothing
@@ -166,124 +166,14 @@ link(s::Shot, x, y) = begin
   i === nothing ? nothing : s.links[i]
 end
 
-"How many letters the words `ws` have"
-letter_count(ws) = isempty(ws) ? 0 : ws[end].from + length(ws[end].letters)
-letter_count(s::Shot) = letter_count(s.words)
-
-"How far the point `(x, y)` is from the line of words `w`, up or down. It's 0 for a point that's level with it."
-off_line(w::Words, y) = y < w.top ? w.top - y : max(0.0, y - w.top - w.tall)
-"How far the point `(x, y)` is from the words `w`, to the left or the right. It's 0 for a point over them."
-off_words(w::Words, x) = x < w.edges[1] ? w.edges[1] - x : max(0.0, x - w.edges[end])
-
-"""
-The place in the page's words that's nearest the point `(x, y)` of the page,
-in px from its top left corner. The point is in the line of words that it's
-level with, or in the nearest line up or down. In that line, the place is
-before the letter that the point is over, or after it when the point is over
-its right half. Over the first line of words, it's the start of the words.
-Under the last line, it's their end.
-"""
-place(s::Shot, x, y) = begin
-  isempty(s.words) && return 0
-  y < minimum(w -> w.top, s.words) && return 0
-  y > maximum(w -> w.top + w.tall, s.words) && return letter_count(s)
-  # A line can have more than one piece of words, like a word in bold, or the cells of a row of a table
-  near = argmin(w -> off_line(w, y), s.words)
-  w = argmin(w -> off_words(w, x), Iterators.filter(w -> level(w, near.top, near.tall), s.words))
-  w.from + count(i -> (w.edges[i] + w.edges[i+1]) / 2 < x, eachindex(w.letters))
-end
-
-"True when the words `w` are in the same line as words whose top is `top` and that are `tall`: when most of the shorter is level with the other"
-level(w::Words, top, tall) = min(w.top + w.tall, top + tall) - max(w.top, top) > min(w.tall, tall) / 2
-
-"True when the point `(x, y)` of the page is over some of its words"
-over_words(s::Shot, x, y) = any(w -> off_line(w, y) == 0 && off_words(w, x) == 0, s.words)
-
-"The letters of `w` between the places `a` and `b` of the page's words, as how many of its letters come before each"
-letters_between(w::Words, a, b) = (max(a - w.from, 0), min(b - w.from, length(w.letters)))
-
-"""
-The words of the page between the places `a` and `b`, as they're copied: with
-a new line between two lines of the page that aren't one paragraph, and a tab
-between two cells of a row of a table. A space that can't break a line is a
-space, and no line ends with a space.
-"""
-words(s::Shot, a, b) = begin
-  a, b = minmax(a, b)
-  io = IOBuffer()
-  for w in s.words
-    lo, hi = letters_between(w, a, b)
-    lo < hi || continue
-    position(io) > 0 && print(io, w.before)
-    print(io, String(w.letters[lo+1:hi]))
-  end
-  replace(replace(String(take!(io)), '\u00a0' => ' '), r" +(?=\n|$)" => "")
-end
-
-"""
-Where the page draws its words between the places `a` and `b`: a rectangle for
-each line, as the left, the top, how wide and how tall it is, in px. The words
-of a line that are in more than one piece, like a word in bold, are one
-rectangle. Two cells of a row of a table are two.
-"""
-marks(s::Shot, a, b) = begin
-  a, b = minmax(a, b)
-  out = NTuple{4,Float64}[]
-  for w in s.words
-    lo, hi = letters_between(w, a, b)
-    lo < hi || continue
-    left, right, top, bottom = w.edges[lo+1], w.edges[hi+1], w.top, w.top + w.tall
-    if !isempty(out) && isempty(w.before)
-      l, t, wide, tall = out[end]
-      # Words that go on in the same line, to the right, are part of the same rectangle
-      if left >= l + wide - 1 && level(w, t, tall)
-        top, bottom = min(top, t), max(bottom, t + tall)
-        out[end] = (l, top, max(right, l + wide) - l, bottom - top)
-        continue
-      end
-    end
-    push!(out, (left, top, right - left, bottom - top))
-  end
-  out
-end
-
-"Which piece of the page's words holds the letter after place `a`, or the last letter when `a` is the end of the words, or nothing"
-words_at(s::Shot, a) = findlast(w -> w.from <= a, s.words)
-
-isword(c::Char) = isletter(c) || isdigit(c) || c in ('_', '\'', '’')
-
-"""
-The places round the word at place `a` of the page's words, as two clicks
-select it. Where there's no word, it's the letter after `a`.
-"""
-word(s::Shot, a) = begin
-  i = words_at(s, a)
-  i === nothing && return (a, a)
-  w = s.words[i]
-  k = a - w.from
-  n = length(w.letters)
-  # A place at the end of a piece of words, after its last letter, is in its last word
-  k >= n && return n > 0 && isword(w.letters[n]) ? word(s, a - 1) : (a, a)
-  isword(w.letters[k+1]) || return (a, a + 1)
-  lo = hi = k
-  while lo > 0 && isword(w.letters[lo]); lo -= 1 end
-  while hi < n && isword(w.letters[hi+1]); hi += 1 end
-  (w.from + lo, w.from + hi)
-end
-
-"""
-The places round the paragraph at place `a` of the page's words, as three
-clicks select it: the lines of words from the last one that starts a line of
-its own, to the next one that does.
-"""
-paragraph(s::Shot, a) = begin
-  i = words_at(s, a)
-  i === nothing && return (a, a)
-  lo = hi = i
-  while lo > 1 && isempty(s.words[lo].before); lo -= 1 end
-  while hi < length(s.words) && isempty(s.words[hi+1].before); hi += 1 end
-  (s.words[lo].from, s.words[hi].from + length(s.words[hi].letters))
-end
+"The words between places, the place at a point and the rest are web/select.jl's, which the web view uses too"
+letter_count(s::Shot) = Select.letter_count(s.words)
+place(s::Shot, x, y) = Select.place(s.words, x, y)
+over_words(s::Shot, x, y) = Select.over_words(s.words, x, y)
+words(s::Shot, a, b) = Select.copied(s.words, a, b)
+marks(s::Shot, a, b) = Select.marks(s.words, a, b)
+word(s::Shot, a) = Select.word(s.words, a)
+paragraph(s::Shot, a) = Select.paragraph(s.words, a)
 
 """
 True when the HTML has a picture, a font or a style sheet from a web site, so

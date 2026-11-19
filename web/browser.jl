@@ -33,6 +33,11 @@
 #   - A click on a button that sends its form sends it. A form that sends with
 #     "get" is an address, and the view goes there. Nothing can be sent any
 #     other way.
+#   - A drag over the page's words selects them, and ⌘C copies them. Two
+#     clicks select a word, and three a paragraph, and a drag after them goes
+#     on by words or by paragraphs. A click with ⇧ held moves the end of the
+#     selection there. ⌘A selects all of the page's words. A drag above or
+#     below the view scrolls the page. A drag in a field selects its letters.
 #   - The page's scripts hear the mouse and the keys: `mousemove`, `mouseover`,
 #     `mouseout`, `mousedown`, `mouseup`, `click`, `keydown`, `keyup`, `input`,
 #     `change`, `focus`, `blur`, `scroll` and `submit`. A script that says to
@@ -44,8 +49,10 @@
 # What it doesn't do yet: a box that's fixed in the window scrolls with the
 # page. What the page's CSS says for the mouse over an element (`:hover`) or
 # for the field with the keyboard (`:focus`) is left out. Text in a field
-# that's longer than the field isn't scrolled into view. The words of the page
-# can't be selected. And see what view.jl, live.jl and script.jl leave out.
+# that's longer than the field isn't scrolled into view. A selection of the
+# page's words is kept as places in its words, so a script that changes the
+# words before it moves it. A page's `user-select: none` is left out. And see
+# what view.jl, live.jl and script.jl leave out.
 
 @use "github.com/jkroso/Prospects.jl" @def
 @use "github.com/jkroso/MiniFB.jl" onkey onmouse ontype onscroll KeyPress KeyRelease MouseMove Typed Keys flt
@@ -62,6 +69,7 @@
 @use "./files" Files
 @use "./entities" entities
 @use "./view" View page! refresh! restart!
+@use "./select" => Select
 @use "./dom" Element document attr text
 @use "./css" resolve
 
@@ -72,6 +80,9 @@ const AGAIN = 0.25     # seconds between two layouts of a page whose files are s
 const QUICK = 0.03     # seconds: a page whose scripts and layout take longer than this in a frame is a slow page
 const SHARE = 3        # a slow page rests this many times as long as its frame took, so that the window stays yours
 const LIMIT = 4.0      # seconds that a script of the page may run before it's stopped
+const AGAIN_CLICK = 0.4   # seconds between two clicks at one place that make them a double click
+const EDGE_SPEED = 12.0   # px a second that a drag scrolls the page for each px that the mouse is above or below the view
+const EDGE_MOST = 80.0    # px above or below the view past which the drag scrolls no faster
 
 "A page that's on its way: its address, then its HTML once that has come, and the files that it waits for before it shows"
 mutable struct Coming
@@ -115,6 +126,12 @@ end
   rest::Float64 = 0.0       # until when a slow page's scripts and layout don't run again
   made::Any = nothing       # the size and the zoom that the page was last laid out for
   swallow::Bool = false     # a script said to do no more with the key that's down, so it types nothing
+  picked::Tuple{Int,Int} = (0, 0)   # the page's words that are selected: where the selection started, and where it ends, as places in the words
+  grain::Int = 1                    # what a drag selects: letters, words after two clicks, paragraphs after three
+  grown::Tuple{Int,Int} = (0, 0)    # what the click that started the drag selected
+  clicks::Tuple{Float64,Int,Int} = (0.0, -1, 0)   # when the mouse last went down on the page's words, at which place, and how many clicks in a row that makes
+  drag::Symbol = :none      # what a drag with the button down selects: the page's words (:words), the letters of the field (:field), or nothing
+  dragged::Float64 = 0.0    # when a drag above or below the view last scrolled the page
 end
 
 # --- which page shows -----------------------------------------------------------------------
@@ -263,6 +280,7 @@ show!(b::Browser, c::Coming) = begin
   restart!(v)
   b.shown, b.failed, b.title = c.base, c.failed, title_of(c.html)
   b.offset, b.field, b.caret, b.anchor, b.down = 0.0, nothing, 0, 0, nothing
+  b.picked, b.drag = (0, 0), :none
   b.landed, b.refreshed = b.files.landed, time()
   b
 end
@@ -355,6 +373,7 @@ describe(b::Browser) = begin
     redraw_in!(b, max(0.0, b.rest - time()))
   end
   b.offset = clamp(b.offset, 0.0, reach(b))
+  edge_scroll!(b)
   (loading(b) || Fetch.coming(b.files) > 0 || b.files.landed != b.landed) && redraw_in!(b, 0.05)
   # The caret blinks, so the window has to draw again while a field has the keyboard
   field(b) !== nothing && focused(b) && redraw_in!(b, 0.5)
@@ -371,7 +390,8 @@ patch(ctx, x, y, w, h, colour::UInt32; round=0.0) = begin
   Skia.sk_paint_delete(paint)
 end
 
-const SELECTED = 0x4d4285f4   # the colour over the text that's selected in a field
+const SELECTED = 0x4d4285f4   # the colour over the text that's selected in a field, and over the page's words that are selected
+const ASIDE = 0x33808080      # and over the page's words that are selected while the view doesn't have the keyboard
 const THUMB = 0x59000000      # the bar at the right that says where the window is in the page
 const COMING = 0xff2a78d6     # the line at the top while a page is on its way
 
@@ -382,6 +402,14 @@ draw(ctx, size, ui::ConcreteRect, b::Browser) = begin
   left, top, wide, high = Float64(flt(ui.left)), Float64(flt(ui.top)), Float64(flt(ui.width)), Float64(flt(ui.height))
   with_clip(ctx, ui.left, ui.top, ui.width, ui.height) do
     Web.draw(ctx, p; x=left, y=top - s, top=s, bottom=s + high)
+    # The page's words that are selected, in grey while the keyboard is elsewhere, as a browser shows them. A view that
+    # only shows the page shows no selection.
+    colour = focused(b) ? SELECTED : ASIDE
+    if b.active
+      for (x, y, across, tall) in Select.marks(p.words, selection(b)...)
+        s - tall <= y <= s + high && patch(ctx, left + x, top - s + y, across, tall, colour)
+      end
+    end
     e = field(b)
     if e !== nothing && focused(b)
       stops = caret_stops(b, e)
@@ -409,13 +437,14 @@ draw(ctx, size, ui::ConcreteRect, b::Browser) = begin
   end
 end
 
-"The point of the page that the mouse is over, in px of the page as it's drawn, or nothing"
-point(b::Browser) = begin
+"The point of the page that the mouse is over, or that's at the point `at` of the window, in px of the page as it's drawn, or nothing"
+point(b::Browser, at=nothing) = begin
   w = window_of(b)
   (w === nothing || b.view.page === nothing) && return nothing
   r = rect(b)
   r === nothing && return nothing
-  (Float64(flt(w.mouse[1] - r.left)), Float64(flt(w.mouse[2] - r.top)) + scrolled(b))
+  at = something(at, w.mouse)
+  (Float64(flt(at[1] - r.left)), Float64(flt(at[2] - r.top)) + scrolled(b))
 end
 
 "The element at the point `(x, y)` of the page, or nothing. Of the boxes there, it's the one that the page has last."
@@ -439,6 +468,94 @@ named(b::Browser, name::AbstractString) = begin
   p = b.view.page
   i = findfirst(q -> attr(q.element, "id") == name || (q.element.tag == "a" && attr(q.element, "name") == name), p.list.places)
   i === nothing ? nothing : p.list.places[i].element
+end
+
+# --- the page's words that are selected -----------------------------------------------------
+
+"The page's words, with where each letter is drawn, or none while no page shows"
+page_words(b::Browser) = (p = b.view.page; p === nothing ? () : p.words)
+
+"The two ends of the page's words that are selected, as places in the words, first the one nearer the top. They're the same when none are."
+selection(b::Browser) = (n = Select.letter_count(page_words(b)); extrema(clamp.(b.picked, 0, n)))
+
+"The page's words that are selected, as they're copied"
+selected_words(b::Browser) = Select.copied(page_words(b), selection(b)...)
+
+"""
+The mouse went down at the point `(x, y)` of the page, on no field. One click
+puts the start of the selection there, two select the word there, and three
+its paragraph. With `shift`, the end of the selection moves there.
+"""
+pick!(b::Browser, x, y, shift) = begin
+  ws = page_words(b)
+  at = Select.place(ws, x, y)
+  t, before, n = b.clicks
+  n = time() - t < AGAIN_CLICK && before == at ? n % 3 + 1 : 1
+  b.clicks = (time(), at, n)
+  b.grain = shift ? 1 : n
+  b.grown = b.grain == 2 ? Select.word(ws, at) : b.grain == 3 ? Select.paragraph(ws, at) : shift ? (b.picked[1], b.picked[1]) : (at, at)
+  b.drag = :words
+  stretch!(b, at)
+end
+
+"""
+Select the page's words from where the click that started the drag selected
+them to the place `at`. After two clicks, the drag selects whole words, and
+after three, whole paragraphs.
+"""
+stretch!(b::Browser, at) = begin
+  ws = page_words(b)
+  lo, hi = b.grown
+  from, to = b.grain == 2 ? Select.word(ws, at) : b.grain == 3 ? Select.paragraph(ws, at) : (at, at)
+  b.picked = at < lo ? (hi, from) : (lo, max(hi, to))
+  redraw_in!(b, 0)
+  b
+end
+
+"The mouse is at the point `(x, y)` of the page with its button down: the drag selects what it has gone over"
+drag!(b::Browser, x, y) = begin
+  if b.drag == :words
+    stretch!(b, Select.place(page_words(b), x, y))
+  elseif b.drag == :field
+    e = field(b)
+    e === nothing || caret!(b, e, index_at(b, e, x, y), true)
+  end
+  b
+end
+
+"""
+While a drag selects and the mouse is above or below the view, the page
+scrolls that way, faster the further the mouse is, and the drag selects what
+comes into view. A drag whose button came up where the view didn't hear it
+ends here.
+"""
+edge_scroll!(b::Browser) = begin
+  b.drag == :none && return b
+  w, r = window_of(b), rect(b)
+  (w === nothing || r === nothing) && return b
+  if !(Keys.mouse_left in w.keys)
+    b.drag, b.down = :none, nothing
+    return b
+  end
+  y, high = Float64(flt(w.mouse[2] - r.top)), Float64(flt(r.height))
+  off = y < 0 ? max(y, -EDGE_MOST) : y > high ? min(y - high, EDGE_MOST) : 0.0
+  now = time()
+  took, b.dragged = clamp(now - b.dragged, 0.0, 0.1), now
+  off == 0 && return b
+  scroll!(b, scrolled(b) + off * EDGE_SPEED * took)
+  at = point(b)
+  at === nothing || drag!(b, at...)
+  redraw_in!(b, 1 / 60)
+  b
+end
+
+"Select all of the page's words"
+select_all!(b::Browser) = (b.picked = (0, Select.letter_count(page_words(b))); redraw_in!(b, 0); b)
+
+"Copy the page's words that are selected to the clipboard. It's false when none are."
+copy_words!(b::Browser, w) = begin
+  words = selected_words(b)
+  isempty(words) ? false : (clipboard!(w, words); true)
 end
 
 # --- the field that has the keyboard --------------------------------------------------------
@@ -659,13 +776,16 @@ cursor(b::Browser) = begin
   at === nothing && return :arrow
   Web.link(b.view.page, at...) === nothing || return :hand
   e = element(b, at...)
-  e === nothing ? :arrow : Forms.typed(e) ? :ibeam : :arrow
+  e !== nothing && Forms.typed(e) && return :ibeam
+  Select.over_words(page_words(b), at...) ? :ibeam : :arrow
 end
 
 onmouse(b::Browser, ev::MouseMove) = begin
   b.active || return nothing
-  l, at = live(b), point(b)
-  (l === nothing || at === nothing) && return handled
+  l, at = live(b), point(b, ev.position)
+  at === nothing && return handled
+  b.down !== nothing && Keys.mouse_left in ev.window.keys && drag!(b, at...)
+  l === nothing && return handled
   Live.move!(l, at...)
   l.scripts.changed && redraw_in!(b, 0)
   handled
@@ -674,6 +794,8 @@ end
 onscroll(b::Browser, ev::MouseScroll) = begin
   b.active || return nothing
   scroll!(b, scrolled(b) - 30 * Float64(flt(ev.delta[2])))
+  at = point(b)
+  b.down === nothing || at === nothing || drag!(b, at...)
   handled
 end
 
@@ -684,13 +806,22 @@ onkey(b::Browser, ev::KeyPress{Keys.mouse_left}) = begin
   at === nothing && return handled
   x, y = at
   l = live(b)
-  b.down = (x, y)
-  # A script that says to do no more with the button going down keeps the keyboard where it is
+  b.down, b.drag, b.dragged = (x, y), :none, time()
+  shift = Keys.shft in ev.window.keys
+  # A script that says to do no more with the button going down keeps the keyboard where it is, and selects nothing
   if l === nothing || Live.press!(l, x, y)
     e = element(b, x, y)
     to = e !== nothing && Forms.typed(e) ? e : nothing
+    was = field(b)
     field!(b, to)
-    to === nothing || (b.caret = b.anchor = index_at(b, to, x, y))
+    if to === nothing
+      pick!(b, x, y, shift)
+    else
+      # In a field, the click and the drag select its letters, and the page's words are no longer selected
+      b.picked, b.drag = (0, 0), :field
+      b.caret = index_at(b, to, x, y)
+      shift && was === to || (b.anchor = b.caret)
+    end
   end
   wake!(b)
   handled
@@ -699,7 +830,7 @@ end
 onkey(b::Browser, ev::KeyRelease{Keys.mouse_left}) = begin
   (b.active && b.down !== nothing) || return nothing
   from = b.down
-  b.down = nothing
+  b.down, b.drag = nothing, :none
   at = point(b)
   at === nothing && return handled
   l = live(b)
@@ -769,7 +900,11 @@ onkey(b::Browser, ev::KeyPress{K}) where K = begin
   end
   e = field(b)
   e === nothing || return edit!(b, e, K, w)
-  cmd && return nothing
+  if cmd
+    K == Keys.c && return (copy_words!(b, w); handled)
+    K == Keys.a && return (select_all!(b); handled)
+    return nothing
+  end
   page = Float64(flt(b.high))
   K == Keys.space ? scroll!(b, scrolled(b) + (shift ? -0.9 : 0.9) * page) :
   K == Keys.pagedown ? scroll!(b, scrolled(b) + 0.9page) :

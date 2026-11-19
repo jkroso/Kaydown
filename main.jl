@@ -23759,8 +23759,14 @@ end
 The module that the `julia` code blocks of the page run in. It has each name
 that a live block has, and each unit of a sheet that has no such name. They
 come in with `using`, so the page's code can give any of them a new meaning.
+
+Ladder runs the code of two kinds of page itself: the startup page and a
+folder's page. Their code runs in the window as Ladder runs it, with the name
+`Ladder` and nothing more: see `ladder_module`.
 """
 workspace(e) = get!(e.nodes, (:workspace, e.buf.path)) do
+  own = ladder_module(e.buf.path)
+  own === nothing || return own
   from = sandbox(e)
   usual = Module(:Usual)
   # The modules can be new, so their names are asked for as they are now
@@ -27282,6 +27288,28 @@ code_module(name::AbstractString) = begin
   m
 end
 
+"The module that the code of the startup page ran in when Ladder last started, or nothing before that"
+const STARTUP_MODULE = Ref{Union{Module,Nothing}}(nothing)
+
+"""
+The module that code from the page at `path` runs in when you run it in the
+window, if Ladder runs the page's code itself. It's nothing for any other page.
+
+  - The startup page's code runs in the module that the page ran in when
+    Ladder started. So what that code loaded is there, like `Mail`.
+  - A folder's page gets a new module, as it does each time Ladder runs it.
+"""
+ladder_module(path::AbstractString) = begin
+  isfile(path) || return nothing
+  home = startup_page()
+  if isfile(home) && samefile(path, home)
+    m = STARTUP_MODULE[]
+    m === nothing ? code_module("startup") : m
+  elseif basename(path) == FOLDER_PAGE
+    code_module(FOLDER_PAGE * " of " * basename(dirname(abspath(path))))
+  end
+end
+
 """
 Run the code of the startup page: each of its `julia` blocks, from the top, in
 one module, which this gives. In that module `Ladder` is this module. Code
@@ -27289,6 +27317,7 @@ that fails stops the code after it, and `STARTUP[]` then says what failed.
 """
 run_startup!(path=startup_page()) = begin
   m = code_module("startup")
+  STARTUP_MODULE[] = m
   STARTUP[] = try
     isfile(path) && Base.invokelatest(run_page!, m, path)
     ("", time())

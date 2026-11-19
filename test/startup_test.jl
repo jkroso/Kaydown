@@ -118,3 +118,46 @@ end
   frame(w); frame(w)
   @test !any(p -> p.key == :startup, popups(w))
 end
+
+@testset "code of the page that runs in the window runs where Ladder ran it, with the name Ladder" begin
+  write(page, """
+    # Home
+
+    ```julia
+    const loaded = 7
+    ```
+
+    ```julia
+    Ladder.startup_page()
+    loaded + 1
+    ```
+    """)
+  m = K.run_startup!()
+  e = K.build_editor(page)
+  w = Window(e, size=(900px, 700px))
+  frame(w); frame(w)
+  shown(line) = (e.buf.caret = e.buf.anchor = (line, 0); K.run_here!(e); only(filter(o -> o.last == line, K.outcomes(e))))
+  o = shown(8)
+  @test !o.failed && o.brief == repr(page)
+  # What the code loaded when Ladder started is there, since it's the same module
+  o = shown(9)
+  @test !o.failed && o.brief == "8"
+  @test K.workspace(e) === m
+  # A folder's own page has the name too, in a module like the one that Ladder runs it in
+  folder = mkpath(joinpath(mktempdir(), "notes"))
+  file = joinpath(folder, K.FOLDER_PAGE)
+  write(file, "```julia\nLadder.FOLDER_PAGE\n```\n")
+  e = K.build_editor(file)
+  w = Window(e, size=(900px, 700px))
+  frame(w); frame(w)
+  o = shown(2)
+  @test !o.failed && o.brief == repr(K.FOLDER_PAGE)
+  @test nameof(K.workspace(e)) == Symbol("⭒.ladder of notes")
+  # Any other page has no such name
+  other = joinpath(folder, "other.md")
+  write(other, "```julia\nLadder\n```\n")
+  e = K.build_editor(other)
+  w = Window(e, size=(900px, 700px))
+  frame(w); frame(w)
+  @test shown(2).failed
+end

@@ -415,3 +415,52 @@ end
   @test !isdefined(mine, :moons)
   @test K.source_module(e, "./moons.md") === mine && isdefined(mine, :moons)
 end
+
+@testset "a live block runs in the page's module, with the page's julia blocks" begin
+  live = joinpath(dir, "live.md")
+  write(live, """
+    # Live
+
+    ```ui
+    from_live = 41
+    ```
+
+    ```julia
+    from_live + 1
+    ```
+
+    ```ui
+    nothing_called_this
+    ```
+    """)
+  before = length(K.problems)
+  e3 = K.build_editor(live)
+  w3 = Window(e3, size=(800px, 600px))
+  frame(w3); frame(w3)
+  m = K.workspace(e3)
+  @test nameof(m) == Symbol("⭒", Base.Filesystem.contractuser(realpath(live)))
+  @test isdefined(m, :from_live)
+  value, _, failed = K.run_code(e3, "from_live + 1")
+  @test !failed && value == 42
+  # What goes wrong in a live block names the page's module, so it says which page
+  @test any(p -> occursin("nothing_called_this", p) && occursin(realpath(live), p), K.problems[before+1:end])
+  # A name that acts on a window acts on the front window when it shows the page, as for a click on a button
+  # that the page's code made, and on the window that runs code in the module while it runs
+  e4 = K.build_editor(live)
+  w4 = Window(e4, size=(800px, 600px))
+  frame(w4); frame(w4)
+  @test K.workspace(e4) === m
+  was = e3.theme, e4.theme
+  e3.theme, e4.theme = :paper, :night
+  theme = Base.invokelatest(getglobal, m, :page_theme)
+  K.FRONT_WINDOW[] = e4
+  @test Base.invokelatest(theme) == "Night"
+  @test K.run_code(e3, "page_theme()")[1] == "Paper"
+  K.FRONT_WINDOW[] = e3
+  @test Base.invokelatest(theme) == "Paper"
+  # With no window in front, it's the window whose code ran in the module last
+  K.FRONT_WINDOW[] = nothing
+  K.run_code(e4, "1")
+  @test Base.invokelatest(theme) == "Night"
+  e3.theme, e4.theme = was
+end

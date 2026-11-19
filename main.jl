@@ -3248,6 +3248,8 @@ end
 # A code block in the language `ui` holds Julia code. The page runs it once and
 # shows its value where the block is: a UI node from any module, or any other
 # value as text. The node is kept, so a node with state keeps it between frames.
+# The code runs in the page's module, as the page's `julia` blocks do, so the
+# two kinds of block share their names: see `page_module`.
 #
 # The code can use the names that pages use most with no line that loads them:
 # UI.jl's components, like Slider and STLViewer, the parts of a layout, like
@@ -3270,9 +3272,14 @@ share!(m, path) = begin
   end
 end
 
-"The module that the live blocks of every document run in"
+"""
+The names that the window gives the code of its pages, with no line that
+loads them, in a module of the window. No code runs in this module. Each
+page's module has its names (see `usual_module`), and a name that acts on a
+window, like `page_theme!`, acts on this window when it calls this module's.
+"""
 sandbox(e) = get!(e.nodes, :sandbox) do
-  m = Module(:Page)
+  m = Module(Symbol("⭒window"))
   # Kip by the module that's loaded here, not by name. A built app can't find a package by name.
   Core.eval(m, :(const Kip = $Kip))
   Core.eval(m, :(using .Kip))
@@ -3462,7 +3469,8 @@ evaluate(e, code::String; key=(:live, e.buf.path, code), inline=false) = begin
   try
     # Kip finds a path like "./widgets.jl" from the folder of the document, and so does a relative FSPath
     cd(isdir(docdir(e)) ? docdir(e) : pwd()) do
-      value = include_string(sandbox(e), code, isempty(path) ? joinpath(e.folder, "untitled.md") : path)
+      # The code runs in the page's module, with the page's other code
+      value = running_code(m -> include_string(m, code, isempty(path) ? joinpath(e.folder, "untitled.md") : path), e)
       node = inline ? present_inline(value) : present(value)
       node !== nothing ? node : inline ? (said(value), false) : note(repr("text/plain", value), colours.ink)
     end
@@ -16198,8 +16206,8 @@ end
 """
 The module of each Markdown page's `julia` code, by the real path of the
 page's file. There's one for each file, as Kip has one for each Julia file.
-The code that you run on the page, in any window, and the kinds of block that
-the page defines, are in the same module. See `page_module`.
+The page's live blocks, the code that you run on it in any window, and the
+kinds of block that it defines are all in the same module. See `page_module`.
 """
 const PAGE_MODULES = Dict{String,Module}()
 
@@ -16256,8 +16264,8 @@ Kip loads has, like `@use`, and more names by the kind of page:
   - The startup page and a folder's page have `Ladder`, as they have when
     Ladder runs their code. Each time Ladder runs one, the page has a new
     module: see `code_module!`.
-  - Any other page has each name that a live block has, and each unit of a
-    sheet: see `usual_module`.
+  - Any other page has the names that its window gives a page's code, like
+    UI.jl's components, and each unit of a sheet: see `usual_module`.
 
 The module's name is the page's path. So a page called `stars` can define a
 function called `stars`, and two pages with the same name have two modules.
@@ -16265,7 +16273,10 @@ function called `stars`, and two pages with the same name have two modules.
 page_module(e, path::AbstractString) = begin
   key = page_key(path)
   get!(PAGE_WINDOWS, key, e)
-  get!(() -> ladder_runs(key) ? code_module(key) : usual_module(e, page_module_name(key), key), PAGE_MODULES, key)
+  m = get!(() -> ladder_runs(key) ? code_module(key) : usual_module(e, page_module_name(key), key), PAGE_MODULES, key)
+  # A window that's newer than the module can give a page's code more names. It gives them once.
+  get!(() -> Base.invokelatest(isdefined, m, :Usual) && window_names!(m, e, key), e.nodes, (:page_names, key))
+  m
 end
 
 "The module of the page at `path`, as `page_module` gives it, with all of the page's code run in it, as a kind of block that the page defines needs"
@@ -23861,47 +23872,107 @@ made_workspace(e) = isempty(e.buf.path) ? get(e.nodes, :workspace, nothing) : ge
 
 """
 A new module called `name`, with what a Julia file that Kip loads has, like
-`@use`, and each name that a live block of the window `e` has, and each unit
-of a sheet that has no such name. They come in with `using`, so the module's
-code can give any of them a new meaning.
-
-With `key`, the path of a page, the module is for each window that shows the
-page. A name that acts on a window, like `page_theme!`, then acts on the
-window whose code ran in the module last: `PAGE_WINDOWS[key]`.
+`@use`, and the names that the window `e` gives a page's code: see
+`window_names!`. With `key`, the path of a page, the module is for each
+window that shows the page.
 """
 usual_module(e, name::Symbol, key=nothing) = begin
-  from = sandbox(e)
-  usual = Module(:Usual)
-  # The modules can be new, so their names are asked for as they are now
-  share(source, n) = begin
-    hidden = startswith(string(n), '#') || n in (nameof(source), :eval, :include, :Kip, :SheetUnits)
-    (hidden || isdefined(usual, n) || !Base.invokelatest(isdefined, source, n)) && return
-    value = Base.invokelatest(getglobal, source, n)
-    key !== nothing && acts_on_window(value) && (value = window_call(key, n))
-    Core.eval(usual, :(const $n = $value))
-    Core.eval(usual, Expr(:export, n))
-  end
-  foreach(n -> share(from, n), Base.invokelatest(names, from, all=true, imported=true))
-  units = Base.invokelatest(getglobal, from, :SheetUnits)
-  foreach(n -> share(units, n), Base.invokelatest(names, units))
   m = Module(name)
-  # Kip by the module that's loaded here, not by name, as the live blocks' module has it
+  # Kip by the module that's loaded here, not by name, as the window's module has it
   Core.eval(m, :(const Kip = $Kip))
   Core.eval(m, :(using .Kip))
   Core.eval(m, :(eval(x) = Core.eval($m, x)))
   Core.eval(m, :(include(file) = Base.include($m, file)))
-  Core.eval(m, :(const Usual = $usual))
+  # The window's names go in a module that has no others, not even Julia's own, so each one that Julia has too goes in
+  Core.eval(m, :(const Usual = $(Module(:Usual, false))))
   Core.eval(m, :(using .Usual))
+  window_names!(m, e, key)
+end
+
+"""
+Give the module `m` of a page's code each name that the window `e` gives a
+page's code (see `sandbox`), and each unit of a sheet, that `m` hasn't got
+yet. A window that's newer than the module can have more names, like ones
+that code from the startup page added since. It gives `m`.
+
+The names come in with `using`, so the page's code can give any of them a new
+meaning. Julia's own name would come before one that comes in that way, so a
+name of the window that Julia has too, like `Text`, is a constant of the
+module itself, as it is in the window's module. The page's code can still
+give it a new meaning, as a page that loads UI.jl's names does. A unit with a
+name that Julia has stays out. With `key`, a name that acts on a window acts
+on the one that `acting_window` gives.
+"""
+window_names!(m::Module, e, key=nothing) = begin
+  usual = Base.invokelatest(getglobal, m, :Usual)
+  from = sandbox(e)
+  # The modules can be new, so their names are asked for as they are now
+  share(source, n) = begin
+    hidden = startswith(string(n), '#') || n in (nameof(source), :eval, :include, :Kip, :SheetUnits)
+    (hidden || Base.invokelatest(isdefined, usual, n) || !Base.invokelatest(isdefined, source, n)) && return
+    julias = Base.isexported(Base, n)
+    source !== from && julias && return
+    value = Base.invokelatest(getglobal, source, n)
+    key !== nothing && acts_on_window(value) && (value = window_call(key, n, source))
+    Core.eval(usual, :(const $n = $value))
+    Core.eval(usual, Expr(:export, n))
+    julias && !(try Base.which(m, n) === m catch; false end) && Core.eval(m, :(const $n = $value))
+  end
+  foreach(n -> share(from, n), Base.invokelatest(names, from, all=true, imported=true))
+  units = Base.invokelatest(getglobal, from, :SheetUnits)
+  foreach(n -> share(units, n), Base.invokelatest(names, units))
   m
 end
 
 "True when `f` is a function that acts on one window, as `page_theme!` does: it holds the window"
 acts_on_window(f) = f isa Function && any(i -> isdefined(f, i) && getfield(f, i) isa Editor, 1:nfields(f))
 
-"A function that calls the function `name` of the live blocks of the window whose code ran last in the module of the page at `key`"
-window_call(key::String, name::Symbol) = (args...; kw...) -> begin
-  live = sandbox(PAGE_WINDOWS[key])
-  Base.invokelatest(Base.invokelatest(getglobal, live, name), args...; kw...)
+"""
+A function that calls the function `name` of the window that the names of
+the module of the page at `key` act on: see `acting_window`. When that window
+is older than the name and hasn't got it, it calls the one of `given`, the
+module of the window that gave the page's module the name.
+"""
+window_call(key::String, name::Symbol, given::Module) = (args...; kw...) -> begin
+  from = sandbox(acting_window(key))
+  Base.invokelatest(isdefined, from, name) || (from = given)
+  Base.invokelatest(Base.invokelatest(getglobal, from, name), args...; kw...)
+end
+
+"The window whose page's code runs now, or nothing between runs"
+const RUNNING_WINDOW = Ref{Any}(nothing)
+
+"The window in front, as macOS last said, or nothing"
+const FRONT_WINDOW = Ref{Any}(nothing)
+
+"""
+Run `f` with the module of the page's code, for code that the window `e` runs
+in it now. A name of the module that acts on a window acts on `e` while the
+code runs, and after that until another window runs code in the module.
+"""
+running_code(f, e) = begin
+  m = workspace(e)
+  isempty(e.buf.path) || (PAGE_WINDOWS[page_key(e.buf.path)] = e)
+  was = RUNNING_WINDOW[]
+  RUNNING_WINDOW[] = e
+  try
+    f(m)
+  finally
+    RUNNING_WINDOW[] = was
+  end
+end
+
+"""
+The window that a name of the module of the page at `key` acts on, like
+`page_theme!`: the window whose code runs in the module now, or else the
+front window when it shows the page, as it does when you click a button that
+the page's code made, or else the window whose code ran in the module last.
+"""
+acting_window(key::String) = begin
+  for w in (RUNNING_WINDOW[], FRONT_WINDOW[])
+    w !== nothing && !isempty(w.buf.path) && page_key(w.buf.path) == key && return w
+  end
+  PAGE_WINDOWS[key]
 end
 
 """
@@ -23913,16 +23984,13 @@ run_code(e, code::String) = begin
   path = isempty(e.buf.path) ? joinpath(e.folder, "untitled.md") : e.buf.path
   # Kip finds a path like "./widgets.jl" from the folder of the document, as it does for a live block
   dir = isdir(docdir(e)) ? docdir(e) : pwd()
-  m = workspace(e)
-  # The names of the module that act on a window act on this one now
-  isempty(e.buf.path) || (PAGE_WINDOWS[page_key(e.buf.path)] = e)
   # The code can load the drawing methods of a node, so the window draws one more frame soon after
   e.nodes[:ran] = true
   screen = stdout
   rd, wr = redirect_stdout()
   printed = @async read(rd, String)
   value, failed = try
-    (cd(() -> include_string(m, code, path), dir), false)
+    (cd(() -> running_code(m -> include_string(m, code, path), e), dir), false)
   catch err
     (err isa LoadError ? err.error : err, true)
   finally
@@ -27514,11 +27582,12 @@ left!(e) = begin
   e
 end
 
-"Have macOS tell `e` when its window `w` stops being the front window. A window that isn't on the screen is never the front one."
+"Have macOS tell `e` when its window `w` comes to the front, and when it stops being the front window. A window that isn't on the screen is never the front one."
 watch_front!(e, w) = begin
   isempty(w.glfw) && return w
   GLFW.SetWindowFocusCallback(w.glfw[1], (_, front) -> begin
-    front && return
+    # A name of a page's module that acts on a window acts on the front one, when it shows the page
+    front && (FRONT_WINDOW[] = e; return)
     try
       Base.invokelatest(left!, e)
     catch

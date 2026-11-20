@@ -226,6 +226,32 @@ end
   @test occursin("stray.txt", v.said)
 end
 
+@testset "a Trash that macOS doesn't let Ladder read shows a note, and the window goes on" begin
+  # Until the Mac's owner gives Ladder Full Disk Access, macOS refuses each read of
+  # the Trash. A folder that nobody may read acts the same, and so does a plain one.
+  locked = mkpath(joinpath(dir, "Locked Trash"))
+  plain = mkpath(joinpath(dir, "Locked"))
+  write(joinpath(locked, "plan.pdf"), "x")
+  write(joinpath(plain, "a.md"), "# A\n")
+  K.PLACE_KINDS[locked] = K.TrashDirectory
+  chmod(locked, 0o000); chmod(plain, 0o000)
+  try
+    K.open!(e, K.object(e, locked))
+    frames()
+    @test e.buf.path == locked
+    @test e.folder == locked && isempty(e.listed)
+    v = view(locked)
+    @test occursin("Full Disk Access", v.problem)
+    @test haskey(v.buttons, :access)
+    K.open!(e, K.object(e, plain))
+    frames()
+    @test e.folder == plain && isempty(e.listed)
+  finally
+    chmod(locked, 0o755); chmod(plain, 0o755)
+    delete!(K.PLACE_KINDS, locked)
+  end
+end
+
 @testset "a folder's own page makes it show as Downloads does" begin
   own = joinpath(dir, "Inbox")
   mkpath(own)

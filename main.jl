@@ -1297,7 +1297,9 @@ entries(e, d::AbstractDirectory) = begin
   trash = Sys.isapple() && string(d.path) == homedir() ? basename(Mac.trash()) : ""
   shows(n) = e.hidden ? n != ".DS_Store" : !ishidden(n) || n == trash
   found = FSObject[]
-  for name in sort!(readdir(string(d.path)), by=lowercase)
+  # macOS doesn't let Ladder read some folders, like the Trash without Full Disk Access. Those list nothing.
+  names = try readdir(string(d.path)) catch; String[] end
+  for name in sort!(names, by=lowercase)
     shows(name) || continue
     # A link that leads nowhere, a socket, and a file that left since the folder was read have no object to list
     o = try FS.child(d, name) catch; nothing end
@@ -29424,9 +29426,10 @@ Code that started before a page ran can't make a folder of a kind from a
 page, so to that code the folder is plain.
 """
 page_kind(path::AbstractString) = begin
-  st = stat(joinpath(path, FOLDER_PAGE))
+  # A folder that macOS doesn't let Ladder look in, like the Trash without Full Disk Access, has no page
+  st = try stat(joinpath(path, FOLDER_PAGE)) catch; nothing end
   kept = get(FOLDER_PAGE_KINDS, path, nothing)
-  if !isfile(st)
+  if st === nothing || !isfile(st)
     # The folder lost its page, so it's plain from now on
     kept === nothing || (delete!(FOLDER_PAGE_KINDS, path); FOLDER_PAGES_RAN[] += 1)
     return nothing
@@ -30134,9 +30137,13 @@ found_kind(path::AbstractString) = begin
   k === nothing || return k
   k = mac_kind(path)
   k === nothing || return k
-  # Obsidian keeps its settings for a folder of notes in a folder of this name
-  isdir(joinpath(path, ".obsidian")) && return NotesDirectory
-  Git.istop(path) && return GitDirectory
+  # Obsidian keeps its settings for a folder of notes in a folder of this name. A folder
+  # that macOS doesn't let Ladder look in is plain.
+  try
+    isdir(joinpath(path, ".obsidian")) && return NotesDirectory
+    Git.istop(path) && return GitDirectory
+  catch
+  end
   FS.Directory
 end
 

@@ -3620,7 +3620,11 @@ end
 # in a row. Click the last name to list what's in that folder under the
 # breadcrumb, and click an earlier name to go to that folder. A click on a
 # line of the list makes that file or folder the path, so its name joins the
-# breadcrumb. Under a path to a file is a preview of the file:
+# breadcrumb. The Open button at the right end of the names shows the file in
+# the window, or the folder in the sidebar, as a link to it does. A click with ⌘
+# held on a name or on a line of the list does the same for that file or folder.
+# A breadcrumb in a line of text has no Open button, but a click with ⌘ held works.
+# Under a path to a file is a preview of the file:
 #
 #   - a picture, of any kind that Skia or macOS reads
 #   - the model in an STL or 3MF file
@@ -3663,6 +3667,13 @@ end
   inline::Bool = false   # in a line of text, so its list floats under it and takes no room on the page
   folders::Bool = false  # only a folder can be the path, as when you choose where something is kept. The folder needn't be made yet.
   room::Union{Nothing,px} = nothing   # how wide it can be, when it has less room than the page is wide
+  button::Any = nothing  # its OpenButton, once it has shown
+end
+
+"The button at the right end of a breadcrumb's names that shows its file in the window, or its folder in the sidebar"
+@def mutable struct OpenButton <: SemanticUI
+  rect::NTuple{4,px} = (0px, 0px, 0px, 0px)   # where it was last drawn, to put its tooltip under it
+  quiet::Bool = false                         # clicked, so no tooltip until the mouse leaves it
 end
 
 "The list or the preview under a breadcrumb that's in a line of text. It floats over the page."
@@ -3716,11 +3727,16 @@ describe(l::Breadcrumb) = begin
   # The first name and as many of the last names as fit. An … stands for the names left out.
   # An open breadcrumb that isn't in a line of text is in a panel with what's under it, so it has less room
   panel = l.open && !l.inline
-  n = fitting(map(wide, names), something(l.room, editor(l).width) - (panel ? 2PANEL_PAD : 0px))
+  # A path to a file or a folder has a button at the right end of its names that shows it in the window.
+  # A breadcrumb in a line of text has no room for it: a click with ⌘ held does the same.
+  opens = !l.inline && !l.folders && ispath(l.at)
+  opens && l.button === nothing && (l.button = own!(l, OpenButton()))
+  n = fitting(map(wide, names), something(l.room, editor(l).width) - (panel ? 2PANEL_PAD : 0px) - (opens ? OPEN_W + 2CRUMB_GAP : 0px))
   kept = n < length(names) - 1 ? Any[names[1], Box(width(DOTS_W), label("…", color=colours.dim)), names[end-n+1:end]...] : names
   parts = Iterators.flatten(i == 1 ? (c,) : (arrow(), c) for (i, c) in enumerate(kept))
   l.inline && return Row(height(24px), child_gap=CRUMB_GAP, clip=true, parts...)
-  trail = Row(width(grow=grow), height(30px), child_gap=CRUMB_GAP, clip=true, parts...)
+  trail = Row(width(grow=grow), height(30px), child_gap=CRUMB_GAP, clip=true, parts...,
+              (opens ? (Box(width(grow=grow)), l.button) : ())...)
   panel || return Column(width(grow=grow), Alignment.Start, trail)
   # One background goes round the names and what's under them, to show that they're one thing
   Column(width(grow=grow), Alignment.Start, padding(PANEL_PAD), radius(8px), background(colours.block), child_gap=1px,
@@ -3790,9 +3806,49 @@ onkey(c::Crumb, ev::KeyPress{Keys.mouse_left}) = begin
   l = c.parent::Breadcrumb
   # In a line of text, a click with ⌥ held shows the code and leaves the path as it is
   l.inline && held(c, Keys.opt) && return nothing
+  held(c, Keys.cmd) && !l.folders && return show_crumb!(l, c.path, ev.window)
   c.path == l.at ? (l.open = !l.open) : (l.at = c.path; l.open = true)
   l.inline && list!(l, ev.window)
   nothing
+end
+
+const OPEN_W = 62px   # how wide the button is that shows a breadcrumb's file in the window
+
+describe(b::OpenButton) = begin
+  ishovered(b) || (b.quiet = false)
+  Box(width(OPEN_W), height(24px), radius(5px), Alignment.Center, justify=Alignment.Center, name="Button",
+      background(ishovered(b) ? colours.hover : clear),
+    Row(Alignment.Center, child_gap=5px,
+      Icon("box-arrow-up-right", size=11px, color=colours.dim),
+      label("Open", 12px, color=colours.dim)))
+end
+
+cursor(::OpenButton) = :hand
+draw(ctx, size, ui::ConcreteRect, b::OpenButton) = (b.rect = (ui.left, ui.top, ui.width, ui.height); nothing)
+
+onmouse(b::OpenButton, ev::MouseMove) = begin
+  b.quiet && return handled
+  tip = isdir((b.parent::Breadcrumb).at) ? "Show this folder in the sidebar" : "Show this file in the window"
+  show_tooltip!(ev.window, tip_label(tip), b.rect..., placement=:bottom, gap=6px)
+  handled
+end
+
+onkey(b::OpenButton, ev::KeyPress{Keys.mouse_left}) = begin
+  b.quiet = true
+  hide_tooltip!(ev.window)
+  l = b.parent::Breadcrumb
+  show_crumb!(l, l.at, ev.window)
+end
+
+"""
+Show the file at `path` in the window, or the folder at `path` in the sidebar,
+as a link to it does. The breadcrumb `l` holds the path. When it's in a line
+of text, its list closes first.
+"""
+show_crumb!(l::Breadcrumb, path, window) = begin
+  l.inline && l.open && (l.open = false; list!(l, window))
+  show_path!(editor(l), path)
+  handled
 end
 
 describe(r::FileEntry) = begin
@@ -4195,8 +4251,11 @@ end
 
 cursor(::FileEntry) = :hand
 
-onkey(r::FileEntry, ::KeyPress{Keys.mouse_left}) = begin
-  (r.parent::Breadcrumb).at = r.path
+onkey(r::FileEntry, ev::KeyPress{Keys.mouse_left}) = begin
+  l = r.parent::Breadcrumb
+  # A click with ⌘ held shows the file in the window, as a click on a link with ⌘ held does
+  held(r, Keys.cmd) && !l.folders && return show_crumb!(l, r.path, ev.window)
+  l.at = r.path
 end
 
 # --- a file that isn't Markdown, in the page -------------------------------------------------
@@ -18124,9 +18183,17 @@ follow!(e, url) = begin
   startswith(url, '^') && return follow_note!(e, url[2:end])
   occursin('#', url) && follow_heading!(e, url) && return e   # a heading of a page, like welcome.md#tables
   path = abspath(docdir(e), expanduser(unescaped(url)))
+  ispath(path) ? show_path!(e, path) : open_url(url)
+end
+
+"""
+Show the file at `path` in the window, or the folder at `path` in the sidebar,
+as a link to it does. A folder of a kind that shows in the page shows there.
+A folder that the Finder shows as one file, like an app, opens as that file does.
+"""
+show_path!(e, path) = begin
   isfile(path) && return open!(e, path)
-  # A folder that the Finder shows as one file, like an app, opens as that file does
-  (isdir(path) && !ispackage(path)) || return open_url(isdir(path) ? path : url)
+  (isdir(path) && !ispackage(path)) || return open_url(path)
   # A folder does what a click on it in the sidebar does. A folder of no kind shows in the sidebar, and a kind can show in the page too.
   path = String(rstrip(path, '/'))
   # The folder's own page says its kind, and loads the code of the kind. It runs now if it hasn't, and

@@ -337,7 +337,7 @@ end
 close(w)
 delete!(K.PLACE_KINDS, pics)
 M.reader[] = M.read_words
-M.words_file[] = joinpath(homedir(), "Library", "Caches", "Ladder", "picture-words.tsv")
+M.words_file[] = M.usual_words_file()
 M.loaded[] = ""
 K.TILE_PLACER[] = K.photo_place
 K.Maps.HELPER[] = K.Maps.run_program

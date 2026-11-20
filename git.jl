@@ -185,6 +185,10 @@ const LOGS = Dict{Tuple{String,Int},Asked{Vector{Commit}}}()
 "The git program. A test can name another."
 const program = Ref("git")
 
+# The app that's built keeps what these hold when it's made. A git that ran then never ends in the app,
+# so the app starts with nothing asked.
+__init__() = (empty!(STATES); empty!(LOGS); nothing)
+
 "Run git in the folder `root` and give what it printed, or nothing when it failed"
 ask(root, args) = begin
   try

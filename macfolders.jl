@@ -299,8 +299,10 @@ end
 
 # What reads a picture's words. A test puts a function of its own here.
 const reader = Ref{Function}(read_words)
-"The file that keeps the words of each picture. A test names one of its own."
-const words_file = Ref(joinpath(homedir(), "Library", "Caches", "Ladder", "picture-words.tsv"))
+"The file that keeps the words of each picture, in the home folder of whoever runs Ladder. A test names one of its own."
+const words_file = Ref("")
+"The file that keeps the words of each picture when nothing else is named"
+usual_words_file() = joinpath(homedir(), "Library", "Caches", "Ladder", "picture-words.tsv")
 
 const words_lock = ReentrantLock()
 "The words of each picture that was read, in small letters, by its path, with when its file had changed"
@@ -312,6 +314,15 @@ const version = Ref(0)
 const working = Ref(false)   # the thread that reads is running
 const loaded = Ref("")       # the file that `WORDS` was last read from
 const unsaved = Ref(0)       # how many pictures were read since the file was written
+
+# The app that's built keeps what these hold when it's made, on the Mac that made it. So the app starts
+# with nothing read, no thread at work, and the file in the home folder of whoever runs it.
+__init__() = begin
+  empty!(WORDS); empty!(waiting)
+  working[], loaded[], unsaved[] = false, "", 0
+  words_file[] = usual_words_file()
+  nothing
+end
 
 "Read the file of the words, once for each file that `words_file` names"
 load_words!() = begin

@@ -248,7 +248,7 @@
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Mermaid" => Diagrams
 @use "github.com/jkroso/UI.jl/Interface/media" silence! recording picture_size
 @use "github.com/jkroso/UI.jl/Interface/Semantic/ThreeMF" => ThreeMF
-@use "./pictures" picture natural thumbnail pdf_pages pdf_page pdf_size pdf_part pdf_lines
+@use "./pictures" picture natural thumbnail finder_icon pdf_pages pdf_page pdf_size pdf_part pdf_lines
 @use "./spelling" misspelt guesses learn!
 @use "./transcribe" Transcription check! finished phrases words_between
 @use "./html" html footnotes NOTE escape
@@ -286,6 +286,7 @@
 @use "./web/browser" => Browsers
 @use "./web/files" => Webfiles
 @use "./slides" => Slides
+@use "./desktop" => Desks
 @use "github.com/jkroso/UI.jl/Interface/draw" Bubble
 @use "github.com/jkroso/UI.jl/Interface/draw" popups sync_mouse!
 @use "github.com/jkroso/URI.jl/FSPath" FSPath
@@ -1212,10 +1213,31 @@ build_editor(path) = begin
     e.panel = true
     list_files!(e)
     isempty(e.files) || open!(e, e.files[1])
+    # A folder of a kind that shows in the page, like a desktop, shows there: see `show_opened!`
+    e.nodes[:opened_on] = (path, e.buf.path)
+    show_opened!(e)
   else
     open!(e, path)
   end
   e
+end
+
+"""
+Show the folder that the window was opened on in the page, when it's of a kind
+that shows there, as a desktop is. A folder whose own page says its kind is
+plain until that page has run, so the window asks again then. A window that
+shows another file by then keeps that file.
+"""
+show_opened!(e) = begin
+  on = get(e.nodes, :opened_on, nothing)
+  on === nothing && return
+  path, was = on
+  (e.folder == path && e.buf.path == was) || return (delete!(e.nodes, :opened_on); nothing)
+  d = directory(e)
+  (d isa AbstractDirectory && !(d isa FS.Directory) && page_view(e, d) !== nothing) || return
+  delete!(e.nodes, :opened_on)
+  open!(e, d)
+  nothing
 end
 
 # The sidebar's folder, and each folder and file in it, is an object of the
@@ -1228,7 +1250,8 @@ end
 # from the startup page gives a kind of folder its own way in the sidebar with
 # a method for the folder's type, as it does for a component of a page. The
 # page asks too: `page_view` gives what it shows for a file or a folder of a
-# kind, and `page_fills` says whether that's as wide as the window.
+# kind, `page_fills` says whether that's as wide as the window, and
+# `page_covers` says whether it covers the page's whole space, as a desktop does.
 #
 #     @def struct NotesDirectory <: Ladder.AbstractDirectory end
 #     Ladder.FS.kinds[fs"/Users/jake/Notes"] = NotesDirectory
@@ -1320,8 +1343,34 @@ page_object(e) = begin
   o
 end
 
+"""
+True when what `page_view` gives for `o` covers the page's whole space in the
+window: from the sidebar to the window's right edge, and from the top bar to
+the bottom. It has no space round it, and the page doesn't scroll. A desktop
+covers the page so, with its wallpaper.
+"""
+page_covers(e, o) = false
+
 "True when a kind of folder or of file shows the page its own way, as wide as the window has room for"
 own_page(e) = (o = page_object(e); o !== nothing && page_fills(e, o))
+
+"True when the folder or the file that shows covers the page's whole space with a view of its own"
+page_covered(e) = (o = page_object(e); o !== nothing && page_covers(e, o))
+
+"What covers the page's whole space, when the folder or the file that shows is of a kind that covers it, or nothing"
+page_cover(e) = begin
+  o = page_object(e)
+  (o !== nothing && page_covers(e, o)) || return nothing
+  own = with_theme(() -> page_view(e, o), component_theme(e.zoom))
+  own === nothing ? nothing : Box(width(grow=grow), height(grow=grow), Alignment.Start, own)
+end
+
+"How wide and how tall the page's space in the window is: beside the sidebar, and under the top bar"
+page_room(e) = begin
+  w, h = window_size(e)
+  side = lowered(e) === nothing ? panel_w(e) * opened(e) : 0px
+  (max(w - side, 1px), max(h - TOPBAR_H, 1px))
+end
 
 """
 Show the file at `path`. A file that's already open keeps its changes. The
@@ -5479,6 +5528,8 @@ cursor(::FileView) = :arrow
 "The one item of the page of a file that shows in a viewer"
 file_item(e, b::Buffer) = begin
   v = node!(() -> FileView(path=b.path), e, (:fileview, b.path))
+  # What covers the page's whole space isn't one of the page's items, so it has no height to learn
+  b === e.buf && page_covered(e) && return Item(1, 1, 0px, 1px, Live(v, 1px))
   # Lay it out once to learn how tall it is
   concrete = describe(Column(fixed(e.width), Alignment.Start, geometry(v)), (e.width, 9999px))
   high = concrete.height + 2LIVE_GAP
@@ -17577,6 +17628,9 @@ page_bottom(e) = numbered(e.buf) ? max(PAGE_BOTTOM, e.scroll.viewport - CODE_END
 
 describe(p::Page) = begin
   e = editor(p)
+  # A kind of folder or of file can cover the page's whole space, as a desktop does with its wallpaper
+  cover = page_cover(e)
+  cover === nothing || return cover
   # Long lines that don't wrap go on to the right edge of the window. The text moves left as the page
   # scrolls sideways. None of it shows past the edges of the page, and the numbers of the lines go over it.
   page = wraps(e) ?
@@ -20755,7 +20809,9 @@ describe(t::TopBar) = begin
       # so that it stays where it is, under the mouse, when a click on its slider changes the level. The
       # slider opens out to the left, and the parts before it move aside to make room.
       # The words have the room that the picture or the slider, the button after it and the edge leave them.
-      (readonly(b) ? (said_part(isempty(b.about) ? "Read only" : b.about * "  ·  Read only", side - 40px - (isempty(mode) ? 0px : MODE_W + grown)),
+      # What covers the page's whole space, like a desktop, is no file that's only shown, so the bar says nothing of it.
+      (page_covered(e) ? () :
+       readonly(b) ? (said_part(isempty(b.about) ? "Read only" : b.about * "  ·  Read only", side - 40px - (isempty(mode) ? 0px : MODE_W + grown)),
                       mode...,
                       # The app that the Mac uses for the file can change it, so a button opens the file there
                       button(e, :outside, "box-arrow-up-right")) :
@@ -22112,8 +22168,8 @@ menu_theme() = Theme(size=12px, surface=colours.float, text=colours.ink, dim=col
 
 """
 Show the menu of the file or the folder at `path`. `at` is where you
-right-clicked: its name in the `:sidebar` or in the `:title` of the top bar.
-Rename puts the text field there.
+right-clicked: its name in the `:sidebar` or in the `:title` of the top bar,
+or its icon on a `:desktop`. Rename puts the text field there.
 """
 file_menu!(e, w, path; at=:sidebar, items=file_menu(path)) = begin
   act(i) = file_act!(e, path, get(items, i, ""); at)
@@ -22249,7 +22305,8 @@ text when the field was in the top bar or was the name of a new page.
 stop_rename!(e) = begin
   delete!(e.nodes, :renaming)
   new = pop!(e.nodes, :renaming_new, nothing)
-  pop!(e.nodes, :renaming_at, :sidebar) == :title || new == :page ? focus(e) : focus(file_tree(e))
+  at = pop!(e.nodes, :renaming_at, :sidebar)
+  at == :desktop ? focus_desktop!(e) : at == :title || new == :page ? focus(e) : focus(file_tree(e))
 end
 
 "Return gives the file the name that's typed, and esc leaves it with the name it has"
@@ -22334,6 +22391,7 @@ move!(e, old, new) = begin
     item.firstchild.path = to(item.firstchild.path)
   end
   e.folder = to(e.folder)
+  desktop_moved!(e, old, new)   # an icon of a desktop keeps its place under its new name
   list_files!(e)
 end
 
@@ -22686,14 +22744,15 @@ Show `items` as a menu that Ladder draws, for a window that macOS has no menu
 for. They're the items that `system_menu` takes. An item that opens a menu
 shows that menu in this one's place.
 """
-drawn_menu!(w, items, act; off=(), path=(), at=(w.mouse[1], w.mouse[2])) = begin
+drawn_menu!(w, items, act; off=(), ticked=(), path=(), at=(w.mouse[1], w.mouse[2])) = begin
   isoff(i) = (path..., i) in off || (isempty(path) && i in off)
   shown = [(i, entry) for (i, entry) in enumerate(items) if entry != "-" && !isoff(i)]
-  names = [entry isa Pair ? first(entry) * "  ›" : entry for (_, entry) in shown]
+  # An item with a tick, like the way that a desktop is sorted now, has the tick before its name
+  names = [entry isa Pair ? first(entry) * "  ›" : (path..., i) in ticked ? "✓ " * entry : entry for (i, entry) in shown]
   show_menu!(w, names, at[1], at[2], 170px, theme=menu_theme(), item_height=28px, lift=3.0, onselect=k -> begin
     k in eachindex(shown) || return
     i, entry = shown[k]
-    entry isa Pair ? drawn_menu!(w, last(entry), act; off, path=(path..., i), at) : act(path..., i)
+    entry isa Pair ? drawn_menu!(w, last(entry), act; off, ticked, path=(path..., i), at) : act(path..., i)
   end)
 end
 
@@ -28019,12 +28078,15 @@ page_kind(path::AbstractString) = begin
   kept !== nothing && pages_callable() ? kept[2] : nothing
 end
 
-# A folder of no kind asks the page of each folder in it. A kind that code gave a folder by its path comes first.
-FS.kind(d::FS.Directory, path::FSPath) = begin
+"The kind of the folder at `path`, when the folder that it's in doesn't say: the kind that code gave it by its path, or else the kind that its own page gives it"
+folder_kind(path::FSPath) = begin
   k = get(FS.kinds, path, nothing)
   k === nothing || return k
   something(page_kind(string(path)), FS.Directory)
 end
+
+# A folder of no kind asks the page of each folder in it
+FS.kind(d::FS.Directory, path::FSPath) = folder_kind(path)
 
 """
 Run the page of each folder that waits. The kind that a page gives is its
@@ -28076,7 +28138,609 @@ folder_pages_tick!(e) = begin
   e.nodes[:folder_pages] = FOLDER_PAGES_RAN[]
   list_files!(e)
   delete!(e.nodes, :page_object)   # the folder that the page shows is found again too
+  show_opened!(e)   # a window that was opened on a folder shows it in the page, if its page said that its kind does
   nothing
+end
+
+# --- a folder that's a desktop -------------------------------------------------------------
+#
+# A folder can show in the page as a desktop does: its folders and files are
+# icons on a wallpaper. The Mac's own Desktop folder is the one it's made for,
+# and any folder becomes a desktop with a page of its own, the file `.ladder`
+# in it, that ends with this block:
+#
+#     ```julia
+#     Ladder.DesktopDirectory
+#     ```
+#
+# A desktop in Ladder starts as a copy of the Mac's desktop. It has the Mac's
+# wallpaper, and its icons have the size, the names and the order that the
+# Finder gives the icons of the Mac's desktop. desktop.jl reads those, and
+# works out where each icon goes: the first at the top right, the next ones
+# down, and each new column to the left.
+#
+# The Finder takes no place and no order for an icon from another app. So what
+# you change here is Ladder's own, and the Mac's desktop stays as it is. A
+# right-click on the wallpaper shows the ways to lay the icons out, as it does
+# on the Mac: Sort By, with None and Snap to Grid, Clean Up and Clean Up By.
+# With None or Snap to Grid, you drag an icon to where you want it, and Ladder
+# keeps its place, for each folder, beside the settings. A sorted desktop puts
+# a dragged icon back, as the Finder does. An icon that you drop on a folder
+# goes into that folder, however the desktop is sorted.
+#
+# A click chooses an icon, and ⌘ or ⇧ with a click chooses one more. A drag
+# from the wallpaper chooses the icons that its box touches. Two clicks open
+# an icon as a link to it would: a file shows in the page, and a folder in the
+# sidebar. A right-click on an icon shows the menu that the sidebar has for
+# it. While the desktop has the keyboard, the arrows go from icon to icon,
+# Return renames the one that's chosen, ⌘↓ opens what's chosen, ⌘⌫ moves it to
+# the Trash, and ⌘A chooses every icon.
+
+"A folder that the page shows as a desktop: an icon for each folder and file in it, on the Mac's wallpaper"
+@def struct DesktopDirectory <: AbstractDirectory end
+
+# A desktop holds what any folder holds, so each folder in it can have a page and a kind of its own
+FS.kind(::DesktopDirectory, path::FSPath) = folder_kind(path)
+
+push!(BLOCK_ICONS, "display", "folder-fill", "file-earmark-fill")
+entry_icon(::DesktopDirectory) = "display"
+
+"A click on a desktop in the sidebar shows it in the page, and the sidebar lists what it holds"
+open!(e, d::DesktopDirectory; record=true) = (open!(e, string(d.path); record); go_folder!(e, string(d.path)))
+
+page_view(e, d::DesktopDirectory) = desktop!(e, string(d.path))
+page_fills(e, ::DesktopDirectory) = true
+page_covers(e, ::DesktopDirectory) = true
+
+"What the page shows of a folder that's a desktop"
+@def mutable struct DesktopView <: SemanticUI
+  path::String = ""
+  names::Vector{String} = String[]                 # the folders and files that have an icon, as the folder was last read
+  read::Float64 = 0.0                              # when it was read
+  area::NTuple{2,Float64} = (0.0, 0.0)             # how wide and tall the desktop was in the last frame
+  spots::Dict{String,NTuple{2,Float64}} = Dict{String,NTuple{2,Float64}}()   # the middle of each icon, from the desktop's top left corner
+  chosen::Set{String} = Set{String}()              # the names of the icons that are chosen
+  press::Any = nothing                             # where the mouse button went down: (name, place, more, chosen before), with "" for the wallpaper
+  moved::NTuple{2,Float64} = (0.0, 0.0)            # how far the mouse has gone since
+  dragging::Bool = false                           # the chosen icons follow the mouse
+  over::String = ""                                # the folder that the dragged icons are over
+  clicked::Tuple{Float64,String} = (0.0, "")       # the last click on an icon: when, and its name
+end
+
+"What Ladder keeps of each desktop, by its folder's path. Each window that shows the folder has the same one."
+const DESKTOPS = Dict{String,Desks.Kept}()
+"How the Finder shows the Mac's desktop, and when it was asked. It's asked again after 3 seconds."
+const FINDER_LOOK = Ref((0.0, Desks.Look()))
+"The Mac's wallpaper: when macOS was asked for it, its file, and the key of its picture or nothing"
+const WALLPAPER = Ref{Tuple{Float64,String,Any}}((0.0, "", nothing))
+"The picture of each icon, by its path: when the file had changed, and the picture's key or nothing"
+const DESKTOP_PICTURES = Dict{String,Tuple{Float64,Any}}()
+"The lines of each name under an icon, by the name, the width and the size of the text"
+const DESKTOP_NAMES = Dict{Tuple{String,Float64,Float64},Vector{String}}()
+
+const DESKTOP_BLUE = RGBA(0.16, 0.42, 0.87, 1.0)     # behind the name of a chosen icon, as in the Finder
+const DESKTOP_SHADE = RGBA(0.0, 0.0, 0.0, 0.3)       # behind a chosen icon
+const DESKTOP_PLAIN = RGBA(0.23, 0.32, 0.45, 1.0)    # the desktop, when the Mac names no wallpaper
+const ICON_PAD = 4.0                                 # round an icon's picture, inside the box that's dark while it's chosen
+
+"The view of the desktop that's the folder at `path`"
+desktop!(e, path) = node!(() -> DesktopView(path=path), e, (:desktop, path))
+
+"The file that keeps the places of the icons of the desktop of the folder `dir`. It's in a folder beside the file of the settings."
+desktop_file(dir) = joinpath(dirname(settings_file()), "desktops", Desks.filename(dir))
+
+"What Ladder keeps of the desktop of the folder `dir`"
+desktop_kept(dir) = get!(() -> Desks.load(desktop_file(dir)), DESKTOPS, dir)
+
+"Write what Ladder keeps of the desktop of `dir` to its file, if this editor keeps settings, and draw each window again"
+desktop_keep!(e, dir) = begin
+  e.remember && Desks.save(desktop_file(dir), desktop_kept(dir))
+  foreach(o -> redraw_in!(o, 0), editors)
+  nothing
+end
+
+"How the icons of the desktop of `dir` look: as the Finder shows the Mac's desktop, sorted as you chose in Ladder"
+desktop_look(dir) = begin
+  at, _ = FINDER_LOOK[]
+  time() - at > 3 && (FINDER_LOOK[] = (time(), Desks.looker[]()))
+  Desks.look(desktop_kept(dir), FINDER_LOOK[][2])
+end
+
+"The key of the picture of the Mac's wallpaper, or nothing when macOS names none. macOS is asked again after 3 seconds, so a new wallpaper shows here too."
+wallpaper_key() = begin
+  at, file, key = WALLPAPER[]
+  time() - at > 3 || return key
+  file = Desks.papers[]()
+  # The picture is no bigger than a screen needs. A wallpaper can have many times the pixels.
+  key = isfile(file) ? something(thumbnail(file, 2560), picture(file), Some(nothing)) : nothing
+  WALLPAPER[] = (time(), file, key)
+  key
+end
+
+"The folders and files of the desktop `v` that have an icon: the ones that the Finder shows, and the hidden ones too when the sidebar shows those"
+desktop_names(e, v::DesktopView) = begin
+  found = try readdir(v.path) catch; String[] end
+  shows(n) = n != ".DS_Store" && (e.hidden || !Desks.facts(joinpath(v.path, n)).hidden)
+  String[n for n in found if shows(n) && ispath(joinpath(v.path, n))]
+end
+
+"Read the folder of the desktop `v` again, a second after it was last read. An icon whose file left is no longer chosen, and its place is forgotten."
+desktop_read!(e, v::DesktopView) = begin
+  time() - v.read < 1 && return
+  v.read = time()
+  v.names = desktop_names(e, v)
+  intersect!(v.chosen, v.names)
+  k = desktop_kept(v.path)
+  # A folder that can't be read for a moment, like a disk that left, keeps its places
+  isempty(v.names) || (Desks.prune!(k, v.names) && desktop_keep!(e, v.path))
+  nothing
+end
+
+"The picture of the icon of the folder or the file at `path`: the picture itself for a picture or a PDF file, or the Finder's icon. `budget` is how many more pictures this frame can make, so that a big folder doesn't hold the window up."
+desktop_picture(e, path, look, budget) = begin
+  at = isdir(path) ? 0.0 : mtime(path)
+  kept = get(DESKTOP_PICTURES, path, nothing)
+  kept !== nothing && kept[1] == at && return kept[2]
+  budget[] > 0 || (redraw_in!(e, 0); return kept === nothing ? nothing : kept[2])
+  budget[] -= 1
+  side = round(Int, 2look.icon)   # two pixels to the px, for a screen that has them
+  ext = lowercase(splitext(path)[2])
+  preview = look.previews && isfile(path) && (ext in PICTURES || ext in MAC_PICTURES || ext == ".pdf")
+  key = something(preview ? thumbnail(path, side) : nothing, finder_icon(path, side), Some(nothing))
+  length(DESKTOP_PICTURES) > 5000 && empty!(DESKTOP_PICTURES)
+  DESKTOP_PICTURES[path] = (at, key)
+  key
+end
+
+"The text of an icon's name"
+desktop_face(look) = Face(SANS, "Medium", px(look.text), RGBA(1, 1, 1, 1), false)
+
+"""
+The name under an icon, as one line or two that are no wider than `wide`. The
+first line ends where a word of the name ends, when one ends on it. A name
+that's too long for two lines loses the middle of its second line.
+"""
+name_lines(name, wide, look) = get!(DESKTOP_NAMES, (String(name), Float64(wide), look.text)) do
+  face = desktop_face(look)
+  fits(s) = num(measure(face, s)) <= wide
+  fits(name) && return [String(name)]
+  chars = collect(name)
+  # The second line has three characters or more, so that the end of a name isn't alone on it
+  n = min(something(findlast(k -> fits(String(chars[1:k])), eachindex(chars)), 1), max(1, length(chars) - 3))
+  # The first line ends after a space, a hyphen, a dot or a line under the words, when it has one that's not near its start
+  gap = findlast(k -> chars[k] in (' ', '-', '.', '_'), 1:n)
+  cut = gap !== nothing && gap > n ÷ 3 ? gap : n
+  head, rest = String(rstrip(String(chars[1:cut]))), collect(lstrip(String(chars[cut+1:end])))
+  fits(String(rest)) && return [head, String(rest)]
+  for keep in length(rest)-1:-1:2
+    s = String(rest[1:keep÷2]) * "…" * String(rest[end-(keep-keep÷2)+1:end])
+    fits(s) && return [head, s]
+  end
+  [head, "…"]
+end
+
+"How wide the lines of a name under an icon can be"
+name_room(look) = Desks.cell(look)[1] - 12
+
+# Where the dark copies of a name are, beside the white one, and how dark each is. Together they make a
+# soft dark edge round the letters, so that white words read on a wallpaper that's nearly white.
+const NAME_SHADOWS = ((0, 1, 0.8), (0, 2, 0.35), (1, 0, 0.5), (-1, 0, 0.5), (0, -1, 0.4), (1, 1, 0.4), (-1, 1, 0.4))
+
+"One line of an icon's name: white, with dark copies under it so that it reads on any wallpaper"
+name_line(s, look, chosen) = begin
+  words(color) = Text(s, size=px(look.text), family=SANS, subfamily="Medium", color=color, wrap=WrapMode.none)
+  white = Box(words(RGBA(1, 1, 1, 1)))
+  # The name of a chosen icon is on blue, and needs no dark edge
+  Box(height(px(look.text + 5)), padding(4px, 0px), radius(4px), (chosen ? (background(DESKTOP_BLUE),) : ())...,
+    chosen ? white : Stack([Box(offset_x=px(x), offset_y=px(y), words(RGBA(0, 0, 0, dark))) for (x, y, dark) in NAME_SHADOWS]..., white))
+end
+
+"The icon of the folder or the file called `name` on the desktop `v`, with its middle at `at`"
+desktop_icon(v::DesktopView, e, look, name, at, budget) = begin
+  path = joinpath(v.path, name)
+  side = look.icon
+  chosen = name in v.chosen
+  x, y = v.dragging && chosen ? at .+ v.moved : at
+  key = desktop_picture(e, path, look, budget)
+  face = if key === nothing
+    # The Finder's picture isn't made yet, or this isn't a Mac
+    Icon(isdir(path) ? "folder-fill" : "file-earmark-fill", size=px(0.8side), color=RGBA(1, 1, 1, 0.9))
+  else
+    shape = image_aspect(key)
+    Image(key, fixed(px(shape >= 1 ? side : side * shape)), height(px(shape >= 1 ? side / shape : side)))
+  end
+  box = side + 2ICON_PAD
+  picture = Box(fixed(px(box)), height(px(box)), radius(7px), (chosen || name == v.over ? (background(DESKTOP_SHADE),) : ())..., face)
+  wide = Desks.cell(look)[1] - 4
+  # While the file is renamed, a text field with its name is where the name was
+  words = renaming(e, :desktop) == path ?
+    Box(fixed(px(wide)), height(22px), padding(5px, 0px), radius(4px), Alignment.Start, background(colours.bg),
+        border(1px, :solid, colours.accent), renamer(e)) :
+    Column(Alignment.Center, [name_line(s, look, chosen) for s in name_lines(name, name_room(look), look)]...)
+  Column(fixed(px(wide)), Alignment.Center, child_gap=3px, offset_x=px(x - wide / 2), offset_y=px(y - side / 2 - ICON_PAD), picture, words)
+end
+
+"The wallpaper of a desktop that's `w` wide and `h` tall. The picture covers the desktop, and what doesn't fit is cut off at two sides."
+wallpaper_part(w, h) = begin
+  key = wallpaper_key()
+  key === nothing && return Box(fixed(px(w)), height(px(h)), background(DESKTOP_PLAIN))
+  shape = image_aspect(key)
+  wide, tall = w / h > shape ? (w, w / shape) : (h * shape, h)
+  Image(key, fixed(px(wide)), height(px(tall)), offset_x=px((w - wide) / 2), offset_y=px((h - tall) / 2))
+end
+
+"The box that a drag from the wallpaper draws, as its left, top, right and bottom, or nothing"
+desktop_band(v::DesktopView) = begin
+  p = v.press
+  (p === nothing || !isempty(p.name) || v.moved == (0.0, 0.0)) && return nothing
+  a, b = p.at, p.at .+ v.moved
+  (min(a[1], b[1]), min(a[2], b[2]), max(a[1], b[1]), max(a[2], b[2]))
+end
+
+describe(v::DesktopView) = begin
+  e = editor(v)
+  win = window_of(e)
+  w, h = num.(page_room(e))
+  v.area = (w, h)
+  look = desktop_look(v.path)
+  desktop_read!(e, v)
+  # The button can come up where the window doesn't hear it, like over a menu
+  v.press === nothing || win === nothing || Keys.mouse_left in win.keys || drop!(v)
+  v.spots = Desks.places(v.path, v.names, v.area, look, desktop_kept(v.path))
+  redraw_in!(e, 1)   # the folder is read again each second, so a new file gets its icon
+  budget = Ref(4)
+  # The icons that are dragged are drawn last, over the others
+  order = sort(v.names, by=n -> v.dragging && n in v.chosen)
+  band = desktop_band(v)
+  Stack(fixed(px(w)), height(px(h)), Alignment.Start, clip=true, name="Desktop",
+    wallpaper_part(w, h),
+    [desktop_icon(v, e, look, n, v.spots[n], budget) for n in order]...,
+    (band === nothing ? () : (Box(fixed(px(band[3] - band[1])), height(px(band[4] - band[2])), offset_x=px(band[1]), offset_y=px(band[2]),
+                                  background(RGBA(1, 1, 1, 0.16)), border(1px, :solid, RGBA(1, 1, 1, 0.65))),))...)
+end
+
+cursor(::DesktopView) = :arrow
+
+"Where `pos`, a place in the window, is on the desktop `v`, from the desktop's top left corner. It's nothing until the desktop has been drawn."
+desktop_at(v::DesktopView, pos) = begin
+  r = rect(v)
+  r === nothing ? nothing : (num(pos[1]) - num(r.left), num(pos[2]) - num(r.top))
+end
+
+"The name of the icon of the desktop `v` that's at `at`, on its picture or on its name, or nothing. `but` are names to pass over."
+icon_at(v::DesktopView, at; but=()) = begin
+  look = desktop_look(v.path)
+  half = look.icon / 2 + ICON_PAD
+  for name in reverse(v.names)
+    name in but && continue
+    s = get(v.spots, name, nothing)
+    s === nothing && continue
+    dx, dy = at[1] - s[1], at[2] - s[2]
+    abs(dx) <= half && abs(dy) <= half && return name
+    lines = length(name_lines(name, name_room(look), look))
+    abs(dx) <= name_room(look) / 2 && half < dy <= half + 3 + lines * (look.text + 5) && return name
+  end
+  nothing
+end
+
+"Give the keyboard to the desktop that the page shows, or to the text when it shows none"
+focus_desktop!(e) = (v = get(e.nodes, (:desktop, e.buf.path), nothing); v isa DesktopView ? focus(v) : focus(e))
+
+"Open the icon called `name` of the desktop `v`, as a link to it does: a file shows in the page, and a folder in the sidebar"
+desktop_open!(v::DesktopView, name) = (show_path!(editor(v), joinpath(v.path, name)); nothing)
+
+onkey(v::DesktopView, ev::KeyPress{Keys.mouse_left}) = begin
+  w = ev.window
+  at = desktop_at(v, w.mouse)
+  at === nothing && return handled
+  focus(v)   # a name that was being typed is given to its file, since the field lost the keyboard
+  name = icon_at(v, at)
+  more = Keys.cmd in w.keys || Keys.shft in w.keys
+  v.moved, v.dragging, v.over = (0.0, 0.0), false, ""
+  t, last = v.clicked
+  # A click with ⌘ or ⇧, or on the wallpaper, isn't the first of the two clicks that open an icon
+  v.clicked = name === nothing || more ? (0.0, "") : (time(), name)
+  if name === nothing
+    more || empty!(v.chosen)
+    v.press = (name="", at=at, more=more, before=copy(v.chosen))
+    return handled
+  end
+  if time() - t < 0.4 && last == name && !more
+    # Two clicks open the icon
+    v.clicked, v.press = (0.0, ""), nothing
+    desktop_open!(v, name)
+    return handled
+  end
+  if more
+    name in v.chosen ? delete!(v.chosen, name) : push!(v.chosen, name)
+  elseif !(name in v.chosen)
+    empty!(v.chosen)
+    push!(v.chosen, name)
+  end
+  v.press = (name=name, at=at, more=more, before=copy(v.chosen))
+  handled
+end
+
+# Each move of a drag comes here, since the button went down on the desktop
+onmouse(v::DesktopView, ev::MouseMove) = begin
+  p = v.press
+  (p === nothing || !(Keys.mouse_left in ev.window.keys)) && return nothing
+  at = desktop_at(v, ev.position)
+  at === nothing && return handled
+  v.moved = at .- p.at
+  if isempty(p.name)
+    # A drag from the wallpaper chooses the icons that its box touches, with the ones that ⌘ kept
+    l, t, r, b = something(desktop_band(v), (at..., at...))
+    half = desktop_look(v.path).icon / 2
+    touched = [n for (n, s) in v.spots if s[1] + half >= l && s[1] - half <= r && s[2] + half >= t && s[2] - half <= b]
+    v.chosen = union(p.more ? p.before : Set{String}(), touched)
+  elseif v.dragging || hypot(v.moved...) > 4
+    v.dragging = true
+    under = icon_at(v, at, but=v.chosen)
+    v.over = under !== nothing && isdir(joinpath(v.path, under)) ? under : ""
+  end
+  redraw_in!(v, 0)
+  handled
+end
+
+onkey(v::DesktopView, ::KeyRelease{Keys.mouse_left}) = (drop!(v); handled)
+
+"""
+End the drag of the desktop `v`. Icons that were dropped on a folder go into
+it. On a desktop that nothing sorts, the others stay where they were dropped,
+and Ladder keeps their places. A sorted desktop puts them back.
+"""
+drop!(v::DesktopView) = begin
+  p = v.press
+  p === nothing && return
+  e = editor(v)
+  v.press = nothing
+  if v.dragging
+    look = desktop_look(v.path)
+    if !isempty(v.over)
+      into = joinpath(v.path, v.over)
+      for name in collect(v.chosen)
+        # A folder keeps what it has under that name
+        ispath(joinpath(into, name)) || move!(e, joinpath(v.path, name), joinpath(into, name))
+      end
+      empty!(v.chosen)
+      v.read = 0.0
+    elseif look.order == :none
+      k = desktop_kept(v.path)
+      for name in v.chosen
+        haskey(v.spots, name) && Desks.place!(k, name, v.spots[name] .+ v.moved, v.area, look)
+      end
+      desktop_keep!(e, v.path)
+    end
+  elseif !isempty(p.name) && !p.more && length(v.chosen) > 1
+    # A click on one of several chosen icons, with no drag, chooses only that one
+    v.chosen = Set([p.name])
+  end
+  v.dragging, v.over, v.moved = false, "", (0.0, 0.0)
+  redraw_in!(v, 0)
+  nothing
+end
+
+"An icon of a desktop keeps its place when its file gets a new name, and stays chosen. Its place is forgotten when the file leaves the desktop's folder."
+desktop_moved!(e, old, new) = begin
+  dir, was, now = dirname(old), basename(old), basename(new)
+  stays = dirname(new) == dir
+  v = get(e.nodes, (:desktop, dir), nothing)
+  if v isa DesktopView
+    was in v.chosen && (delete!(v.chosen, was); stays && push!(v.chosen, now))
+    v.read = 0.0
+  end
+  k = get(DESKTOPS, dir, nothing)
+  k === nothing && return
+  place = pop!(k.places, was, nothing)
+  place === nothing && return
+  stays && (k.places[now] = place)
+  desktop_keep!(e, dir)
+end
+
+# --- the menus of a desktop ------------------------------------------------------------------
+
+"The ways to sort a desktop, as its menu names them, in the menu's order"
+const DESKTOP_SORTS = ["None", "Snap to Grid", "-", "Name", "Kind", "Date Modified", "Date Created", "Size"]
+"The order that each name of the menu stands for"
+const DESKTOP_ORDERS = Dict("Name" => :name, "Kind" => :kind, "Date Modified" => :changed, "Date Created" => :made, "Size" => :size)
+"The ways to clean a desktop up once, in the menu's order"
+const DESKTOP_CLEANS = ["Name", "Kind", "Date Modified", "Date Created", "Size"]
+"The menu of a desktop, for a right-click on its wallpaper"
+const DESKTOP_MENU = Any["New Folder", "New Page", "-", "Sort By" => DESKTOP_SORTS, "Clean Up", "Clean Up By" => DESKTOP_CLEANS, "-",
+                         "Change Wallpaper…", "Show in Finder"]
+
+"What the menu of the desktop of `dir` calls the way that it's sorted now"
+desktop_sort(dir) = begin
+  look = desktop_look(dir)
+  look.order == :none ? (look.snap ? "Snap to Grid" : "None") : only(n for (n, o) in DESKTOP_ORDERS if o == look.order)
+end
+
+"Keep each icon of the desktop `v` where it is now, so that it stays there when nothing sorts the desktop"
+desktop_freeze!(v::DesktopView) = begin
+  k = desktop_kept(v.path)
+  foreach(((name, at),) -> k.places[name] = Desks.share(at, v.area), v.spots)
+  k
+end
+
+"""
+Sort the desktop `v` as `choice` says, one of `DESKTOP_SORTS`. With None or
+Snap to Grid the icons stay where the last order put them, as they do in the
+Finder, and from then on each stays where you put it.
+"""
+desktop_sort!(v::DesktopView, choice) = begin
+  e = editor(v)
+  k = desktop_kept(v.path)
+  if choice in ("None", "Snap to Grid")
+    desktop_look(v.path).order == :none || desktop_freeze!(v)
+    k.order, k.snap = :none, choice == "Snap to Grid"
+  elseif haskey(DESKTOP_ORDERS, choice)
+    k.order = DESKTOP_ORDERS[choice]
+  end
+  desktop_keep!(e, v.path)
+end
+
+"""
+Put the icons of the desktop `v` in the cells of the grid, once. With an
+`order`, they fill the grid in that order. Without one, each goes to the cell
+that's nearest to it, or to the first free cell when another icon has that one.
+"""
+desktop_clean!(v::DesktopView, order=nothing) = begin
+  e = editor(v)
+  look = desktop_look(v.path)
+  look.order == :none || return
+  k = desktop_kept(v.path)
+  g = Desks.grid(v.area, look)
+  if order === nothing
+    taken = NTuple{2,Float64}[]
+    # The icons nearest the top right take their cells first
+    for name in sort(collect(keys(v.spots)), by=n -> (-v.spots[n][1], v.spots[n][2]))
+      at = Desks.nearest(g, v.spots[name])
+      any(t -> Desks.meets(g, at, t), taken) && (at = Desks.free(g, taken))
+      push!(taken, at)
+      k.places[name] = Desks.share(at, v.area)
+    end
+  else
+    for (i, name) in enumerate(Desks.sorted(v.path, v.names, order))
+      k.places[name] = Desks.share(Desks.spot(g, i), v.area)
+    end
+  end
+  desktop_keep!(e, v.path)
+end
+
+"Make a new folder or a new page on the desktop `v`, with its icon at `at` when nothing sorts the desktop. Its name is a text field under the icon, to type the name it should have."
+desktop_new!(v::DesktopView, kind::Symbol, at) = begin
+  e = editor(v)
+  path = kind == :folder ? free_path(e, v.path, "Untitled") : free_path(e, v.path, "Untitled", ".md")
+  try kind == :folder ? mkdir(path) : touch(path) catch; return end   # the disk said no
+  look = desktop_look(v.path)
+  if look.order == :none
+    Desks.place!(desktop_kept(v.path), basename(path), at, v.area, look)
+    desktop_keep!(e, v.path)
+  end
+  v.read = 0.0
+  v.chosen = Set([basename(path)])
+  list_files!(e)
+  rename!(e, path, at=:desktop)
+  e.nodes[:renaming_new] = kind
+  nothing
+end
+
+"The page of the Mac's settings that has the wallpaper"
+const WALLPAPER_SETTINGS = "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension"
+
+"Show the menu of the desktop `v`, for a right-click on its wallpaper at `at`"
+desktop_menu!(v::DesktopView, w, at) = begin
+  sorts = findfirst(x -> x isa Pair && first(x) == "Sort By", DESKTOP_MENU)
+  cleans = findfirst(x -> x isa Pair && first(x) == "Clean Up By", DESKTOP_MENU)
+  act(i, j=0) = begin
+    name = DESKTOP_MENU[i] isa Pair ? first(DESKTOP_MENU[i]) : DESKTOP_MENU[i]
+    name == "New Folder" ? desktop_new!(v, :folder, at) :
+    name == "New Page" ? desktop_new!(v, :page, at) :
+    name == "Sort By" ? desktop_sort!(v, get(DESKTOP_SORTS, j, "")) :
+    name == "Clean Up" ? desktop_clean!(v) :
+    name == "Clean Up By" ? desktop_clean!(v, get(DESKTOP_ORDERS, get(DESKTOP_CLEANS, j, ""), :name)) :
+    name == "Change Wallpaper…" ? (open_url(WALLPAPER_SETTINGS); nothing) :
+    name == "Show in Finder" ? show_in_finder(v.path) : nothing
+  end
+  # The way that the desktop is sorted now has a tick. A sorted desktop has nothing to clean up, as in the Finder.
+  ticked = [(sorts, findfirst(==(desktop_sort(v.path)), DESKTOP_SORTS))]
+  off = desktop_look(v.path).order == :none ? Int[] : [cleans - 1, cleans]
+  system_menu(w, DESKTOP_MENU, act; off, ticked) || drawn_menu!(w, DESKTOP_MENU, act; off, ticked)
+  nothing
+end
+
+"""
+Show the menu of the icon called `name` of the desktop `v`: the menu that the
+sidebar has for the folder or the file, under an item that opens it. When more
+than one icon is chosen, the menu is for them all.
+"""
+icon_menu!(v::DesktopView, w, name) = begin
+  e = editor(v)
+  path = joinpath(v.path, name)
+  names = sort!(collect(v.chosen))
+  items = length(names) > 1 ? ["Open", "-", "Move to Trash"] : ["Open", "-", file_menu(path)...]
+  act(i) = begin
+    item = get(items, i, "")
+    item == "Open" ? foreach(n -> desktop_open!(v, n), names) :
+    item == "Move to Trash" ? desktop_trash!(v, names) : file_act!(e, path, item, at=:desktop)
+    nothing
+  end
+  system_menu(w, items, act) || drawn_menu!(w, items, act)
+  nothing
+end
+
+"Move the icons of the desktop `v` that are called `names` to the Trash, and keep the keyboard on the desktop"
+desktop_trash!(v::DesktopView, names) = begin
+  e = editor(v)
+  foreach(n -> trash!(e, joinpath(v.path, n)), names)
+  v.read = 0.0
+  e.buf.path == v.path && focus(v)
+  nothing
+end
+
+onkey(v::DesktopView, ev::KeyPress{Keys.mouse_right}) = begin
+  w = ev.window
+  at = desktop_at(v, w.mouse)
+  at === nothing && return handled
+  focus(v)
+  name = icon_at(v, at)
+  if name === nothing
+    empty!(v.chosen)
+    desktop_menu!(v, w, at)
+  else
+    name in v.chosen || (v.chosen = Set([name]))
+    icon_menu!(v, w, name)
+  end
+  handled
+end
+
+"""
+Choose the icon of the desktop `v` that's nearest to the chosen one in the
+direction (`dx`, `dy`), as an arrow key does. With no icon chosen, it's the
+first one of the desktop's order.
+"""
+desktop_step!(v::DesktopView, dx, dy) = begin
+  isempty(v.names) && return
+  from = length(v.chosen) == 1 ? get(v.spots, only(v.chosen), nothing) : nothing
+  if from === nothing
+    look = desktop_look(v.path)
+    v.chosen = Set([first(look.order == :none ? sort(v.names, by=n -> (-v.spots[n][1], v.spots[n][2])) : Desks.sorted(v.path, v.names, look.order))])
+    return
+  end
+  best, least = nothing, Inf
+  for (name, at) in v.spots
+    along = (at[1] - from[1]) * dx + (at[2] - from[2]) * dy
+    across = abs((at[1] - from[1]) * dy) + abs((at[2] - from[2]) * dx)
+    along > 1 || continue
+    # An icon straight ahead comes before a nearer one that's off to the side
+    far = along + 3across
+    far < least && ((best, least) = (name, far))
+  end
+  best === nothing || (v.chosen = Set([best]))
+  nothing
+end
+
+onkey(v::DesktopView, ev::KeyPress{K}) where K = begin
+  w = ev.window
+  e = editor(v)
+  cmd = Keys.cmd in w.keys
+  names = sort!(collect(v.chosen))
+  if K == Keys.down && cmd
+    foreach(n -> desktop_open!(v, n), names)
+  elseif K in (Keys.backspace, Keys.delete) && cmd
+    desktop_trash!(v, names)
+  elseif K == Keys.a && cmd
+    v.chosen = Set(v.names)
+  elseif K == Keys.enter && !cmd && length(names) == 1
+    rename!(e, joinpath(v.path, only(names)), at=:desktop)
+  elseif !cmd && K in (Keys.left, Keys.right, Keys.up, Keys.down)
+    desktop_step!(v, (K == Keys.right) - (K == Keys.left), (K == Keys.down) - (K == Keys.up))
+  else
+    return nothing   # any other key is the window's, like the one that goes back
+  end
+  redraw_in!(v, 0)
+  handled
 end
 
 # --- the startup page ------------------------------------------------------------------

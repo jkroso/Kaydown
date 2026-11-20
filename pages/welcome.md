@@ -633,6 +633,16 @@ A Markdown page or a file of code that your Mac marks as read-only shows as it a
 
 Right-click a file or a folder in the list to rename it, duplicate it, copy its path, show it in the Finder or move it to the Trash. A folder goes to the Trash with everything in it. A folder's menu also makes a new page or a new folder in it, and opens it in a new window. A file's menu also opens it in a new window or in the Mac's app for it. Its Copy Link item copies a wiki link to the file, like `[[examples]]`. Right-click under the list to make a new page or folder in the folder that the list shows. Right-click the file's name at the top of the window for the file's menu.
 
+A folder can show as a desktop: an icon for each folder and file in it, on your Mac's wallpaper. The icons have the size and the order that the Finder gives the icons of your Mac's desktop. To make a folder a desktop, put a file called `.ladder` in it that ends with this block, and click the folder in the list.
+
+````markdown
+```julia
+Ladder.DesktopDirectory
+```
+````
+
+Click an icon to choose it, and click it twice to open it. Hold ⌘ to choose more than one, or drag from the wallpaper to choose the icons in a box. Right-click the wallpaper to choose how the icons are laid out, as you do on the Mac. Sort By keeps them in an order. With None or Snap to Grid, you drag each icon to where you want it, and Ladder keeps its place. Clean Up puts the icons back in the grid. Drop an icon on a folder to move it into that folder. Right-click an icon for the menu of its file. Ladder's layout is its own: macOS doesn't let another app move the icons of the Mac's desktop, so those stay where they are.
+
 Right-click the page to cut, copy or paste. The menu's Insert item adds a new block where you clicked: a heading, a list, a to-do item, a table, a sheet, a spreadsheet, a diagram, a takeoff, a schedule, a chart, a board, a calendar, a sketch, a live block and more.
 
 A file can start with front matter: lines like `title: Notes` between two lines of `---`. Ladder shows it as a block of its own, and leaves it out of the word count.

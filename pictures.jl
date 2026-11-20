@@ -112,6 +112,23 @@ thumbnail(path::AbstractString, side::Integer=1000) = keep(stamp("thumbnail", pa
         C_NULL, fileurl(path), (Float64(side), Float64(side)), C_NULL)
 end
 
+"""
+The icon that the Finder shows for the folder or the file at `path`, `side`
+pixels wide and tall: a folder's own icon, or the icon of the app that opens
+the file. It's kept by the path, since an icon seldom changes.
+"""
+finder_icon(path::AbstractString, side::Integer=128) = keep(join(("icon", abspath(path), side), ':')) do
+  Base.Libc.Libdl.dlopen(AppKit)
+  image = msg(msg(cls("NSWorkspace"), "sharedWorkspace"), "iconForFile:", nsstring(abspath(path)))
+  image == C_NULL && return C_NULL
+  room = Ref{Rect}((0.0, 0.0, Float64(side), Float64(side)))
+  made = ccall((:objc_msgSend, libobjc), Object, (Object, Object, Ptr{Cvoid}, Object, Object), image,
+               sel("CGImageForProposedRect:context:hints:"), room, C_NULL, C_NULL)
+  # The picture belongs to the NSImage, which goes when this is done, so take a share in it
+  made == C_NULL || ccall((:CFRetain, CoreFoundation), Object, (Object,), made)
+  made
+end
+
 "How many pages the PDF file at `path` has, or 0 if it isn't a PDF file that macOS can read"
 pdf_pages(path::AbstractString) = Sys.isapple() ? with_pool() do
   pdf = ccall((:CGPDFDocumentCreateWithURL, CoreGraphics), Object, (Object,), fileurl(path))

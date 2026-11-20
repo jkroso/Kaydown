@@ -38,7 +38,7 @@ building && start_packages()
 
 # Icons are read from UI.jl's Icons folder the first time they're drawn. Reading
 # them now keeps them in the app, so it doesn't need that folder.
-foreach(load_icon, ["check", "chevron-down", "chevron-right", "chevron-up", "copy", "file-earmark", "file-earmark-text", "folder", "eye", "bell-fill", "bell",
+foreach(load_icon, ["arrow-return-left", "check", "chevron-down", "chevron-right", "chevron-up", "copy", "file-earmark", "file-earmark-text", "folder", "eye", "bell-fill", "bell",
                     "ladder", "layout-sidebar", "pause-fill", "play-fill", "record-fill", "search", "stop-fill", "text-center", "text-left",
                     "text-paragraph", "text-right", "x-lg", SIDEBAR_ICONS..., FILE_ICONS..., PLAN_ICONS..., SCHEDULE_ICONS..., BLOCK_ICONS...])
 
@@ -291,6 +291,9 @@ warm_up() = begin
   press(Keys.backslash, Keys.cmd)
   frame(w)
   press(Keys.o, Keys.cmd); press(Keys.n); press(Keys.escape)
+  # The command palette: its list, then the chip of its first command, Autosave, which is a switch. Space turns the switch
+  # and runs nothing. Esc empties the bar, and Esc again closes it, so the page and the settings are as they were.
+  press(Keys.p, Keys.cmd, Keys.shft); press(Keys.down); press(Keys.up); press(Keys.enter); press(Keys.space); press(Keys.escape); press(Keys.escape)
   # The page drawn for paper. A window that isn't on the screen shows no print panel.
   press(Keys.p, Keys.cmd)
   # The settings window. A setting that changes there changes in this window too, and ⌘W closes the settings window.

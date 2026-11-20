@@ -49,6 +49,7 @@ To play a video or a sound faster or slower, move the mouse over its player, and
 | Keys | What they do |
 |------|--------------|
 | ⌘O | Finds a file in this folder by name |
+| ⌘⇧P | Opens the command palette. It lists the commands that have a use where you are. Type a command's name and press Return to run it. |
 | ⌘⌥← and ⌘⌥→ | Go back to the file that showed before, and forward again |
 | ⌘F | Finds text in the page. Return goes to the next place that has it. |
 | ⌘E | Shows the markup of the part of the page that the caret is in, or hides it again |

@@ -172,6 +172,37 @@ Tins = ceil(litres / 4litre)
 
 Click a cell and type. Tab goes to the next cell and Return starts a row. To see the sheet as lines of code, hold ⌥ and click it.
 
+A row that is one number, like the wall's length, changes with a drag. Put the mouse on the `12m` at the right end of its row, and drag to the right or to the left. The rows under it follow while the mouse moves. Hold ⇧ to make each step ten times as big.
+
+A sheet can work a row out backwards. Start the row's expression with a `?`, and write the answer that you want after a second `=` in a row under it. This sheet finds the wall that 6 litres of paint cover. The value after the `?` is where the sheet starts to look, and it gives the row its unit. A line in the accent colour goes round the value that the sheet found.
+
+```sheet
+Wall length = ? 12m
+Wall height = 2.4m
+Area = wall length * wall height
+Litres = area * 2 / (16m^2 / litre) = 6litre
+```
+
+A row can be every value from one to another: write `to` between the two. Each row under it shows what it comes to at the two ends. A chart of the sheet draws the rows that change, with a point for each value on the way. Move the mouse over a point of the chart, and the sheet shows that value and what the other rows come to there.
+
+```sheet
+Side of a tile = 0.2m to 0.6m
+Floor area = 36m^2
+Tiles = floor area / (side of a tile * side of a tile)
+```
+
+```chart
+kind: lines
+```
+
+A row can use the names of other blocks of the page, the way that it uses the name of a row above it:
+
+- a row of a sheet that's over this one in the page
+- a measure of a takeoff, like `kitchen floor tiles`, which is its amount in metres or square metres
+- a task of a time log, like `framing`, which is the hours that the log has for it
+
+So `Tiles = kitchen floor tiles / 0.36m^2` follows the outline that's drawn on the plan. A sum in a line of text can use the rows of every sheet of the page, with a `_` for each space: \!`wall_length` shows !`wall_length`. The page [components.md](components.md#sums-in-a-line-of-text) says more of such sums.
+
 ## Spreadsheets
 
 A code block in the language `spreadsheet` is a grid of cells. Each column has a letter and each row has a number, so `B2` is the second cell of the second row. A cell that starts with `=` is a formula: a Julia expression that can use the other cells by name. `D2:D4` is every cell from D2 to D4.
@@ -402,6 +433,12 @@ Click the box of an item like this one to tick it. | Doing
 
 The block's lines hold the column of each card. A line like `columns: Later, This week, Done` at their top names other columns.
 
+## One thing in many blocks
+
+One thing can show in many blocks of a page. A to-do item is a line of the text, a card of a board, a bar of a schedule, a thing of a calendar's day and the rows of a time log. Move the mouse over it in one of them, and each of the others marks it. Try it with the card of the board above: the item's line of the text gets a soft box behind it.
+
+A row of a table is marked with its bar of a chart in the same way. So is a contact with its pin on a map. Blocks know a thing by its name, so a task of a time log that's called what a to-do item is called is that item.
+
 ## Galleries
 
 A code block in the language `gallery` shows the pictures of a folder as a grid of small squares. This one shows the folder `photos` beside this page. Click a picture, and it fills the window. Press ← and → there to see the others, or click the arrows in the bar under it. The bar says which picture shows, like “2 of 6”. Press Esc to come back. The button at the top right of the gallery changes the size of the squares.
@@ -425,6 +462,24 @@ month: 2026-11
 ```
 
 The arrows go to the month before and the month after, and **Today** goes back to the month of today. Drag an event or a to-do item to another day, and Ladder writes the new day into its line. Click an empty part of a day twice to add an event: type its words and press Return. Click a thing twice to go to its line.
+
+A calendar shows the hours of the page's time logs too. Each day of a log has the tasks of that day, with the hours of each, after a small clock.
+
+## The day of a page
+
+A page shows itself as it stands on one day. That day is today, until the page has a code block in the language `day`. The block is a line of days with a slider on it. Drag the slider, click a day, or click the line and press ← and →.
+
+```day
+```
+
+Each block that would ask for today asks for the page's day:
+
+- A calendar shows the month of that day, with a circle round the day.
+- A time log adds up the hours to that day, when the day is past. A chart of the log draws those hours.
+- A schedule draws its line of today on that day, and shows the tasks that the plan has finished by then as done.
+- A board of a page with a schedule puts each card where the plan has its task on that day: to do, doing or done. Its cards stay where they are until the page shows today again.
+
+The boxes of the to-do items in the text stay as they are: only the plan says what's done on another day. **Today** takes the day out of the block, so the page follows the real day again. The page [schedule.md](schedule.md) has a slider to try with a schedule and a board.
 
 ## Columns
 
@@ -514,6 +569,10 @@ ABN: 12 345 678 901
 
 A block can hold several contacts, with an empty line between one and the next. `kind: company` says that a contact is a company. While the mouse is over a card, the + at its top right adds a detail, and the button beside it adds the contact to the Contacts app. A button under the last card adds a contact. Drag a contact from the Contacts app onto the page, or drop a vCard file, to make a block of contacts.
 
+Under its details, a card lists the to-do items that name the contact and aren't ticked yet. It looks in this page, and in every page of this page's folder and of the folders in it. A person is named by the whole name, or by the first name alone. Click an item to go to it in its own page.
+
+- [ ] Ask Mei when the tiles come
+
 ## Maps
 
 A code block in the language `map` shows the map of a place, with a pin on the place. Write an address in it, or a latitude and a longitude like `-33.8593, 151.2132`.
@@ -525,6 +584,8 @@ A code block in the language `map` shows the map of a place, with a pin on the p
 The − and the + on the map show more and less of what's round the place. Drag the map to move it. Click the map to put the pin where you clicked: it moves at once. ⌘Z takes back a drag or a click. **Open in Maps** opens the Maps app at the place. The address under the map is the one that Apple has for the place. Check that the pin is where you mean.
 
 The block keeps what you do as lines. A drag writes the middle of the map, like `centre: -33.86120, 151.21010`. A click writes the latitude and the longitude of the pin as the place. After a drag, a third button beside the − puts the place back in the middle.
+
+A map shows the other places of its page too. The address of each contact of the page has a pin in blue, and so has an `address` line of the page's front matter. Move the mouse over a blue pin to see whose place it is, and click it to go to its line. A map with no place of its own shows all of those places, as close as shows them all.
 
 Apple's maps make the picture, so the first one needs the network. Ladder keeps it on your Mac, and the map shows at once the next time. To see the block's lines, hold ⌥ and click the map.
 
@@ -567,6 +628,8 @@ rate: 85
 ```
 
 Under the rows are the total, and the hours of each task. The line `rate: 85` is the dollars for each hour, so the totals show money too. A line like `round: 15` rounds each stretch to the nearest 15 minutes when the hours are added up. Click a time or a task in a row to change it there, and press Return. A `chart` block under a log draws the hours of each task. To see the block's lines, hold ⌥ and click the log.
+
+On a page with a time log, each to-do item has a clock. Move the mouse over a to-do item, and a small button shows at the end of its line, with the hours that the log has for the item. Click it to start the log's clock on the item, and click it again to stop the clock. A tick in the item's box stops the clock too. A schedule of the page shows the hours of each task beside the task's name.
 
 ## Recordings
 

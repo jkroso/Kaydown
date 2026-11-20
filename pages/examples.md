@@ -42,6 +42,10 @@ The block at the top of this page is front matter: lines at the very top of a fi
 ## Blocks that work things out
 
 - [A sheet: rows with names, sums and units](welcome.md#sheets)
+- [A number that a drag changes, in a sheet and in a line of text](welcome.md#sheets)
+- [A sheet that works a row out backwards, from the answer that you want](welcome.md#sheets)
+- [A row over a range of values, and a chart of it](welcome.md#sheets)
+- [A row that uses a measure of a takeoff, a task of a time log or a row of another sheet](welcome.md#sheets)
 - [A spreadsheet: a grid of cells with formulas](welcome.md#spreadsheets)
 - [A chart of a table's numbers](welcome.md#charts)
 - [Sums in a line of text](components.md#sums-in-a-line-of-text)
@@ -65,7 +69,12 @@ The block at the top of this page is front matter: lines at the very top of a fi
 - [A board of a page's to-do items](welcome.md#boards)
 - [A gallery of a folder's pictures](welcome.md#galleries)
 - [A calendar: a month with a page's tasks, its to-do items that have a day, and events](welcome.md#calendars)
+- [The day of a page: a slider that shows the page as it stands on another day](welcome.md#the-day-of-a-page)
+- [One thing in many blocks: the mouse on a task in one block marks it in the others](welcome.md#one-thing-in-many-blocks)
 - [A log of the hours on each task, with a clock to start and stop](welcome.md#time-logs)
+- [A clock on a to-do item, which starts and stops the log](welcome.md#time-logs)
+- [A contact's card with the to-do items that name the contact](welcome.md#contacts)
+- [A map with a pin for each contact of the page](welcome.md#maps)
 - [A list of what's found in every page of a folder](welcome.md#find)
 
 ## Work with an agent

@@ -196,8 +196,10 @@ const SLICES = 6
 What the chart `c` shows of a table. `rows` holds the text of each cell of
 each row. With `headed`, the first row has the names of the columns. Without
 it, the first row is the names when none of its cells but the first is a number.
+With `by_first`, the first column names each row, even when it holds numbers,
+unless the chart names another: the rows of a sheet over a range are like that.
 """
-data(c::Chart, rows::Vector{Vector{String}}; headed::Bool=false) = begin
+data(c::Chart, rows::Vector{Vector{String}}; headed::Bool=false, by_first::Bool=false) = begin
   rows = filter(row -> any(!isempty, row), rows)
   isempty(rows) && return nothing_to_draw("This table has no rows yet.")
   wide = maximum(length, rows)
@@ -209,7 +211,7 @@ data(c::Chart, rows::Vector{Vector{String}}; headed::Bool=false) = begin
   column(k) = [cell(row, k) for row in body]
   # A column of numbers has a number in most of its cells that hold something
   numeric(k) = (full = filter(!isempty, column(k)); !isempty(full) && 2count(isnumber, full) > length(full))
-  by = isempty(c.by) ? findfirst(k -> !numeric(k), 1:wide) : findfirst(k -> same(head[k], c.by), 1:wide)
+  by = !isempty(c.by) ? findfirst(k -> same(head[k], c.by), 1:wide) : by_first ? 1 : findfirst(k -> !numeric(k), 1:wide)
   !isempty(c.by) && by === nothing && return nothing_to_draw("The table has no column called “$(c.by)”.")
   shown = Int[]
   for name in c.show

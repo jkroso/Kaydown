@@ -19,6 +19,7 @@
 # - a to-do item of the page that has a day in its text, like
 #   `- [ ] Order the tiles 2026-11-25`
 # - an event of the calendar's own
+# - the hours that a time log of the page has for each task on a day
 #
 # A to-do item with a day in its text shows on that day only, and not on the
 # days that the schedule gives it.
@@ -49,12 +50,12 @@ Calendar() = Calendar(nothing, Event[])
 
 "A thing that the calendar shows on a day"
 struct Thing
-  kind::Symbol    # :task, :todo or :event
+  kind::Symbol    # :task, :todo or :event, or :log for the hours that a time log has for a task on the day
   day::Date
   words::String
   done::Bool
-  line::Int       # the line of the page that a task or a to-do item is on. For an event, its line of the block.
-  key::String     # what a schedule calls the task or the to-do item, or "" for an event
+  line::Int       # the line of the page that a task, a to-do item or a row of a log is on. For an event, its line of the block.
+  key::String     # what a schedule calls the task or the to-do item, the task of a log's hours, or "" for an event
 end
 
 "What tells one thing from the others. A task has the same one on each of its days."
@@ -155,8 +156,10 @@ The things of each day. `items` are the page's to-do items, and `tasks` are
 the tasks of its schedule with their days, as `plan!` of schedule.jl gives
 them. `weekends` is true when the schedule's work is done on Saturday and
 Sunday too. A day's tasks come first, then its to-do items, then its events.
+`others` are things that other parts of the page give the calendar, like the
+hours of a time log: they come last.
 """
-things(c::Calendar, items, tasks=Planned[], weekends::Bool=false) = begin
+things(c::Calendar, items, tasks=Planned[], weekends::Bool=false, others=Thing[]) = begin
   out = Dict{Date,Vector{Thing}}()
   add(t) = push!(get!(() -> Thing[], out, t.day), t)
   for task in tasks
@@ -171,6 +174,7 @@ things(c::Calendar, items, tasks=Planned[], weekends::Bool=false) = begin
     d === nothing || add(Thing(:todo, d, plain(t.name), t.done, t.line, t.key))
   end
   foreach(e -> add(Thing(:event, e.day, e.words, false, e.line, "")), c.events)
+  foreach(add, others)
   out
 end
 

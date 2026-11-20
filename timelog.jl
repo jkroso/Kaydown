@@ -138,6 +138,9 @@ seconds(log::Log, i::Int, now::DateTime) = begin
   n < 0 ? n + 86400 : n
 end
 
+"The log with only the stretches of the days up to `d`. A line that can't be read is left out."
+upto(log::Log, d::Date) = Log(log.rate, log.round, Union{Stretch,String}[r for r in log.rows if r isa Stretch && r.day <= d])
+
 "The whole minutes of row `i`, as its times say"
 minutes(log::Log, i::Int, now::DateTime) = seconds(log, i, now) ÷ 60
 
@@ -159,6 +162,18 @@ tasks(log::Log, now::DateTime) = begin
     r isa Stretch || continue
     k = findfirst(p -> same(p.first, r.task), out)
     k === nothing ? push!(out, r.task => counted(log, i, now)) : (out[k] = out[k].first => out[k].second + counted(log, i, now))
+  end
+  out
+end
+
+"The minutes of each task on each day, in the order of the log: the day, the task and the minutes. Capital letters don't make another task."
+days(log::Log, now::DateTime) = begin
+  out = Tuple{Date,String,Int}[]
+  for (i, r) in enumerate(log.rows)
+    r isa Stretch || continue
+    k = findfirst(d -> d[1] == r.day && same(d[2], r.task), out)
+    m = counted(log, i, now)
+    k === nothing ? push!(out, (r.day, r.task, m)) : (out[k] = (out[k][1], out[k][2], out[k][3] + m))
   end
   out
 end

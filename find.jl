@@ -20,7 +20,7 @@
 #
 # - `code blocks`: the blocks of code that Ladder shows as code
 # - `sheets`, `spreadsheets`, `live blocks`, `diagrams`, `takeoffs`,
-#   `schedules`, `charts`, `boards`, `calendars`, `columns`, `sketches`, `signatures`, `contacts`, `maps`, `find lists`, `email lists`,
+#   `schedules`, `charts`, `boards`, `calendars`, `day sliders`, `columns`, `sketches`, `signatures`, `contacts`, `maps`, `find lists`, `email lists`,
 #   `time logs`, `questions`, `changes`: the blocks that Ladder shows as that component
 #
 # A block is listed by the heading that it's under. A block of code, and a
@@ -72,6 +72,7 @@ const WHATS = (todo=what_is("to-do items", "to-dos", "todos", "todo", "to-do", "
                chart=what_is("charts", "chart", "graphs", one="chart", langs=("chart",)),
                board=what_is("boards", "board", "kanban", one="board", langs=("board",)),
                calendar=what_is("calendars", "calendar", one="calendar", langs=("calendar",)),
+               day=what_is("day sliders", "day slider", "day blocks", one="day slider", langs=("day",)),
                columns=what_is("columns", "column", one="set of columns", many="sets of columns", langs=("columns", "column")),
                sketch=what_is("sketches", "sketch", "drawings", one="sketch", langs=("sketch",)),
                signature=what_is("signatures", "signature", one="signature", langs=("signature",)),

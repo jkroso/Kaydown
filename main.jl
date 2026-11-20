@@ -254,7 +254,7 @@
 @use "./html" html footnotes NOTE escape
 @use "./markdown" Kind Line Span Cell classify spans tablecells isdivider words isdone front_matter MATTER TOML_MATTER MATH CALLOUTS callout opens_callout wikitarget
 @use "./highlight" tokens
-@use "./sheet" SHEET Result sheetcells parts uses tally known units shown
+@use "./sheet" SHEET Result sheetcells parts uses tally known units shown number_at nudged name_values ident cases
 @use "./spreadsheet" SPREADSHEET Value spreadcells spreadtexts isformula letters answers moved
 @use "./merge" changes combine follow
 @use "./agent" => Agent
@@ -277,6 +277,7 @@
 @use "./contact" => Contacts
 @use "./map" => Maps
 @use "./timelog" => Timelogs
+@use "./day" => Days
 @use "./centient" => Centient
 @use "./update" => Update
 @use "./mime" => Mime
@@ -2879,12 +2880,31 @@ spared(text::AbstractString, f::Face) =
   [Box(fixed(measure(pf, part)), Alignment.Start,
      Text(part, size=pf.size, family=pf.family, subfamily=pf.style, color=pf.color, wrap=WrapMode.none)) for (part, pf) in runs(text, f)]
 
+"""
+Where a sheet with a row over a range shows itself: at the value of that row
+that the mouse is on, in a chart of the sheet or in any other part of the
+page, as a number from 0 at the first value to 1 at the last. It's nothing
+while the mouse is on no such value: the sheet then shows both ends.
+"""
+sheet_case(e, texts, given) = begin
+  name = pointed(e)
+  name === nothing && return nothing
+  over = get!(() -> cases(texts; given), e.flows, (:cases, texts, given))
+  over === nothing && return nothing
+  k = findfirst(row -> plain_name(row[1]) == name, view(over.table, 2:length(over.table)))
+  k === nothing ? nothing : over.places[k]
+end
+
 "Lay out the sheet whose code block opens on line `from` and closes on line `to`"
 sheetgrid(e, from::Int, to::Int) = begin
   b = e.buf
   caret = from < b.caret[1] < to && b.caret[1] == b.anchor[1] ? b.caret : nothing
   # The layout holds the number of each row's line, so it's kept for these lines only
-  get!(e.flows, (:sheet, from, b.lines[from+1:to-1], caret)) do
+  # The names that the sheet has from the parts of the page over it, like the measures of a takeoff
+  given = page_given(e, from)
+  # While the mouse is on one value of a chart of a sheet with a row over a range, the sheet shows itself at that value
+  at = sheet_case(e, [parts(b.lines[i]) for i in from+1:to-1], given)
+  get!(e.flows, (:sheet, from, b.lines[from+1:to-1], caret, given, at)) do
     size = body(e).size * 0.86
     lh = size * 1.7
     ink = Face(SHEET_FONT, SHEET_WEIGHT, size, colours.ink, false)
@@ -2892,7 +2912,7 @@ sheetgrid(e, from::Int, to::Int) = begin
     cells = [sheetcells(b.lines[i]) for i in rows]
     texts = [parts(b.lines[i]) for i in rows]
     # The rows are only worked out again when the text of one changes
-    results = get!(() -> tally(texts), e.flows, (:sheetrun, texts))
+    results = get!(() -> tally(texts; given, at), e.flows, (:sheetrun, texts, given, at))
     # The cell with the caret shows the spaces typed after its text
     upto(i, c) = caret !== nothing && caret[1] == i && within(c, caret[2]) ? max(c.hi, caret[2]) : c.hi
     names = map(zip(rows, cells)) do (i, cs)
@@ -2906,7 +2926,7 @@ sheetgrid(e, from::Int, to::Int) = begin
     exprs = map(enumerate(rows)) do (r, i)
       c = cells[r][end]
       chip = chip_w(ink, results[r])
-      wrap(exprpieces(b.lines[i], c.lo, upto(i, c), known(texts, r), ink), max(80px, room - chip - (chip > 0px ? SHEET_X : 0px)); lh, size)
+      wrap(exprpieces(b.lines[i], c.lo, upto(i, c), known(texts, r, given), ink), max(80px, room - chip - (chip > 0px ? SHEET_X : 0px)); lh, size)
     end
     nameflows = [wrap(ps, name_w; lh, size) for ps in names]
     heights = [max(tall(n), tall(x)) for (n, x) in zip(nameflows, exprs)]
@@ -2975,10 +2995,12 @@ describe(e::Editor, it::Item, s::Sheet) = begin
     chip = isempty(res.text) ? () :
       (Column(fixed(w + SHEET_X), height(grow=grow), Alignment.Start, padding(above + 1px, SHEET_X, 0px, 0px),
          res.failed ? own!(node!(Document, e, :document), Trouble(message=res.text, size=s.size)) :
+           # A value that the sheet worked out backwards, from an answer under it, has a line round it in the accent colour
            Row(fixed(w), height(lh - 2px), Alignment.Center, padding(RESULT_X, 0px), radius(6px), background(colours.chip),
+               (res.solved ? (border(1px, :solid, colours.accent),) : ())...,
              # Menlo's raised signs sit lower than Source Code Pro's raised digits, so they go up a little
              [Box(padding(0px, 0px, f.family == SHEET_FONT ? 0px : s.size * RAISE, 0px),
-                Text(t, size=s.size, family=f.family, subfamily=f.style, color=colours.ink, wrap=WrapMode.none))
+                Text(t, size=s.size, family=f.family, subfamily=f.style, color=res.solved ? colours.accent : colours.ink, wrap=WrapMode.none))
               for (t, f) in runs(res.text, Face(SHEET_FONT, SHEET_WEIGHT, s.size, colours.ink, false))]...)),)
     Row(width(grow=grow), height(s.heights[r] + above + below), Alignment.Start,
       # A row without a name shows its number
@@ -3227,7 +3249,7 @@ offered(e) = begin
   (c.lo <= col <= c.limit && nearest(cs, col) == length(cs)) || return nothing
   s, _ = sheet(b, i)
   rows = [parts(b.lines[j]) for j in s+1:i-1]
-  names = known(rows, length(rows) + 1)
+  names = known(rows, length(rows) + 1, page_given(e, s))
   isempty(names) && return nothing
   chars = collect(b.lines[i])
   # In the middle of a word, nothing is offered
@@ -9082,10 +9104,14 @@ draw_days(ctx, v::ScheduleView) = begin
       write_ink(ctx, "$(Dates.day(d)) $(Dates.monthabbr(d))", x + 5, top + 37, small)
     end
   end
-  # Today's name goes over the middle of today, when today is in sight
-  now = day_x(v, daynum(Dates.today())) + z / 2
+  # Today's name goes over the middle of today, when today is in sight. A page that shows another day has that day's name there.
+  e = editor(v)
+  other = another_day(e)
+  at = other ? page_day(e) : Dates.today()
+  pill_text = other ? "$(Dates.day(at)) $(Dates.monthabbr(at))" : "Today"
+  now = day_x(v, daynum(at)) + z / 2
   today = Face(SANS, "Semibold", 10.5px, colours.bg, false)
-  pill = num(measure(today, "Today")) + 12
+  pill = num(measure(today, pill_text)) + 12
   shows = left <= now <= left + wide
   # Each month's name is at the month's first day, or at the left edge when that day is out of sight.
   # A name that today's name would cover goes after it.
@@ -9109,27 +9135,31 @@ draw_days(ctx, v::ScheduleView) = begin
   if shows
     trace(ctx, [(now, rows), (now, top + tall)], RGBA(colours.ink, 0.6), 1.0)
     round_box(ctx, now - pill / 2, top + 6, pill, 16, 4; fill=colours.ink)
-    write_ink(ctx, "Today", now - pill / 2 + 6, top + 17.5, today)
+    write_ink(ctx, pill_text, now - pill / 2 + 6, top + 17.5, today)
   end
 end
 
 "The colour of a task's bar: one for a task that's done, and one for a task that isn't"
-task_hue(t) = t.todo.done ? colours.string : colours.accent
+task_hue(done::Bool) = done ? colours.string : colours.accent
 
 "Draw the bar of each task. The task under the mouse, and the one that's selected, have the circle that a link is dragged from."
 draw_bars(ctx, v::ScheduleView) = begin
   left, _, wide, _ = v.box
   hot = hot_row(v)
   g = v.grab
+  e = editor(v)
   for (i, t) in enumerate(v.tasks)
     x, y, w, h = task_bar(v, i)
     (x + w + 2KNOB_GAP < left || x > left + wide) && continue
-    hue = task_hue(t)
+    done = finished(e, t)   # on another day than today, the plan says which tasks are done
+    hue = task_hue(done)
     on = v.picked == (:task, t.todo.key)
-    round_box(ctx, x, y, w, h, 5; fill=RGBA(hue, on ? 0.32 : 0.17), line=RGBA(hue, 0.9), wide=on ? 1.8 : 1.0)
+    # A bar is marked while the mouse is on its task in another part of the page
+    lit = i != hot && marked(v, t.todo.key)
+    round_box(ctx, x, y, w, h, 5; fill=RGBA(hue, on || lit ? 0.32 : 0.17), line=RGBA(hue, 0.9), wide=on || lit ? 1.8 : 1.0)
     # A task that's done has a tick, and a bar with room says how many days it is
     inset = 6.0
-    if t.todo.done && w >= 18
+    if done && w >= 18
       trace(ctx, [(x + 5.5, y + h / 2 + 0.5), (x + 8.5, y + h / 2 + 3.5), (x + 13.5, y + h / 2 - 3.5)], hue, 1.6)
       inset = 18.0
     end
@@ -9377,13 +9407,18 @@ describe(n::TaskName) = begin
   i === nothing && return Box(width(grow=grow), height(px(TASK_H)))
   t = v.tasks[i]
   on = v.picked == (:task, n.key)
+  done = finished(editor(v), t)
   # A task under another, further in, is further in here too
   indent = 12px + 14px * min(t.todo.level ÷ 2, 4)
-  room = names_w(v) - indent - 12px - (t.todo.done ? 20px : 0px)
+  # The hours that the page's time logs have for the task show at the end of its name
+  minutes = worked(editor(v), t.todo.name)
+  hours = minutes > 0 ? (minutes % 60 == 0 ? "$(minutes ÷ 60) h" : "$(round(minutes / 60, digits=1)) h") : ""
+  room = names_w(v) - indent - 12px - (done ? 20px : 0px) - (isempty(hours) ? 0px : measure(Face(SANS, "", 11px, colours.dim, false), hours) + 8px)
   Row(width(grow=grow), height(px(TASK_H)), padding(0px, 12px, 0px, indent), child_gap=6px, Alignment.Center, clip=true,
-      background(on ? colours.active : hot_row(v) == i ? colours.hover : clear),
-    (t.todo.done ? (Icon("check", size=14px, color=colours.string),) : ())...,
-    Box(label(elide(t.todo.name, 13px, room), 13px, color=t.todo.done ? colours.dim : colours.ink)))
+      background(on ? colours.active : hot_row(v) == i ? colours.hover : marked(v, n.key) ? tint(colours.accent, MARK_FILL) : clear),
+    (done ? (Icon("check", size=14px, color=colours.string),) : ())...,
+    Box(label(elide(t.todo.name, 13px, room), 13px, color=done ? colours.dim : colours.ink)),
+    (isempty(hours) ? () : (Box(width(grow=grow)), Box(label(hours, 11px, color=colours.dim))))...)
 end
 
 cursor(::TaskName) = :hand
@@ -9557,15 +9592,17 @@ task_over(e) = begin
   hide() = (d.of = nothing; ())
   line = on_details ? nothing : ishovered(node!(Document, e, :document)) && !held(e, Keys.mouse_left) ? todo_line(e, x, y) : nothing
   (on_details || line !== nothing) || return hide()
-  v = page_schedule(e)
-  v === nothing && return hide()
-  ts = tasks!(v)
-  i = on_details ? task_place(v, d.key) : findfirst(t -> t.todo.line == line, ts)
+  # A page with a schedule shows the task's days. A page with a time log shows the item's clock.
+  v, log = page_schedule(e), page_log(e)
+  (v === nothing && log === nothing) && return hide()
+  v === nothing || tasks!(v)
+  items = page_todos(e)
+  i = on_details ? findfirst(t -> t.key == d.key, items) : findfirst(t -> t.line == line, items)
   i === nothing && return hide()
-  it = item(e, ts[i].todo.line)
+  it = item(e, items[i].line)
   f = it.content
   (f isa Flow && f.kind == Kind.todo && !f.raw) || return hide()
-  d.of, d.key = v, ts[i].todo.key
+  d.of, d.key = something(v, log), items[i].key
   wide = describe(Row(Alignment.Start, geometry(d)), (9999px, 9999px)).width
   # They go at the right end of the first of the item's lines that has room for them, or under the item when none has
   edge = sum(item_room(e, it))   # the right edge of the item's column, or of the page
@@ -9581,21 +9618,27 @@ task_over(e) = begin
 end
 
 describe(d::TaskDetails) = begin
-  v = d.of
+  e = editor(d)
+  v = d.of isa ScheduleView ? d.of : nothing
   i = v === nothing ? nothing : task_place(v, d.key)
-  i === nothing && return Box(width(0px), height(DETAILS_H))
+  # On a page with a time log, the item has a button that starts and stops the log's clock on it
+  clock = page_log(e) === nothing || todo_called(e, d.key) === nothing ? () :
+    ((c = node!(ItemClock, e, :item_clock); c.key = d.key; c.parent === d || setfield!(c, :parent, d); c),)
+  (i === nothing && isempty(clock)) && return Box(width(0px), height(DETAILS_H))
+  dot() = Box(label("·", 12px, color=colours.faint))
+  # Under the line, they float over the text of the next line
+  look = d.floats ? (background(colours.float), border(1px, :solid, colours.line), lifted) : (background(colours.bg),)
+  i === nothing && return Row(height(DETAILS_H), padding(8px, 0px), child_gap=6px, Alignment.Center, radius(6px), look..., name="Task", clock...)
   t = v.tasks[i]
   d.less === nothing && (d.less = own!(d, DayButton(by=-1)); d.more = own!(d, DayButton(by=1)))
   first_name = isempty(t.after) ? "" : v.tasks[t.after[1]].todo.name
   waits = isempty(t.after) ? "" : length(t.after) > 1 ? "after $(length(t.after)) tasks" :
           "after " * (length(first_name) > 30 ? first(first_name, 29) * "…" : first_name)
-  dot() = Box(label("·", 12px, color=colours.faint))
-  # Under the line, they float over the text of the next line
-  look = d.floats ? (background(colours.float), border(1px, :solid, colours.line), lifted) : (background(colours.bg),)
   Row(height(DETAILS_H), padding(8px, 0px), child_gap=6px, Alignment.Center, radius(6px), look..., name="Task",
     Icon("calendar-event", size=12px, color=colours.dim), Box(label(task_days(t), 12px, color=colours.dim)), dot(),
     d.less, Box(label(Schedules.days_text(t.days), 12px)), d.more,
-    (isempty(waits) ? () : (dot(), Box(label(waits, 12px, color=colours.dim))))...)
+    (isempty(waits) ? () : (dot(), Box(label(waits, 12px, color=colours.dim))))...,
+    (isempty(clock) ? () : (dot(), clock...))...)
 end
 
 cursor(::TaskDetails) = :arrow
@@ -9604,7 +9647,7 @@ onkey(::TaskDetails, ::KeyPress{Keys.mouse_left}) = handled
 onmouse(::TaskDetails, ::MouseMove) = handled
 
 "The task that the details `d` show, or nothing when the page has it no more"
-task_of(d::TaskDetails) = (i = d.of === nothing ? nothing : task_place(d.of, d.key); i === nothing ? nothing : d.of.tasks[i])
+task_of(d::TaskDetails) = (i = d.of isa ScheduleView ? task_place(d.of, d.key) : nothing; i === nothing ? nothing : d.of.tasks[i])
 
 describe(b::DayButton) = begin
   t = task_of(b.parent)
@@ -10652,10 +10695,10 @@ comes to. `headed` is true when the first row has the names of the columns.
 """
 page_tables(e) = begin
   b = e.buf
-  key = (:tables, b.path, b.version, table_reads[])
+  key = (:tables, b.path, b.version, table_reads[], page_day(e))
   haskey(e.flows, key) && return e.flows[key]
   ks = kinds(b)
-  out = @NamedTuple{first::Int, last::Int, under::String, rows::Vector{Vector{String}}, headed::Bool}[]
+  out = @NamedTuple{first::Int, last::Int, under::String, rows::Vector{Vector{String}}, headed::Bool, ranged::Bool}[]
   under = ""
   i = 1
   while i <= length(ks)
@@ -10667,7 +10710,7 @@ page_tables(e) = begin
       run = table(b, i)
       if run !== nothing && run[1] == i
         rows = [String[plain_cell(rest(head(b.lines[r], c.hi), c.lo)) for c in tablecells(b.lines[r])] for r in tablerows(run)]
-        push!(out, (first=i, last=run[2], under=under, rows=rows, headed=true))
+        push!(out, (first=i, last=run[2], under=under, rows=rows, headed=true, ranged=false))
         stop = run[2]
       end
     elseif k.kind == Kind.fence && k.level == 0 && k.lang in (SPREADSHEET, SHEET)
@@ -10680,24 +10723,32 @@ page_tables(e) = begin
                   for (r, row) in enumerate(texts)]
         else
           texts = [parts(b.lines[r]) for r in i+1:t-1]
-          results = get!(() -> tally(texts), e.flows, (:sheetrun, texts))
+          given = page_given(e, i)
+          # A sheet with a row over a range is a table with a row for each value of that row
+          over = get!(() -> cases(texts; given), e.flows, (:cases, texts, given))
+          if over !== nothing
+            push!(out, (first=i, last=t, under=under, rows=over.table, headed=true, ranged=true))
+            i = t + 1
+            continue
+          end
+          results = get!(() -> tally(texts; given), e.flows, (:sheetrun, texts, given, nothing))
           rows = [String[strip(name), results[r].failed ? "" : results[r].text] for (r, (name, _)) in enumerate(texts)]
         end
-        push!(out, (first=i, last=t, under=under, rows=rows, headed=false))
+        push!(out, (first=i, last=t, under=under, rows=rows, headed=false, ranged=false))
         stop = t
       end
     elseif k.kind == Kind.fence && k.level == 0 && k.lang == TIMELOG
       # A log of hours is a table of its tasks, with the hours of each
       t = codeblock(b, i)[2]
       if t > i && ks[t].kind == Kind.fence && ks[t].level == 1
-        rows = Timelogs.table(Timelogs.timelog(b.lines[i+1:t-1]), Timelogs.now())
-        length(rows) > 1 && push!(out, (first=i, last=t, under=under, rows=rows, headed=true))
+        rows = Timelogs.table(log_to_day(e, Timelogs.timelog(b.lines[i+1:t-1])), Timelogs.now())
+        length(rows) > 1 && push!(out, (first=i, last=t, under=under, rows=rows, headed=true, ranged=false))
         stop = t
       end
     elseif k.kind == Kind.fence && k.level == 0
       stop = max(i, codeblock(b, i)[2])   # a table in a block of code isn't one
     elseif k.kind == Kind.paragraph && (rows = table_rows(e, i)) !== nothing
-      push!(out, (first=i, last=i, under=under, rows=rows, headed=true))   # a line that shows a CSV file as a table
+      push!(out, (first=i, last=i, under=under, rows=rows, headed=true, ranged=false))   # a line that shows a CSV file as a table
     end
     i = stop + 1
   end
@@ -10720,13 +10771,13 @@ chart_data(e, v::ChartView) = begin
   k == 0 && return Charts.nothing_to_draw(isempty(c.from) ?
     "This page has no table yet. Put a table, a spreadsheet or a sheet over this chart, and the chart draws its numbers." :
     "This page has no table under a heading called “$(c.from)”.")
-  Charts.data(c, tables[k].rows, headed=tables[k].headed)
+  Charts.data(c, tables[k].rows, headed=tables[k].headed, by_first=tables[k].ranged)
 end
 
 "What the chart shows. It's worked out again when the page has changed."
 shown!(v::ChartView) = begin
   e = editor(v)
-  key = (e.buf.version, v.first, v.lines, table_reads[])
+  key = (e.buf.version, v.first, v.lines, table_reads[], page_day(e))
   (v.shown !== nothing && v.shown[1] == key) || (v.shown = (key, chart_data(e, v)))
   v.shown[2]
 end
@@ -10774,11 +10825,12 @@ disc(ctx, x, y, r, colour) = begin
 end
 
 "Draw the marks of a chart, with the top left corner of the chart at `(x0, y0)`. The mark `hot` is the one under the mouse."
-draw_marks(ctx, marks, x0, y0, hot=nothing) = begin
+draw_marks(ctx, marks, x0, y0, hot=nothing; lit=0) = begin
   cs, surface = series_colours(), takeoff_back()
   for m in marks
-    # While the mouse is over a bar or a slice, the others are pale
-    pale = hot !== nothing && m.kind in (:bar, :slice) && (m.label, m.series) != (hot.label, hot.series)
+    # While the mouse is over a bar or a slice, the others are pale. So are the bars of the other rows,
+    # while the mouse is on a row of the chart's table: the row at place `lit`.
+    pale = m.kind in (:bar, :slice) && (hot !== nothing ? (m.label, m.series) != (hot.label, hot.series) : lit > 0 && m.label != lit)
     colour = m.colour == 0 ? colours.dim : pale ? RGBA(cs[m.colour], 0.4) : cs[m.colour]
     x, y = x0 + m.at[1], y0 + m.at[2]
     if m.kind == :rule
@@ -10792,7 +10844,7 @@ draw_marks(ctx, marks, x0, y0, hot=nothing) = begin
     elseif m.kind == :line
       trace(ctx, [(x0 + a, y0 + b) for (a, b) in m.points], colour, 2.0)
     elseif m.kind == :dot
-      on = hot === m
+      on = hot === m || (hot === nothing && lit > 0 && m.label == lit)
       r = on ? 5.5 : m.at[3]
       r > 0 || continue
       disc(ctx, x, y, r + 2, surface)   # a ring in the colour of the page keeps it apart from the line that it's on
@@ -10815,7 +10867,10 @@ draw(ctx, size, ui::ConcreteRect, a::PlotArea) = begin
   v.box[3] > 0 || return
   v.marks = Charts.plot(shown!(v), v.spec.kind, v.box[3], v.box[4], chart_measure)
   with_clip(ctx, ui.left, ui.top, ui.width, ui.height) do
-    draw_marks(ctx, v.marks, v.box[1], v.box[2], ishovered(a) ? chart_hit(v) : nothing)
+    hot = ishovered(a) ? chart_hit(v) : nothing
+    # The row of the table that the mouse is on, in another part of the page, has its bars marked
+    lit = hot === nothing ? something(findfirst(name -> marked(v, name), shown!(v).labels), 0) : 0
+    draw_marks(ctx, v.marks, v.box[1], v.box[2], hot; lit)
   end
 end
 
@@ -10939,7 +10994,7 @@ map_place(v::MapView) = lowercase(Maps.query(v.data.place))
 map_wide(v::MapView) = round(Int, num(editor(v).width))
 
 "The zoom that the map's picture is made at: the block's, or a higher one on a page that's too wide for it"
-map_zoom(v::MapView) = Maps.fit(v.data.zoom, map_wide(v), Maps.TALL)
+map_zoom(v::MapView) = (a = map_around(v); Maps.fit(a === nothing ? v.data.zoom : a.zoom, map_wide(v), Maps.TALL))
 
 "What Apple has for the block's place, or nothing while that isn't known"
 map_facts(v::MapView) = (p = v.place; p !== nothing && p.key == map_place(v) ? p.facts : nothing)
@@ -10963,7 +11018,9 @@ nothing while the place of an address isn't known.
 """
 map_middle(v::MapView) = begin
   v.at === nothing || return v.at
-  middle = something(v.data.centre, map_pin(v), Some(nothing))
+  # A map with no place of its own has the places from the rest of its page round its middle
+  a = map_around(v)
+  middle = something(v.data.centre, map_pin(v), a === nothing ? nothing : a.centre, Some(nothing))
   middle === nothing ? nothing : Maps.rounded(middle)
 end
 
@@ -10995,7 +11052,7 @@ end
 map_changes(v::MapView) = (b = editor(v).buf; !readonly(b) && !b.fixed)
 
 "True when a drag can move the map and a click can move its place: the page can be changed, and the map shows a picture"
-map_moves(v::MapView) = map_changes(v) && map_shows(v)
+map_moves(v::MapView) = map_changes(v) && map_shows(v) && !isempty(v.data.place)
 
 """
 What Apple has for the block's place. The program that finds a place is
@@ -11007,6 +11064,8 @@ map_find!(v::MapView, runs) = begin
   key = map_place(v)
   p = v.place
   p !== nothing && p.key == key && p.facts !== nothing && return p
+  # A map with no place of its own has nothing to find
+  isempty(v.data.place) && return v.place = (key=key, found=(state=:none, file="", problem="", wait=Inf), facts=nothing)
   ask(start) = Maps.found!(media_dir(), v.data.place; start)
   found = ask(runs)
   facts = found.state == :there ? Maps.facts(found.file) : nothing
@@ -11031,8 +11090,10 @@ map_picture!(v::MapView) = begin
   rest = MAP_PAUSE - (time() - v.asked[2])
   runs = on_screen(v) || Maps.HELPER[] !== Maps.run_program
   place = map_find!(v, runs)
+  map_others(v, runs)   # the places from the rest of the page are asked for too
+  around = map_around(v)
   # The picture is of what the block says, and not of where a drag has the map now: the block changes when the mouse lets go
-  middle = something(s.centre, map_pin(v), Some(nothing))
+  middle = something(s.centre, map_pin(v), around === nothing ? nothing : around.centre, Some(nothing))
   p = nothing
   if middle !== nothing
     middle = Maps.rounded(middle)
@@ -11117,9 +11178,10 @@ describe(v::MapView) = begin
   e = editor(v)
   s = v.data
   with_theme(component_theme(e.zoom)) do
-    isempty(s.place) && return Column(block_look()..., clip=true, name="Map",
-      block_note("Write an address in this block, or a latitude and a longitude, to see the map of that place."))
+    isempty(s.place) && isempty(page_places(e)) && return Column(block_look()..., clip=true, name="Map",
+      block_note("Write an address in this block, or a latitude and a longitude, to see the map of that place. A map with no address shows the addresses of the page's contacts."))
     map_picture!(v)
+    others = map_others(v)
     area = block_part!(() -> MapArea(of=v), v, :area)
     least, most = first(Maps.ZOOMS), last(Maps.ZOOMS)
     # On a page that's too wide for the lowest zooms, the − stops at the lowest zoom that a picture is made at
@@ -11128,14 +11190,18 @@ describe(v::MapView) = begin
       (s.centre === nothing ? () : (block_button!(v, :home, :home, icon="crosshair", tip="Put the place back in the middle of the map"),))...,
       block_button!(v, :out, (:zoom, -1), icon="dash-lg", tip="Show more of what's round the place", off=lowest),
       block_button!(v, :in, (:zoom, 1), icon="plus-lg", tip="Show the place closer", off=s.zoom >= most))
+    # A map with no place of its own is as close as shows every place from the page, and says how many those are
+    own = !isempty(s.place)
+    under = own ? map_address(v) : isempty(others) ? "Finding the places of this page…" :
+            length(others) == 1 ? "1 place from this page: " * others[1].name : "$(length(others)) places from this page: " * join((o.name for o in others), ", ")
     Column(block_look()..., clip=true, name="Map",
       Stack(width(grow=grow), height(px(Maps.TALL)), Alignment.Start,
         map_shows(v) ? fillable(v, (:picture, map_full!(v)), area, wide=:grow) : area,
-        Row(width(grow=grow), padding(8px), Alignment.Start, justify=Alignment.End, buttons)),
-      Row(width(grow=grow), padding(5px, 6px, 5px, 12px), child_gap=8px, Alignment.Center,
+        (own ? (Row(width(grow=grow), padding(8px), Alignment.Start, justify=Alignment.End, buttons),) : ())...),
+      Row(width(grow=grow), padding(own ? 5px : 9px, 6px, own ? 5px : 9px, 12px), child_gap=8px, Alignment.Center,
         Box(Icon("geo-alt", size=14px, color=colours.dim)),
-        Box(width(grow=grow), Alignment.Start, clip_x=true, Text(map_address(v), size=12.5px, family=SANS, color=colours.dim, wrap=WrapMode.words)),
-        block_button!(v, :open, :open, words="Open in Maps", icon="box-arrow-up-right", tip="Open the Maps app at this place")))
+        Box(width(grow=grow), Alignment.Start, clip_x=true, Text(under, size=12.5px, family=SANS, color=colours.dim, wrap=WrapMode.words)),
+        (own ? (block_button!(v, :open, :open, words="Open in Maps", icon="box-arrow-up-right", tip="Open the Maps app at this place"),) : ())...))
   end
 end
 
@@ -11155,7 +11221,7 @@ Draw a pin whose point is at `(x, y)`: a red drop with a white dot in it, as
 maps mark a place. It's drawn as a shape, so it's sharp however big the
 canvas draws it, on the screen and on paper.
 """
-pin_ink(ctx, x, y) = begin
+pin_ink(ctx, x, y; fill=RGBA(0.92, 0.26, 0.21, 1.0), line=RGBA(0.70, 0.16, 0.13, 1.0)) = begin
   r, cy = 11.0, y - 26.0   # the radius of the pin's round head, and how high its middle is
   shape = [(x, y); pin_bend((x, y), (x - 2, y - 9), (x - r, cy + 9), (x - r, cy));
            [(x - r * cos(a), cy - r * sin(a)) for a in (1:23) .* (π / 24)];
@@ -11165,7 +11231,7 @@ pin_ink(ctx, x, y) = begin
   ground = Ref(Skia.sk_rect_t(Float32(x - 5), Float32(y - 2), Float32(x + 5), Float32(y + 2)))
   Skia.sk_canvas_draw_oval(ctx, ground, shadow)
   Skia.sk_paint_delete(shadow)
-  trace(ctx, shape, RGBA(0.70, 0.16, 0.13, 1.0), 1.0; fill=RGBA(0.92, 0.26, 0.21, 1.0), closed=true)
+  trace(ctx, shape, line, 1.0; fill, closed=true)
   disc(ctx, x, cy, 4, RGBA(1.0, 1.0, 1.0, 1.0))
 end
 
@@ -11211,6 +11277,15 @@ draw(ctx, size, ui::ConcreteRect, a::MapArea) = begin
     with_round_clip(ctx, ui.left, ui.top, ui.width, ui.height + px(2MAP_ROUND), px(MAP_ROUND)) do
       image = image_source(v.shown.file)
       paint_picture(ctx, image.raw, (0, 0, image.width, image.height), (x + r[1], y + r[2], r[3], r[4]))
+      # The places from the rest of the page have pins of another colour, under the map's own. The one that the
+      # mouse is on, here or on its contact's card, has a ring round its head.
+      hot = other_at(v)
+      for o in map_others(v)
+        at = other_point(v, o)
+        at === nothing && continue
+        (o === hot || marked(v, o.name)) && disc(ctx, x + at[1], y + at[2] - 26, 15.5, tint(OTHER_PIN[1], 0.35))
+        pin_ink(ctx, x + at[1], y + at[2], fill=OTHER_PIN[1], line=OTHER_PIN[2])
+      end
       pin = map_pin(v)
       pin === nothing && return
       at = Maps.point(pin, map_middle(v), map_zoom(v), w, h)
@@ -11221,7 +11296,7 @@ end
 
 cursor(::MapView) = :arrow
 # UI.jl has no open hand, so a map that a drag can move has the hand that points
-cursor(a::MapArea) = map_moves(a.of) ? :hand : :arrow
+cursor(a::MapArea) = map_moves(a.of) || other_at(a.of) !== nothing ? :hand : :arrow
 onpinch(v::MapView, ev::Pinch) = pinch_open(v, ev)
 
 # A press on the map starts a drag that moves the map, or a click that moves the place. The press is the
@@ -11229,6 +11304,9 @@ onpinch(v::MapView, ev::Pinch) = pinch_open(v, ev)
 # block's lines, as it does on any block. A page that can't be changed takes no drag and no click.
 onkey(a::MapArea, ev::KeyPress{Keys.mouse_left}) = begin
   v = a.of
+  # A click on the pin of a place from the rest of the page goes to the place's line
+  o = held(v, Keys.opt) ? nothing : other_at(v)
+  o === nothing || (hide_tooltip!(ev.window); return show_line!(editor(v), o.line))
   (held(v, Keys.opt) || !map_moves(v)) && return nothing
   w = ev.window
   focus(editor(v))
@@ -11240,7 +11318,14 @@ end
 onmouse(a::MapArea, ev::MouseMove) = begin
   v = a.of
   g = v.grab
-  g === nothing && return nothing
+  if g === nothing
+    # The mouse on the pin of a place from the rest of the page says whose place it is
+    o = other_at(v)
+    o === nothing && return nothing
+    at = other_point(v, o)
+    show_tooltip!(ev.window, tip_label(o.name * "  ·  " * o.place), px(v.box[1] + at[1] - 11), px(v.box[2] + at[2] - 37), 22px, 37px, placement=:top, gap=4px)
+    return nothing
+  end
   Keys.mouse_left in ev.window.keys || (map_drop!(v); return handled)
   dx, dy = num(ev.position[1]) - g.from[1], num(ev.position[2]) - g.from[2]
   (g.dragged || hypot(dx, dy) >= MAP_SLACK) || return handled
@@ -12102,7 +12187,7 @@ reread!(v::CalendarView, lines) = begin
 end
 
 "The first day of the month that the calendar shows"
-month_shown(v::CalendarView) = Calendars.shown(v.data, today=calendar_today())
+month_shown(v::CalendarView) = Calendars.shown(v.data, today=page_day(editor(v)))
 
 """
 The tasks of the page's first schedule with their days, and whether its work
@@ -12121,8 +12206,35 @@ end
 things!(v::CalendarView) = begin
   e = editor(v)
   key = (e.buf.version, v.lines, calendar_today())
-  (v.shown !== nothing && v.shown[1] == key) || (v.shown = (key, Calendars.things(v.data, page_todos(e), calendar_tasks(e)...)))
+  (v.shown !== nothing && v.shown[1] == key) || (v.shown = (key, Calendars.things(v.data, page_todos(e), calendar_tasks(e)..., log_things(e))))
   v.shown[2]
+end
+
+"""
+The things that the page's time logs give its calendars: for each day of a
+log, each task with the hours that the log has for it on that day. A click
+on one, twice, goes to the first of its rows.
+"""
+log_things(e) = begin
+  b = e.buf
+  get!(e.flows, (:log_things, b.path, b.version)) do
+    out = Calendars.Thing[]
+    ks = kinds(b)
+    at = Timelogs.now()
+    for (i, k) in enumerate(ks)
+      (k.kind == Kind.fence && k.level == 0 && k.lang == TIMELOG) || continue
+      t = codeblock(b, i)[2]
+      (t > i && ks[t].kind == Kind.fence && ks[t].level == 1) || continue
+      lines = b.lines[i+1:t-1]
+      rows = [Timelogs.stretch(String(strip(l))) for l in lines]
+      for (day, task, minutes) in Timelogs.days(Timelogs.timelog(lines), at)
+        minutes > 0 || continue
+        r = findfirst(s -> s !== nothing && s.day == day && Timelogs.same(s.task, task), rows)
+        push!(out, Calendars.Thing(:log, day, (isempty(task) ? "" : task * "  ") * Timelogs.hours(minutes), false, i + something(r, 0), task))
+      end
+    end
+    out
+  end
 end
 
 "The things of the day `d`"
@@ -12202,22 +12314,28 @@ describe(c::CalendarThing) = begin
   t === nothing && return Box(height(0px))
   on = v.picked == Calendars.id(t)
   taken = dragging(v) && Calendars.id(v.grab[1]) == Calendars.id(t)
+  # A thing is marked while the mouse is on it in another part of the page, or on another of its days here
+  lit = !taken && (t.kind == :task || !ishovered(c)) && marked(v, thing_name(t))
   c.box === nothing && (c.box = CalendarTick(of=c); setfield!(c.box, :parent, c))
   if t.kind == :task
     # A task looks like its bar in the schedule
     hue = t.done ? colours.string : colours.accent
-    look = (background(RGBA(hue, on ? 0.32 : 0.17)), border(on ? 1.5px : 1px, :solid, RGBA(hue, 0.9)))
+    look = (background(RGBA(hue, on || lit ? 0.32 : 0.17)), border(on || lit ? 1.5px : 1px, :solid, RGBA(hue, 0.9)))
     lead = t.done && !tight(v) ? (Icon("check", size=12px, color=hue),) : ()
+  elseif t.kind == :log
+    # The hours of a time log are quiet: a small clock and grey words, with no box round them
+    look = (background(lit ? mark_colour(takeoff_back()) : clear), border(1px, :solid, on || lit ? colours.accent : clear))
+    lead = tight(v) ? () : (Icon("stopwatch", size=11px, color=colours.dim),)
   else
-    look = (background(taken ? clear : colours.block),
-            border(on && !taken ? 1.5px : 1px, :solid, taken ? colours.faint : on ? colours.accent : ishovered(c) ? colours.marker : colours.line))
+    look = (background(taken ? clear : lit ? mark_colour(colours.block) : colours.block),
+            border(on && !taken ? 1.5px : 1px, :solid, taken ? colours.faint : on || lit ? colours.accent : ishovered(c) ? colours.marker : colours.line))
     # A narrow day has no room for the box: the words need it
     lead = t.kind == :todo && !tight(v) ? (c.box,) : ()
   end
   words = elide(t.words, 12px, words_room(v, isempty(lead) ? 0px : 18px))
   c.cut = words != t.words
   Row(width(grow=grow), height(THING_H), padding(tight(v) ? 3px : 5px, 0px), radius(5px), child_gap=5px, Alignment.Center, clip=true, name="Thing", look...,
-    lead..., Box(label(words, 12px, color=taken ? colours.faint : t.done ? colours.dim : colours.ink)), Box(width(grow=grow)))
+    lead..., Box(label(words, 12px, color=taken ? colours.faint : t.done || t.kind == :log ? colours.dim : colours.ink)), Box(width(grow=grow)))
 end
 
 cursor(::Union{CalendarThing,CalendarTick,CalendarMore}) = :hand
@@ -12234,8 +12352,8 @@ onkey(c::CalendarThing, ev::KeyPress{Keys.mouse_left}) = begin
   v.picked = Calendars.id(t)
   # Two clicks in one place go to the thing's line of the page
   twice && again && return show_line!(editor(v), thing_line(v, t))
-  # A task's days are the schedule's, so a task stays where it is
-  t.kind == :task || readonly(editor(v).buf) || (v.grab = (t, x, y, false))
+  # A task's days are the schedule's, and the hours of a log are the log's, so they stay where they are
+  t.kind in (:task, :log) || readonly(editor(v).buf) || (v.grab = (t, x, y, false))
   # The press isn't a click on the page's text, so the text doesn't select when the mouse leaves the calendar with the thing
   e = editor(v)
   e.clicked = (e.clicked[1], e.clicked[2], 0)
@@ -12271,9 +12389,13 @@ describe(c::CalendarDay) = begin
   inside = Dates.month(d) == Dates.month(month_shown(v))
   weekend = Dates.dayofweek(d) > 5
   number = string(Dates.day(d))
-  head = d == calendar_today() ?
+  # The page's day has a circle. When that isn't today, today has a ring.
+  head = d == page_day(editor(v)) ?
     Row(fixed(20px), height(20px), radius(10px), Alignment.Center, justify=Alignment.Center, background(colours.accent),
         Box(label(number, 11px, color=colours.bg, weight="Semibold"))) :
+    d == calendar_today() ?
+    Row(fixed(20px), height(20px), radius(10px), Alignment.Center, justify=Alignment.Center, border(1.5px, :solid, colours.accent),
+        Box(label(number, 11px, color=colours.accent, weight="Semibold"))) :
     Row(height(20px), padding(4px, 0px), Alignment.Center,
         Box(label(number, 11px, color=!inside ? colours.faint : weekend ? colours.dim : colours.ink)))
   field = v.adding == d ?
@@ -12501,13 +12623,38 @@ reread!(v::BoardView, lines) = begin
   v
 end
 
-"The cards of each column of the board. They're worked out again when the page has changed."
+"The cards of each column of the board. They're worked out again when the page has changed, and when it shows another day."
 columns!(v::BoardView) = begin
   e = editor(v)
-  key = (e.buf.version, v.lines)
-  (v.shown !== nothing && v.shown[1] == key) || (v.shown = (key, Boards.arrange(v.data, page_todos(e))))
+  key = (e.buf.version, v.lines, page_day(e))
+  (v.shown !== nothing && v.shown[1] == key) || (v.shown = (key, cards_on_day(e, v.data)))
   v.shown[2]
 end
+
+"""
+The cards of each column on the page's day. Today, that's what the page's
+items and the board's lines say. On another day, a page with a schedule shows
+the plan: a task that's finished by that day is in the last column, a task
+that runs on that day is in the second column of three or more, and the rest
+are in the first.
+"""
+cards_on_day(e, board::Boards.Board) = begin
+  tasks = planned_tasks(e)
+  isempty(tasks) && return Boards.arrange(board, page_todos(e))
+  n = length(board.columns)
+  out = [Schedules.Todo[] for _ in 1:n]
+  for t in tasks
+    s = standing(e, t)
+    push!(out[s == :done ? n : s == :doing && n > 2 ? 2 : 1], t.todo)
+  end
+  out
+end
+
+"True when the board shows the schedule's plan for another day than today. Its cards stay where they are then."
+planned(v::BoardView) = !isempty(planned_tasks(editor(v)))
+
+"True when the card of the item `t` shows as done"
+card_done(v::BoardView, t) = planned(v) ? t in columns!(v)[end] : t.done
 
 "The to-do item of the page that the card called `key` is for, or nothing"
 card_todo(v::BoardView, key) = (items = page_todos(editor(v)); k = findfirst(t -> t.key == key, items); k === nothing ? nothing : items[k])
@@ -12535,13 +12682,17 @@ describe(card::BoardCard) = begin
   t = card_todo(v, card.key)
   t === nothing && return Box(height(0px))
   taken = dragging(v) && v.grab[1] == card.key
+  done = card_done(v, t)
+  # A card is marked while the mouse is on its item in another part of the page
+  lit = !taken && !ishovered(card) && marked(v, card.key)
   Row(width(grow=grow), padding(10px, 8px), radius(6px), child_gap=7px, Alignment.Start, name="Card",
-      background(taken ? clear : takeoff_back()), border(1px, :solid, taken ? colours.faint : ishovered(card) ? colours.marker : colours.line),
-    (t.done ? (Box(padding(0px, 2px), Icon("check", size=14px, color=taken ? colours.faint : colours.string)),) : ())...,
-    Box(width(grow=grow), Text(t.name, size=13px, family=SANS, color=taken ? colours.faint : t.done ? colours.dim : colours.ink, wrap=WrapMode.words)))
+      background(taken ? clear : lit ? mark_colour(takeoff_back()) : takeoff_back()),
+      border(1px, :solid, taken ? colours.faint : lit ? colours.accent : ishovered(card) ? colours.marker : colours.line),
+    (done ? (Box(padding(0px, 2px), Icon("check", size=14px, color=taken ? colours.faint : colours.string)),) : ())...,
+    Box(width(grow=grow), Text(t.name, size=13px, family=SANS, color=taken ? colours.faint : done ? colours.dim : colours.ink, wrap=WrapMode.words)))
 end
 
-cursor(::BoardCard) = :hand
+cursor(card::BoardCard) = planned(card.of) ? :arrow : :hand
 cursor(::Union{BoardView,BoardColumn,DragLayer}) = :arrow
 
 onkey(card::BoardCard, ev::KeyPress{Keys.mouse_left}) = begin
@@ -12552,7 +12703,8 @@ onkey(card::BoardCard, ev::KeyPress{Keys.mouse_left}) = begin
   t = card_todo(v, card.key)
   # Two clicks in one place go to the card's line of the page
   time() - at < 0.35 && hypot(x - cx, y - cy) < 4 && t !== nothing && return show_line!(editor(v), t.line)
-  v.grab = (card.key, x, y, false)
+  # A board that shows the plan for another day has no card to move
+  planned(v) || (v.grab = (card.key, x, y, false))
   handled
 end
 
@@ -12586,6 +12738,13 @@ describe(v::BoardView) = begin
     wide = (e.width - 2px - 16px - 8px * (n - 1)) / n   # each column is as wide as the next
     columns = Row(width(grow=grow), padding(8px), child_gap=8px, Alignment.Start,
       [Box(fixed(wide), Alignment.Start, block_part!(() -> BoardColumn(of=v, c=c), v, (:column, c))) for c in 1:n]...)
+    # On another day than today, a line over the columns says whose cards these are
+    d = page_day(e)
+    planned(v) && (columns = Column(width(grow=grow), Alignment.Start,
+      Row(width(grow=grow), height(30px), padding(14px, 0px), child_gap=7px, Alignment.Center, clip=true,
+          Icon("calendar-day", size=13px, color=colours.accent),
+          Box(label("As the schedule plans it for $(Dates.dayname(d)) $(Schedules.long(d))", 12px, color=colours.dim)), Box(width(grow=grow))),
+      columns))
     Stack(block_look()..., clip=true, name="Board", columns,
           (dragging(v) ? (block_part!(() -> DragLayer(of=v), v, :drag),) : ())...)
   end
@@ -14909,7 +15068,7 @@ block_tick!(v::TimelogView) = begin
   if Timelogs.running(v.data) !== nothing && (minute = Dates.minute(Timelogs.now())) != v.minute
     v.minute = minute
     e = editor(v)
-    delete!(e.flows, (:tables, e.buf.path, e.buf.version))
+    delete!(e.flows, (:tables, e.buf.path, e.buf.version, table_reads[], page_day(e)))
     foreach(node -> node isa ChartView && (node.shown = nothing), values(e.nodes))
   end
   v
@@ -15040,7 +15199,7 @@ describe(v::TimelogView) = begin
       (narrow ? () : (log_column(fixed(LOG_DAY), "Day", size=11px, color=colours.dim),))...,
       log_column(fixed(time_wide), "From", size=11px, color=colours.dim), log_column(fixed(time_wide), "To", size=11px, color=colours.dim),
       log_column(fixed(hours_wide), "Hours", size=11px, color=colours.dim), log_column(width(grow=grow), "Task", size=11px, color=colours.dim))
-    rows, day = Any[], nothing
+    rows, day, hot = Any[], nothing, hot_stretch(v)
     for (i, r) in enumerate(log.rows)
       if r isa String
         # A line that can't be read shows as it's written
@@ -15054,10 +15213,12 @@ describe(v::TimelogView) = begin
                                          Box(label(Timelogs.day(r.day), 12px, color=colours.dim, weight="Semibold")), Box(width(grow=grow))))
       runs = i == run
       hours = runs ? Timelogs.elapsed(Timelogs.seconds(log, i, at)) : r.to === nothing ? "–" : Timelogs.hours(Timelogs.counted(log, i, at))
-      push!(rows, Row(width(grow=grow), height(LOG_ROW), padding(6px, 0px), Alignment.Center, background(runs ? RGBA(colours.accent, 0.09) : clear),
+      # A row is marked while the mouse is on its task: in another row, or in another part of the page
+      lit = !isempty(r.task) && i != hot && marked(v, r.task)
+      push!(rows, Row(width(grow=grow), height(LOG_ROW), padding(6px, 0px), Alignment.Center, background(lit ? tint(colours.accent, MARK_FILL) : runs ? RGBA(colours.accent, 0.09) : clear),
         (narrow ? () : (log_column(fixed(LOG_DAY), fresh ? Timelogs.day(r.day) : "", color=colours.dim),))...,
         block_part!(() -> LogCell(of=v, i=i, part=:from), v, (:cell, i, :from)), block_part!(() -> LogCell(of=v, i=i, part=:to), v, (:cell, i, :to)),
-        log_column(fixed(hours_wide), hours, color=runs ? colours.accent : r.to === nothing ? colours.faint : colours.ink, weight=runs ? "Semibold" : ""),
+        log_column(fixed(hours_wide), hours, color=runs ? colours.accent : r.to === nothing || r.day > page_day(e) ? colours.faint : colours.ink, weight=runs ? "Semibold" : ""),
         block_part!(() -> LogCell(of=v, i=i, part=:task), v, (:cell, i, :task))))
     end
     # Under the rows: the total, and the hours of each task when the log has more than one
@@ -15065,12 +15226,15 @@ describe(v::TimelogView) = begin
     if any(r -> r isa Timelogs.Stretch, log.rows)
       lead = (narrow ? 0px : LOG_DAY) + 2time_wide
       sum_row(name, minutes, weight) = Row(width(grow=grow), height(LOG_ROW), padding(6px, 0px), Alignment.Center,
+        background(isempty(weight) && marked(v, name) ? tint(colours.accent, MARK_FILL) : clear),
         log_column(fixed(lead), elide(name, 13px, lead - 12px), color=isempty(weight) ? colours.dim : colours.ink, weight=weight),
         log_column(fixed(hours_wide), Timelogs.hours(minutes), weight=weight),
         log_column(width(grow=grow), something(Timelogs.money(log, minutes), ""), weight=weight))
-      tasks = Timelogs.tasks(log, at)
+      # A page that shows a day that's past adds up the hours to that day
+      counted = log_to_day(e, log)
+      tasks = Timelogs.tasks(counted, at)
       push!(sums, Box(width(grow=grow), padding(12px, 4px), Box(width(grow=grow), height(1px), background(colours.line))),
-            sum_row("Total", Timelogs.total(log, at), "Semibold"))
+            sum_row(counted === log ? "Total" : "To " * Schedules.short(page_day(e)), Timelogs.total(counted, at), "Semibold"))
       length(tasks) > 1 && append!(sums, (sum_row(isempty(name) ? "No task" : name, minutes, "") for (name, minutes) in tasks))
     end
     Column(block_look()..., clip=true, name="Time log", bar, head, rows..., sums..., Box(height(6px)))
@@ -15591,11 +15755,20 @@ describe(card::ContactCard) = begin
   # A new detail that's being typed is a row at the end
   v.editing !== nothing && v.editing[1] == k && v.editing[2] isa Symbol && v.editing[2] !== :name && push!(rows, contact_row!(v, k, v.editing[2]))
   foreach(r -> r.room = inner, rows)
+  # Under the details: the to-do items that name the contact, with a line over them
+  work = contact_work(v, k)
+  jobs = isempty(work) ? () :
+    (Box(height(6px * z)), Box(fixed(inner), height(1px), background(colours.line)), Box(height(4px * z)),
+     [(r = contact_part!(() -> ContactWork(of=v, k=k, i=i), v, (:work_row, k, i), card); r.room = inner; r) for i in 1:min(length(work), WORK_ROWS)]...,
+     (length(work) > WORK_ROWS ? (Row(fixed(inner), height(CONTACT_LINE * z), padding(0px, 0px, 0px, 25px * z), Alignment.Center,
+                                    Box(label("and $(length(work) - WORK_ROWS) more", 11.5px * z, color=colours.faint)), Box(width(grow=grow))),) : ())...)
   # A card with only a name, or a name and the line under it, has them level with the middle of the picture
-  Row(fixed(contact_wide(v)), isempty(rows) ? Alignment.Center : Alignment.Start, padding(pad), child_gap=pad, radius(8px), border(1px, :solid, colours.line),
-      background(colours.block), clip=true, name="Contact",
+  # A card is marked while the mouse is on its contact in another part of the page, like its pin on a map
+  lit = !ishovered(card) && !isempty(Contacts.title(c)) && marked(v, Contacts.title(c))
+  Row(fixed(contact_wide(v)), isempty(rows) && isempty(jobs) ? Alignment.Center : Alignment.Start, padding(pad), child_gap=pad, radius(8px), border(1px, :solid, lit ? colours.accent : colours.line),
+      background(lit ? mark_colour(colours.block) : colours.block), clip=true, name="Contact",
     contact_part!(() -> ContactFace(of=v, k=k), v, (:face, k), card),
-    Column(width(grow=grow), Alignment.Start, head, tag..., (isempty(rows) ? () : (Box(height(5px * z)),))..., rows...))
+    Column(width(grow=grow), Alignment.Start, head, tag..., (isempty(rows) ? () : (Box(height(5px * z)),))..., rows..., jobs...))
 end
 
 cursor(::ContactCard) = :arrow
@@ -16358,6 +16531,1042 @@ web_html(e, v::WebView) = begin
 end
 
 BLOCKS[WEBVIEW] = BlockKind("Web page", "globe", WebView, web_html)
+
+# --- one thing in many parts of the page -------------------------------------------------------
+#
+# One thing can show in many parts of a page. A to-do item is a line of the
+# text, a card of a board, a bar of a schedule, a thing of a calendar's day
+# and the rows of a time log. A row of a table is a bar of a chart. While the
+# mouse is on a thing in one part, each other part marks the same thing, so
+# you see where it is in all of them.
+#
+# A thing is known by its name: the words of a to-do item, the task of a row
+# of a log, the first cell of a row of a table. No part sends another a
+# message. `pointed(part)` is the name of what the mouse is on in a part, and
+# `marked(part, name)` is true while the mouse is on a thing of that name
+# anywhere in the page. A kind of block joins in with a method of `pointed`,
+# and a call of `marked` where it draws a thing.
+
+const MARK_FILL = 0.13   # how strong the accent colour is behind a thing that's marked
+
+"A name as two parts of the page compare it. Capital letters, and the space round it, make no other name."
+plain_name(name::AbstractString) = lowercase(strip(name))
+
+"The colour `back` with the accent colour over it, as strong as a mark is: what's behind a thing that's marked"
+mark_colour(back) = begin
+  a, b = convert(RGBA{Float64}, back), convert(RGBA{Float64}, colours.accent)
+  RGBA(a.r + (b.r - a.r) * MARK_FILL, a.g + (b.g - a.g) * MARK_FILL, a.b + (b.b - a.b) * MARK_FILL, 1.0)
+end
+
+"The name of the thing that the mouse is on in `part`, or nothing. A kind of block that shows things by name has a method."
+pointed(part) = nothing
+
+"What tells a thing of a calendar from the others for the rest of the page: the name of its task or its to-do item, or the words of an event"
+thing_name(t::Calendars.Thing) = t.kind == :event ? t.words : t.key
+
+pointed(v::BoardView) = begin
+  v.grab === nothing || return nothing
+  for card in values(v.parts)
+    card isa BoardCard && ishovered(card) && return card.key
+  end
+  nothing
+end
+
+pointed(v::CalendarView) = begin
+  v.grab === nothing || return nothing
+  for c in values(v.parts)
+    c isa CalendarThing && c.thing !== nothing && ishovered(c) && return thing_name(c.thing)
+  end
+  nothing
+end
+
+pointed(v::ScheduleView) = (i = v.grab === nothing ? hot_row(v) : 0; i == 0 ? nothing : v.tasks[i].todo.key)
+
+"The place of the row of a log that the mouse is on, or 0"
+hot_stretch(v::TimelogView) = begin
+  w = window_of(v)
+  (w === nothing || !ishovered(v)) && return 0
+  y = w.mouse[2]
+  for i in eachindex(v.data.rows)
+    c = get(v.parts, (:cell, i, :task), nothing)
+    r = c === nothing ? nothing : rect(c)
+    r !== nothing && r.top - 2px <= y < r.top + r.height + 2px && return i
+  end
+  0
+end
+
+pointed(v::TimelogView) = begin
+  s = Timelogs.stretch(v.data, hot_stretch(v))
+  s === nothing || isempty(s.task) ? nothing : s.task
+end
+
+pointed(v::ChartView) = begin
+  a = get(v.parts, :area, nothing)
+  (a === nothing || !ishovered(a) || v.shown === nothing) && return nothing
+  m, labels = chart_hit(v), v.shown[2].labels
+  m !== nothing && 1 <= m.label <= length(labels) ? labels[m.label] : nothing
+end
+
+"Each part of the page that shows: the children of the document, in the order of their lines"
+shown_parts(e) = begin
+  out = Any[]
+  child = getfield(node!(Document, e, :document), :firstchild)
+  while child !== nothing
+    push!(out, child)
+    child = getfield(child, :nextsibling)
+  end
+  out
+end
+
+"The table of the page that the item `it` shows, as `page_tables` gives it, or nothing"
+item_table(e, it::Item) = (ts = page_tables(e); k = findfirst(t -> t.first == it.first, ts); k === nothing ? nothing : ts[k])
+
+"The name of row `r` of a table of the page: its first cell that holds something. The row of the columns' names has none."
+row_name(table, r::Int) = begin
+  (1 <= r <= length(table.rows) && !(r == 1 && table.headed)) || return nothing
+  k = findfirst(!isempty, table.rows[r])
+  k === nothing ? nothing : table.rows[r][k]
+end
+
+"""
+The rows of the table or the sheet that the item `it` shows, each with its
+name, how far its top is from the top of the item, and how tall it is. A row
+with no name is left out.
+"""
+named_rows(e, it::Item) = begin
+  out = Tuple{String,px,px}[]
+  g = it.content
+  g isa Union{Grid,Sheet} || return out
+  table = item_table(e, it)
+  (table === nothing || table.ranged) && return out   # the rows of a sheet over a range are its values, and not its own rows
+  y = g isa Grid ? TABLE_GAP + g.head : 0px
+  for r in eachindex(g.rows)
+    top, high = g isa Grid ? (y, g.heights[r] + 1px) : (row_top(g, r), g.heights[r])
+    y += high
+    name = row_name(table, r)
+    name === nothing || push!(out, (name, top, high))
+  end
+  out
+end
+
+"""
+The line of the page's text that the mouse is on, and the name of the thing
+on it: a to-do item, or a row of a table, of a spreadsheet or of a sheet. It's
+nothing when the mouse is on no such line.
+"""
+pointed_line(e) = begin
+  (zooming(e) === nothing && full_block(e) === nothing && e.popup == :none) || return nothing
+  win = window_of(e)
+  (win === nothing || isempty(e.layout) || held(e, Keys.mouse_left) || !ishovered(node!(Document, e, :document))) && return nothing
+  x, y = num(win.mouse[1]), num(win.mouse[2])
+  line = todo_line(e, x, y)
+  if line !== nothing
+    k = findfirst(t -> t.line == line, page_todos(e))
+    return k === nothing ? nothing : (line, page_todos(e)[k].key)
+  end
+  dx, dy = px(x) - e.origin[1], px(y) - e.origin[2]
+  (0px <= dx < e.width && y >= num(TOPBAR_H) && dy >= 0px) || return nothing
+  it = e.layout[item_under(e, dx, dy)]
+  for (r, (name, top, high)) in enumerate(named_rows(e, it))
+    it.top + top <= dy < it.top + top + high && return (it.first + r, name)
+  end
+  nothing
+end
+
+"""
+Find the thing that the mouse is on, before the page is laid out: in the
+page's text, or else in the first part of the page that says so. `pointed(e)`
+gives its name until the next frame.
+"""
+point_tick!(e) = begin
+  found = pointed_line(e)
+  if found === nothing
+    for part in shown_parts(e)
+      name = pointed(part)
+      name === nothing || (found = (0, name); break)
+    end
+  end
+  e.nodes[:pointed] = found === nothing ? nothing : (found[1], plain_name(found[2]))
+  e
+end
+
+"The name of the thing that the mouse is on, in any part of the page that shows, or nothing"
+pointed(e::Editor) = (p = get(e.nodes, :pointed, nothing); p === nothing ? nothing : p[2])
+
+"True while the mouse is on a thing called `name`, in any part of the page"
+marked(e::Editor, name::AbstractString) = (p = pointed(e); p !== nothing && p == plain_name(name))
+marked(part, name::AbstractString) = marked(editor(part), name)
+
+"""
+Mark the thing that the mouse is on where the page's text has it too: a soft
+box behind each to-do item and each row of a table that has its name. The line
+that the mouse is on has none. The page's text is at `ui`.
+"""
+mark_pointed(ctx, e, ui) = begin
+  p = get(e.nodes, :pointed, nothing)
+  p === nothing && return
+  from, name = p
+  fill = tint(colours.accent, MARK_FILL)
+  todos = nothing
+  for it in e.layout[e.shown]
+    across, wide = item_room(e, it)
+    left, top = num(ui.left + across), num(ui.top + it.top)
+    f = it.content
+    if f isa Flow && f.kind == Kind.todo && !f.raw && it.first != from
+      todos === nothing && (todos = page_todos(e))
+      k = findfirst(t -> t.line == it.first, todos)
+      k !== nothing && plain_name(todos[k].key) == name && round_box(ctx, left - 6, top, num(wide) + 12, num(it.tall), 5; fill)
+    elseif f isa Union{Grid,Sheet}
+      long = f isa Grid ? num(f.left + sum(f.widths, init=0px) + 1px * (length(f.widths) + 1)) : num(wide)
+      for (r, (row, y, high)) in enumerate(named_rows(e, it))
+        plain_name(row) == name && it.first + r != from && round_box(ctx, left, top + num(y), long, num(high), 0; fill)
+      end
+    end
+  end
+end
+
+# --- the day that the page shows ---------------------------------------------------------------
+#
+# A page shows itself as it stands on one day: today, until the page has a
+# code block in the language `day`. day.jl says how that block is written. It
+# shows a line of days with a slider on it. Drag the slider, click a day, or
+# press ← and →, and the page's day changes while the mouse moves. When the
+# mouse lets go, the day goes into the block's line. Today takes the line
+# away, so the page follows the real day again.
+#
+# No part of the page is told. Each part that would ask for today asks
+# `page_day(e)`:
+#
+#   - A schedule draws its line of today on that day. A task that the plan
+#     finishes before that day shows as done.
+#   - A board puts each card where the schedule's plan has its task on that
+#     day: to do, doing or done. Its cards stay where they are while it does.
+#   - A calendar shows the month of that day, with a circle round the day.
+#   - A time log adds up the hours to that day, when the day is past. A chart
+#     of the log draws those hours.
+#
+# The slider goes from the first to the last day of the things of the page.
+# `page_days` finds those: it asks the schedule for its tasks, and reads the
+# days of the to-do items, the events and the rows of the logs.
+
+const DAY_BLOCK = Days.DAY
+const DAY_TRACK = 50px    # how tall the line of days is
+const DAY_PAD = 20.0      # px from each end of that line to the edge of the block
+const DAY_KNOB = 7.0      # the radius of the slider
+push!(BLOCK_ICONS, "calendar-day")
+
+"What a `day` block shows: a line of days with a slider on it, which sets the day that the page shows"
+@def mutable struct DayView <: SemanticUI
+  n::Int = 0                               # its place among the page's blocks of this kind
+  first::Int = 0                           # the lines of its block, when the page was last laid out
+  last::Int = 0
+  day::Union{Nothing,Date} = nothing       # the day that its lines say, or nothing for today
+  lines::Vector{String} = String[]         # the lines that `day` was read from
+  at::Union{Nothing,Date} = nothing        # the day that the slider is on while the mouse drags it
+  grab::Bool = false                       # the mouse holds the slider
+  days::Vector{Date} = Date[]              # the days that the line shows
+  box::NTuple{4,Float64} = (0.0, 0.0, 0.0, 0.0)   # where the line of days was last drawn in the window
+  parts::Dict{Any,Any} = Dict{Any,Any}()   # its buttons and its line of days, kept between frames
+end
+
+"The line of days of a `day` block, with the slider on it"
+@def mutable struct DayTrack <: SemanticUI
+  of::Any = nothing
+end
+
+reread!(v::DayView, lines) = begin
+  lines == v.lines && return v
+  v.lines = lines
+  v.day = Days.day(lines)
+  v
+end
+
+"The lines that open and close the page's first `day` block, or nothing. They're found again when the page has changed."
+day_block(e) = (b = e.buf; get!(() -> block_lines(b, DAY_BLOCK, 1), e.flows, (:day_block, b.path, b.version)))
+
+"""
+The day that the page shows itself on: today, unless the page has a `day`
+block that says another. Each part of the page that shows what's done, what's
+running or what's to come asks for this day.
+"""
+page_day(e) = begin
+  today = calendar_today()
+  span = day_block(e)
+  span === nothing && return today
+  v = block_view(e, DAY_BLOCK, 1)
+  reread!(v, e.buf.lines[span[1]+1:span[2]-1])
+  something(v.at, v.day, today)
+end
+
+"True when the page shows a day that isn't today"
+another_day(e) = page_day(e) != calendar_today()
+
+"How the task `t` of a schedule stands on the page's day: `:done`, `:doing` or `:todo`"
+standing(e, t::Schedules.Planned) = Days.stands(t.start, t.finish, t.todo.done, page_day(e), calendar_today())
+
+"True when the task `t` shows as done: it's ticked, or on another day than today, the plan has it finished by then"
+finished(e, t::Schedules.Planned) = another_day(e) ? standing(e, t) == :done : t.todo.done
+
+"The tasks of the page's schedule, when the page shows another day than today. On the real day, and with no schedule, there are none: the page shows what's ticked."
+planned_tasks(e) = another_day(e) ? calendar_tasks(e)[1] : Schedules.Planned[]
+
+"A log with only the hours to the page's day, when that day is past. If not, the log itself."
+log_to_day(e, log::Timelogs.Log) = (d = page_day(e); d < calendar_today() ? Timelogs.upto(log, d) : log)
+
+"""
+The days of the things of the page: the days of its schedule's tasks, of its
+to-do items that have a day, of its calendars' events and of the rows of its
+time logs. They're found again when the page has changed.
+"""
+page_days(e) = begin
+  b = e.buf
+  get!(e.flows, (:page_days, b.path, b.version, calendar_today())) do
+    out = Date[]
+    foreach(t -> push!(out, t.start, t.finish), calendar_tasks(e)[1])
+    for t in page_todos(e)
+      d = Calendars.stamp(t.name)
+      d === nothing || push!(out, d)
+    end
+    for (i, k) in enumerate(kinds(b))
+      (k.kind == Kind.code && k.lang in (CALENDAR, TIMELOG)) || continue
+      d = Days.day((b.lines[i],))
+      d === nothing || push!(out, d)
+    end
+    out
+  end
+end
+
+"Make `d` the page's day, and write it into the block's line. Today takes the line away."
+set_day!(v::DayView, d::Date) = begin
+  v.at = nothing
+  write_block!(v, DAY_BLOCK, Days.written(v.lines, d == calendar_today() ? nothing : d))
+  handled
+end
+
+act!(v::DayView, action, w) = begin
+  e = editor(v)
+  action == :today ? set_day!(v, calendar_today()) : set_day!(v, page_day(e) + Day(action == :back ? -1 : 1))
+end
+
+"How far across the window the middle of the day at place `i` of the line is"
+day_spot(v::DayView, i::Real) = v.box[1] + DAY_PAD + (i - 0.5) * (v.box[3] - 2DAY_PAD) / max(length(v.days), 1)
+
+"The day of the line that's nearest to `x` across the window"
+day_near(v::DayView, x::Real) = begin
+  n = length(v.days)
+  n == 0 && return calendar_today()
+  v.days[clamp(floor(Int, (x - v.box[1] - DAY_PAD) / max((v.box[3] - 2DAY_PAD) / n, 1e-6)) + 1, 1, n)]
+end
+
+"What happens to a `day` block in each frame, before the page is laid out: the slider follows the mouse that holds it, and its day is written down when the mouse lets go"
+block_tick!(v::DayView) = begin
+  v.grab || return v
+  w = window_of(v)
+  w === nothing && return (v.grab = false; v)
+  if held(v, Keys.mouse_left)
+    v.at = day_near(v, num(w.mouse[1]))
+  else
+    v.grab = false
+    v.at === nothing || set_day!(v, v.at)
+  end
+  v
+end
+
+describe(v::DayView) = begin
+  e = editor(v)
+  today, d = calendar_today(), page_day(e)
+  v.days = collect(Days.span(page_days(e), today, d))
+  with_theme(component_theme(e.zoom)) do
+    off = readonly(e.buf)
+    bar = block_bar(
+      block_button!(v, :back, :back, icon="chevron-left", tip="The day before", off=off),
+      block_button!(v, :on, :on, icon="chevron-right", tip="The day after", off=off),
+      Box(width(6px)),
+      Box(label("$(Dates.dayname(d)) $(Schedules.long(d))", 13px, weight="Semibold")),
+      Box(width(8px)),
+      Row(width(grow=grow), clip=true, Alignment.Center, Box(label(d == today ? "Today" : uppercasefirst(Days.away(d, today)), 12px, color=colours.dim)), Box(width(grow=grow))),
+      block_button!(v, :today, :today, words="Today", tip="Show the page as it is today", off=off || (d == today && v.day === nothing)))
+    Column(block_look()..., clip=true, name="Day", bar, block_part!(() -> DayTrack(of=v), v, :track))
+  end
+end
+
+describe(::DayTrack) = Box(width(grow=grow), height(DAY_TRACK))
+
+draw(ctx, size, ui::ConcreteRect, t::DayTrack) = begin
+  v = t.of
+  v.box = (num(ui.left), num(ui.top), num(ui.width), num(ui.height))
+  n = length(v.days)
+  (v.box[3] > 2DAY_PAD && n > 0) || return
+  e = editor(v)
+  left, top = v.box[1], v.box[2]
+  today, d = calendar_today(), page_day(e)
+  step = (v.box[3] - 2DAY_PAD) / n
+  line = top + 30
+  small = Face(SANS, "", 11px, colours.dim, false)
+  with_clip(ctx, ui.left, ui.top, ui.width, ui.height) do
+    round_box(ctx, left + DAY_PAD, line - 2, v.box[3] - 2DAY_PAD, 4, 2; fill=RGBA(colours.ink, 0.1))
+    # The names of the days go over the line: each Monday, or the first day of each month when the days are narrow
+    weekly = 7step >= 50
+    for (i, day) in enumerate(v.days)
+      x = day_spot(v, i)
+      monday, first = Dates.dayofweek(day) == 1, Dates.day(day) == 1
+      step >= 7 && trace(ctx, [(x, line - 6), (x, line - 3)], RGBA(colours.ink, monday ? 0.35 : 0.15), 1.0)
+      (weekly ? monday : first) || continue
+      words = weekly ? "$(Dates.day(day)) $(Dates.monthabbr(day))" : Dates.monthabbr(day)
+      write_ink(ctx, words, x - num(measure(small, words)) / 2, top + 16, small)
+    end
+    # The line is coloured from today to the page's day, and today has its name under it
+    a, b = findfirst(==(today), v.days), findfirst(==(d), v.days)
+    if a !== nothing
+      x = day_spot(v, a)
+      b === nothing || a == b || round_box(ctx, min(x, day_spot(v, b)), line - 2, abs(day_spot(v, b) - x), 4, 2; fill=RGBA(colours.accent, 0.45))
+      disc(ctx, x, line, 3.5, colours.ink)
+      words = "Today"
+      write_ink(ctx, words, clamp(x - num(measure(small, words)) / 2, left + 4, left + v.box[3] - num(measure(small, words)) - 4), line + 16, small)
+    end
+    if b !== nothing
+      x = day_spot(v, b)
+      disc(ctx, x, line, DAY_KNOB + 2, takeoff_back())
+      disc(ctx, x, line, DAY_KNOB, colours.accent)
+    end
+  end
+end
+
+cursor(::DayTrack) = :hand
+cursor(::DayView) = :arrow
+
+onkey(t::DayTrack, ev::KeyPress{Keys.mouse_left}) = begin
+  v = t.of
+  readonly(editor(v).buf) && return handled
+  focus(t)
+  v.grab = true
+  v.at = day_near(v, num(ev.window.mouse[1]))
+  handled
+end
+onkey(t::DayTrack, ::KeyPress{Keys.left}) = act!(t.of, :back, nothing)
+onkey(t::DayTrack, ::KeyPress{Keys.right}) = act!(t.of, :on, nothing)
+onkey(t::DayTrack, ::KeyPress{Keys.escape}) = (focus(editor(t.of)); handled)
+# A click beside a button is the block's, and doesn't move the caret
+onkey(::DayView, ::KeyPress{Keys.mouse_left}) = handled
+# A drag is the slider's, so the page's text doesn't select
+onmouse(v::DayView, ::MouseMove) = v.grab ? handled : nothing
+
+"The block as HTML: the day that the page shows"
+day_html(e, v::DayView) = (d = something(v.day, calendar_today()); "<p><strong>$(Dates.dayname(d)) $(Schedules.long(d))</strong></p>")
+
+BLOCKS[DAY_BLOCK] = BlockKind("Day", "calendar-day", DayView, day_html)
+
+# --- a number that a drag changes ---------------------------------------------------------------
+#
+# A sum in a line of text that is one number, like !`l = 16m`, shows what it
+# comes to: 16m. So does a row of a sheet that is one number. A drag on that
+# value, to the right or to the left, makes the number bigger or smaller. Each
+# step of the drag writes the new number into the page's text, so every other
+# part that reads it follows while the mouse moves: the rows of the sheet
+# under that row, a chart of the sheet, and the sums in a line that use the
+# sum's name. ⇧ makes each step ten times as big. A click that doesn't move
+# puts the caret where a click puts it anywhere else.
+#
+# A sum in a line of text keeps what it made, so that it runs once. When a
+# sum of the page changes, `inline_tick!` forgets what the sums after it made,
+# and they run again from the top down.
+
+const SCRUB_STEP = 5.0   # px that the mouse moves for one step of a number
+
+"""
+The number at the place `pos` of the window that a drag can change: its line,
+and the columns that it runs from and to. It's the number of a sum in a line
+of text, under what the sum shows, or the number of a row of a sheet, under
+what the row comes to. Nothing when the place has no such number.
+"""
+scrub_at(e, pos) = begin
+  b = e.buf
+  (isempty(e.layout) || readonly(b) || b.fixed || b.view != :markdown) && return nothing
+  dx, dy = pos[1] - e.origin[1], pos[2] - e.origin[2]
+  (dy >= 0px && pos[2] >= TOPBAR_H) || return nothing
+  it = e.layout[item_under(e, dx, dy)]
+  y = dy - it.top
+  c = it.content
+  if c isa Flow
+    (!c.raw && 0px <= y < tall(c)) || return nothing
+    chars = collect(b.lines[it.first])
+    for seg in c.lines[line_at(c, y)].segs
+      (seg.atomic && seg.node === nothing && seg.x <= dx < seg.x + seg.w) || continue
+      # The piece stands for the code of !`code`
+      (seg.col >= 2 && seg.col + seg.n <= length(chars) && chars[seg.col-1] == '!' && chars[seg.col] == '`') || continue
+      at = number_at(String(chars[seg.col+1:seg.col+seg.n]))
+      return at === nothing ? nothing : (it.first, seg.col + at[1], seg.col + at[2])
+    end
+  elseif c isa Sheet
+    across, wide = item_room(e, it)
+    r = rowunder(c, y)
+    res = c.results[r]
+    (res.failed || isempty(res.text) || !(row_top(c, r) <= y < row_top(c, r) + c.heights[r])) && return nothing
+    # What the row comes to is at the right end of the row
+    w = chip_w(Face(SHEET_FONT, SHEET_WEIGHT, c.size, colours.ink, false), res)
+    (wide - SHEET_X - w <= dx - across < wide - SHEET_X) || return nothing
+    cell = c.cells[r][end]
+    at = number_at(rest(head(b.lines[c.rows[r]], cell.hi), cell.lo))
+    return at === nothing ? nothing : (c.rows[r], cell.lo + at[1], cell.lo + at[2])
+  end
+  nothing
+end
+
+"""
+Draw a line of dashes under each sum in a line of text that a drag can change,
+so that it reads as a number to take hold of. The page's text is at `ui`.
+"""
+underline_scrubs(ctx, e, ui) = begin
+  b = e.buf
+  (readonly(b) || b.fixed || b.view != :markdown) && return
+  for it in e.layout[e.shown]
+    f = it.content
+    (f isa Flow && !f.raw && occursin(INLINE, b.lines[it.first])) || continue
+    chars = collect(b.lines[it.first])
+    for vl in f.lines, seg in vl.segs
+      (seg.atomic && seg.node === nothing && seg.col >= 2 && seg.col + seg.n <= length(chars) && chars[seg.col-1] == '!' && chars[seg.col] == '`') || continue
+      number_at(String(chars[seg.col+1:seg.col+seg.n])) === nothing && continue
+      y = num(ui.top + it.top + f.above + vl.top + vl.high / 2) + num(f.size) * 0.62
+      trace(ctx, [(num(ui.left + seg.x), y), (num(ui.left + seg.x + seg.w), y)], tint(colours.accent, 0.75), 1.0, dashed=true)
+    end
+  end
+end
+
+"Take hold of the number at `found`, which `scrub_at` gave, with the mouse at `pos`"
+scrub!(e, found, pos) = begin
+  i, lo, hi = found
+  b = e.buf
+  e.nodes[:scrub] = (line=i, lo=lo, hi=hi, x=num(pos[1]), text=rest(head(b.lines[i], hi), lo), steps=0, moved=false)
+  b.typed = 0.0   # the drag is taken back by itself, and not with what was typed before it
+  e.popup = :none
+  e.clicked = (time(), (i, 0), 0)
+  took(e) || focus(e)
+  e
+end
+
+"Give the number that the mouse holds the value for where the mouse is now, and write it into its line. The caret stays with its text."
+scrub_to!(e, pos) = begin
+  s = e.nodes[:scrub]
+  b = e.buf
+  steps = round(Int, (num(pos[1]) - s.x) / SCRUB_STEP) * (held(e, Keys.shft) ? 10 : 1)
+  (steps == s.steps || !(1 <= s.line <= length(b.lines))) && return e
+  new = nudged(s.text, steps)
+  caret, anchor = b.caret, b.anchor
+  edit!(b, (s.line, s.lo), (s.line, s.hi), new, typing=true)
+  by = length(new) - (s.hi - s.lo)
+  kept(p) = p[1] == s.line && p[2] >= s.hi ? (p[1], p[2] + by) : p
+  b.caret, b.anchor = kept(caret), kept(anchor)
+  e.nodes[:scrub] = (; s..., hi=s.lo + length(new), steps, moved=true)
+  e
+end
+
+"What happens in each frame to a number that the mouse holds: when the mouse lets go, the drag ends. A press that never moved was a click, and puts the caret there."
+scrub_tick!(e) = begin
+  s = get(e.nodes, :scrub, nothing)
+  (s === nothing || held(e, Keys.mouse_left)) && return e
+  delete!(e.nodes, :scrub)
+  b = e.buf
+  b.typed = 0.0
+  w = window_of(e)
+  if !s.moved && w !== nothing
+    b.caret = b.anchor = settle(b, locate(e, w.mouse))
+    touch!(e)
+  end
+  e
+end
+
+"The code of each sum in a line of text of the page, in the order of the page"
+inline_codes(e, b::Buffer) = get!(e.flows, (:inline_codes, b.path, b.version)) do
+  String[m[1] for i in inline_lines(e, b) for m in eachmatch(r"!`([^`]+)`", b.lines[i])]
+end
+
+"""
+Run again the sums in a line of text that come after a sum that changed, so
+that a sum which uses a name follows the sum that gives the name its value.
+What a sum made is forgotten, and the sum runs when its line is next laid
+out. A sum that made a node, like a switch, keeps its node. `also` is what
+else the sums read, as `inline_given!` gives it: when that changes, every sum
+runs again.
+"""
+inline_tick!(e) = begin
+  b = e.buf
+  b.view == :markdown || return e
+  key = (:inline_seen, b.path)
+  seen = get(e.nodes, key, nothing)
+  seen !== nothing && seen[1] == b.version && return e
+  codes = inline_codes(e, b)
+  also = inline_given!(e)
+  e.nodes[key] = (b.version, codes, also)
+  seen === nothing && return e
+  (codes == seen[2] && also == seen[3]) && return e
+  from = also == seen[3] ? something(findfirst(i -> i > length(seen[2]) || seen[2][i] != codes[i], eachindex(codes)), length(codes) + 1) : 1
+  counts = Dict{String,Int}()
+  for (i, code) in enumerate(codes)
+    n = counts[code] = get(counts, code, 0) + 1
+    i >= from && get(e.nodes, (:inline, b.path, code, n), nothing) isa Tuple && delete!(e.nodes, (:inline, b.path, code, n))
+  end
+  # A sum that the page no longer has is forgotten too, so that it runs if it comes back
+  for k in collect(keys(e.nodes))
+    (k isa Tuple && length(k) == 4 && k[1] == :inline && k[2] == b.path && e.nodes[k] isa Tuple) || continue
+    get(counts, k[3], 0) < k[4] && delete!(e.nodes, k)
+  end
+  e
+end
+
+# --- the places that a map has from the rest of its page ------------------------------------------
+#
+# A map shows more than its own place. Each address of a contact of the
+# page has a pin on the map too, in another colour, and so has the address
+# in the page's front matter. The mouse over such a pin says whose it is, and
+# a click goes to its line of the page. A map with no place of its own shows
+# all of those places, and is as close as shows them all.
+#
+# The map asks: `block_places(lang, lines)` says which places a block of one
+# kind gives, and `page_places` gathers them. A kind of block that has a place
+# joins in with a line there. While the mouse is on a contact's card, its pin
+# is marked, and the other way round: see "one thing in many parts of the page".
+
+const OTHER_PIN = (colorant"#2a78d6", colorant"#1d5fb0")   # what fills the pin of a place from the page, and the line round it
+const PIN_REACH = 14.0   # px from the middle of a pin's head that the mouse is still on the pin
+
+"""
+The places that a block in the language `lang` gives the maps of its page:
+each with the name of whose place it is, the place as the block has it, and
+the line of the block that it's on. `lines` are the lines of the block. A
+block of contacts gives the address of each contact that has one.
+"""
+block_places(lang, lines) = begin
+  out = @NamedTuple{name::String, place::String, line::Int}[]
+  lang == CONTACT || return out
+  at = 0
+  for c in Contacts.contacts(lines)
+    at += c.before
+    k = Contacts.place(c, :address)
+    k === nothing || push!(out, (name=Contacts.title(c), place=c.lines[k].value, line=at + k))
+    at += length(c.lines)
+  end
+  out
+end
+
+"""
+Every place that the page gives its maps, with the line of the page that
+each is on: the address in the page's front matter, and what each block
+gives. They're found again when the page has changed.
+"""
+page_places(e) = begin
+  b = e.buf
+  get!(e.flows, (:places, b.path, b.version)) do
+    out = @NamedTuple{name::String, place::String, line::Int}[]
+    matter = 2:front_matter(b.lines)-1
+    # The place is called what the front matter calls the page, or else what the page's file is called
+    title = something((match(r"^title\s*:\s*(\S.*?)\s*$"i, b.lines[i]) for i in matter)..., Some(nothing))
+    called = title === nothing ? splitext(basename(b.path))[1] : String(strip(title[1], ['"', '\'']))
+    for i in matter
+      m = match(r"^(?:address|place|site)\s*:\s*(\S.*?)\s*$"i, b.lines[i])
+      m === nothing || push!(out, (name=called, place=String(strip(m[1], ['"', '\''])), line=i))
+    end
+    ks = kinds(b)
+    for (i, k) in enumerate(ks)
+      (k.kind == Kind.fence && k.level == 0 && k.lang == CONTACT) || continue
+      t = codeblock(b, i)[2]
+      (t > i && ks[t].kind == Kind.fence && ks[t].level == 1) || continue
+      append!(out, ((name=p.name, place=p.place, line=i + p.line) for p in block_places(k.lang, b.lines[i+1:t-1])))
+    end
+    out
+  end
+end
+
+"""
+The places from the rest of the page that the map `v` can show: each with its
+name, its line of the page, and its latitude and longitude. A place is one of
+them once Apple's maps have said where it is. With `runs`, the program that
+asks them starts for a place that isn't kept yet. The map's own place isn't
+one of them.
+"""
+map_others(v::MapView, runs::Bool=false) = begin
+  e = editor(v)
+  kept = get(e.flows, (:map_others, objectid(v)), nothing)
+  kept !== nothing && kept[1] == (e.buf.version, map_place(v)) && kept[2] && return kept[3]
+  out = @NamedTuple{name::String, place::String, line::Int, at::Maps.LatLon}[]
+  whole = true
+  for p in page_places(e)
+    lowercase(Maps.query(p.place)) == map_place(v) && continue
+    at = Maps.coordinates(p.place)
+    if at === nothing
+      found = Maps.found!(media_dir(), p.place; start=runs)
+      facts = found.state == :there ? Maps.facts(found.file) : nothing
+      if facts === nothing
+        # The window looks again when the program may have finished
+        found.state in (:coming, :none) && (whole = false; isfinite(found.wait) && redraw_in!(v, max(found.wait, 0.05)))
+        continue
+      end
+      at = (facts.lat, facts.lon)
+    end
+    push!(out, (name=p.name, place=p.place, line=p.line, at=at))
+  end
+  e.flows[(:map_others, objectid(v))] = ((e.buf.version, map_place(v)), whole, out)
+  out
+end
+
+"The middle and the zoom of a map with no place of its own, which shows the places from the rest of its page. It's nothing when the map has a place, or the page gives none that's known."
+map_around(v::MapView) = begin
+  isempty(v.data.place) || return nothing
+  ats = [o.at for o in map_others(v)]
+  isempty(ats) ? nothing : Maps.around(ats, v.data.zoom, map_wide(v), Maps.TALL)
+end
+
+"The point of the map that shows now where the place `o` from the page is, in px from the map's top left corner, or nothing when it isn't in the map"
+other_point(v::MapView, o) = begin
+  middle = map_middle(v)
+  middle === nothing && return nothing
+  _, _, w, h = v.box
+  at = Maps.point(o.at, middle, map_zoom(v), w, h)
+  0 <= at[1] <= w && 0 <= at[2] <= h ? at : nothing
+end
+
+"The place from the page whose pin the mouse is on, or nothing"
+other_at(v::MapView) = begin
+  w = window_of(v)
+  a = get(v.parts, :area, nothing)
+  (w === nothing || a === nothing || !ishovered(a) || v.grab !== nothing || !map_shows(v)) && return nothing
+  x, y = num(w.mouse[1]) - v.box[1], num(w.mouse[2]) - v.box[2]
+  for o in map_others(v)
+    at = other_point(v, o)
+    # The head of a pin is over its point
+    at !== nothing && hypot(x - at[1], y - (at[2] - 26)) <= PIN_REACH && return o
+  end
+  nothing
+end
+
+pointed(v::MapView) = (o = other_at(v); o === nothing ? nothing : o.name)
+
+pointed(v::ContactView) = begin
+  # A to-do item under a contact's details is the item, and not the contact
+  for r in values(v.parts)
+    r isa ContactWork && ishovered(r) || continue
+    m = work_of(r)
+    return m === nothing ? nothing : m.text
+  end
+  for card in values(v.parts)
+    card isa ContactCard && ishovered(card) || continue
+    c = contact_of(v, card.k)
+    return c === nothing || isempty(Contacts.title(c)) ? nothing : Contacts.title(c)
+  end
+  nothing
+end
+
+# --- the work that names a contact --------------------------------------------------------------
+#
+# Under the details of a contact, its card lists the to-do items that name
+# the contact and aren't ticked yet: the items of this page, and of every
+# page of this page's folder and of the folders in it. A person is named by
+# the whole name, or by the first name alone. A click on an item goes to its
+# line, in its own page. The mouse on an item marks it in the other parts of
+# the page that show it: see "one thing in many parts of the page".
+#
+# The card reads the pages as a `find` block does, with `folder_pages` and
+# `page_text`, so a page is read again only when it changes. A page that
+# can't be changed, like an email, lists none.
+
+const WORK_ROWS = 4   # the most items that a card lists. Under them, a line says how many more there are.
+push!(BLOCK_ICONS, "square")
+
+"A row under the details of a contact: a to-do item that names the contact"
+@def mutable struct ContactWork <: SemanticUI
+  of::Any = nothing
+  k::Int = 0        # the contact
+  i::Int = 0        # the item's place among the contact's items
+  room::px = 0px    # how wide the row is
+end
+
+"The words that name the contact `c` in a line of text: its whole name, and for a person the first name too, when it has three letters or more"
+contact_names(c::Contacts.Contact) = begin
+  title = String(strip(Contacts.title(c)))
+  isempty(title) && return String[]
+  first_name = String(first(split(title)))
+  !Contacts.iscompany(c) && first_name != title && length(first_name) >= 3 ? [title, first_name] : [title]
+end
+
+"True when `text` has one of `names` in it as whole words. Capital letters make no difference."
+names_one(text::AbstractString, names) = begin
+  low = lowercase(text)
+  any(names) do name
+    n = lowercase(name)
+    at = findfirst(n, low)
+    while at !== nothing
+      before = first(at) == firstindex(low) ? ' ' : low[prevind(low, first(at))]
+      after = last(at) == lastindex(low) ? ' ' : low[nextind(low, last(at))]
+      (isletter(before) || isdigit(before) || isletter(after) || isdigit(after)) || return true
+      at = findnext(n, low, nextind(low, first(at)))
+    end
+    false
+  end
+end
+
+"""
+The to-do items that name contact `k` of the block and aren't ticked, in
+every page of this page's folder and of the folders in it. They're found
+again when a page changes in Ladder, and when the folder is read again.
+"""
+contact_work(v::ContactView, k::Int) = begin
+  e = editor(v)
+  names = contact_names(contact_of(v, k))
+  folder = docdir(e)
+  (isempty(names) || locked(v) || !isdir(folder)) && return Searches.Match[]
+  listed = folder_pages(folder)
+  key = (names, hash([b.version for b in values(e.buffers)]), listed.read)
+  kept = get(e.flows, (:contact_work, objectid(v), k), nothing)
+  kept !== nothing && kept[1] == key && return kept[2]
+  pages = get!(() -> Dict{String,Any}(), e.flows, :contact_todos)   # the open items of each page, for every card of the window
+  every = Searches.Query(:todo, String[], "", String[])
+  out = Searches.Match[]
+  for (path, at) in listed.pages
+    lines, ks, mark = page_text(e, path, at)
+    had = get(pages, path, nothing)
+    items = had !== nothing && had[1] == mark ? had[2] : (pages[path] = (mark, Searches.matches(every, path, lines, ks)))[2]
+    append!(out, (m for m in items if m.kind == :todo && names_one(m.text, names)))
+  end
+  e.flows[(:contact_work, objectid(v), k)] = (key, out)
+  out
+end
+
+"The to-do item that the row `r` shows, or nothing when the contact has it no more"
+work_of(r::ContactWork) = (found = contact_work(r.of, r.k); r.i in eachindex(found) ? found[r.i] : nothing)
+
+describe(r::ContactWork) = begin
+  v = r.of
+  e = editor(v)
+  z = e.zoom
+  m = work_of(r)
+  m === nothing && return Box(height(0px))
+  # An item of another page says which page it's in
+  page = m.path == e.buf.path ? "" : splitext(relpath(m.path, docdir(e)))[1]
+  grey = Face(SANS, "", 11.5px * z, colours.faint, false)
+  tail = isempty(page) ? 0px : min(measure(grey, page), r.room * 0.4) + 8px * z
+  Row(fixed(r.room), height(CONTACT_LINE * z), child_gap=7px * z, Alignment.Center, radius(4px), clip=true, name="Item",
+      background(ishovered(r) ? colours.hover : clear),
+    Box(fixed(18px * z), Alignment.Center, Icon("square", size=12px * z, color=colours.dim)),
+    Box(label(elide(m.text, 13px * z, r.room - 25px * z - tail), 13px * z, color=colours.ink)), Box(width(grow=grow)),
+    (isempty(page) ? () : (Box(label(elide(page, 11.5px * z, tail - 8px * z), 11.5px * z, color=colours.faint)),))...)
+end
+
+cursor(::ContactWork) = :hand
+onkey(r::ContactWork, ::KeyPress{Keys.mouse_left}) = (m = work_of(r); m === nothing ? handled : visit!(editor(r.of), m.path, m))
+
+# --- the clock of a to-do item -----------------------------------------------------------------
+#
+# On a page with a time log, the mouse over a to-do item shows a small
+# button at the end of the item's line, with the hours that the log has for
+# the item. A click starts the log's clock on the item: the log gets a new
+# line for now, with the item's words as its task. While the clock runs on
+# the item, the button stops it. A tick in the item's box stops it too.
+#
+# The item and the log send each other nothing. The button calls the log's
+# own `Timelogs.start!` and `Timelogs.stop!` on the log's view, and writes
+# the log's block. The schedule asks `worked` for the hours of each task, and
+# shows them beside the task's name.
+
+push!(BLOCK_ICONS, "play-fill", "stop-fill")
+
+"The button beside a to-do item that starts and stops the clock of the page's time log on the item"
+@def mutable struct ItemClock <: SemanticUI
+  key::String = ""                              # the to-do item, by what a schedule calls it
+  rect::NTuple{4,px} = (0px, 0px, 0px, 0px)     # where it was last drawn, to put its tooltip over it
+end
+
+"The view of the page's first time log, read again from the lines of its block, or nothing when the page has none or can't be changed"
+page_log(e) = begin
+  b = e.buf
+  (readonly(b) || b.fixed) && return nothing
+  span = get!(() -> block_lines(b, TIMELOG, 1), e.flows, (:log_block, b.path, b.version))
+  span === nothing && return nothing
+  v = block_view(e, TIMELOG, 1)
+  v.first, v.last = span
+  reread!(v, b.lines[span[1]+1:span[2]-1])
+end
+
+"""
+The minutes that the page's time logs have for each task, by the task's name
+as `plain_name` gives it. A row that runs counts up to now, so they're worked
+out again each minute, and when the page has changed.
+"""
+page_minutes(e) = begin
+  b = e.buf
+  at = Timelogs.now()
+  get!(e.flows, (:minutes, b.path, b.version, Dates.format(at, "yyyymmddHHMM"))) do
+    out = Dict{String,Int}()
+    ks = kinds(b)
+    for (i, k) in enumerate(ks)
+      (k.kind == Kind.fence && k.level == 0 && k.lang == TIMELOG) || continue
+      t = codeblock(b, i)[2]
+      (t > i && ks[t].kind == Kind.fence && ks[t].level == 1) || continue
+      for (task, minutes) in Timelogs.tasks(Timelogs.timelog(b.lines[i+1:t-1]), at)
+        out[plain_name(task)] = get(out, plain_name(task), 0) + minutes
+      end
+    end
+    out
+  end
+end
+
+"The minutes that the page's time logs have for the task called `name`"
+worked(e, name::AbstractString) = get(page_minutes(e), plain_name(name), 0)
+
+"The to-do item of the page that a schedule calls `key`, or nothing"
+todo_called(e, key) = (items = page_todos(e); k = findfirst(t -> t.key == key, items); k === nothing ? nothing : items[k])
+
+"True when the clock of the log `log` runs on the task called `name`"
+clocked(log::TimelogView, name::AbstractString) = begin
+  run = Timelogs.running(log.data)
+  run !== nothing && plain_name(log.data.rows[run].task) == plain_name(name)
+end
+
+describe(c::ItemClock) = begin
+  e = editor(c)
+  log, t = page_log(e), todo_called(e, c.key)
+  (log === nothing || t === nothing) && return Box(width(0px), height(18px))
+  on = clocked(log, t.name)
+  on && redraw_in!(c, 1.0)   # the hours count up
+  minutes = worked(e, t.name)
+  words = on ? Timelogs.elapsed(Timelogs.seconds(log.data, Timelogs.running(log.data), Timelogs.now())) : minutes > 0 ? Timelogs.hours(minutes) : ""
+  Row(height(18px), child_gap=4px, Alignment.Center, name="Clock",
+    Box(width(18px), height(18px), radius(4px), Alignment.Center, justify=Alignment.Center,
+        background(on ? colours.active : ishovered(c) ? colours.hover : clear),
+      Icon(on ? "stop-fill" : "play-fill", size=12px, color=on ? colours.accent : colours.dim)),
+    (isempty(words) ? () : (Box(label(words, 12px, color=on ? colours.accent : colours.dim)),))...)
+end
+
+cursor(::ItemClock) = :hand
+draw(ctx, size, ui::ConcreteRect, c::ItemClock) = (c.rect = (ui.left, ui.top, ui.width, ui.height); nothing)
+
+onmouse(c::ItemClock, ev::MouseMove) = begin
+  e = editor(c)
+  log, t = page_log(e), todo_called(e, c.key)
+  (log === nothing || t === nothing) && return handled
+  show_tooltip!(ev.window, tip_label(clocked(log, t.name) ? "Stop the clock" : "Start the clock on this item"), c.rect..., placement=:top, gap=6px)
+  handled
+end
+
+onkey(c::ItemClock, ev::KeyPress{Keys.mouse_left}) = begin
+  e = editor(c)
+  log, t = page_log(e), todo_called(e, c.key)
+  hide_tooltip!(ev.window)
+  (log === nothing || t === nothing) && return handled
+  at = Timelogs.now()
+  clocked(log, t.name) ? Timelogs.stop!(log.data, at) : Timelogs.start!(log.data, t.name, at)
+  write_log!(log)
+  handled
+end
+
+"""
+Stop the clock of the page's time log, when it runs on the to-do item of line
+`i` and the item has just been ticked. The stop is taken back with the tick.
+"""
+stop_clock!(e, i::Int) = begin
+  b = e.buf
+  (1 <= i <= length(b.lines) && isdone(b.lines[i])) || return e
+  log = page_log(e)
+  log === nothing && return e
+  k = findfirst(t -> t.line == i, page_todos(e))
+  (k !== nothing && clocked(log, page_todos(e)[k].name)) || return e
+  Timelogs.stop!(log.data, Timelogs.now())
+  b.typed = time()   # the tick and the log's line change together, so one ⌘Z takes both back
+  write_block!(log, TIMELOG, Timelogs.written(log.data), typing=true)
+  b.typed = 0.0
+  e
+end
+
+# --- names that one part of the page has from another -------------------------------------------
+#
+# A row of a sheet can use a name from a part of the page over it, the way
+# it uses the name of a row above it: a measure of a takeoff, a task of a
+# time log, and a row of another sheet. So "Tiles = kitchen floor tiles /
+# 0.36m^2" follows the outline that's drawn on the plan. A sum in a line of
+# text can use the same names, and the names of every sheet of the page, as
+# Julia knows them: !`wall_length` for the row "Wall length". The code of the
+# page's `julia` blocks can use them too.
+#
+# No part sends its values anywhere. `block_names(lang, lines)` says what the
+# block of one kind gives: each name with an expression for its value, as a
+# row of a sheet has. A sheet asks for the names of the blocks over it with
+# `page_given`, and works them out as rows over its first row.
+
+"""
+What a block in the language `lang` gives the rest of its page: names, each
+with an expression for its value, as a row of a sheet has. `lines` are the
+lines of the block. A sheet gives its rows, a takeoff gives each measure with
+its amount, and a time log gives each task with its hours.
+"""
+block_names(lang, lines) = begin
+  out = Tuple{String,String}[]
+  if lang == SHEET
+    append!(out, (row for row in parts.(lines) if !isempty(ident(row[1]))))
+  elseif lang == TAKEOFF
+    t = Plans.takeoff(lines)
+    for m in t.measures
+      a = isempty(strip(m.name)) ? nothing : Plans.amount(t, m)
+      a === nothing && continue
+      x = string(round(a, digits=4))
+      push!(out, (m.name, m.kind == :count ? x : m.kind == :length ? x * "m" : x * "m^2"))
+    end
+  elseif lang == TIMELOG
+    for (task, minutes) in Timelogs.tasks(Timelogs.timelog(lines), Timelogs.now())
+      isempty(strip(task)) || push!(out, (task, string(round(minutes / 60, digits=4)) * "hr"))
+    end
+  end
+  out
+end
+
+"""
+The names that the parts of the page over line `upto` give, each with an
+expression for its value. With no line, it's the names of the whole page.
+They're found again when the page has changed.
+"""
+page_given(e, upto::Int=typemax(Int)) = begin
+  b = e.buf
+  get!(e.flows, (:given, b.path, b.version, upto)) do
+    out = Tuple{String,String}[]
+    ks = kinds(b)
+    i = 1
+    while i <= length(ks) && i < upto
+      k = ks[i]
+      if k.kind == Kind.fence && k.level == 0
+        t = codeblock(b, i)[2]
+        if t > i && ks[t].kind == Kind.fence && ks[t].level == 1
+          t < upto && k.lang in (SHEET, TAKEOFF, TIMELOG) &&
+            append!(out, get!(() -> block_names(k.lang, b.lines[i+1:t-1]), e.flows, (:block_names, k.lang, b.lines[i+1:t-1])))
+          i = t
+        end
+      end
+      i += 1
+    end
+    out
+  end
+end
+
+"""
+Give the page's code the names of the page's sheets, takeoffs and time logs,
+with their values, and say what they came to. A sum in a line of text, and
+the code of a `julia` block, can then use a row called "Wall length" as
+`wall_length`. A name that the page's code already has, like `sum`, stays as
+it is. `inline_tick!` runs the page's sums again when what this gives changes.
+"""
+inline_given!(e) = begin
+  given = page_given(e)
+  isempty(given) && return nothing
+  values = get!(() -> name_values(given), e.flows, (:name_values, given))
+  m = workspace(e)
+  ours = get!(() -> Set{Symbol}(), e.nodes, (:given_names, e.buf.path))
+  for (id, value) in values
+    name = Symbol(id)
+    (name in ours || !Base.invokelatest(isdefined, m, name)) || continue
+    try
+      Core.eval(m, Expr(:(=), name, QuoteNode(value)))
+      push!(ours, name)
+    catch
+    end
+  end
+  hash(given)
+end
 
 # --- blocks that a file defines --------------------------------------------------------------
 #
@@ -17616,6 +18825,8 @@ cursor(d::Document) = begin
   w === nothing && return :ibeam
   # A click on a to-do item's box ticks it
   todo_at(e, w.mouse) === nothing || return :hand
+  # A drag on what a number comes to changes the number
+  (haskey(e.nodes, :scrub) || scrub_at(e, w.mouse) !== nothing) && return :resize_x
   (Keys.cmd in w.keys && link_at(e, w.mouse) !== nothing) || (e.buf.fixed && link_on(e, w.mouse) !== nothing) ? :hand : :ibeam
 end
 
@@ -17830,6 +19041,8 @@ draw(ctx, size, ui::ConcreteRect, d::Document) = begin
   fill_selection(ctx, selection_boxes(ctx, e, ui))
   with_others(() -> fill_selection(ctx, selection_boxes(ctx, e, ui)), b)
   outline_same_word(ctx, e, ui)
+  mark_pointed(ctx, e, ui)
+  underline_scrubs(ctx, e, ui)
   ring_part(ctx, e, ui)
   annotate(ctx, e, ui)
   glow_bracket_pair(ctx, e, ui)
@@ -18094,6 +19307,7 @@ tick!(e, i::Int) = begin
   caret, anchor = b.caret, b.anchor
   edit!(b, (i, col), (i, col + 1), isdone(text) ? " " : "x")
   b.caret, b.anchor = caret, anchor
+  stop_clock!(e, i)   # a tick stops the clock of a time log that runs on the item
   e
 end
 
@@ -18109,6 +19323,9 @@ press!(e, pos) = begin
     e.clicked = (time(), (box, 0), 0)
     return tick!(e, box)
   end
+  # A press on what a number comes to takes hold of the number: a drag then changes it
+  found = any(k -> held(e, k), (Keys.opt, Keys.cmd, Keys.shft)) ? nothing : scrub_at(e, pos)
+  found === nothing || return scrub!(e, found, pos)
   it = e.layout[item_under(e, pos[1] - e.origin[1], pos[2] - e.origin[2])]
   made = held(e, Keys.opt) ? nothing : inline_at(e, pos)
   # A click on a formula in a line of text puts the caret beside it, as a click on a word does
@@ -18463,6 +19680,7 @@ follow_folder!(e, path) = begin
 end
 
 drag!(e, pos) = begin
+  haskey(e.nodes, :scrub) && held(e, Keys.mouse_left) && return scrub_to!(e, pos)
   held(e, Keys.mouse_left) && e.clicked[3] == 1 || return
   at = settle(e.buf, locate(e, pos))
   at == e.buf.caret && return
@@ -22618,6 +23836,7 @@ const INSERTS = [
   ("Chart",         ["```$CHART", "```", "", ""],   (4, 0)),
   ("Board",         ["```$BOARD", "```", "", ""],   (4, 0)),
   ("Calendar",      ["```$CALENDAR", "```", "", ""], (4, 0)),
+  ("Day",           ["```$DAY_BLOCK", "```", "", ""], (4, 0)),
   # The two blocks that are typed under it show side by side
   ("Columns",       ["```$COLUMN_BLOCK", "2", "```", "", ""], (5, 0)),
   ("Find",          ["```$FIND", "```", "", ""],    (4, 0)),
@@ -27529,6 +28748,9 @@ describe_window(e::Editor) = begin
   takeoff_tick!(e)
   schedule_tick!(e)
   blocks_tick!(e)
+  point_tick!(e)
+  scrub_tick!(e)
+  inline_tick!(e)
   confine!(e)   # while the lines of a block fill the window, the caret stays in them
   job_tick!(e)
   update_tick!(e)

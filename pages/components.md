@@ -12,6 +12,10 @@ A wall that is !`l = 16m` long and !`h = 2.4m` high has an area of !`area = l * 
 
 The numbers have units from Units.jl: lengths like `m`, `km`, `ft` and `inch`, times like `s`, `minute` and `hr`, masses like `kg`, and volumes like `litre`. A sheet has the same units.
 
+A sum that is one number has a line of dashes under what it shows, like the 16m and the 2.4m above. Drag it to the right or to the left to change the number. The sums that use its name follow while the mouse moves, so the area and the paint above change with the wall. Hold ⇧ to make each step ten times as big. ⌘Z takes a drag back.
+
+A sum can use the rows of the page's sheets too, with a `_` for each space in a row's name. The page [welcome.md](welcome.md#sheets) has an example.
+
 A component can go in a line as well: here is a switch !`Toggle(on=true)` and the folder of this page, !`fs"."`.
 
 ## Checkboxes and switches

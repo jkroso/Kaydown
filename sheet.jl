@@ -145,11 +145,52 @@ rewrite(text::AbstractString, names) = begin
   String(take!(out))
 end
 
-"What a row came to. `text` is its value as the row shows it, or what went wrong."
+# --- a number that a drag changes ------------------------------------------------------------
+#
+# A row that is one number, with or without a unit, can be changed with a drag
+# on what it comes to. So can a sum in a line of text. These say where that
+# number is in the code, and what it is after a drag.
+
+const UNIT = raw"[\p{L}°µ]+[²³]?(?:\^-?\d+)?"
+const ONE_NUMBER = Regex("^(\\s*(?:[\\p{L}_][\\p{L}\\p{N}_]*\\s*=\\s*)?)(-?\\d+(?:\\.\\d+)?)\\s*(?:$UNIT(?:\\s*[/*]\\s*$UNIT)*)?\\s*\$")
+
+"""
+Where the number of `code` is, when the code is one number: alone, like `16`,
+with a unit, like `16m` or `16m^2 / litre`, or either with a name before it,
+like `l = 16m`. It gives how many characters come before the number, and how
+many come before its end. It's nothing for any other code.
+"""
+number_at(code::AbstractString) = begin
+  m = match(ONE_NUMBER, code)
+  m === nothing && return nothing
+  # What comes after the number is a unit, like the m of 16m, and not a name, like the area of 2area
+  after = SubString(code, m.offsets[2] + ncodeunits(m[2]))
+  all(w -> isdefined(units(), Symbol(rstrip(w.match, ('²', '³')))), eachmatch(r"[\p{L}°µ²³]+", after)) || return nothing
+  (length(m[1]), length(m[1]) + length(m[2]))
+end
+
+"""
+The number that `text` writes, `steps` steps on. A step is one of the number's
+last digit: 16 goes to 17, and 2.40 goes to 2.41. A number that isn't under 0
+doesn't go under it.
+"""
+nudged(text::AbstractString, steps::Int) = begin
+  dot = findfirst('.', text)
+  places = dot === nothing ? 0 : length(text) - dot
+  was = parse(Float64, text)
+  x = was + steps / 10.0^places
+  was >= 0 && (x = max(x, 0.0))
+  places == 0 ? string(round(Int, x)) : Base.Ryu.writefixed(x, places)
+end
+
+"What a row came to. `text` is its value as the row shows it, or what went wrong. `solved` is true for a row that the sheet worked out backwards, from the answer that a row under it must come to."
 struct Result
   text::String
   failed::Bool
+  solved::Bool
 end
+
+Result(text, failed) = Result(text, failed, false)
 
 const NONE = Result("", false)
 
@@ -223,35 +264,255 @@ problem(err) = begin
   end
 end
 
+# --- a sheet that works backwards --------------------------------------------------------------
+#
+# A row whose expression starts with a ? is a row that the sheet works out.
+# What comes after the ? is where the sheet starts to look, and it gives the
+# row its unit: "? 12m". A row under it says what it must come to, with a
+# second = and the answer: "Tins = ceil(litres / 4litre) = 3". The sheet then
+# finds the value of the first row that makes the second one come to that.
+#
+#     Wall length = ? 12m
+#     Area = wall length * 2.4m
+#     Litres = area * 2 / (16m^2 / litre) = 6litre
+#
+# Here the wall is 20m long. A row with a ? is worked out from the first row
+# under it that has an answer. After that row, a sheet can have another row
+# with a ? and its answer. A row with a ? and no answer under it is the value
+# after the ?.
+
+"What comes after the ? of a row that the sheet works out, or nothing when the row has no ?"
+unknown(expr::AbstractString) = (m = match(r"^\s*\?\s*(.*?)\s*$", expr); m === nothing ? nothing : String(m[1]))
+
+"True when `left` is what a function's definition starts with, like f(x, y), where no value is the name of a row. `ids` are the names of the rows, as Julia knows them."
+signature(left, ids) =
+  left isa Symbol || (Meta.isexpr(left, :call) && left.args[1] isa Symbol && all(a -> a isa Symbol && !(a in ids), left.args[2:end]))
+
+"""
+The two sides of a row that says what it must come to, like
+`ceil(litres / 4litre) = 3`: the expression and the answer. It's nothing for
+any other row. `ex` is the row's expression as Julia reads it.
+"""
+goal(ex, ids) = ex isa Expr && ex.head == :(=) && length(ex.args) == 2 && !signature(ex.args[1], ids) ? (ex.args[1], ex.args[2]) : nothing
+
+"How far `value` is from `target`, as a plain number. Two amounts with units give the number of the first one's unit."
+apart(value, target) = (d = value - target; d isa Real ? Float64(d) : Float64(getfield(d, :value)))
+
+"""
+The number `s` that makes `f(s)` come to 0, or nothing when none is found. It
+starts to look at 1. `f` can go up in steps, as a sum with `ceil` does: any
+number on the step that's at 0 is an answer.
+"""
+solve(f) = begin
+  near(y) = abs(y) < 1e-9
+  a, fa = 1.0, f(1.0)
+  near(fa) && return a
+  # Straight on from two points, again and again, finds the answer of a sum that's smooth
+  b, fb = 1.1, f(1.1)
+  for _ in 1:60
+    near(fb) && return b
+    (isfinite(fb) && fb != fa) || break
+    a, fa, b = b, fb, b - fb * (b - a) / (fb - fa)
+    isfinite(b) || break
+    fb = f(b)
+  end
+  near(fb) && isfinite(b) && return b
+  # If not, find two numbers with the answer between them, and halve the room between them
+  f1 = f(1.0)
+  for other in Iterators.flatten(((2.0^k, 2.0^-k) for k in 1:60))
+    lo, hi = minmax(1.0, other)
+    flo, fhi = lo == 1.0 ? (f1, f(other)) : (f(other), f1)
+    near(fhi) && return hi
+    near(flo) && return lo
+    (isfinite(flo) && isfinite(fhi) && sign(flo) != sign(fhi)) || continue
+    for _ in 1:200
+      mid = (lo + hi) / 2
+      fm = f(mid)
+      near(fm) && return mid
+      sign(fm) == sign(flo) ? ((lo, flo) = (mid, fm)) : ((hi, fhi) = (mid, fm))
+      hi - lo < 1e-12 * max(1.0, abs(hi)) && break
+    end
+    return nothing
+  end
+  nothing
+end
+
+# --- a row over a range -------------------------------------------------------------------------
+#
+# A row can be every value from one to another: "Wall length = 8m to 20m".
+# The sheet is then many sheets, one for each value on the way. A row shows
+# what it comes to at the two ends, like "19.2m² to 48m²". `cases` gives every
+# one of those sheets as the rows of a table, so that a chart can draw what
+# the other rows come to over the range. A sheet has one such row: its first.
+
+"The two ends of a row over a range, like `8m to 20m`, as code. It's nothing for any other row. `names` are the names that the row can use."
+ends(expr::AbstractString, names) = begin
+  m = match(r"^(.*\S)\s+to\s+(\S.*)$", rewrite(expr, names))
+  m === nothing || !all(code(collect(m.match))[m.offsets[1] + ncodeunits(m[1]):m.offsets[2] - 1]) ? nothing : (String(m[1]), String(m[2]))
+end
+
+"The place of the first row of `rows` that is over a range, or 0"
+ranged(rows) = begin
+  seen = String[]
+  for (i, (name, expr)) in enumerate(rows)
+    ends(expr, seen) === nothing || return i
+    isempty(ident(name)) || push!(seen, String(strip(name)))
+  end
+  0
+end
+
+"How many steps a range from 0 to `far` is cut into, so that each step is a round number: 20 of them or more"
+steps(far::Real) = begin
+  (isfinite(far) && far != 0) || return 1
+  raw = abs(far) / 20
+  power = 10.0^floor(log10(raw))
+  step = power * (1, 2, 2.5, 5)[findlast(k -> k * power <= raw * (1 + 1e-9), (1, 2, 2.5, 5))]
+  clamp(round(Int, abs(far) / step), 1, 60)
+end
+
 """
 Work out every row of a sheet, from the top. `rows` holds the name and the
 expression of each one. A row that goes wrong says so, and the rows after it
-carry on.
+carry on. It gives what each row comes to, and the value of each row that has
+a name, under the name that Julia knows it by. `at` says where a row over a
+range is: 0 at its first value, 1 at its last. The third thing that it gives
+is how far apart those two values are, as a number, or nothing.
 """
-tally(rows) = begin
+work(rows; at::Real=0) = begin
   mod = Module(:Sheet)
   Core.eval(mod, Expr(:block, Expr(:const, Expr(:(=), :SheetUnits, units())), Expr(:using, Expr(:., :., :SheetUnits))))
+  read(expr, names) = Meta.parse(rewrite(expr, names))
+  ids(names) = Set(Symbol(ident(n)) for n in names)
+  # Each row that the sheet works out, with the row that says what it must come to
+  pairs, free, seen = Dict{Int,Int}(), 0, String[]
+  for (i, (name, expr)) in enumerate(rows)
+    if free == 0
+      unknown(expr) === nothing || (free = i)
+    elseif unknown(expr) === nothing
+      ex = try read(expr, seen) catch; nothing end
+      goal(ex, ids(seen)) === nothing || (pairs[free] = i; free = 0)
+    end
+    isempty(ident(name)) || push!(seen, String(strip(name)))
+  end
+  answers = Set(values(pairs))
+  over = ranged(rows)
+  far = nothing
   names = String[]
-  map(rows) do (name, expr)
+  named = Pair{String,Any}[]
+  keep!(name, value) = begin
+    id = ident(name)
+    isempty(id) && return
+    Core.eval(mod, Expr(:(=), Symbol(id), QuoteNode(value)))
+    filter!(n -> ident(n) != id, names)
+    push!(names, String(strip(name)))
+    filter!(p -> p.first != id, named)
+    push!(named, id => value)
+  end
+  results = map(enumerate(rows)) do (i, (name, expr))
     isempty(strip(expr)) && return NONE
     try
-      ex = Meta.parse(rewrite(expr, names))
-      ex isa Expr && ex.head in (:incomplete, :error) && return Result("This isn't finished", true)
-      value = Core.eval(mod, ex)
-      id = ident(name)
-      if !isempty(id)
-        Core.eval(mod, Expr(:(=), Symbol(id), QuoteNode(value)))
-        filter!(n -> ident(n) != id, names)
-        push!(names, String(strip(name)))
+      start = unknown(expr)
+      if start !== nothing
+        first = isempty(start) ? 1 : Core.eval(mod, read(start, names))
+        wanted = get(pairs, i, 0)
+        if wanted == 0
+          keep!(name, first)
+          return Result(brief(Base.invokelatest(shown, first)), false)
+        end
+        # The value is so many times the value after the ?, which gives it its unit
+        unit = first isa Number && iszero(first) ? typeof(first)(1) : first
+        id = Symbol(ident(name))
+        trial(s) = begin
+          known = copy(names)
+          isempty(ident(name)) || (Core.eval(mod, Expr(:(=), id, QuoteNode(unit * s))); push!(known, String(strip(name))))
+          for (row, x) in rows[i+1:wanted-1]
+            (isempty(strip(x)) || unknown(x) !== nothing) && continue
+            v = Core.eval(mod, read(x, known))
+            isempty(ident(row)) || (Core.eval(mod, Expr(:(=), Symbol(ident(row)), QuoteNode(v))); push!(known, String(strip(row))))
+          end
+          left, right = goal(read(rows[wanted][2], known), ids(known))
+          Base.invokelatest(apart, Core.eval(mod, left), Core.eval(mod, right))
+        end
+        s = solve(trial)
+        s === nothing && return Result("No value here gives the answer below", true)
+        value = round(unit * s, sigdigits=12)   # 20m, and not 20.00000000000001m
+        keep!(name, value)
+        return Result(brief(Base.invokelatest(shown, value)), false, true)
       end
+      if i == over
+        # The row is somewhere between its two values
+        lo, hi = (Core.eval(mod, Meta.parse(side)) for side in ends(expr, names))
+        gap = hi - lo
+        far = gap isa Real ? Float64(gap) : Float64(getfield(gap, :value))
+        value = at == 0 ? lo : at == 1 ? hi : round(lo + gap * at, sigdigits=12)
+        keep!(name, value)
+        return Result(brief(Base.invokelatest(shown, value)), false)
+      end
+      ex = read(expr, names)
+      ex isa Expr && ex.head in (:incomplete, :error) && return Result("This isn't finished", true)
+      i in answers && (ex = goal(ex, ids(names))[1])   # the row shows what its own side of the = comes to
+      value = Core.eval(mod, ex)
+      keep!(name, value)
       Result(brief(Base.invokelatest(shown, value)), false)
     catch err
       Result(problem(err), true)
     end
   end
+  results, named, far
 end
 
-"The names that the expression of row `r` can use: those of the rows above it"
-known(rows, r::Int) = unique(String[strip(name) for (name, _) in rows[1:r-1] if !isempty(ident(name))])
+"""
+What each row of a sheet comes to. `given` holds the names that the sheet has
+from outside it, like a measure of a takeoff: each with an expression for its
+value, as a row has. They're worked out first, as rows over the first row
+would be, so a row can use them, and a row with the same name takes the name.
+"""
+tally(rows; given=(), at=nothing) = begin
+  all = Tuple{String,String}[given..., rows...]
+  mine(results) = results[length(given)+1:end]
+  # With a row over a range, each row shows what it comes to at the two ends, or at the one place `at`
+  over = ranged(all)
+  if at !== nothing || over == 0
+    results = work(all; at=something(at, 0))[1]
+    # The row over a range shows that it's at one place of the range
+    at !== nothing && over > 0 && !results[over].failed && (results[over] = Result(results[over].text, false, true))
+    return mine(results)
+  end
+  map(mine(work(all)[1]), mine(work(all; at=1)[1])) do lo, hi
+    lo.failed ? lo : hi.failed ? hi : lo.text == hi.text ? lo : Result(brief("$(lo.text) to $(hi.text)"), false)
+  end
+end
 
-export SHEET, Result, sheetcells, parts, ident, uses, tally, known
+"""
+A sheet with a row over a range, as the rows of a table: one for each value
+of that row, from its first to its last. The first column is that row, and
+the others are the rows under it that have a name and change with it. The
+first row of the table has the names. `places` says where each of the other
+rows is in the range, from 0 to 1. It's nothing for a sheet with no row over
+a range, or with no row that changes.
+"""
+cases(rows; given=()) = begin
+  all = Tuple{String,String}[given..., rows...]
+  over = ranged(all)
+  over == 0 && return nothing
+  first, _, far = work(all)
+  (far === nothing || first[over].failed) && return nothing
+  n = steps(far)
+  places = [k / n for k in 0:n]
+  runs = [k == 0 ? first : work(all; at=places[k+1])[1] for k in 0:n]
+  # A row is a column of the table when it has a name, works at every value, and changes
+  shown = [i for i in over+1:length(all) if !isempty(ident(all[i][1])) && !any(r -> r[i].failed || isempty(r[i].text), runs) && any(r -> r[i].text != runs[1][i].text, runs)]
+  isempty(shown) && return nothing
+  columns = [over; shown]
+  table = Vector{String}[String[strip(all[i][1]) for i in columns]]
+  append!(table, (String[r[i].text for i in columns] for r in runs))
+  (table=table, places=places)
+end
+
+"The value of each name of `rows`, under the name that Julia knows it by: wall_length for \"Wall length\""
+name_values(rows) = work(rows)[2]
+
+"The names that the expression of row `r` can use: those of the rows above it, and those that the sheet has from outside it"
+known(rows, r::Int, given=()) = unique(String[strip(name) for (name, _) in Iterators.flatten((given, rows[1:r-1])) if !isempty(ident(name))])
+
+export SHEET, Result, sheetcells, parts, ident, uses, tally, known, name_values, ident, number_at, nudged, cases

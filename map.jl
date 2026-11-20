@@ -225,6 +225,24 @@ held(centre, zoom, tall) = begin
   unspot((c[1], clamp(c[2], tall / 2, w - tall / 2)), zoom)
 end
 
+"""
+The middle and the zoom of a map that shows every one of the places `ats`: a
+latitude and a longitude each. The map is `wide` px by `tall` px. The zoom is
+the highest one, no higher than `most`, that leaves room round the places for
+their pins. One place alone is in the middle, at `most`.
+"""
+around(ats, most, wide, tall) = begin
+  spots = [spot(at, 0) for at in ats]
+  (x1, x2), (y1, y2) = extrema(first, spots), extrema(last, spots)
+  zoom = first(ZOOMS)
+  for z in clamp(most, ZOOMS):-1:first(ZOOMS)
+    k = 2.0^z
+    ((x2 - x1) * k <= max(wide - 120, 40) && (y2 - y1) * k <= max(tall - 110, 40)) && (zoom = z; break)
+  end
+  # The pins stand over their places, so the places are a little under the middle
+  (centre=rounded(unspot(((x1 + x2) / 2, (y1 + y2) / 2 - 14 / 2.0^zoom), 0)), zoom=zoom)
+end
+
 # --- the program that asks Apple's maps -------------------------------------------------
 
 const SOURCE = joinpath(@__DIR__, "map.swift")

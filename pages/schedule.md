@@ -16,6 +16,16 @@ This page plans a job. Each to-do item is a task. The schedule under the tasks s
 
 Move the mouse over a task. Its days show at the end of its line: its first and last day, how many working days it takes, and the task that it waits for. The − and + buttons there make it a day shorter or a day longer.
 
+## The day
+
+Drag the slider to see the job as the schedule plans it on another day. The line of that day moves in the schedule, the tasks that are finished by then show as done, and the cards of the board move to where the plan has them. **Today** shows the job as it is.
+
+```day
+```
+
+```board
+```
+
 ## Schedule
 
 ```schedule

@@ -5,7 +5,7 @@
 
 @use Test: @test, @testset
 @use "../main" => K
-@use "github.com/jkroso/MiniFB.jl" Window
+@use "github.com/jkroso/MiniFB.jl" Window KeyPress Keys onkey Typed ontype
 @use "github.com/jkroso/UI.jl/Interface/draw" frame
 const px = K.px
 
@@ -109,3 +109,20 @@ end
   end
 end
 
+@testset "the command palette has it" begin
+  e, w = window()
+  ran(e, "x = 5")
+  w.keys |= Keys.cmd | Keys.shft
+  onkey(w, KeyPress{Keys.p}(0, w))
+  w.keys ⊻= Keys.cmd | Keys.shft
+  frames(w)
+  @test e.popup == :commands
+  foreach(c -> ontype(w, Typed(c, w)), "reset module")
+  frames(w)
+  rows = K.palette_rows(e, K.palette(e))
+  @test first(rows).name == "Reset Module"
+  onkey(w, KeyPress{Keys.enter}(0, w))
+  frames(w)
+  @test e.popup == :none
+  @test ran(e, "isdefined(@__MODULE__, :x)") == false
+end

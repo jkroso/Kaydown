@@ -162,7 +162,9 @@
 #   - Write a code block in the language `julia`, put the caret in a line of
 #     it and press ⌘Return. The page runs the line and shows what it comes to
 #     in a box after the line. ⇧Return runs the line and goes to the next one.
-#     Click a box that has an arrow to see the rest of its value.
+#     Click a box that has an arrow to see the rest of its value. The code
+#     of a file runs in one module. To start again with nothing that the code
+#     made, press ⌘⇧P and choose Reset Module.
 #   - Type the start of a name in a code block. A list under the caret shows
 #     the page's names that start the same way. ↑ and ↓ choose one, and Return
 #     or Tab types the rest of it.

@@ -15,6 +15,7 @@ The block at the top of this page is front matter: lines at the very top of a fi
 - [Callouts: a note, a tip or a warning that stands out](welcome.md#text)
 - [Spelling, and finding text in the page](welcome.md#text)
 - [Footnotes](welcome.md#text)
+- [Wiki links: `[[Page]]` links to a page by its name, wherever it is](welcome.md#text)
 - [A link card: a web page as a card, with its title, its description and its picture](welcome.md#link-cards)
 - [A page of the web that you use in the window](welcome.md#pages-of-the-web)
 - [Maths: formulas written in TeX](welcome.md#maths)

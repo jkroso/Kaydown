@@ -107,6 +107,10 @@
 #     the page's title, its description and its picture. ⌘-click the card to
 #     open the page.
 #   - Write [^1] in a line and [^1]: on another line to make a footnote.
+#   - Write [[Ideas]] to link to the page Ideas.md, wherever it is in the
+#     project, as in Obsidian. [[Ideas|my ideas]] shows other words, and
+#     [[Ideas#Plans]] goes to a heading. A page that isn't there yet opens empty.
+#     After [[, a list shows the pages whose names fit what you type.
 #   - Right-click a word with red dots under it to put its spelling right.
 #   - The button at the top left, or ⌘\, shows the other files in the folder.
 #     Drag the right edge of that list to make it wider or narrower.
@@ -244,7 +248,7 @@
 @use "./spelling" misspelt guesses learn!
 @use "./transcribe" Transcription check! finished phrases words_between
 @use "./html" html footnotes NOTE escape
-@use "./markdown" Kind Line Span Cell classify spans tablecells isdivider words isdone front_matter MATTER TOML_MATTER MATH CALLOUTS callout opens_callout
+@use "./markdown" Kind Line Span Cell classify spans tablecells isdivider words isdone front_matter MATTER TOML_MATTER MATH CALLOUTS callout opens_callout wikitarget
 @use "./highlight" tokens
 @use "./sheet" SHEET Result sheetcells parts uses tally known units shown
 @use "./spreadsheet" SPREADSHEET Value spreadcells spreadtexts isformula letters answers moved
@@ -3158,7 +3162,8 @@ offered(e) = begin
   b = e.buf
   i, col = b.caret
   selecting(b) && return nothing
-  insheet(b, i) || return code_offered(e)   # a code block offers names too
+  # A code block offers names too, and the name of a wiki link offers pages
+  insheet(b, i) || return (found = code_offered(e); found === nothing ? wiki_offered(e) : found)
   cs = sheetcells(b.lines[i])
   c = cs[end]
   (c.lo <= col <= c.limit && nearest(cs, col) == length(cs)) || return nothing
@@ -3211,7 +3216,7 @@ suggest_key!(e, K) = begin
   if K == Keys.down || K == Keys.up
     state[] = (at=(i, start), chosen=mod1(chosen + (K == Keys.down ? 1 : -1), length(names)), hidden=(0, 0))
   elseif K == Keys.enter || K == Keys.tab
-    edit!(e.buf, (i, start), e.buf.caret, names[chosen])
+    complete!(e, i, start, names[chosen])
   elseif K == Keys.escape
     state[] = (at=(0, 0), chosen=1, hidden=(i, start))
   else
@@ -3237,15 +3242,17 @@ suggestbox(e) = begin
     face = Face(SHEET_FONT, SHEET_WEIGHT, s.size, colours.ink, false)
     across, down = item_room(e, it)[1] + dx + x, row_top(s, r) + f.lh * k
   elseif s isa Flow
-    # In a code block, the list is under the line of the screen that the name is on
+    # In a code block, the list is under the line of the screen that the name is on. In a wiki link too.
     k, x = spot(s, start)
-    face = Face(codefont(), codestyle(), s.size, colours.ink, false)
+    prose = kinds(e.buf)[i].kind != Kind.code
+    face = prose ? body(e) : Face(codefont(), codestyle(), s.size, colours.ink, false)
     across, down = x, line_top(s, k) + s.lines[k].high
   else
     return ()
   end
-  # In Julia code, each name has what it is at the right of its row, in a paler colour
-  notes = s isa Flow ? name_notes(e, i, names) : fill("", length(names))
+  # In Julia code, each name has what it is at the right of its row, in a paler colour. A page has its folder there.
+  notes = !(s isa Flow) ? fill("", length(names)) :
+          prose ? [get(get(e.nodes, :wiki_notes, Dict{String,String}()), n, "") for n in names] : name_notes(e, i, names)
   pale = Face(face, color=colours.dim)
   span(note) = sum(((part, f),) -> measure(f, part), runs(note, pale), init=0px)
   needs(n, note) = measure(face, n) + (isempty(note) ? 0px : NOTE_GAP + span(note))
@@ -18159,15 +18166,191 @@ follow_heading!(e, url) = begin
   file, name = String.(split(url, '#', limit=2))
   path = isempty(file) ? e.buf.path : abspath(docdir(e), unescaped(file))
   (ismarkdown(path) && isfile(path)) || return false
+  go_heading!(e, path, unescaped(name))
+end
+
+"Show the page at `path` with its heading `name` near the top of the window. A page with no such heading shows from where it was. It's true."
+go_heading!(e, path, name) = begin
   path == e.buf.path || open!(e, path)
   b = e.buf
   ks = kinds(b)
-  i = findfirst(i -> ks[i].kind == Kind.heading && heading_slug(rest(b.lines[i], ks[i].prefix)) == heading_slug(unescaped(name)), eachindex(ks))
-  i === nothing && return true   # the page has no such heading, so it shows from where it was
+  slug = heading_slug(name)
+  i = findfirst(i -> ks[i].kind == Kind.heading && heading_slug(rest(b.lines[i], ks[i].prefix)) == slug, eachindex(ks))
+  i === nothing && return true
   show_line!(e, i)
   # Its line goes near the top of the window. The next frame does it, once it has laid out the page.
   e.nodes[:hold] = (i, 24px - PAGE_TOP)
   true
+end
+
+# --- wiki links ---------------------------------------------------------------------------
+#
+# A wiki link, like [[Ideas]], names a page and not its file, as in Obsidian. The
+# page can be anywhere in the project, so a link stays good when a page moves to
+# another folder. See markdown.jl for how one is written.
+
+"The folder names that mark the top folder of a project"
+const PROJECT_MARKS = (".git", ".obsidian")
+
+"""
+The top folder of the project that the folder `dir` is in: the nearest folder,
+from `dir` up, that has a `.git` or an `.obsidian` folder in it. It's `dir`
+when there's none below the home folder.
+"""
+project_root(dir) = begin
+  d = dir
+  while d != homedir() && d != dirname(d)
+    any(m -> ispath(joinpath(d, m)), PROJECT_MARKS) && return d
+    d = dirname(d)
+  end
+  dir
+end
+
+"""
+The file under `root` whose path ends with one of `names`, like `Ideas.md` or
+`notes/Ideas.md`, in any case, or nothing. A file in a folder near the top
+comes before one in a folder deeper down. Hidden folders and `node_modules` are
+left out, and the look stops after a part of a second, as the `find` block's does.
+"""
+find_named(root, names; budget=FIND_BUDGET) = begin
+  ends = ["/" * lowercase(n) for n in names]
+  started = time()
+  level = [root]
+  while !isempty(level) && time() - started < budget
+    deeper = String[]
+    for dir in level
+      found = try sort!(readdir(dir), by=lowercase) catch; String[] end
+      for name in found
+        startswith(name, '.') && continue
+        path = joinpath(dir, name)
+        if isdir(path)
+          name == "node_modules" || push!(deeper, path)
+        elseif any(t -> endswith(lowercase(path), t), ends)
+          return path
+        end
+      end
+    end
+    level = deeper
+  end
+  nothing
+end
+
+"""
+The file that the wiki link to `name` names. `name` is a page's name, like
+`Ideas`, and its file is `Ideas.md`. A name with a file's extension, like
+`plan.pdf`, can be that file too. A name can have folders in it, like
+`notes/Ideas`. Ladder looks in the page's own folder, then from the top of its
+project (see `project_root`), then through the whole project. When no file
+has the name, it's the path of a new page in the page's own folder.
+"""
+wiki_path(e, name) = begin
+  names = ismarkdown(name) ? [name] : [name * ".md", name]
+  dir = docdir(e)
+  root = project_root(dir)
+  for top in unique([dir, root]), n in names
+    path = abspath(top, expanduser(n))
+    isfile(path) && return path
+  end
+  found = find_named(root, names)
+  found === nothing || return found
+  new = abspath(dir, names[1])
+  # A name with folders that aren't there yet makes its page in the page's own folder
+  isdir(dirname(new)) ? new : joinpath(dir, basename(new))
+end
+
+"""
+Follow a wiki link to `target`: show the page that it names. `Ideas#Plans` goes
+to the heading Plans of the page Ideas, and `#Plans` to a heading of the page
+that shows. A page that isn't anywhere opens as a new page with no text, in the
+page's own folder. Its file is made when you write in it.
+"""
+follow_wiki!(e, target) = begin
+  name, heading = occursin('#', target) ? String.(split(target, '#', limit=2)) : (target, "")
+  name = String(strip(name))
+  isempty(name) && return (go_heading!(e, e.buf.path, heading); e)
+  path = wiki_path(e, name)
+  if !isempty(heading) && ismarkdown(path) && isfile(path)
+    go_heading!(e, path, heading)
+    return e
+  end
+  isfile(path) ? show_path!(e, path) : open!(e, path)
+end
+
+# While you type the name in a wiki link, the list of names under the caret
+# shows the pages of the project whose names fit what's typed. Right after the
+# [[, it shows them all, the pages beside this one first. Each page's folder,
+# from the top of the project, is at the right of its row. Return or Tab types
+# the rest of the name and the ]] that ends the link. Two pages with the same
+# name are each written with their folders, like notes/Ideas.
+
+"""
+The pages that the name being typed in a wiki link could be: the line, the
+column where the name starts, and the names. Nothing when the caret isn't in
+the name of a wiki link just after a character was typed, or no page fits.
+"""
+wiki_offered(e) = begin
+  b = e.buf
+  i, col = b.caret
+  key = (b.path, b.version, b.caret)
+  get(e.nodes, :typed_at, nothing) == key || return nothing
+  kept = get(e.nodes, :wiki_offered, nothing)
+  kept !== nothing && kept[1] == key && return kept[2]
+  found = wiki_names(e, i, col)
+  e.nodes[:wiki_offered] = (key, found)
+  found
+end
+
+"The name being typed in a wiki link at column `col` of line `i`, and the pages that fit it, as `wiki_offered` gives them"
+wiki_names(e, i, col) = begin
+  b = e.buf
+  kinds(b)[i].kind in (Kind.code, Kind.fence, Kind.table) && return nothing
+  chars = collect(b.lines[i])
+  # The name starts after the [[ before the caret. A | or a # ends it, and a bracket isn't part of one.
+  start = col
+  while start > 0 && !(chars[start] in ('[', ']', '|', '#')); start -= 1 end
+  (start >= 2 && chars[start] == '[' && chars[start-1] == '[') || return nothing
+  col - start <= 80 || return nothing
+  typed = lowercase(String(chars[start+1:col]))
+  dir = docdir(e)
+  root = project_root(dir)
+  pages = [p for (p, _) in folder_pages(root).pages if p != b.path]
+  name(p) = splitext(basename(p))[1]
+  many = Dict{String,Int}()
+  foreach(p -> many[lowercase(name(p))] = get(many, lowercase(name(p)), 0) + 1, pages)
+  notes = Dict{String,String}()
+  found = Tuple{Int,Bool,Int,String,String}[]   # how well it fits, whether it's in another folder, how deep it is, its name in lower case, and its name
+  for p in pages
+    folder = relpath(dirname(p), root)
+    folder == "." && (folder = "")
+    # Two pages with the same name are told apart by their folders
+    shown = many[lowercase(name(p))] > 1 && !isempty(folder) ? joinpath(folder, name(p)) : name(p)
+    low = lowercase(shown)
+    fit = low == typed ? 0 : startswith(low, typed) ? 1 : any(w -> startswith(w, typed), split(low, r"[\s_/-]+", keepempty=false)) ? 2 : occursin(typed, low) ? 3 : 4
+    fit < 4 || continue
+    shown == name(p) && (notes[shown] = folder)
+    push!(found, (fit, dirname(p) != dir, count(==('/'), folder), low, shown))
+  end
+  isempty(found) && return nothing
+  e.nodes[:wiki_notes] = notes
+  (i, start, unique([n for (_, _, _, _, n) in first(sort!(found), NAMES_SHOWN)]))
+end
+
+"""
+Type `name` in place of the text from column `start` of line `i` to the caret,
+as the list of names does. In a wiki link, the ]] that ends the link comes too,
+unless the link has its end already. The caret goes past a ]] that's just after the name.
+"""
+complete!(e, i, start, name) = begin
+  b = e.buf
+  edit!(b, (i, start), b.caret, name)
+  kinds(b)[i].kind == Kind.code && return
+  after = rest(b.lines[i], b.caret[2])
+  ends, opens = findfirst("]]", after), findfirst("[[", after)
+  if ends === nothing || (opens !== nothing && first(opens) < first(ends))
+    edit!(b, b.caret, b.caret, "]]")
+  elseif startswith(after, "]]")
+    b.caret = b.anchor = (i, b.caret[2] + 2)
+  end
 end
 
 "True when the Finder shows the folder at `path` as one file, as it shows an app"
@@ -18184,6 +18367,8 @@ in the page. Anything else opens in the app that the Mac uses for it. A path can
 """
 follow!(e, url) = begin
   startswith(url, '^') && return follow_note!(e, url[2:end])
+  target = wikitarget(url)
+  target === nothing || return follow_wiki!(e, target)   # a wiki link, like [[Ideas]]
   occursin('#', url) && follow_heading!(e, url) && return e   # a heading of a page, like welcome.md#tables
   path = abspath(docdir(e), expanduser(unescaped(url)))
   ispath(path) ? show_path!(e, path) : open_url(url)

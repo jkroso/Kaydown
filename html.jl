@@ -15,7 +15,7 @@
 # side: for each group of columns, the first line, the last line and the share
 # of the width of each column.
 
-@use "./markdown" Kind Line Span classify spans tablecells isdivider front_matter isdone MATTER TOML_MATTER MATH callout opens_callout
+@use "./markdown" Kind Line Span classify spans tablecells isdivider front_matter isdone MATTER TOML_MATTER MATH callout opens_callout wikitarget
 @use "./math" mathml
 
 "`s` with the characters that mean something in HTML written as their names"
@@ -87,8 +87,23 @@ styled!(out, d::Document, s::Span, mark) = begin
   s.strike && (body = "<del>" * body * "</del>")
   s.italic && (body = "<em>" * body * "</em>")
   s.bold && (body = "<strong>" * body * "</strong>")
-  isempty(s.link) || (body = "<a href=\"" * escape(s.link) * "\">" * body * "</a>")
+  isempty(s.link) || (body = "<a href=\"" * escape(href(s.link)) * "\">" * body * "</a>")
   print(out, body)
+end
+
+"""
+Where a link goes in a page of HTML. A wiki link goes to the file of its page,
+beside this page: [[Ideas#My plans]] goes to `Ideas.md#my-plans`. A name that
+ends with a file's extension, like [[plan.pdf]], is the name of that file.
+"""
+href(link) = begin
+  target = wikitarget(link)
+  target === nothing && return link
+  name, heading = occursin('#', target) ? split(target, '#', limit=2) : (target, "")
+  name = strip(name)
+  file = isempty(name) || occursin(r"\.[A-Za-z][A-Za-z0-9]{0,4}$", name) ? name : name * ".md"
+  slug = strip(replace(lowercase(heading), r"[^\p{L}\p{N}]+" => "-"), '-')
+  replace(file, ' ' => "%20") * (isempty(slug) ? "" : "#" * slug)
 end
 
 "The number of each footnote of `lines`, by name: the footnotes that the text points to, in that order, then the rest"

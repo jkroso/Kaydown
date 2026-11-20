@@ -12,6 +12,13 @@
 # one: `> [!NOTE]`, with the lines of the note under it, each after a `>`. The
 # kinds are note, tip, important, warning and caution, in any case. Words after
 # the `]` are the callout's title. Without them, its title is its kind's name.
+#
+# A wiki link names a page and not its file, as Obsidian writes one: [[Ideas]]
+# links to the page Ideas.md. [[Ideas|my ideas]] shows the words "my ideas",
+# and [[Ideas#Plans]] goes to the heading Plans of that page. [[#Plans]] goes to
+# a heading of the page that it's in. In a table, write the | as \|. The link
+# of each span of its text is the name between the brackets, in brackets: see
+# `wikilink`. The editor finds the page, wherever it is: see `wiki_path` in main.jl.
 
 @use "github.com/jkroso/Prospects.jl" ["Enum" @Enum]
 
@@ -198,6 +205,30 @@ end
 
 Style() = Style(false, false, false, "")
 
+"The link of the text of a wiki link: `[[Ideas#Plans]]` for the link [[Ideas#Plans|my plans]]"
+wikilink(target::AbstractString) = "[[" * target * "]]"
+
+"The page and heading that a span's link names when it's the link of a wiki link, like \"Ideas#Plans\", or nothing for any other link"
+wikitarget(link::AbstractString) = startswith(link, "[[") && endswith(link, "]]") && length(link) > 4 ? chop(link, head=2, tail=2) : nothing
+
+"""
+Where the wiki link that opens with [[ at `i` ends: the first of its two ]], and
+its name, without the spaces around it. It's (0, \"\") when there's no wiki link
+at `i`: the ]] isn't on the line, a bracket is between, or the name is empty.
+"""
+wiki_end(chars, i, to) = begin
+  j = find(chars, "]]", i + 2, to)
+  j == 0 && return (0, "")
+  inner = @view chars[i+2:j-1]
+  any(c -> c == '[' || c == ']', inner) && return (0, "")
+  bar = findfirst(==('|'), inner)
+  name = bar === nothing ? String(inner) : String(inner[1:bar-1])
+  # In a table, the | is written \|, so the | doesn't end the cell
+  bar !== nothing && endswith(name, '\\') && (name = chop(name))
+  name = String(strip(name))
+  (isempty(name) || name == "#") ? (0, "") : (j, name)
+end
+
 isword(c::Char) = isletter(c) || isdigit(c)
 
 "The index where `delim` next starts in `chars[from:to]`, or 0"
@@ -290,6 +321,24 @@ function scan!(out, chars, from, to, style::Style, offset)
       if j != 0
         emit(plain, i - 1); emit(i, i + n - 1, markup=true); emit(i + n, j - 1, math=true); emit(j, j + n - 1, markup=true)
         plain = i = j + n
+        continue
+      end
+    elseif c == '[' && next == '['
+      # [[Ideas]] is a wiki link to the page Ideas, and its name shows. [[Ideas|my ideas]] shows the words after the |.
+      j, name = wiki_end(chars, i, to)
+      if j != 0
+        link = Style(style.bold, style.italic, style.strike, wikilink(name))
+        bar = findnext(==('|'), chars, i + 2)
+        bar = bar !== nothing && bar < j ? bar : 0
+        emit(plain, i - 1)
+        if bar != 0 && any(!isspace, @view chars[bar+1:j-1])
+          emit(i, bar, markup=true); emit(bar + 1, j - 1, s=link); emit(j, j + 1, markup=true)
+        else
+          # A | with no words after it is markup, and so is the \ before a | in a table
+          stop = bar == 0 ? j - 1 : bar - 1 - (chars[bar-1] == '\\')
+          emit(i, i + 1, markup=true); emit(i + 2, stop, s=link); emit(stop + 1, j + 1, markup=true)
+        end
+        plain = i = j + 2
         continue
       end
     elseif c == '[' && next == '^'
@@ -385,4 +434,4 @@ end
 "How many words are in a document"
 words(lines) = sum(text -> count(_ -> true, eachmatch(r"[\p{L}\p{N}][\p{L}\p{N}'’-]*", text)), lines, init=0)
 
-export Kind, Line, Span, Cell, classify, spans, tablecells, isdivider, words, isdone, front_matter, MATTER, TOML_MATTER, MATH, CALLOUTS, callout, opens_callout
+export Kind, Line, Span, Cell, classify, spans, tablecells, isdivider, words, isdone, front_matter, MATTER, TOML_MATTER, MATH, CALLOUTS, callout, opens_callout, wikilink, wikitarget

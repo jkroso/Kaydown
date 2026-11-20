@@ -17882,6 +17882,33 @@ page_run(e, path::AbstractString) = begin
 end
 
 """
+Give the file that the window `e` shows a new, empty module for its code, in
+place of the one it had. The names, the methods and the files that its code
+made or loaded are gone. The new module is made when code next runs on the
+file, as it is the first time: see `page_module`. Each window that shows the
+file runs its live blocks and its inline code again, in the new module. What
+⌘Return showed under the code stays as it was.
+"""
+reset_module!(e) = begin
+  path = e.buf.path
+  isempty(path) && delete!(e.nodes, :workspace)
+  key = isempty(path) ? "" : page_key(path)
+  isempty(key) || (delete!(PAGE_MODULES, key); delete!(PAGES_RUN, key))
+  for w in unique!(Any[e; editors])
+    w === e || (!isempty(w.buf.path) && page_key(w.buf.path) == key) || continue
+    delete!(w.nodes, (:page_names, key))
+    # What the page's code made goes, so that it runs again in the new module
+    p = w.buf.path
+    gone(k) = k isa Tuple && length(k) >= 2 &&
+              ((k[1] in (:live, :inline, :given_names, :inline_seen) && k[2] == p) ||
+               (k[1] == :replaced && k[2] isa Tuple && k[2][1] == :live && k[2][2] == p))
+    foreach(k -> delete!(w.nodes, k), filter(gone, collect(keys(w.nodes))))
+    empty!(w.flows)
+  end
+  nothing
+end
+
+"""
 The file on this Mac that the source `source` names inside a repository, like
 `github.com/sam/blocks/progress.md`. Kip gets the repository if it isn't here.
 """
@@ -29345,6 +29372,10 @@ add_commands!(group::AbstractString, commands) = begin
   end
   nothing
 end
+
+# Reset Module gives the page's code a new module: see `reset_module!`
+add_commands!("The text", [Command(:reset_module, "Run the page's Julia code in a new, empty module, without what it made before", :window, "",
+                                   (e, w, _) -> reset_module!(e))])
 
 """
 True when the page that shows is an email that came or went, so that its

@@ -24,6 +24,12 @@ include("start.jl")
 @use "github.com/jkroso/UI.jl/Interface/Semantic/ListTree" => ListTree
 @use "../pages/widgets" => widgets
 @use "../pages/progress" => progress_block
+# The rest of Units.jl, for a page that works out costs in AUD or lengths in feet. Ladder loads only its
+# main file. Money.jl needs FixedPointDecimals, so that package is in Ladder's Project.toml.
+@use "github.com/jkroso/Units.jl/Money.jl" => money_units
+@use "github.com/jkroso/Units.jl/Imperial.jl" => imperial_units
+@use "github.com/jkroso/Units.jl/Colloquial.jl" => colloquial_units
+@use "github.com/jkroso/Units.jl/Typography.jl" => typography_units
 # Julia's own libraries that code from the startup page is likely to use, like the one that talks to a
 # server. The app has no source of them, so a library that isn't loaded now can't be loaded later.
 import LibCURL, NetworkOptions, Sockets, Dates, Base64, Random, Libdl
@@ -370,6 +376,7 @@ end
 Run the code of a startup page that the app has never seen, and fail if it
 fails. The code loads a file from its source, uses two of Julia's libraries
 by their names, and reads Ladder itself, as code that adds to Ladder does.
+It also loads a file of Units.jl that Ladder itself doesn't load, Money.jl.
 """
 check_startup(dir) = begin
   was = STARTUP_FOLDER[]
@@ -377,11 +384,14 @@ check_startup(dir) = begin
   mkpath(STARTUP_FOLDER[])
   write(joinpath(STARTUP_FOLDER[], "more.jl"), "@use Dates: Date\nday() = Date(2026, 11, 18)\n")
   write(startup_page(), "# Home\n\n```julia\n@use \"./more\" day\n@use LibCURL: curl_version\n" *
-                        "const said = (string(day()), unsafe_string(curl_version()), Ladder.startup_page())\n```\n")
+                        "@use \"github.com/jkroso/Units.jl\" week hr\n@use \"github.com/jkroso/Units.jl/Money.jl\" AUD\n" *
+                        "const said = (string(day()), unsafe_string(curl_version()), Ladder.startup_page(), string(convert(AUD/hr, 168AUD/week)))\n```\n")
   m = run_startup!()
   STARTUP_FOLDER[] = was
   isempty(STARTUP[][1]) || error("The code of a startup page failed: ", STARTUP[][1])
-  Base.invokelatest(getglobal, m, :said)[1] == "2026-11-18" || error("The code of a startup page gave the wrong day")
+  said = Base.invokelatest(getglobal, m, :said)
+  said[1] == "2026-11-18" || error("The code of a startup page gave the wrong day")
+  said[4] == "1.00 AUD/hr" || error("The code of a startup page gave the wrong wage: ", said[4])
 end
 
 "The app's self-test: the pages as the app writes them out, the code of a startup page, then some typing"

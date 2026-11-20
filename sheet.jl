@@ -11,6 +11,7 @@
 #
 # This file reads a row, finds the names in an expression and works out the
 # value of every row. Numbers can have units, from Units.jl: 12m, 25mm, 2hr.
+# A row like `1m in cm` gives a value in another unit: 100cm.
 # Columns count characters from 0, as they do in markdown.jl.
 
 @use "github.com/jkroso/Units.jl" => Units
@@ -370,6 +371,25 @@ steps(far::Real) = begin
   clamp(round(Int, abs(far) / step), 1, 60)
 end
 
+# --- a value in another unit -----------------------------------------------------------------
+#
+# "1m in cm" comes to 100cm. Julia reads it as in(1m, cm), which always goes
+# wrong: a unit is a type, and Julia can't look inside a type. So a sheet can
+# give it this meaning without changing any code that works. With anything
+# but a unit on its right, in means what it means in Julia: 3 in [1, 2, 3].
+
+"`x` in the unit `unit`, or Julia's `x in y` when `y` isn't a unit"
+into(x, unit::Type{<:Units.Unit}) = convert(unit, x)
+into(x, y) = x in y
+
+"`ex` with each `a in b` changed to a call to `into`"
+converting(ex) = ex
+converting(ex::Expr) = begin
+  ex.head == :quote && return ex
+  args = map(converting, ex.args)
+  ex.head == :call && length(args) == 3 && args[1] === :in ? Expr(:call, into, args[2], args[3]) : Expr(ex.head, args...)
+end
+
 """
 Work out every row of a sheet, from the top. `rows` holds the name and the
 expression of each one. A row that goes wrong says so, and the rows after it
@@ -381,7 +401,7 @@ is how far apart those two values are, as a number, or nothing.
 work(rows; at::Real=0) = begin
   mod = Module(:Sheet)
   Core.eval(mod, Expr(:block, Expr(:const, Expr(:(=), :SheetUnits, units())), Expr(:using, Expr(:., :., :SheetUnits))))
-  read(expr, names) = Meta.parse(rewrite(expr, names))
+  read(expr, names) = converting(Meta.parse(rewrite(expr, names)))
   ids(names) = Set(Symbol(ident(n)) for n in names)
   # Each row that the sheet works out, with the row that says what it must come to
   pairs, free, seen = Dict{Int,Int}(), 0, String[]
@@ -441,7 +461,7 @@ work(rows; at::Real=0) = begin
       end
       if i == over
         # The row is somewhere between its two values
-        lo, hi = (Core.eval(mod, Meta.parse(side)) for side in ends(expr, names))
+        lo, hi = (Core.eval(mod, converting(Meta.parse(side))) for side in ends(expr, names))
         gap = hi - lo
         far = gap isa Real ? Float64(gap) : Float64(getfield(gap, :value))
         value = at == 0 ? lo : at == 1 ? hi : round(lo + gap * at, sigdigits=12)

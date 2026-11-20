@@ -75,3 +75,18 @@ end
   # A sheet can have a row over a range and a row that's worked out backwards
   @test texts([("Long", "2 to 4"), ("Wide", "?"), ("Area", "long * wide = 12")]) == ["2 to 4", "6 to 3", "12"]
 end
+
+@testset "a value in another unit" begin
+  @test texts([("", "1m in cm"), ("", "2.5km in m"), ("", "1m in ft"), ("", "25°C in °F")]) == ["100cm", "2,500m", "3.2808'", "77°F"]
+  # A unit made of others, and a sum on the left
+  @test texts([("", "90km/hr in m/s"), ("", "20000cm^2 in m^2"), ("", "2m + 50cm in mm")]) == ["25m/s", "2m²", "2,500mm"]
+  # The names of rows, and a function that a row defines
+  @test texts([("Wall length", "12m"), ("Wall height", "2.4m"), ("", "wall length * wall height in cm^2")])[3] == "288,000cm²"
+  @test texts([("", "metres(x) = x in m"), ("", "metres(300cm)")])[2] == "3m"
+  # A unit that measures something else goes wrong, as convert does
+  @test S.tally([("", "1m in s")])[1].failed
+  # in keeps its meaning for anything that isn't a unit
+  @test texts([("", "3 in [1, 2, 3]"), ("", "4 in (1, 2)"), ("", "[x for x in 1:3]")]) == ["true", "false", "[1, 2, 3]"]
+  # A row that a sheet works out backwards, from an answer in another unit
+  @test texts([("Side", "? 1m"), ("", "side * side in cm^2 = 40000cm^2")]) == ["2m", "40,000cm²"]
+end

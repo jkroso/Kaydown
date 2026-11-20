@@ -8,6 +8,11 @@
 #
 # `wait` talks to Ladder through files in one folder. Ladder's agent.jl says
 # what each file is for.
+#
+# What a command prints shows in Ladder too, as a file of its own:
+#
+#     git log | ladder
+#     curl -s https://api.github.com/repos/jkroso/Ladder | ladder
 
 set -u
 
@@ -22,6 +27,13 @@ Usage:
       the user changed in the file, and stop.
       --as <name>          What Ladder calls you on its Nudge button.
       --timeout <seconds>  Stop waiting after this long. The exit code is then 2.
+
+  <command> | ladder [--as <kind>] [--name <name>]
+      Show what the command prints in Ladder: CSV as a table, JSON as a tree,
+      Markdown as a page, and anything else as text. It prints the path of
+      the file that it wrote.
+      --as <kind>     What the output is, when Ladder guesses wrong: csv, json, md or txt.
+      --name <name>   The name of the file, without its ending. Without it, the name is the time.
 
 Exit codes: 0 done, 1 an error, 2 the time ran out, 3 Ladder can't take part.
 EOF
@@ -101,6 +113,53 @@ wait_for() {
   done
   cat "$me.sent"
 }
+
+# What the text in the file $1 is, by how it starts: json, csv, md or txt
+guess() {
+  first="$(LC_ALL=C grep -m1 -v '^[[:space:]]*$' "$1")"
+  last="$(LC_ALL=C grep -v '^[[:space:]]*$' "$1" | tail -1 | LC_ALL=C sed 's/[[:space:]]*$//')"
+  case "$first" in
+    '{'*) case "$last" in *'}') echo json; return ;; esac ;;
+    '['*) case "$last" in *']') echo json; return ;; esac ;;
+    '# '*|'---') echo md; return ;;
+  esac
+  # A table has the same number of commas, and at least one, in each of its first lines
+  LC_ALL=C awk -F, 'NR > 5 { exit } NF < 2 || (n && NF != n) { bad = 1; exit } { n = NF } END { exit !(NR >= 2 && !bad) }' "$1" && { echo csv; return; }
+  echo txt
+}
+
+# Show what comes in from a pipe, as a file of its own
+piped() {
+  kind="" name=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --as) [ $# -ge 2 ] || fail "--as needs a kind: csv, json, md or txt"; kind="$2"; shift 2 ;;
+      --name) [ $# -ge 2 ] || fail "--name needs a name"; name="$2"; shift 2 ;;
+      *) fail "there's no option $1 for what comes in from a pipe" ;;
+    esac
+  done
+  case "$kind" in ''|csv|json|md|txt) ;; *) fail "--as takes csv, json, md or txt, not $kind" ;; esac
+  case "$name" in */*) fail "--name takes a name with no / in it" ;; esac
+  dir="${LADDER_PIPED:-${TMPDIR:-/tmp}/ladder-piped}"
+  dir="${dir%/}"
+  mkdir -p "$dir" || fail "can't make the folder $dir"
+  part="$dir/.$$.part"
+  # The colour codes that a command writes for a terminal aren't part of what it says
+  LC_ALL=C sed "s/$(printf '\033')\[[0-9;?]*[a-zA-Z]//g" > "$part" || fail "can't write in $dir"
+  [ -s "$part" ] || { rm -f "$part"; fail "the command before the | printed nothing"; }
+  [ -n "$kind" ] || kind="$(guess "$part")"
+  [ -n "$name" ] || name="$(date '+%Y-%m-%d %H.%M.%S')"
+  file="$dir/$name.$kind"
+  mv "$part" "$file" || fail "can't write $file"
+  # A test sets LADDER_QUIET, and no window opens
+  [ -n "${LADDER_QUIET:-}" ] || show "$file"
+  echo "$file"
+}
+
+# With no command, what a pipe or a file sends in is shown
+if [ -p /dev/stdin ] || [ -f /dev/stdin ]; then
+  case "${1:-}" in ""|--as|--name) piped "$@"; exit ;; esac
+fi
 
 case "${1:-}" in
   show) shift; show "$@" ;;

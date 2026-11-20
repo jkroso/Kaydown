@@ -314,6 +314,8 @@ Add the queue table | Doing
 
 The line `columns: Later, This week, Done` at the top of the block names other columns.
 
+The line `in: jobs` at the top of the block makes it a board of a folder. It shows the `- [ ]` items of every page in the folder `jobs` beside the page, and `in: .` is the page's own folder. Ladder ticks an item in its own file when the user drops its card on the last column. A line of the block then names an item by its page and its text: `kitchen: Lay the pipe | Doing`.
+
 ### A signature
 
 A `signature` code block shows a box that a person signs in with the mouse or the trackpad. Write the name of who signs in a `name:` line. Without that line, a field under the box takes the name.
@@ -381,6 +383,8 @@ month: 2026-11
 ````
 
 `month` is the month that shows. Leave it out to show the month of today. Write every day as year-month-day. When the user drags a thing, Ladder writes the new day into the item's text or the event's line.
+
+The line `in: jobs` in the block makes it a calendar of a folder. Its `- [ ]` items are those of every page in the folder `jobs` beside the page, and `in: .` is the page's own folder. Ladder writes a tick or a new day into the item's own file.
 
 ### A map
 
@@ -459,6 +463,16 @@ This paragraph is under the columns.
 ### Code that runs
 
 A code block in the language `ui`, and code between backticks straight after a `!`, is Julia code that Ladder runs when the page opens. Use these only if the user asks for a live block.
+
+## Show what a command prints
+
+`<command> | ladder` shows what the command prints in Ladder, as a file of its own. CSV shows as a table that the user sorts and filters, JSON as a tree, Markdown as a page, and anything else as text. Use it for output that is too long to read in the terminal.
+
+```
+git log --stat -20 | ladder --name "last 20 commits"
+```
+
+`--as csv` says what the output is when Ladder guesses wrong: `csv`, `json`, `md` or `txt`. `--name` names the file. The command prints the path of the file that it wrote. The user can't answer on such a file. To ask them something, write a page.
 
 ## Write a page that is easy to answer
 

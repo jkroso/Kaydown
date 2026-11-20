@@ -14,6 +14,13 @@
 # line under the columns names another for it: the item's text, a |, and the
 # column.
 #
+# A line like `in: jobs` at the top makes it a board of a folder: it shows the
+# to-do items of every page in the folder `jobs` beside the page, and in the
+# folders inside that one. `in: .` is the page's own folder. A card that's
+# moved to the last column ticks its item in the item's own page. A line of
+# the block then names an item by its page and its text, like
+# `plans/kitchen: Lay the new pipe | Doing`.
+#
 # This file reads and writes those lines, and works out the column of each
 # item. It draws nothing.
 
@@ -62,6 +69,19 @@ written(b::Board) = begin
   append!(out, b.other)
   isempty(b.placed) || push!(out, "", ("$name | $column" for (name, column) in b.placed)...)
   !isempty(out) && isempty(out[1]) ? out[2:end] : out
+end
+
+"""
+The folder whose pages the board shows the items of, as a line like `in: jobs`
+names it: a folder beside the page, or `.` for the page's own folder. It's
+nothing for a board of its own page's items.
+"""
+folder(b::Board) = begin
+  for line in b.other
+    m = match(r"^in\s*:\s*(.*)$"i, line)
+    m === nothing || return (name = String(strip(m[1])); isempty(name) ? "." : name)
+  end
+  nothing
 end
 
 "The place of the column that `name` names, or nothing"

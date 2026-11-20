@@ -53,6 +53,7 @@ The block at the top of this page is front matter: lines at the very top of a fi
 - [A live block, which shows what its code makes](welcome.md#live-blocks)
 - [Every component that a live block can show](components.md)
 - [A kind of block of your own, which a file defines](welcome.md#blocks-of-your-own)
+- [The function that draws a thing, which a click shows and you can change](welcome.md#the-code-of-a-thing)
 - [A kind of block that a page defines, with its code and an example](counter.md)
 
 ## Blocks that draw and plan
@@ -67,9 +68,12 @@ The block at the top of this page is front matter: lines at the very top of a fi
 - [A schedule: a page's to-do items as bars on a line of days](welcome.md#schedules)
 - [A schedule to try](schedule.md)
 - [A board of a page's to-do items](welcome.md#boards)
+- [A board of every page of a folder, which ticks an item in its own page](welcome.md#boards)
 - [A gallery of a folder's pictures](welcome.md#galleries)
 - [A calendar: a month with a page's tasks, its to-do items that have a day, and events](welcome.md#calendars)
+- [A calendar of every page of a folder, which writes a new day into an item's own page](welcome.md#calendars)
 - [The day of a page: a slider that shows the page as it stands on another day](welcome.md#the-day-of-a-page)
+- [The page's past: on a day before today, the ticks and the lines that git has for that day](welcome.md#the-day-of-a-page)
 - [One thing in many blocks: the mouse on a task in one block marks it in the others](welcome.md#one-thing-in-many-blocks)
 - [A log of the hours on each task, with a clock to start and stop](welcome.md#time-logs)
 - [A clock on a to-do item, which starts and stops the log](welcome.md#time-logs)
@@ -87,6 +91,9 @@ The block at the top of this page is front matter: lines at the very top of a fi
 ## The window and its settings
 
 - [The list of files, the files that aren't pages, the menus, printing and the app's updates](welcome.md#files-menus-and-settings)
+- [A folder as a kind of folder: a desktop, notes, pictures, or a kind from GitHub](welcome.md#files-menus-and-settings)
+- [A folder as a blog, which publishes its pages as a site on GitHub Pages](welcome.md#files-menus-and-settings)
+- [What a command prints in the terminal, shown in Ladder: `git log | ladder`](welcome.md#from-the-terminal)
 - [A page as slides, one part at a time](welcome.md#slides)
 - [The colours, the font, the size of the text, the width of the page, and saving a page when you leave its window](settings/settings.md)
 - [How code shows](settings/code-editor.md)

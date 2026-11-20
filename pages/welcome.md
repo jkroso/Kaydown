@@ -157,6 +157,16 @@ The line that opens a block can name the file after the language, so one file ca
 
 Open [progress.jl](progress.jl) to see how a kind of block is written in a Julia file. When you save a change to that file, Ladder loads it again, and the block above changes with it.
 
+## The code of a thing
+
+A function draws each thing in this window: a block, a button, a row of the list of files. To find that function, hold ⌘ and ⌥ and move the mouse. A blue line goes round the thing under the mouse. A label on the line has the name of the thing's kind, and the file and the line of its function. Click, and a window opens beside this one with the function in it.
+
+Try it on the bar of the block above. The window shows `progress.jl`, with the caret on the function `describe`. Change a colour or a size there, and press ⌘Return in the function. The bar is drawn the new way at once. ⌘S writes the change to the file.
+
+It works on Ladder's own parts too, like the count of words at the top right. Most of those are in one very long file. The window shows the whole of it, with the function at the top, and ⌘Return and ⌘S work there as they do in any file. The app that you installed writes its own files again each time it starts, so a change to one of its own parts lasts until you quit. To keep the change, put the function on your startup page, between a line `@eval Ladder begin` and a line `end`.
+
+The command Show Code does the same for the next thing that you click. Press ⌘⇧P and type its name to run it. Esc gives the mouse back.
+
 ## Sheets
 
 A code block in the language `sheet` works things out. Each row has a name and a Julia expression. An expression can use the names of the rows above it, and numbers can have units.
@@ -436,6 +446,8 @@ Click the box of an item like this one to tick it. | Doing
 
 The block's lines hold the column of each card. A line like `columns: Later, This week, Done` at their top names other columns.
 
+A board can show a whole folder. With a line like `in: jobs` at its top, the block shows the to-do items of every page in the folder `jobs` beside this page, and in the folders inside it. `in: .` is this page's own folder. Each card has the name of its page under its words. Drop a card on the last column, and Ladder ticks the item in its own page. Click a card twice to open that page at the item.
+
 ## One thing in many blocks
 
 One thing can show in many blocks of a page. A to-do item is a line of the text, a card of a board, a bar of a schedule, a thing of a calendar's day and the rows of a time log. Move the mouse over it in one of them, and each of the others marks it. Try it with the card of the board above: the item's line of the text gets a soft box behind it.
@@ -468,6 +480,8 @@ The arrows go to the month before and the month after, and **Today** goes back t
 
 A calendar shows the hours of the page's time logs too. Each day of a log has the tasks of that day, with the hours of each, after a small clock.
 
+A calendar can show a whole folder, as a board can. With a line like `in: jobs` in the block, the to-do items are those of every page in the folder `jobs` beside this page. `in: .` is this page's own folder. Tick an item or drag it to another day, and Ladder writes the tick or the new day into the item's own page. Click an item twice to open that page.
+
 ## The day of a page
 
 A page shows itself as it stands on one day. That day is today, until the page has a code block in the language `day`. The block is a line of days with a slider on it. Drag the slider, click a day, or click the line and press ← and →.
@@ -482,7 +496,13 @@ Each block that would ask for today asks for the page's day:
 - A schedule draws its line of today on that day, and shows the tasks that the plan has finished by then as done.
 - A board of a page with a schedule puts each card where the plan has its task on that day: to do, doing or done. Its cards stay where they are until the page shows today again.
 
-The boxes of the to-do items in the text stay as they are: only the plan says what's done on another day. **Today** takes the day out of the block, so the page follows the real day again. The page [schedule.md](schedule.md) has a slider to try with a schedule and a board.
+In a folder that git keeps, the text shows its past too. On a day before today, Ladder asks git for the page as its last commit of that day had it:
+
+- The box of a to-do item has a tick only if the item was ticked on that day. A click on a box does nothing until the page shows today again.
+- A line that wasn't on the page on that day is fainter, with a grey bar beside it. So is a line that read another way.
+- A board on a page with no schedule puts each card where its item was on that day.
+
+The slider goes back to the day of the page's first commit. On a page that git doesn't keep, the boxes of the to-do items stay as they are: only the plan says what's done. **Today** takes the day out of the block, so the page follows the real day again. The page [schedule.md](schedule.md) has a slider to try with a schedule and a board.
 
 ## Columns
 
@@ -681,6 +701,23 @@ Click a line of a change to say something about it. A field opens under the line
 
 The agent can change the page while you read it. What you're typing stays, and the agent's changes show around it. A bar shows for a few seconds beside each line that the agent changed. If you missed them, click the button with an eye at the top right: it shows a bar beside every line that the agent changed since you last sent the page, until you click it again. In the list of files, a dot marks a page that an agent waits for. While the list is hidden, the dot shows beside the button that opens it. [Ladder's page on GitHub](https://github.com/jkroso/Ladder#use-it-with-an-agent) says how to set up an agent.
 
+## From the terminal
+
+Ladder has a command for the terminal, called `ladder`. `ladder show plan.md` opens a file or a folder in Ladder. What another command prints can go to Ladder through a pipe:
+
+```
+git log | ladder
+curl -s https://api.github.com/repos/jkroso/Ladder | ladder
+```
+
+Ladder shows what the command printed as a file of its own. JSON shows as a tree, CSV as a table that sorts and filters, Markdown as a page, and anything else as text. `--as csv` says what the output is when Ladder guesses wrong: `csv`, `json`, `md` or `txt`. `--name` names the file.
+
+The command is the file `bin/ladder` in Ladder's own folder, `~/Library/Application Support/Ladder`. To run it by its name, add this line to the file `~/.zshrc`, and open a new terminal window:
+
+```
+export PATH="$HOME/Library/Application Support/Ladder/bin:$PATH"
+```
+
 ## Slides
 
 Press ⌃⌘⇧P to show this page as slides, for when you show a plan to someone. The window shows one part of the page at a time, with bigger text and nothing else of the app. A slide starts at each heading of level 1 or 2. A line across the page, which you write as `---`, starts one too. A right-click on the page has Show as Slides in its menu too.
@@ -719,7 +756,19 @@ Ladder knows some folders by itself, and shows each in its own way:
 
 In Downloads, Pictures and the Trash, click a line or a picture to choose it, and click it twice to show it. Hold ⌘ or ⇧ to choose more. The arrow keys go from one to the next, Return shows what's chosen, and ⌘⌫ moves it to the Trash. Right-click for the menu of the file.
 
-To show another folder in one of these ways, put a file called `.ladder` in it that ends with a block like the one for a desktop, with `Ladder.NotesDirectory`, `Ladder.DownloadsDirectory`, `Ladder.PicturesDirectory` or `Ladder.ScreenshotsDirectory`.
+To show another folder in one of these ways, open a file of the folder, press ⌘⇧P and choose Show Folder As. Choose the kind from the list: Desktop, Notes, Blog, Downloads, Pictures or Screenshots. Ladder writes the file `.ladder` in the folder, and the window shows the folder in its new way. Plain takes that file away, and the folder is as the Finder has it again.
+
+Other people can write a kind of folder and keep it on GitHub. To use one, type its address in place of a kind from the list, like `github.com/jkroso/Media.lad`, which shows a folder of films as a page of posters. Ladder gets the code from GitHub the first time.
+
+A folder that shows as a **Blog** puts itself on the web. Each page in the folder is a post, and the folder's own page lists them, the newest first. A post's front matter can have a `title`, a `date` like 2026-11-20, and `draft: true` for a post that stays out of the site. The page `index.md`, if the folder has one, goes over the list of posts on the site's first page.
+
+- **Publish** makes each post a page of HTML in the folder `docs`, with a first page that lists the posts, and copies the pictures that the posts show. If git keeps the folder and it has a remote called `origin`, Ladder then commits the folder `docs` and pushes it. It commits nothing else, so a draft stays on your Mac.
+- **Open Site** shows the site in your browser.
+- **New Post** starts a page in the folder.
+
+GitHub serves the site when the repository's settings say so: under Settings, then Pages, choose the branch `main` and the folder `/docs`. You do that once.
+
+You can write the file `.ladder` yourself too. It ends with a block like the one for a desktop, with `Ladder.NotesDirectory`, `Ladder.BlogDirectory`, `Ladder.DownloadsDirectory`, `Ladder.PicturesDirectory` or `Ladder.ScreenshotsDirectory`. Show Folder As leaves a file that you wrote as it is.
 
 A zip file shows what it holds, without being unpacked: its folders and files, each file with its size and when it changed. Click a folder to open it, and click a file to see that one file. Ladder doesn't change a file that it shows from a zip file. Click Unpack to unpack the whole file beside itself, as two clicks in the Finder do.
 

@@ -1,0 +1,269 @@
+# Tests for the code of a thing, in main.jl: a click with ⌘ and ⌥ down, or the
+# next click after Show Code, shows the method of `describe` that draws the
+# thing under the mouse, in a window beside this one. Code that runs in that
+# window runs in the module that the file made, so a new method draws the
+# thing at once. Run them with `julia -O0 --project=. test/show_code_test.jl`.
+# They click in windows that aren't on the screen. Set `LADDER_SHOTS` to a
+# folder, and they save a picture of the page there.
+
+@use Test: @test, @testset
+@use "../main" => K
+@use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse
+@use "github.com/jkroso/UI.jl/Interface/draw" frame rect window_tool
+@use "github.com/jkroso/UI.jl/Interface/save" save_png
+@use GeometryBasics: Vec2
+const px = K.px
+
+# The folder has the same name each time, so that Kip compiles its file once
+const dir = joinpath(tempdir(), "ladder-show-code-test")
+rm(dir, recursive=true, force=true)
+mkpath(dir)
+@eval K settings_file() = $(joinpath(dir, "settings"))
+const page = joinpath(dir, "tank.md")
+const source = joinpath(dir, "gauge.jl")
+
+# A kind of block with a node of its own, which counts the clicks that it gets
+write(source, """
+@use "github.com/jkroso/Prospects.jl" @def
+@use "github.com/jkroso/MiniFB.jl" Keys KeyPress onkey
+@use "github.com/jkroso/Font.jl/units" px
+@use "github.com/jkroso/UI.jl/Interface/Geometric"...
+@use "github.com/jkroso/UI.jl/Interface/abstract" SemanticUI describe handled
+
+"How full a tank is"
+@def mutable struct Gauge <: SemanticUI
+  level::Int = 0
+  clicks::Int = 0
+end
+
+gauge(lines) = Gauge(level=something(tryparse(Int, strip(get(lines, 1, ""))), 0))
+
+"A bar as wide as the tank is full"
+describe(g::Gauge) =
+  Box(width(200px), height(30px), background("steelblue"))
+
+onkey(g::Gauge, ::KeyPress{Keys.mouse_left}) = (g.clicks += 1; handled)
+""")
+write(page, "# A tank\n\n```gauge\n3\n```\n\nThe end.\n")
+
+const e = K.build_editor(page)
+const w = Window(e, size=(900px, 600px))
+# Each frame is drawn with the newest code, as the app's own loop draws it
+frames(win=w, n=2) = foreach(_ -> Base.invokelatest(frame, win), 1:n)
+frames(w, 4)
+shot(name) = haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], name), w)
+
+node() = e.nodes[(:block, "gauge", page, 1)].value
+over() = begin
+  r = rect(node())
+  x, y = r.left + r.width / 2, r.top + r.height / 2
+  w.mouse = typeof(w.mouse)(x, y)
+  onmouse(w, MouseMove(Vec2{px}(x, y), w))
+  frames(w, 1)
+end
+click(held...) = begin
+  over()
+  foreach(h -> w.keys |= h, held)
+  frames(w, 1)
+  w.keys |= Keys.mouse_left
+  onkey(w, KeyPress{Keys.mouse_left}(0, w))
+  w.keys ⊻= Keys.mouse_left
+  onkey(w, KeyRelease{Keys.mouse_left}(0, w))
+  foreach(h -> w.keys ⊻= h, held)
+  frames()
+end
+"The editors of the windows that show the file of code"
+code_windows() = filter(o -> o !== e && o.buf.path == realpath(source), K.editors)
+const first_line = findfirst(startswith("describe(g::Gauge)"), readlines(source))
+
+@testset "the method that draws a thing" begin
+  @test nameof(typeof(node())) == :Gauge
+  m = K.drawn_by(node())
+  @test m isa Method && K.code_place(m) == (realpath(source), first_line)
+  @test K.code_label(m) == "gauge.jl:$first_line"
+  @test K.drawn_by(3) === nothing
+  # A function of Julia's own has no file on this Mac
+  @test K.code_place(which(sin, Tuple{Float64})) === nothing
+  # The built app says where it wrote each file that the Mac that built it had
+  other = joinpath(dir, "copy.jl")
+  write(other, "1\n")
+  K.SOURCE_FILES[String(m.file)] = other
+  @test K.code_place(m) == (realpath(other), first_line)
+  delete!(K.SOURCE_FILES, String(m.file))
+  @test K.code_label(which(K.describe, Tuple{K.Editor})) == "Ladder/main.jl:$(which(K.describe, Tuple{K.Editor}).line)"
+end
+
+@testset "a click with ⌘ and ⌥ down shows the code" begin
+  @test window_tool(w) isa K.CodePicker
+  # A click with no key down is the block's own
+  click()
+  @test node().clicks == 1 && isempty(code_windows())
+  # With only one of the two keys down, too
+  click(Keys.cmd)
+  @test isempty(code_windows())
+  n = node().clicks
+  over()
+  w.keys |= Keys.cmd; w.keys |= Keys.opt
+  frames()
+  shot("show-code-line.png")
+  w.keys ⊻= Keys.cmd; w.keys ⊻= Keys.opt
+  click(Keys.cmd, Keys.opt)
+  # The block didn't get the click, and a window shows its file with the caret on the method
+  @test node().clicks == n
+  shown = code_windows()
+  @test length(shown) == 1
+  @test shown[1].buf.caret[1] == first_line
+  @test !shown[1].panel
+  # A second click shows the same window
+  click(Keys.cmd, Keys.opt)
+  @test length(code_windows()) == 1
+end
+
+@testset "Show Code takes the next click" begin
+  shown = only(code_windows())
+  shown.buf.caret = shown.buf.anchor = (1, 0)
+  K.show_code!(e)
+  t = K.code_picker(e)
+  @test t.picking
+  n = node().clicks
+  click()
+  @test !t.picking && node().clicks == n && shown.buf.caret[1] == first_line
+  # The click after that is the block's own again
+  click()
+  @test node().clicks == n + 1
+  # Esc gives the mouse back
+  K.show_code!(e)
+  onkey(w, KeyPress{Keys.escape}(0, w))
+  @test !t.picking
+  click()
+  @test node().clicks == n + 2
+  @test haskey(K.COMMANDS, :show_code)
+end
+
+@testset "code that runs in the file's window changes what's loaded" begin
+  shown = only(code_windows())
+  m = K.page_module(shown, realpath(source))
+  @test m === Kip.modules[realpath(source)]
+  @test K.workspace(shown) === m
+  @test rect(node()).width == 200px
+  value, printed, failed = K.run_code(shown, "describe(g::Gauge) = Box(width(40px * g.level), height(30px), background(\"tomato\"))")
+  @test !failed
+  frames(w, 3)
+  @test rect(node()).width == 120px
+  shot("show-code-changed.png")
+  # A page's own code still has a module of its own
+  @test K.page_module(e, page) !== m
+end
+
+# --- a method of a long file -------------------------------------------------------
+#
+# A file that's longer than `MOST_TEXT` opens whole, as code to change. A kind
+# of block whose file is that long has its drawing method far down the file.
+
+const long = joinpath(dir, "dial.jl")
+const filler = ["# A line that makes the file long, number $i, with enough words in it to take up some room." for i in 1:6000]
+const dial_code = """
+\"\"\"
+A dial that shows a level,
+as a box.
+\"\"\"
+describe(d::Dial) =
+  Box(width(100px), height(30px),
+      background("steelblue"))
+"""
+write(long, """
+@use "github.com/jkroso/Prospects.jl" @def
+@use "github.com/jkroso/Font.jl/units" px
+@use "github.com/jkroso/UI.jl/Interface/Geometric"...
+@use "github.com/jkroso/UI.jl/Interface/abstract" SemanticUI describe
+
+@def mutable struct Dial <: SemanticUI
+  level::Int = 0
+end
+
+dial(lines) = Dial(level=something(tryparse(Int, strip(get(lines, 1, ""))), 0))
+
+$(join(filler, "\n"))
+
+$dial_code
+"A line after the method"
+after(d::Dial) = d.level
+""")
+const dials = joinpath(dir, "dials.md")
+write(dials, "# Dials\n\n```dial\n2\n```\n")
+K.open!(e, dials)
+frames(w, 4)
+dial_node() = e.nodes[(:block, "dial", dials, 1)].value
+"Hold ⌘ and ⌥ and click the dial"
+click_dial() = begin
+  r = rect(dial_node())
+  x, y = r.left + r.width / 2, r.top + r.height / 2
+  w.mouse = typeof(w.mouse)(x, y)
+  onmouse(w, MouseMove(Vec2{px}(x, y), w))
+  w.keys |= Keys.cmd; w.keys |= Keys.opt
+  frames(w, 1)
+  w.keys |= Keys.mouse_left
+  onkey(w, KeyPress{Keys.mouse_left}(0, w))
+  w.keys ⊻= Keys.mouse_left
+  onkey(w, KeyRelease{Keys.mouse_left}(0, w))
+  w.keys ⊻= Keys.cmd; w.keys ⊻= Keys.opt
+  frames()
+end
+"The windows that show the long file"
+shows() = filter(o -> o.buf.path == realpath(long), K.editors)
+
+@testset "the line of a method in a file that changed since it was loaded" begin
+  m = K.drawn_by(dial_node())
+  lines = ["x = 1", "describe(g::Gauge) = 1", "", "\"Words\"", "describe(d::Dial) =", "  2", "function describe(d::Dial, n::Int)", "end"]
+  # Julia has the method's old line. The nearest line that starts a method of that name for that type is its line now.
+  @test K.settled_line(m, lines, 5) == 5 && K.settled_line(m, lines, 2) == 5 && K.settled_line(m, lines, 8) == 7
+  @test K.settled_line(m, ["nothing here"], 40) == 1
+end
+
+@testset "a method of a long file shows in the whole file" begin
+  @test filesize(long) > K.MOST_TEXT && K.iscode(long)
+  m = K.drawn_by(dial_node())
+  at = findfirst(startswith("describe(d::Dial)"), readlines(long))
+  @test K.code_place(m) == (realpath(long), at)
+  click_dial()
+  shown = only(shows())
+  # The window has every line of the file, as code to change, with the caret on the method
+  @test shown.buf.view == :code && shown.buf.lines == K.text(long) && length(shown.buf.lines) > 6000 && shown.buf.lines[at-4:at+2] == split(rstrip(dial_code), '\n')
+  @test shown.buf.caret[1] == at && isempty(shown.buf.about)
+  # The method's line is in the lines that the window draws
+  win = K.window_of(shown)
+  frames(win, 3)
+  @test at in first(shown.layout[first(shown.shown)].first:shown.layout[last(shown.shown)].last, 12)
+  # A second click shows the same window, with what was changed in it
+  K.edit!(shown.buf, (at + 2, 0), (at + 2, 0), " ")
+  click_dial()
+  @test only(shows()) === shown && shown.buf.lines[at+2] == "       background(\"steelblue\"))"
+  K.undo!(shown.buf)
+  # Lines that are typed over the method move it, and the next click finds its line as it is in the window
+  K.edit!(shown.buf, (1, 0), (1, 0), "# One more line\n")
+  click_dial()
+  @test shown.buf.caret[1] == at + 1
+  K.undo!(shown.buf)
+end
+
+@testset "its code runs in the long file's module, and a save writes the file" begin
+  shown = only(shows())
+  b = shown.buf
+  @test K.page_module(shown, b.path) === Kip.modules[realpath(long)]
+  @test rect(dial_node()).width == 100px
+  at = findfirst(startswith("describe(d::Dial)"), b.lines)
+  i = at + 1
+  from = length(b.lines[i], 1, prevind(b.lines[i], first(findfirst("100px", b.lines[i]))))
+  K.edit!(b, (i, from), (i, from + 5), "60px * d.level")
+  value, printed, failed = K.run_code(shown, join(b.lines[at:at+2], "\n"))
+  @test !failed
+  frames(w, 3)
+  @test rect(dial_node()).width == 120px
+  # ⌘S writes the whole file, with the new line where the old one was
+  K.save!(b)
+  now = readlines(long)
+  @test now[at+1] == "  Box(width(60px * d.level), height(30px)," && now[at-4] == "\"\"\"" && now[at+3] == ""
+  @test now[at+4] == "\"A line after the method\"" && length(now) == 6000 + 22 && now[12] == filler[1] && now[6011] == filler[6000]
+end
+
+foreach(o -> (win = K.window_of(o); win === nothing || close(win)), copy(K.editors))

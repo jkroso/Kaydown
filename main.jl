@@ -40,12 +40,16 @@
 #     or a sheet to draw its numbers as bars, as lines or as a pie.
 #   - Write a code block in the language `board` to see the page's to-do
 #     items as cards in columns. Drag a card to the last column to tick its item.
+#     With a line like `in: jobs` in it, the board shows the items of every
+#     page of that folder, and a card that's moved ticks its item in its own page.
 #   - Write a code block in the language `gallery` to show the pictures of a
 #     folder as a grid of small squares. Click one to make it fill the window,
 #     and press ← and → there to see the others.
 #   - Write a code block in the language `calendar` to see a month, with the
 #     page's tasks, its to-do items that have a day like 2026-11-25 in their
 #     text, and events of its own. Drag a thing to another day to move it.
+#     With a line like `in: jobs` in it, the to-do items are those of every
+#     page of that folder, and a tick or a new day goes into the item's own page.
 #   - Write a code block in the language `columns` with a number in it, like 3,
 #     to show the next three blocks of the page side by side. You type in a
 #     column as you type anywhere. A heading takes the blocks under it into its column.
@@ -227,6 +231,23 @@
 #   - ⌘W closes the file, and the window stays open with no file. ⌘W in a
 #     window with no file closes it. Ladder quits when its last window closes.
 #   - ⌘⌥I opens the layout inspector.
+#   - Press ⌘⇧P and choose Show Folder As to show the folder of the file as
+#     a kind of folder: a desktop, notes, a grid of pictures, or a kind that
+#     a repository on GitHub has, like github.com/jkroso/Media.lad. Ladder
+#     writes the folder's own page, the file `.ladder`. Plain takes it away.
+#   - Show a folder as a Blog, and its own page lists its pages as posts.
+#     Publish there makes each a page of HTML in the folder `docs`, with a
+#     first page that lists them, and pushes that folder to GitHub, where
+#     GitHub Pages serves it. See "a folder that's a blog".
+#   - Hold ⌘ and ⌥ and click anything in the window: a block, a button, a
+#     row of the sidebar. A window opens beside this one with the function
+#     that draws that thing. Change the function there and press ⌘Return in
+#     it, and the thing is drawn the new way at once. Show Code in the command
+#     palette does the same for the next thing that you click. See "the code
+#     of a thing".
+#   - Open a long file of code, like this one. It opens whole, and a typed
+#     letter takes no longer there than in a short file. See "the lines of a
+#     long file".
 #
 # It uses these UI.jl features: a `Scroll` that only builds the lines
 # on screen, a `draw` method that adds the caret and selection over a node,
@@ -308,8 +329,10 @@
 @use "./notes" => Notes
 @use "./zip" => Zips
 @use "./macfolders" => Mac
+@use "./blog" => Blogs
 @use "github.com/jkroso/UI.jl/Interface/draw" Bubble
 @use "github.com/jkroso/UI.jl/Interface/draw" popups sync_mouse!
+@use "github.com/jkroso/UI.jl/Interface/draw" set_tool! window_tool draw_tool tool_input invalidate_layout!
 @use "github.com/jkroso/URI.jl/FSPath" FSPath
 @use "github.com/jkroso/URI.jl/FS" => FS FSObject AbstractDirectory
 @use Colors: @colorant_str, RGBA, Colorant
@@ -730,6 +753,7 @@ Base.@kwdef mutable struct Buffer
   # The text as an agent last knew it: what you last sent it, with every change that was made to the file from outside since
   told::Vector{String} = [""]
   sent::Vector{String} = [""]           # the text as it was when you last sent it to an agent, or when the file was opened
+  counted::Vector{String} = String[]    # the lines of a file of code that `words` and `chars` are the counts of
 end
 
 "True when the file is only shown. Ladder changes Markdown files and the files of code in `CODE_FILES`, and no others."
@@ -835,7 +859,7 @@ kinds(b::Buffer) = begin
     lang = b.view == :hex ? HEX : b.view == :bits ? BITS : String(lstrip(lowercase(splitext(b.path)[2]), '.'))
     b.kinds = fill(Line(Kind.code, 0, 0, lang), length(b.lines))
     # A file that's only shown has no words to count
-    b.words, b.chars = b.view == :code ? (words(b.lines), sum(length, b.lines, init=0)) : (0, 0)
+    b.view == :code ? count_lines!(b) : ((b.words, b.chars) = (0, 0); b.counted = String[])
     b.kinds_at = b.version
   elseif b.kinds_at != b.version
     b.kinds = classify(b.lines)
@@ -846,6 +870,22 @@ kinds(b::Buffer) = begin
     b.kinds_at = b.version
   end
   b.kinds
+end
+
+"""
+Count the words and the characters of a file of code. After a change, only
+the lines that changed are counted again, so a long file costs no more than a
+short one.
+"""
+count_lines!(b::Buffer) = begin
+  old, lines = b.counted, b.lines
+  isempty(old) && ((b.words, b.chars) = (0, 0))
+  head, tail = unchanged(lines, old)
+  now, was = view(lines, head+1:length(lines)-tail), view(old, head+1:length(old)-tail)
+  b.words += words(now) - words(was)
+  b.chars += sum(length, now, init=0) - sum(length, was, init=0)
+  b.counted = copy(lines)
+  b
 end
 
 dirty(b::Buffer) = b.version != b.saved
@@ -912,7 +952,11 @@ edit!(b::Buffer, lo::Pos, hi::Pos, new::AbstractString; typing=false) = begin
   # Letters typed one after another undo together
   if !(typing && time() - b.typed < 1 && !isempty(b.undo))
     push!(b.undo, snapshot(b))
-    length(b.undo) > 500 && popfirst!(b.undo)
+    # Each step back keeps a list of the file's lines, so a long file keeps fewer steps: 500 for a
+    # file of 16,000 lines or less, 228 for one of 35,000 lines, and never less than 20
+    while length(b.undo) > clamp(8_000_000 ÷ max(length(b.lines), 1), 20, 500)
+      popfirst!(b.undo)
+    end
   end
   empty!(b.redo)
   b.typed = typing ? time() : 0.0
@@ -1215,13 +1259,14 @@ const CODE_FILES = (".jl",)
 
 """
 True when the file at `path` is code that the page can change: a kind of file
-in `CODE_FILES`, whose text shows whole. A file that's too long to show whole,
-or that isn't text, is only shown.
+in `CODE_FILES`, whose text shows whole. A file of any usual length does: see
+"the lines of a long file". A file that's longer than `MOST_PAGE`, or that
+isn't text, is only shown.
 """
 iscode(path) = begin
   (lowercase(splitext(path)[2]) in CODE_FILES && isfile(path)) || return false
   filesize(path) == 0 && return true
-  found = try reading(path, tidy=false) catch; nothing end
+  found = try reading(path, tidy=false, most=MOST_PAGE) catch; nothing end
   found !== nothing && !found[2]
 end
 
@@ -1833,12 +1878,13 @@ pieces(e, text::String, line::Line, raw::Bool, i::Int=0) = begin
     if k == Kind.bullet && !raw
       push!(out, piece("•  ", line.level, mark, atomic=true, n=line.prefix - line.level))
     elseif k == Kind.todo && !raw
-      push!(out, piece(isdone(text) ? TODO_DONE : TODO_OPEN, line.level, base, atomic=true, n=line.prefix - line.level))
+      # On a day before today, the box shows what git has for that day: see `page_then`
+      push!(out, piece(something(ticked_then(e, i), isdone(text)) ? TODO_DONE : TODO_OPEN, line.level, base, atomic=true, n=line.prefix - line.level))
     else
       push!(out, piece(rest(lead, line.level), line.level, mark))
     end
     # A to-do item that's done reads fainter
-    k == Kind.todo && isdone(text) && (base = Face(base, color=colours.dim))
+    k == Kind.todo && something(raw ? nothing : ticked_then(e, i), isdone(text)) && (base = Face(base, color=colours.dim))
   elseif k == Kind.paragraph
     isempty(lead) || push!(out, piece(lead, 0, base))
   elseif opens_callout(line) && !raw
@@ -2396,7 +2442,7 @@ flow(e, i::Int, raw::Bool=israw(e.buf, i)) = begin
   text, line = e.buf.lines[i], kinds(e.buf)[i]
   if e.buf.view == :code
     # A line of a file of code is laid out as a line of a file that's only shown is
-    length(e.flows) > 4000 && empty!(e.flows)
+    spare_flows!(e)
     return get!(() -> file_line(e, text, line, i), e.flows, (:file, text, line))
   end
   # The lines that open and close a code block show while the caret is in the block. As rich text, one only shows while it's typed.
@@ -2404,10 +2450,13 @@ flow(e, i::Int, raw::Bool=israw(e.buf, i)) = begin
   build() = laid(e, text, line, raw, i)
   # What inline code made can change its size, so its line is laid out again each time
   !raw && occursin(INLINE, text) && !(line.kind in (Kind.code, Kind.fence, Kind.rule)) && return build()
-  length(e.flows) > 4000 && empty!(e.flows)
+  spare_flows!(e)
   # A footnote's number comes from the rest of the document, which `notes` reads once for each
   # version of it. So the line is kept for that version, and laid out again after a change.
   !raw && occursin("[^", text) && return get!(build, e.flows, (text, line, raw, :notes, e.buf.path, e.buf.version))
+  # On a day before today, the box of a to-do item shows the tick of that day, so the line is kept with it
+  then = line.kind == Kind.todo && !raw ? ticked_then(e, i) : nothing
+  then === nothing || return get!(build, e.flows, (text, line, raw, :then, then))
   get!(build, e.flows, (text, line, raw))
 end
 
@@ -4088,6 +4137,7 @@ hush!(l::Breadcrumb) = (l.viewer isa Union{AudioPlayer,VideoPlayer} && pause!(l.
 const LINE_H = 18px          # the height of a line of a file's text
 const TEXT_PAD = 8px         # above the first line and under the last
 const MOST_TEXT = 400_000    # bytes. The preview of a longer file stops there.
+const MOST_PAGE = 20_000_000 # bytes. A file that shows as a page shows this much of its text: see "the lines of a long file".
 
 """
 The text of the file that a breadcrumb previews. It's kept so that the file
@@ -4104,12 +4154,14 @@ FileText(lines, more) = FileText(lines, more, Scroll(width(grow=grow), height(LI
 """
 The lines of the file at `path` and whether it has more, or nothing if it isn't
 text. With `tidy`, a tab is two spaces and a long line stops at 200 characters,
-which is how the lines of a file of code are shown.
+which is how the lines of a file of code are shown. No more than `most` bytes
+of the file are read.
 """
-reading(path; tidy=true) = begin
-  bytes = open(io -> read(io, MOST_TEXT + 1), path)
-  more = length(bytes) > MOST_TEXT
-  more && resize!(bytes, MOST_TEXT)
+reading(path; tidy=true, most=MOST_TEXT) = begin
+  # Julia makes room for as many bytes as it's asked to read, so it's asked for no more than the file has
+  bytes = open(io -> read(io, min(most, filesize(path)) + 1), path)
+  more = length(bytes) > most
+  more && resize!(bytes, most)
   (isempty(bytes) || 0x00 in view(bytes, 1:min(length(bytes), 4000))) && return nothing
   s = String(bytes)
   # A file that was cut short can stop part way through a character
@@ -4515,11 +4567,11 @@ end
 
 "The buffer that shows the text of the file at `path`, or nothing if the file isn't text"
 text_look(path) = begin
-  found = try reading(path, tidy=false) catch; nothing end
+  found = try reading(path, tidy=false, most=MOST_PAGE) catch; nothing end
   found === nothing && return nothing
   lines, more = found
   Buffer(path=path, view=:text, lines=map(shown_line, lines),
-         about=more ? "First $(bytes(MOST_TEXT)) of $(bytes(filesize(path)))" : "")
+         about=more ? "First $(bytes(MOST_PAGE)) of $(bytes(filesize(path)))" : "")
 end
 
 "Whether each file that was asked about is text, with when the file was last read then. Only the last few are kept."
@@ -5618,21 +5670,192 @@ file_line(e, text, line::Line, i::Int) = begin
   wrap(ps, e.width; lh, size, hang)
 end
 
+# --- the lines of a long file ---------------------------------------------------------
+#
+# A file of code can be tens of thousands of lines long. To lay out a line takes
+# time: its code is cut into parts, each part is measured, and the parts are
+# wrapped. So the lines of a file are laid out in a way that costs less, and the
+# layout is kept from one frame to the next.
+#
+#   - A line is laid out as runs of text in one colour, and nothing is
+#     measured. In a font whose characters are all one width, a run is as wide
+#     as its characters are many, so where a long line breaks can be counted.
+#     The line gets its colours when it's drawn, and only the lines on screen
+#     are drawn: see `in_colour`.
+#   - A line with a character that may be of another width is laid out in full,
+#     and so is a line with a word that's too long for the window.
+#   - After a change, only the lines that changed are laid out again.
+
+"The layout of a file's lines, kept from one frame to the next, with the lines that it's of"
+mutable struct Laid
+  version::Int
+  lines::Vector{String}
+  items::Vector{Item}
+end
+
+const pitches = Dict{Tuple{String,String,Float32},Union{Nothing,px}}()
+
 """
-The lines of a file that shows as text, laid out. Each is a line of code. The
-whole page is code, so the lines have no background of their own and start at
-the edge of the page.
+How wide one character of `face` is, when each character that a keyboard types
+is that wide, in the face and in the slanted one that comments are in. Code's
+own fonts are like that. Nothing for a font whose characters differ.
 """
-text_items(e, b::Buffer) = begin
-  ks = kinds(b)
-  items = Vector{Item}(undef, length(b.lines))
-  top = 0px
-  for (i, text) in enumerate(b.lines)
-    f = file_line(e, text, ks[i], i)
-    items[i] = Item(i, i, top, tall(f), f)
-    top += tall(f)
+pitch(face::Face) = get!(pitches, (face.family, face.style, Float32(num(face.size)))) do
+  wide = measure(face, "M")
+  near(w, n=1) = abs(num(w) - n * num(wide)) < 0.01
+  slant = Face(face, style=codeslant())
+  # Two characters side by side can be nearer than they are apart, in a font that isn't code's
+  even = all(c -> near(measure(face, string(c))) && near(measure(slant, string(c))), ' ':'~') &&
+         near(measure(face, "AVAVfifiWoTo"), 12) && near(measure(face, "    ->==!="), 10)
+  even && num(wide) > 0 ? wide : nothing
+end
+
+"True when each character of `text` is one that a keyboard types: a letter, a digit, a mark or a space"
+typeable(text::String) = all(c -> 0x20 <= c <= 0x7e, codeunits(text))
+
+"""
+Where the line `text` breaks into lines on screen, as `wrap` breaks the line
+that `file_line` gives it: the first and the last column of each. Each
+character is `wide` across, the lines are `limit` across, and each after the
+first starts at `hang`. Nothing when that can't be told without measuring:
+a word that's too long for a line breaks between two parts of its code, and
+a word that ends within half a pixel of the edge could go either way.
+"""
+quick_rows(text::String, wide::Float64, limit::Float64, hang::Float64) = begin
+  chars = codeunits(text)
+  n = length(chars)
+  rows = Tuple{Int,Int}[]
+  x = start = 0.0
+  from = at = 0
+  # The spaces that start the line go on its first line, however many they are
+  while at < n && chars[at+1] == 0x20; at += 1 end
+  x += at * wide
+  while at < n
+    word = at
+    while word < n && chars[word+1] != 0x20; word += 1 end
+    next = word
+    while next < n && chars[next+1] == 0x20; next += 1 end
+    w = (word - at) * wide
+    w <= limit - hang - 0.5 || return nothing
+    over = x + w - limit
+    abs(over) < 0.5 && return nothing
+    if over > 0 && x > start
+      push!(rows, (from, at))
+      from, x, start = at, hang, hang
+    end
+    # The spaces after a word may hang past the edge
+    x += (next - at) * wide
+    at = next
   end
+  push!(rows, (from, n))
+end
+
+"""
+Line `i` of a file, laid out for the layout of the whole file. It's what
+`file_line` gives, but for the colours of its code, and nothing is measured:
+`wide` is how wide one character of `face` is, so a run of text is as wide as
+its characters are many. A line with a character that a keyboard doesn't type,
+or in a font whose characters differ, when `wide` is nothing, is laid out by
+`file_line`. So is a line that `quick_rows` can't break.
+"""
+quick_line(e, text::String, line::Line, i::Int, face::Face, lh::px, wide) = begin
+  n = ncodeunits(text)
+  (wide !== nothing && typeable(text)) || return file_line(e, text, line, i)
+  run(from, to, x) = Seg[Seg(from == 0 && to == n ? text : text[from+1:to], from, to - from, face, false, "", x, (to - from) * wide, nothing)]
+  flow(lines) = Flow(lines, lh, face.size, 0px, 0px, Kind.paragraph, false)
+  # A line that's sure to fit, or that goes on past the edge of the window, is one line on screen
+  (!wraps(e) || n * wide <= e.width - 1px) && return flow([VLine(n == 0 ? Seg[] : run(0, n, 0px), 0px, 0, n, 0px, lh)])
+  # A line that goes on under itself starts there one step of indentation further in, as `file_line` has it
+  lead = something(findfirst(!=(0x20), codeunits(text)), n + 1) - 1
+  hang = min((lead + e.indent) * wide, e.width / 2)
+  rows = quick_rows(text, num(wide), num(e.width), num(hang))
+  rows === nothing && return file_line(e, text, line, i)
+  flow([VLine(run(from, to, k == 1 ? 0px : hang), k == 1 ? 0px : hang, from, to, lh * (k - 1), lh) for (k, (from, to)) in enumerate(rows)])
+end
+
+"True when `a` and `b` are the same text. Two lines of a file that didn't change are one string, which is quick to see."
+same_text(a::String, b::String) = pointer(a) == pointer(b) || a == b
+
+"How many lines at the start of `new` are as they are in `old`, and how many at the end of the lines that are left"
+unchanged(new::Vector{String}, old::Vector{String}) = begin
+  n, m = length(new), length(old)
+  head = 0
+  while head < min(n, m) && same_text(new[head+1], old[head+1])
+    head += 1
+  end
+  tail = 0
+  while tail < min(n, m) - head && same_text(new[n-tail], old[m-tail])
+    tail += 1
+  end
+  (head, tail)
+end
+
+"""
+The lines of the file that `b` shows, laid out. Each is a line of code. The
+whole page is code, so the lines have no background of their own and start at
+the edge of the page. See "the lines of a long file".
+"""
+file_lines(e, b::Buffer) = begin
+  key = (:lines, b.path, b.view)
+  kept = get(e.flows, key, nothing)
+  kept isa Laid && kept.version == b.version && return kept.items
+  # What was laid out before, and the lines that it was of. Julia knows the types of these two, so the loops below are quick.
+  was, before = kept isa Laid ? (kept.items, kept.lines) : (Item[], String[])
+  ks, lines = kinds(b), b.lines
+  n = length(lines)
+  items = Vector{Item}(undef, n)
+  n == 0 && return items
+  # Every line of a file is a line of code in the file's language, so one face and one height do for all
+  f = face(e, ks[1])
+  lh = code_size(e) * 1.5 / CODE_SCALE
+  wide = pitch(f)
+  # The lines before the first that changed, and the lines after the last, keep their layout
+  m = length(before)
+  head, tail = unchanged(lines, before)
+  top = 0px
+  copyto!(items, 1, was, 1, head)
+  head > 0 && (top = items[head].top + items[head].tall)
+  for i in head+1:n-tail
+    flow = quick_line(e, lines[i], ks[i], i, f, lh, wide)
+    high = tall(flow)
+    items[i] = Item(i, i, top, high, flow)
+    top += high
+  end
+  for i in n-tail+1:n
+    it = was[i-n+m]
+    items[i] = Item(i, i, top, it.tall, it.content)
+    top += it.tall
+  end
+  e.flows[key] = Laid(b.version, copy(lines), items)
   items
+end
+
+"""
+The Flow `f` of the item `it`, with the colours of its code, to draw. A line of
+a file whose lines on screen are each one run of text is in one colour: see
+`quick_line`. The line as `file_line` lays it out has its colours, and is kept
+by its text. It's drawn only if it breaks where `f` does, so the page's lines
+stay where the layout put them.
+"""
+in_colour(e, it::Item, f::Flow) = begin
+  b = e.buf
+  (b.view != :markdown && it.first == it.last && 1 <= it.first <= length(b.lines)) || return f
+  all(vl -> length(vl.segs) == 1, f.lines) || return f
+  text = b.lines[it.first]
+  (last(f.lines).to == length(text) && startswith(text, f.lines[1].segs[1].text)) || return f
+  line = kinds(b)[it.first]
+  spare_flows!(e)
+  full = get!(() -> file_line(e, text, line, it.first), e.flows, (:file, text, line))::Flow
+  length(full.lines) == length(f.lines) && all(k -> full.lines[k].from == f.lines[k].from, eachindex(f.lines)) ? full : f
+end
+
+"Forget the lines that are laid out, when many are kept. The layout of a whole file's lines stays: it's made again only after a change."
+spare_flows!(e) = begin
+  length(e.flows) > 4000 || return e
+  kept = [p for p in e.flows if p.second isa Laid]
+  empty!(e.flows)
+  foreach(p -> e.flows[p.first] = p.second, kept)
+  e
 end
 
 "What the page shows for a file that doesn't show as text: a viewer of its kind, or words that say it's a binary file"
@@ -12228,6 +12451,12 @@ BLOCKS[CHANGES] = BlockKind("Changes", "file-diff", ChangesView, changes_html)
 #   - Click a day twice to add an event to it, type its words, and press Return.
 #   - A day with more things than it has room for says how many more there
 #     are. Click those words to make the week tall enough for all of them.
+#
+# A block with a line like `in: jobs` is a calendar of a folder: its to-do
+# items are those of every page of the folder `jobs` beside the page, as a
+# board of a folder has them. A tick and a new day are written into the
+# item's own page: see `tick_page!` and `stamp_page!`. Two clicks on such an
+# item open its page at its line.
 
 const CALENDAR = Calendars.CALENDAR
 push!(BLOCK_ICONS, "calendar3", "chevron-left", "chevron-right")
@@ -12315,9 +12544,57 @@ end
 "The things of each day. They're worked out again when the page has changed, and on a new day."
 things!(v::CalendarView) = begin
   e = editor(v)
-  key = (e.buf.version, v.lines, calendar_today())
-  (v.shown !== nothing && v.shown[1] == key) || (v.shown = (key, Calendars.things(v.data, page_todos(e), calendar_tasks(e)..., log_things(e))))
+  items = calendar_items(v)
+  # The items of a folder are one list until a page of the folder changes
+  key = (e.buf.version, v.lines, calendar_today(), objectid(items))
+  (v.shown !== nothing && v.shown[1] == key) || (v.shown = (key, Calendars.things(v.data, items, calendar_tasks(e)..., log_things(e))))
   v.shown[2]
+end
+
+"The folder whose pages the calendar shows the to-do items of, as a path, or nothing for a calendar of its own page's items"
+calendar_folder(v::CalendarView) = begin
+  name = Calendars.folder(v.lines)
+  name === nothing ? nothing : abspath(joinpath(docdir(editor(v)), expanduser(name)))
+end
+
+"The to-do items that the calendar shows on their days: those of its page, or those of every page of its folder, as `folder_todos` gives them"
+calendar_items(v::CalendarView) = (folder = calendar_folder(v); folder === nothing ? page_todos(editor(v)) : folder_todos(editor(v), folder).items)
+
+"Where the to-do item called `key` is, for a calendar of a folder: its page, its line and its text. It's nothing for a calendar of its own page."
+item_place(v::CalendarView, key) = (folder = calendar_folder(v); folder === nothing ? nothing : get(folder_todos(editor(v), folder).found, key, nothing))
+
+"""
+Write the day `to` in place of the day `from` in the text of the to-do item
+`m`, in its own page. A page that's open is changed as if you'd typed the day
+there. If it isn't the page that shows, and it had nothing to save, it's
+saved. A page that isn't open is changed in its file. It gives the item's new
+line, or nothing when the item or its day isn't there any more, or its page
+can't be written.
+"""
+stamp_page!(e, m::Searches.Match, from::Date, to::Date) = begin
+  b = get(e.buffers, m.path, nothing)
+  if b !== nothing && !readonly(b)
+    i = Searches.locate(m, b.lines, kinds(b))
+    at = i === nothing ? nothing : Calendars.stamp_at(b.lines[i], from)
+    at === nothing && return nothing
+    clean = !dirty(b)
+    caret, anchor = b.caret, b.anchor
+    edit!(b, (i, at[1]), (i, at[2]), string(to))
+    kept(p) = p[1] == i ? (i, min(p[2], length(b.lines[i]))) : p
+    b.caret, b.anchor = kept(caret), kept(anchor)
+    b !== e.buf && clean && save!(b)
+    i
+  else
+    isfile(m.path) || return nothing
+    lines = text(m.path)
+    i = Searches.locate(m, lines)
+    at = i === nothing ? nothing : Calendars.stamp_at(lines[i], from)
+    at === nothing && return nothing
+    lines[i] = first(lines[i], at[1]) * string(to) * join(Iterators.drop(lines[i], at[2]))
+    try write(m.path, join(lines, "\n")) catch; return nothing end
+    empty!(FOLDER_PAGES)   # the folder is read again, so that the calendar has the file as it is now
+    i
+  end
 end
 
 """
@@ -12413,6 +12690,9 @@ onkey(t::CalendarTick, ::KeyPress{Keys.mouse_left}) = begin
   settle!(v)
   e = editor(v)
   (thing === nothing || readonly(e.buf)) && return handled
+  place = item_place(v, thing.key)
+  # An item of another page is ticked in that page
+  place === nothing || return (tick_page!(e, place, !thing.done); v.shown = nothing; handled)
   items = page_todos(e)
   k = findfirst(it -> it.key == thing.key, items)
   k === nothing || tick!(e, items[k].line)
@@ -12460,8 +12740,11 @@ onkey(c::CalendarThing, ev::KeyPress{Keys.mouse_left}) = begin
   twice = click_twice!(v, x, y)
   again = v.picked == Calendars.id(t)
   v.picked = Calendars.id(t)
-  # Two clicks in one place go to the thing's line of the page
-  twice && again && return show_line!(editor(v), thing_line(v, t))
+  # Two clicks in one place go to the thing's line of the page, or of its own page for an item of a calendar of a folder
+  if twice && again
+    place = t.kind == :todo ? item_place(v, t.key) : nothing
+    return place === nothing ? show_line!(editor(v), thing_line(v, t)) : visit!(editor(v), place.path, place)
+  end
   # A task's days are the schedule's, and the hours of a log are the log's, so they stay where they are
   t.kind in (:task, :log) || readonly(editor(v).buf) || (v.grab = (t, x, y, false))
   # The press isn't a click on the page's text, so the text doesn't select when the mouse leaves the calendar with the thing
@@ -12639,6 +12922,15 @@ drop!(v::CalendarView) = begin
   (d === nothing || d == t.day || readonly(b)) && return v
   if t.kind == :event
     write_block!(v, CALENDAR, Calendars.moved(v.lines, t.line, d))
+  elseif t.kind == :todo && calendar_folder(v) !== nothing
+    # The item's own page gets the new day
+    place = item_place(v, t.key)
+    line = place === nothing ? nothing : stamp_page!(e, place, t.day, d)
+    line === nothing && return v
+    # The item's name has the new day in it, and the item stays selected
+    found = folder_todos(e, calendar_folder(v)).found
+    now = findfirst(m -> m.path == place.path && m.line == line, found)
+    v.picked = now === nothing ? nothing : (:todo, now)
   elseif t.kind == :todo
     k = findfirst(it -> it.key == t.key, page_todos(e))
     k === nothing && return v
@@ -12693,6 +12985,15 @@ BLOCKS[CALENDAR] = BlockKind("Calendar", "calendar3", CalendarView, calendar_htm
 # dragged out of it takes the tick away. Click a card twice to go to its line
 # of the page. The block's lines hold the column of each card that's between
 # the first column and the last.
+#
+# A block with a line like `in: jobs` is a board of a folder: its cards are
+# the to-do items of every page of the folder `jobs` beside the page, and of
+# the folders in it. `in: .` is the page's own folder. Each card has the name
+# of its page under its words. A card that's dropped on the last column ticks
+# its item in the item's own page, as a click on a box of a `find` block
+# does: see `tick_page!`. Two clicks on a card open its page at its line. The
+# schedule of the board's page plans only that page's items, so a board of a
+# folder shows today on every day of the page.
 
 const BOARD = Boards.BOARD
 push!(BLOCK_ICONS, "kanban")
@@ -12736,10 +13037,60 @@ end
 "The cards of each column of the board. They're worked out again when the page has changed, and when it shows another day."
 columns!(v::BoardView) = begin
   e = editor(v)
-  key = (e.buf.version, v.lines, page_day(e))
-  (v.shown !== nothing && v.shown[1] == key) || (v.shown = (key, cards_on_day(e, v.data)))
+  items = board_items(v)
+  # The items of a folder are one list until a page of the folder changes
+  key = (e.buf.version, v.lines, page_day(e), objectid(items))
+  (v.shown !== nothing && v.shown[1] == key) || (v.shown = (key, board_folder(v) === nothing ? cards_on_day(e, v.data) : Boards.arrange(v.data, items)))
   v.shown[2]
 end
+
+"The folder whose pages the board shows the items of, as a path, or nothing for a board of its own page's items"
+board_folder(v::BoardView) = begin
+  name = Boards.folder(v.data)
+  name === nothing ? nothing : abspath(joinpath(docdir(editor(v)), expanduser(name)))
+end
+
+"""
+The to-do items of every page of `folder`, and then of the folders in it, in
+the order of the pages' names, for a board or a calendar of a folder.
+`items` has each as a to-do item that's called by its page and its text, like
+`plans/kitchen: Lay the new pipe`, so two pages can each have an item with
+the same words. `found` says where each is, by that name: its page, its line
+and its text. They're found again when a page changes in Ladder, and when
+the folder is read again. A folder that isn't there has none.
+"""
+folder_todos(e, folder::AbstractString) = begin
+  isdir(folder) || return get!(() -> (key=nothing, items=Schedules.Todo[], found=Dict{String,Searches.Match}()), e.flows, (:no_folder_todos, folder))
+  listed = folder_pages(folder)
+  key = (hash([b.version for b in values(e.buffers)]), listed.read)
+  kept = get(e.flows, (:folder_todos, folder), nothing)
+  kept !== nothing && kept.key == key && return kept
+  pages = get!(() -> Dict{String,Any}(), e.flows, :folder_todo_pages)   # the items of each page, for every board and calendar of the window
+  # A list finds the items that aren't ticked, or the ones that are. These are both, in the order of their lines.
+  open, done = Searches.Query(:todo, String[], "", String[]), Searches.Query(:done, String[], "", String[])
+  both(path, lines, ks) = sort!([Searches.matches(open, path, lines, ks); Searches.matches(done, path, lines, ks)], by=m -> m.line)
+  items, found = Schedules.Todo[], Dict{String,Searches.Match}()
+  for (path, at) in listed.pages
+    lines, ks, mark = page_text(e, path, at)
+    had = get(pages, path, nothing)
+    ms = had !== nothing && had[1] == mark ? had[2] : (pages[path] = (mark, both(path, lines, ks)))[2]
+    page = splitext(relpath(path, folder))[1]
+    seen = Dict{String,Int}()
+    for m in ms
+      n = seen[m.text] = get(seen, m.text, 0) + 1
+      name = "$page: $(m.text)" * (n == 1 ? "" : " #$n")
+      push!(items, Schedules.Todo(m.line, m.text, name, 0, m.kind == :done))
+      found[name] = m
+    end
+  end
+  e.flows[(:folder_todos, folder)] = (key=key, items=items, found=found)
+end
+
+"The to-do items that the board shows: those of its page, or those of every page of its folder, as `folder_todos` gives them"
+board_items(v::BoardView) = (folder = board_folder(v); folder === nothing ? page_todos(editor(v)) : folder_todos(editor(v), folder).items)
+
+"Where the item of the card called `key` is, for a board of a folder: its page, its line and its text. It's nothing for a board of its own page, and for a card that the folder has no more."
+card_place(v::BoardView, key) = (folder = board_folder(v); folder === nothing ? nothing : get(folder_todos(editor(v), folder).found, key, nothing))
 
 """
 The cards of each column on the page's day. Today, that's what the page's
@@ -12750,7 +13101,8 @@ are in the first.
 """
 cards_on_day(e, board::Boards.Board) = begin
   tasks = planned_tasks(e)
-  isempty(tasks) && return Boards.arrange(board, page_todos(e))
+  # With no schedule to plan from, a card is where its item was on the page's day, as git has it: see `todos_then`
+  isempty(tasks) && return Boards.arrange(board, todos_then(e))
   n = length(board.columns)
   out = [Schedules.Todo[] for _ in 1:n]
   for t in tasks
@@ -12761,13 +13113,16 @@ cards_on_day(e, board::Boards.Board) = begin
 end
 
 "True when the board shows the schedule's plan for another day than today. Its cards stay where they are then."
-planned(v::BoardView) = !isempty(planned_tasks(editor(v)))
+planned(v::BoardView) = board_folder(v) === nothing && !isempty(planned_tasks(editor(v)))
+
+"True when the board shows the items as git has them for a day before today: a board of its own page with no schedule to plan from. Its cards stay where they are then, too."
+past(v::BoardView) = board_folder(v) === nothing && !planned(v) && page_then(editor(v)) !== nothing
 
 "True when the card of the item `t` shows as done"
-card_done(v::BoardView, t) = planned(v) ? t in columns!(v)[end] : t.done
+card_done(v::BoardView, t) = planned(v) || past(v) ? t in columns!(v)[end] : t.done
 
 "The to-do item of the page that the card called `key` is for, or nothing"
-card_todo(v::BoardView, key) = (items = page_todos(editor(v)); k = findfirst(t -> t.key == key, items); k === nothing ? nothing : items[k])
+card_todo(v::BoardView, key) = (items = board_items(v); k = findfirst(t -> t.key == key, items); k === nothing ? nothing : items[k])
 
 "True while the mouse drags a card of the board"
 dragging(v::BoardView) = v.grab !== nothing && v.grab[4]
@@ -12793,16 +13148,23 @@ describe(card::BoardCard) = begin
   t === nothing && return Box(height(0px))
   taken = dragging(v) && v.grab[1] == card.key
   done = card_done(v, t)
+  place = card_place(v, card.key)
   # A card is marked while the mouse is on its item in another part of the page
   lit = !taken && !ishovered(card) && marked(v, card.key)
   Row(width(grow=grow), padding(10px, 8px), radius(6px), child_gap=7px, Alignment.Start, name="Card",
       background(taken ? clear : lit ? mark_colour(takeoff_back()) : takeoff_back()),
       border(1px, :solid, taken ? colours.faint : lit ? colours.accent : ishovered(card) ? colours.marker : colours.line),
     (done ? (Box(padding(0px, 2px), Icon("check", size=14px, color=taken ? colours.faint : colours.string)),) : ())...,
-    Box(width(grow=grow), Text(t.name, size=13px, family=SANS, color=taken ? colours.faint : done ? colours.dim : colours.ink, wrap=WrapMode.words)))
+    Column(width(grow=grow), Alignment.Start, child_gap=3px,
+      Box(width(grow=grow), Text(t.name, size=13px, family=SANS, color=taken ? colours.faint : done ? colours.dim : colours.ink, wrap=WrapMode.words)),
+      # A card of a board of a folder says which page its item is in
+      (place === nothing ? () : (Box(width(grow=grow), clip=true, label(card_page(v, place), 11px, color=colours.faint)),))...))
 end
 
-cursor(card::BoardCard) = planned(card.of) ? :arrow : :hand
+"The name of the page of a card's item as the card shows it: where it is in the board's folder, without the end of its file's name"
+card_page(v::BoardView, place) = splitext(relpath(place.path, board_folder(v)))[1]
+
+cursor(card::BoardCard) = planned(card.of) || past(card.of) ? :arrow : :hand
 cursor(::Union{BoardView,BoardColumn,DragLayer}) = :arrow
 
 onkey(card::BoardCard, ev::KeyPress{Keys.mouse_left}) = begin
@@ -12811,10 +13173,13 @@ onkey(card::BoardCard, ev::KeyPress{Keys.mouse_left}) = begin
   at, cx, cy = v.clicked
   v.clicked = (time(), x, y)
   t = card_todo(v, card.key)
-  # Two clicks in one place go to the card's line of the page
-  time() - at < 0.35 && hypot(x - cx, y - cy) < 4 && t !== nothing && return show_line!(editor(v), t.line)
-  # A board that shows the plan for another day has no card to move
-  planned(v) || (v.grab = (card.key, x, y, false))
+  # Two clicks in one place go to the card's line of the page, or of its own page for a board of a folder
+  if time() - at < 0.35 && hypot(x - cx, y - cy) < 4 && t !== nothing
+    place = card_place(v, card.key)
+    return place === nothing ? show_line!(editor(v), t.line) : visit!(editor(v), place.path, place)
+  end
+  # A board that shows the plan for another day, or the items of a day that's past, has no card to move
+  planned(v) || past(v) || (v.grab = (card.key, x, y, false))
   handled
 end
 
@@ -12840,10 +13205,14 @@ describe(v::BoardView) = begin
     v.grab = (g[1], g[2], g[3], true)
   end
   # The cards of items that the page had once are forgotten
-  length(v.parts) > 2length(page_todos(e)) + 40 && filter!(p -> !(p[1] isa Tuple && p[1][1] == :card) || card_todo(v, p[1][2]) !== nothing, v.parts)
+  items = board_items(v)
+  folder = board_folder(v)
+  length(v.parts) > 2length(items) + 40 && filter!(p -> !(p[1] isa Tuple && p[1][1] == :card) || card_todo(v, p[1][2]) !== nothing, v.parts)
   with_theme(component_theme(e.zoom)) do
-    isempty(page_todos(e)) && return Column(block_look()..., clip=true, name="Board",
-      block_note("This page has no to-do items yet. Start a line with - [ ] to make a card."))
+    isempty(items) && return Column(block_look()..., clip=true, name="Board",
+      block_note(folder === nothing ? "This page has no to-do items yet. Start a line with - [ ] to make a card." :
+                 isdir(folder) ? "No page of the folder “$(basename(folder))” has a to-do item yet." :
+                 "There's no folder called “$(Boards.folder(v.data))” beside this page."))
     n = length(v.data.columns)
     wide = (e.width - 2px - 16px - 8px * (n - 1)) / n   # each column is as wide as the next
     columns = Row(width(grow=grow), padding(8px), child_gap=8px, Alignment.Start,
@@ -12854,6 +13223,17 @@ describe(v::BoardView) = begin
       Row(width(grow=grow), height(30px), padding(14px, 0px), child_gap=7px, Alignment.Center, clip=true,
           Icon("calendar-day", size=13px, color=colours.accent),
           Box(label("As the schedule plans it for $(Dates.dayname(d)) $(Schedules.long(d))", 12px, color=colours.dim)), Box(width(grow=grow))),
+      columns))
+    past(v) && (columns = Column(width(grow=grow), Alignment.Start,
+      Row(width(grow=grow), height(30px), padding(14px, 0px), child_gap=7px, Alignment.Center, clip=true,
+          Icon("calendar-day", size=13px, color=colours.accent),
+          Box(label("As git has the page for $(Dates.dayname(d)) $(Schedules.long(d))", 12px, color=colours.dim)), Box(width(grow=grow))),
+      columns))
+    # A board of a folder says whose items these are
+    folder === nothing || (columns = Column(width(grow=grow), Alignment.Start,
+      Row(width(grow=grow), height(30px), padding(14px, 0px), child_gap=7px, Alignment.Center, clip=true,
+          Icon("folder", size=13px, color=colours.dim),
+          Box(label("Every page of $(basename(folder))", 12px, color=colours.dim)), Box(width(grow=grow))),
       columns))
     Stack(block_look()..., clip=true, name="Board", columns,
           (dragging(v) ? (block_part!(() -> DragLayer(of=v), v, :drag),) : ())...)
@@ -12887,14 +13267,21 @@ drop!(v::BoardView) = begin
   c = drop_column(v)
   e = editor(v)
   b = e.buf
-  items = page_todos(e)
+  items = board_items(v)
   t = card_todo(v, g[1])
   (c === nothing || t === nothing || readonly(b) || Boards.column(v.data, t, items) == c) && return v
+  place = card_place(v, g[1])
+  # The item of another page is ticked there first. If its page can't be written, the card stays where it is.
+  if place !== nothing
+    last = length(v.data.columns)
+    turns = c == last ? !t.done : t.done
+    turns && !tick_page!(e, place, c == last) && return v
+  end
   Boards.prune!(v.data, items)
   tick = Boards.move!(v.data, t, c, items)
   # The tick and the block's lines change together, so one ⌘Z takes both back
   b.typed = 0.0
-  if tick !== nothing
+  if tick !== nothing && place === nothing
     caret, anchor = b.caret, b.anchor
     col = findfirst('[', b.lines[t.line])
     edit!(b, (t.line, col), (t.line, col + 1), tick ? "x" : " ", typing=true)
@@ -13805,18 +14192,17 @@ onkey(r::SearchRow, ::KeyPress{Keys.mouse_left}) = begin
 end
 
 """
-Tick the to-do item `m` in its own page, or take its tick away. A page that's
-open is changed as if you'd clicked the box there. If it isn't the page that
-shows, and it had nothing to save, it's saved. A page that isn't open is
-changed in its file.
+Tick the to-do item `m` in its own page when `done` is true, or take its tick
+away. A page that's open is changed as if you'd clicked the box there. If it
+isn't the page that shows, and it had nothing to save, it's saved. A page
+that isn't open is changed in its file. It's false when the item isn't there
+any more, or its page can't be written.
 """
-tick_found!(v::SearchView, m::Searches.Match) = begin
-  e = editor(v)
-  done = m.kind != :done
+tick_page!(e, m::Searches.Match, done::Bool) = begin
   b = get(e.buffers, m.path, nothing)
   if b !== nothing && !readonly(b)
     i = Searches.locate(m, b.lines, kinds(b))
-    i === nothing && return handled
+    i === nothing && return false
     clean = !dirty(b)
     caret, anchor = b.caret, b.anchor
     col = findfirst('[', b.lines[i])
@@ -13824,15 +14210,26 @@ tick_found!(v::SearchView, m::Searches.Match) = begin
     b.caret, b.anchor = caret, anchor
     b !== e.buf && clean && save!(b)
   else
-    isfile(m.path) || return handled
+    isfile(m.path) || return false
     lines = text(m.path)
     i = Searches.locate(m, lines)
-    i === nothing && return handled
+    i === nothing && return false
     lines[i] = Searches.ticked(lines[i], done)
     # A file that can't be written, like one of the pages that come with the app, stays as it is
-    try write(m.path, join(lines, "\n")) catch; return handled end
-    empty!(FOLDER_PAGES)   # the folder is read again, so that the list has the file as it is now
+    try write(m.path, join(lines, "\n")) catch; return false end
+    empty!(FOLDER_PAGES)   # the folder is read again, so that a list has the file as it is now
   end
+  true
+end
+
+"""
+Tick the to-do item `m` of a list in its own page, or take its tick away: see
+`tick_page!`. The item stays in the list until another page shows.
+"""
+tick_found!(v::SearchView, m::Searches.Match) = begin
+  e = editor(v)
+  done = m.kind != :done
+  tick_page!(e, m, done) || return handled
   # The item stays in this list. A second click, which puts it back as it was, lets it go.
   now = Searches.Match(m.path, m.line, m.text, done ? :done : :todo)
   k = findfirst(x -> x.path == m.path && x.text == m.text && x.kind == m.kind, v.kept)
@@ -16854,6 +17251,8 @@ end
 #   - A calendar shows the month of that day, with a circle round the day.
 #   - A time log adds up the hours to that day, when the day is past. A chart
 #     of the log draws those hours.
+#   - The text shows what git has of the page for that day, when the day is
+#     past and git keeps the page: see "the page's text on its day".
 #
 # The slider goes from the first to the last day of the things of the page.
 # `page_days` finds those: it asks the schedule for its tasks, and reads the
@@ -16942,6 +17341,9 @@ page_days(e) = begin
       d = Days.day((b.lines[i],))
       d === nothing || push!(out, d)
     end
+    # The slider goes back to the page's first commit, when git keeps the page: see "the page's text on its day"
+    h = !isempty(b.path) && isfile(b.path) ? page_history(page_key(b.path)) : nothing
+    h === nothing || push!(out, h.commits[end][2])
     out
   end
 end
@@ -16994,7 +17396,9 @@ describe(v::DayView) = begin
       Box(width(6px)),
       Box(label("$(Dates.dayname(d)) $(Schedules.long(d))", 13px, weight="Semibold")),
       Box(width(8px)),
-      Row(width(grow=grow), clip=true, Alignment.Center, Box(label(d == today ? "Today" : uppercasefirst(Days.away(d, today)), 12px, color=colours.dim)), Box(width(grow=grow))),
+      # The row is as tall as the bar, so that it doesn't cut the tails of its letters off
+      Row(width(grow=grow), height(grow=grow), clip=true, Alignment.Center,
+          Box(label(d == today ? "Today" : uppercasefirst(Days.away(d, today)) * (isempty(then_words(e)) ? "" : ", and " * then_words(e)), 12px, color=colours.dim)), Box(width(grow=grow))),
       block_button!(v, :today, :today, words="Today", tip="Show the page as it is today", off=off || (d == today && v.day === nothing)))
     Column(block_look()..., clip=true, name="Day", bar, block_part!(() -> DayTrack(of=v), v, :track))
   end
@@ -17066,6 +17470,158 @@ day_html(e, v::DayView) = (d = something(v.day, calendar_today()); "<p><strong>$
 
 BLOCKS[DAY_BLOCK] = BlockKind("Day", "calendar-day", DayView, day_html)
 
+# --- the page's text on its day ------------------------------------------------------------------
+#
+# A page in a folder that git keeps has its past. On a day before today, the
+# text shows that past too: Ladder asks git for the page as its last commit
+# of that day had it, and compares it with the page as it is now.
+#
+#   - The box of a to-do item shows a tick only if the item was ticked then.
+#     A click on a box does nothing until the page shows today again.
+#   - A line that wasn't on the page then, or that read another way, is
+#     fainter, with a grey bar beside it. A tick alone is no other way to read.
+#   - A board with no schedule to plan from puts each card where its item
+#     was then.
+#
+# The slider of a `day` block goes back to the day of the page's first
+# commit. A page that git doesn't keep, and a day with nothing to compare,
+# shows as it is.
+
+"How many seconds the commits of a page stay good, before git is asked for them again"
+const HISTORY_FRESH = 30.0
+"The commits of each page that was asked for, by the page's real path: when git was asked, the top folder of the page's repository, the page's place in it, and the commits, newest first, each as its hash and its day"
+const PAGE_HISTORY = Dict{String,Any}()
+"The lines of a page in a commit, by the repository's folder, the commit's hash and the page's place. A commit never changes, so they're kept."
+const COMMIT_LINES = Dict{Tuple{String,String,String},Vector{String}}()
+
+"The day of the time `t`, in seconds, on this Mac's clock"
+day_of(t::Real) = Date(Libc.strftime("%Y-%m-%d", t))
+
+"""
+What git has of the page at `path`: the top folder of its repository, its
+place in that folder, and its commits, the newest first, each as its hash and
+its day. It's nothing for a page that no repository holds, or that has no
+commit yet.
+"""
+page_history(path::AbstractString) = begin
+  kept = get(PAGE_HISTORY, path, nothing)
+  kept !== nothing && time() - kept.at < HISTORY_FRESH && return kept.found
+  found = try
+    root = Git.top(path)
+    if isempty(root)
+      nothing
+    else
+      rel = relpath(path, realpath(root))
+      commits = [(hash, day_of(at)) for (hash, at) in Git.history(root, rel)]
+      isempty(commits) ? nothing : (root=root, rel=rel, commits=commits)
+    end
+  catch
+    nothing   # no git on this Mac, or a folder that macOS doesn't let Ladder read
+  end
+  length(PAGE_HISTORY) > 500 && empty!(PAGE_HISTORY)
+  PAGE_HISTORY[path] = (at=time(), found=found)
+  found
+end
+
+"The lines of the page at `rel` in the commit `hash` of the repository at `root`, or none when the commit hasn't got the page"
+commit_lines(root, hash, rel) = begin
+  length(COMMIT_LINES) > 200 && empty!(COMMIT_LINES)
+  get!(COMMIT_LINES, (root, hash, rel)) do
+    text = Git.at_commit(root, hash, rel)
+    text === nothing ? String[] : String.(split(chomp(text), '\n'))
+  end
+end
+
+"The line `text` with the box of a to-do item empty, so that a tick alone doesn't make two lines differ"
+unticked(text::AbstractString) = replace(text, r"^(\s*[-*+] \[)[xX](\])" => s"\1 \2")
+
+"""
+The page as git has it for the page's day, when that day is before today:
+
+  - `lines`: its lines in the last commit of that day or before it. There
+    are none when its first commit came later.
+  - `later`: for each line of the page as it is now, true when the line
+    wasn't there then, or read another way.
+  - `ticks`: for the line of each to-do item of the page now, true when the
+    item was ticked then.
+
+It's nothing when the page shows today, and for a page that git doesn't keep.
+"""
+page_then(e) = begin
+  b = e.buf
+  (b.view == :markdown && !isempty(b.path)) || return nothing
+  d = page_day(e)
+  d < calendar_today() || return nothing
+  # Each to-do item of the page asks in each frame, so what was found is good for a second without a look at the disk
+  kept = get(e.flows, (:page_then_at, b.path, b.version, d), nothing)
+  kept !== nothing && time() - kept[1] < 1 && return kept[2]
+  found = page_then(e, d)
+  e.flows[(:page_then_at, b.path, b.version, d)] = (time(), found)
+  found
+end
+
+"The page as git has it for the day `d`, as `page_then(e)` gives it for the page's day. It looks at the disk, for whether the page's file is there."
+page_then(e, d::Date) = begin
+  b = e.buf
+  h = isfile(b.path) ? page_history(page_key(b.path)) : nothing
+  h === nothing && return nothing
+  k = findfirst(c -> c[2] <= d, h.commits)
+  hash = k === nothing ? "" : h.commits[k][1]
+  get!(e.flows, (:page_then, b.path, b.version, hash)) do
+    lines = k === nothing ? String[] : commit_lines(h.root, hash, h.rel)
+    later = falses(length(b.lines))
+    for (_, new) in changes(unticked.(lines), unticked.(b.lines)), i in new
+      later[i] = true
+    end
+    was = Dict(t.key => t.done for t in Schedules.todos(lines))
+    ticks = Dict{Int,Bool}(t.line => get(was, t.key, false) for t in page_todos(e))
+    (lines=lines, later=later, ticks=ticks)
+  end
+end
+
+"True or false when the box of the to-do item on line `i` shows what git has for the page's day, ticked or not. It's nothing when the page shows today, and so the box shows the line's own tick."
+ticked_then(e, i::Int) = begin
+  i > 0 || return nothing
+  then = page_then(e)
+  then === nothing ? nothing : get(then.ticks, i, nothing)
+end
+
+"The to-do items of the page as they stand on the page's day: each is done if git has it ticked then. On the real day, and for a page that git doesn't keep, they're the page's own."
+todos_then(e) = begin
+  then = page_then(e)
+  then === nothing && return page_todos(e)
+  b = e.buf
+  get!(e.flows, (:todos_then, b.path, b.version, objectid(then))) do
+    [Schedules.Todo(t.line, t.name, t.key, t.level, get(then.ticks, t.line, false)) for t in page_todos(e)]
+  end
+end
+
+"How strongly the page's own colour covers a line that wasn't on the page on its day"
+const LATER_VEIL = 0.62
+
+"Make each line of text that wasn't on the page on its day fainter, and draw a grey bar in the margin beside it. The text is drawn already."
+veil_later(ctx, e, ui) = begin
+  then = page_then(e)
+  (then === nothing || slideshow(e) !== nothing) && return
+  left = ui.left + sideways(e)
+  n = length(then.later)
+  for it in e.layout[e.shown]
+    (it.content isa Flow && it.first <= n && all(i -> then.later[i], it.first:min(it.last, n))) || continue
+    isempty(strip(e.buf.lines[it.first])) && it.first == it.last && continue   # an empty line has nothing to make fainter
+    rectangle(ctx, ui.left, ui.top + it.top, ui.width, it.tall, background=RGBA(colours.bg, LATER_VEIL), border=0px)
+    rectangle(ctx, left - 16px, ui.top + it.top, 3px, it.tall, background=RGBA(colours.ink, 0.22), border=0px)
+  end
+end
+
+"What a `day` block says of the page's text on a day before today: that it shows as git has it, or that git has none so early. It's \"\" when the text shows as it is."
+then_words(e) = begin
+  then = page_then(e)
+  then === nothing && return ""
+  isempty(then.lines) && return "before this page's first commit"
+  n = count(i -> then.later[i] && !isempty(strip(e.buf.lines[i])), eachindex(then.later))   # an empty line is no line to read
+  n == 0 ? "the text is as it was" : "$n line$(n == 1 ? "" : "s") came later"
+end
+
 # --- a number that a drag changes ---------------------------------------------------------------
 #
 # A sum in a line of text that is one number, like !`l = 16m`, shows what it
@@ -17095,6 +17651,8 @@ scrub_at(e, pos) = begin
   dx, dy = pos[1] - e.origin[1], pos[2] - e.origin[2]
   (dy >= 0px && pos[2] >= TOPBAR_H) || return nothing
   it = e.layout[item_under(e, dx, dy)]
+  # Until the next frame, the layout is of the page that showed before, which can have more lines than this one
+  it.last <= length(b.lines) || return nothing
   y = dy - it.top
   c = it.content
   if c isa Flow
@@ -17870,9 +18428,12 @@ unit_of(m::Module, n::Symbol) = begin
 end
 
 """
-The module of the page at `path`, which the window `e` asks for. It's made the
-first time, and kept by the page's real path. It has what a Julia file that
-Kip loads has, like `@use`, and more names by the kind of page:
+The module of the page at `path`, which the window `e` asks for. A file of
+code that Ladder loaded has the module that Kip made from it, so code that
+runs in its window changes what's loaded: see "the code of a thing". The
+module of any other page is made the first time, and kept by the page's real
+path. It has what a Julia file that Kip loads has, like `@use`, and more
+names by the kind of page:
 
   - The startup page and a folder's page have `Ladder`, as they have when
     Ladder runs their code. Each time Ladder runs one, the page has a new
@@ -17885,6 +18446,9 @@ function called `stars`, and two pages with the same name have two modules.
 """
 page_module(e, path::AbstractString) = begin
   key = page_key(path)
+  # A file of code that Ladder loaded has the module that the file made, so code that runs there changes what's loaded
+  loaded = loaded_module(key)
+  loaded === nothing || return loaded
   get!(PAGE_WINDOWS, key, e)
   m = get!(() -> ladder_runs(key) ? code_module(key) : usual_module(e, page_module_name(key), key), PAGE_MODULES, key)
   # A window that's newer than the module can give a page's code more names. It gives them once.
@@ -18607,7 +19171,9 @@ layout!(e, width=text_width(e)) = begin
   columns = page_columns!(e)   # the blocks that show side by side after a `columns` block, or nothing when the page has none
   # A file that's only shown is one viewer, or lines of text that are laid out once and kept
   b.view == :file && return e.layout = [file_item(e, b)]
-  readonly(b) && return e.layout = get!(() -> text_items(e, b), e.flows, (:shown, b.path, b.version))
+  readonly(b) && return e.layout = file_lines(e, b)
+  # A file of code is lines of text too, which a key can change
+  b.view == :code && columns === nothing && lowered(e) === nothing && return e.layout = slide_items(e, file_lines(e, b))
   items = Item[]
   top = 0px
   i = 1
@@ -18862,6 +19428,7 @@ rows(f::Flow, edge=0px) =
 describe(e::Editor, it::Item) = describe(e, it, it.content)
 
 describe(e::Editor, it::Item, f::Flow) = begin
+  f = in_colour(e, it, f)   # a line of a file gets the colours of its code here
   k = f.kind
   if k == Kind.rule && !f.raw
     return Box(width(grow=grow), height(tall(f)), Box(width(grow=grow), height(1px), background(colours.line)))
@@ -19207,6 +19774,7 @@ draw(ctx, size, ui::ConcreteRect, d::Document) = begin
     e.gliding = 1
   end
   e.by_step = false   # the step has been drawn. What moves the caret next may be a click.
+  veil_later(ctx, e, ui)
   margin(ctx, e, ui)
 end
 
@@ -19452,6 +20020,8 @@ end
 "Tick the box of the to-do item on line `i`, or take its tick away. The caret stays where it is."
 tick!(e, i::Int) = begin
   b = e.buf
+  # On a day before today, the box shows the past, which a click can't change
+  ticked_then(e, i) === nothing || return e
   text = b.lines[i]
   col = findfirst('[', text)   # the column after the [, because only spaces and a - come before it
   caret, anchor = b.caret, b.anchor
@@ -27841,6 +28411,8 @@ run_code(e, code::String) = begin
     redirect_stdout(screen)
     close(wr)
   end
+  # Code that ran in a module of Ladder's own can give a thing a new way to draw itself: see "the code of a thing"
+  loaded_module(page_key(path)) === nothing || redraw_windows!()
   (value, fetch(printed), failed)
 end
 
@@ -29425,6 +29997,101 @@ ccall(:jl_generating_output, Cint, ()) == 1 && read_names(String.(split(replace(
     c = a.
   """, "@load" => "@use"), '\n')), 1)
 
+# --- the names of a long file --------------------------------------------------------------
+#
+# A file of Julia code can be tens of thousands of lines long, and the parser
+# takes a moment to read that much. So the file's code is read in parts. A part
+# is the code that starts on a line of its own at the top of the file, like one
+# function, with the lines after it up to the next. After a change, only the
+# parts that the change touches are read again, and the other parts keep their
+# names. Code that's half typed can't close or open what's in another part, as
+# it could if the whole file were read again: the names of the other parts stay
+# as they were, which is what the list of names is best with.
+
+"""
+A part of a file's Julia code and the names that it makes. `first` is the line
+that it starts on now. The lines in `names` are as they were when it started
+on the line `read`.
+"""
+struct NamesPart
+  first::Int
+  read::Int
+  names::Vector{Bound}
+end
+
+"The names of a file of Julia code, kept from one version of the file to the next, with the lines that they're of"
+struct FileNames
+  key::Tuple{String,Int}
+  lines::Vector{String}
+  parts::Vector{NamesPart}
+  found::Vector{Bound}
+end
+
+"""
+The Julia code of `lines` in parts, each with the names that it makes. The
+first of the lines is line `start` of the page. The parts cover all the lines:
+the first starts on line `start`.
+"""
+read_parts(lines::Vector{String}, start::Int) = begin
+  r = Scan(lines, start, cumsum([1; [ncodeunits(l) + 1 for l in lines[1:end-1]]]), Bound[])
+  parts = NamesPart[]
+  from, taken, ended = start, 0, 0
+  tree = try Syntax.parseall(Syntax.SyntaxNode, join(lines, '\n'), ignore_errors=true) catch; nothing end
+  for n in (tree === nothing ? () : kids(tree))
+    at = span_of(r, n)
+    # Code that starts on the line where other code ends is in one part with it
+    if ended > 0 && first(at) > ended
+      push!(parts, NamesPart(from, from, r.found[taken+1:end]))
+      from, taken = first(at), length(r.found)
+    end
+    ended = max(ended, last(at))
+    try
+      scan!(r, n, nothing, nothing)
+    catch err
+      # The parser can give half typed code a shape that this doesn't expect. The names found so far still stand.
+      @debug "The names of some Julia code couldn't all be read" err
+    end
+  end
+  push!(parts, NamesPart(from, from, r.found[taken+1:end]))
+end
+
+"The names of the parts, each with the lines that it has now"
+part_names(parts::Vector{NamesPart}) = begin
+  found = Bound[]
+  sizehint!(found, sum(p -> length(p.names), parts, init=0))
+  for p in parts
+    by = p.first - p.read
+    by == 0 && (append!(found, p.names); continue)
+    for x in p.names
+      push!(found, Bound(x.name, (x.at[1] + by, x.at[2]), x.words, x.call, x.span === nothing ? nothing : x.span .+ by))
+    end
+  end
+  found
+end
+
+"The names that the file of Julia code in `b` makes. See \"the names of a long file\"."
+file_bounds(e, b::Buffer) = begin
+  old = get(e.nodes, :file_names, nothing)
+  lines, n = b.lines, length(b.lines)
+  parts = if old isa FileNames && old.key[1] == b.path
+    m, ps = length(old.lines), old.parts
+    head, tail = unchanged(lines, old.lines)
+    # The parts that the change touches, with the line before the change and the line after it:
+    # what's typed at the start or the end of a part can join the code of the part beside it
+    starts = [p.first for p in ps]
+    a = searchsortedlast(starts, max(head, 1))
+    z = searchsortedlast(starts, min(m - tail + 1, m))
+    from = ps[a].first
+    to = z == length(ps) ? n : ps[z+1].first - 1 + n - m
+    [ps[1:a-1]; read_parts(lines[from:to], from); [NamesPart(p.first + n - m, p.read, p.names) for p in ps[z+1:end]]]
+  else
+    read_parts(lines, 1)
+  end
+  found = part_names(parts)
+  e.nodes[:file_names] = FileNames((b.path, b.version), copy(lines), parts, found)
+  found
+end
+
 "The names that the page's Julia code makes, from every block of it. They're kept until the text changes."
 page_bounds(e) = begin
   b = e.buf
@@ -29433,7 +30100,10 @@ page_bounds(e) = begin
   ks = kinds(b)
   julia(i) = ks[i].kind == Kind.code && !(ks[i].lang in NO_NAMES) && shared_lang(ks[i].lang) == "julia"
   found = Bound[]
-  i = 1
+  # A file of code is one language from its first line to its last
+  whole = b.view == :code && !isempty(ks) && julia(1)
+  whole && (found = file_bounds(e, b))
+  i = whole ? length(ks) + 1 : 1
   while i <= length(ks)
     j = i
     while j <= length(ks) && julia(j); j += 1 end
@@ -30655,6 +31325,8 @@ describe_window(e::Editor) = begin
   zoom_tick!(e)
   slide_tick!(e)
   screen_tick!(e)
+  code_tick!(e)
+  publish_tick!(e)
   layout!(e)
   # A page whose long lines don't wrap scrolls sideways as far as its longest line goes, and no further when the window grows
   if !wraps(e)
@@ -31261,6 +31933,201 @@ end
 
 "What the top bar calls the page that shows, when that isn't its file's name: what code from the startup page calls it, or an email's subject"
 page_title(e) = something(first_answer(PAGE_TITLES, e), email_title(e), Some(nothing))
+
+# --- the code of a thing ------------------------------------------------------------------
+#
+# A function draws each thing that a window shows: the method of `describe`
+# for the thing's type. Hold ⌘ and ⌥ and click a thing, and Ladder shows that
+# method in a window beside this one. Show Code, in the command palette, does
+# the same for the next thing that you click, and esc gives the mouse back.
+# While ⌘ and ⌥ are down, or after Show Code, a line goes round the thing
+# under the mouse, with a label: the name of its type, and the file and the
+# line of its method.
+#
+# The window with the code shows a file that Ladder loaded. Code that you run
+# there runs in the module that the file made, and not in a module of its own:
+# see `loaded_module`. So change the method and press ⌘Return in it. Julia has
+# the new method, and each window draws the thing again with it. The change
+# lasts until Ladder quits. ⌘S writes it to the file, as it does for any file.
+#
+# The window shows the whole file, with the method's first line near its top,
+# however long the file is: see "the lines of a long file".
+#
+# The picker is a tool of the window, as UI.jl's layout inspector is. A tool
+# sees each click before the window's own parts do. A window has one tool, so
+# the picker waits while the inspector is open.
+
+"Where the source of a file of code is on this Mac, by where it was on the Mac that built the app. The app fills it in when it starts: see app/app.jl."
+const SOURCE_FILES = Dict{String,String}()
+
+"The module that Kip made from the Julia file at `path`, or nothing when Ladder hasn't loaded that file. `path` is the file's real path."
+loaded_module(path::AbstractString) = begin
+  m = get(Kip.modules, path, nothing)
+  m isa Module ? m : nothing
+end
+
+"""
+The line of `lines`, the lines of a file as it is now, that the method `m`
+starts on. Julia knows the line that the method was on when its file was
+loaded, which is `line`. A file that was changed since then can have it on
+another line, so this looks for the nearest line that starts a method of that
+name for those types. It gives `line` when it finds none.
+"""
+settled_line(m::Method, lines, line::Int) = begin
+  types = Base.unwrap_unionall(m.sig).parameters[2:end]
+  names = [string(nameof(T)) for T in types if T isa DataType && T !== Any]
+  # The name can have a module before it, and `function` or a macro before that
+  starts = Regex("^\\s*(?:@\\w+\\s+)*(?:function\\s+)?(?:[\\w.]+\\.)?\\Q$(m.name)\\E\\(")
+  fits(i) = 1 <= i <= length(lines) && occursin(starts, lines[i]) && all(n -> occursin(n, lines[i]), names)
+  fits(line) && return line
+  for far in 1:length(lines)
+    fits(line - far) && return line - far
+    fits(line + far) && return line + far
+  end
+  clamp(line, 1, max(length(lines), 1))
+end
+
+"The method that draws `x`: the method of `describe` for its type. It's nothing for a thing that no method draws."
+drawn_by(x::SemanticUI) = try which(describe, Tuple{typeof(x)}) catch; nothing end
+drawn_by(x) = nothing
+
+"The file on this Mac that has the method `m`, and its line there. It's nothing when this Mac doesn't have the file, as for a function of Julia's own."
+code_place(m::Method) = begin
+  path = String(m.file)
+  path = get(SOURCE_FILES, path, path)
+  isabspath(path) && isfile(path) ? (realpath(path), Int(m.line)) : nothing
+end
+
+"The thing under the mouse of the window `w` that has code to show, with the method that draws it: the nearest part of the window whose method is in a file on this Mac. It's nothing over a place with none."
+code_under(w) = begin
+  node = hittest(w)
+  while node !== nothing
+    m = drawn_by(node)
+    m === nothing || code_place(m) === nothing || return (node, m)
+    node = node.parent
+  end
+  nothing
+end
+
+"What a window's label says of the method `m`: its file's name, with the folder that holds it for a file called main.jl, and its line"
+code_label(m::Method) = begin
+  file, line = code_place(m)
+  name = basename(file)
+  name == "main.jl" && (name = joinpath(basename(dirname(file)), name))
+  "$name:$line"
+end
+
+"The tool of a window of the editor `editor` that shows the code of a thing. `picking` is true after Show Code, until a click or esc. `swallow` is true from a click that it took until the button comes up."
+@def mutable struct CodePicker
+  editor::Any = nothing
+  picking::Bool = false
+  swallow::Bool = false
+end
+
+code_picker(e) = get!(() -> CodePicker(editor=e), e.nodes, :code_picker)::CodePicker
+
+"True while a click in the window `w` shows the code of the thing that it's on: after Show Code, or while ⌘ and ⌥ are down"
+picks(t::CodePicker, w) = t.picking || (Keys.cmd in w.keys && Keys.opt in w.keys)
+
+"Give the window of `e` its picker, unless it has a tool, like the layout inspector"
+code_tick!(e) = begin
+  w = window_of(e)
+  w === nothing || window_tool(w) !== nothing || set_tool!(w, code_picker(e))
+  nothing
+end
+
+tool_input(t::CodePicker, w, ::KeyPress{Keys.mouse_left}) = begin
+  picks(t, w) || return false
+  found = code_under(w)
+  t.picking = false
+  t.swallow = true   # the window's parts see neither the press nor the release
+  found === nothing || show_code!(t.editor, found[2])
+  true
+end
+tool_input(t::CodePicker, w, ::KeyRelease{Keys.mouse_left}) = (was = t.swallow; t.swallow = false; was)
+tool_input(t::CodePicker, w, ::KeyPress{Keys.escape}) = (was = t.picking; t.picking = false; was)
+
+const PICK_LINE = colorant"rgb(48,128,236)"
+
+# A line round the thing that a click would show the code of, and a label over its top left corner
+draw_tool(ctx, w, t::CodePicker, scene) = begin
+  picks(t, w) || return nothing
+  redraw_in!(t.editor, 1/30)   # the line follows the mouse
+  found = code_under(w)
+  found === nothing && return nothing
+  node, m = found
+  r = try rect(node) catch; nothing end
+  r === nothing && return nothing
+  x, y, wide, tall = num(r.left), num(r.top), num(r.width), num(r.height)
+  round_box(ctx, x + 0.5, y + 0.5, max(1, wide - 1), max(1, tall - 1), 3; fill=RGBA(PICK_LINE.r, PICK_LINE.g, PICK_LINE.b, 0.08), line=PICK_LINE, wide=1.5)
+  face = Face(SANS, "", 11px, colorant"white", false)
+  words = "$(nameof(typeof(node)))  ·  $(code_label(m))"
+  across = num(measure(face, words)) + 12
+  # The label sits on the thing's top edge, and comes down into the thing where the window has no room over it
+  left = clamp(x, 0.0, max(0.0, num(w.size[1]) - across))
+  top = y >= 18 ? y - 18 : y
+  round_box(ctx, left, top, across, 18, 3; fill=PICK_LINE)
+  write_ink(ctx, words, left + 6, top + 13, face)
+  nothing
+end
+
+"""
+Show the method `m` in a window beside the window of `e`: the file that has
+it, with the caret on its first line. A window that shows the file already
+comes to the front. It gives the editor of that window, or nothing when this
+Mac doesn't have the file.
+"""
+show_code!(e, m::Method) = begin
+  place = code_place(m)
+  place === nothing && return nothing
+  file, line = place
+  by = window_of(e)
+  k = findfirst(o -> o !== e && !isempty(o.buf.path) && (o.buf.path == file || page_key(o.buf.path) == file), editors)
+  # Julia knows the line that the method was on when its file was loaded. The file can have changed since, on the disk or in its window.
+  line = settled_line(m, k === nothing ? text(file) : editors[k].buf.lines, line)
+  if k === nothing
+    shown = build_editor(file)
+    foreach(name -> setfield!(shown, name, getfield(e, name)), SHARED)
+    shown.remember = e.remember
+    shown.panel = false
+    size, at = window_beside(by)
+    shown.size = size
+    show_window!(window!(shown, title="Ladder", size=size, position=at), by)
+  else
+    shown = editors[k]
+    w = window_of(shown)
+    w === nothing || !isopen(w) || front!(w)
+  end
+  show_line!(shown, line)
+  # The method's first line goes near the top of the window. The next frame does it, once it has laid out the file.
+  shown.nodes[:hold] = (line, 24px - PAGE_TOP)
+  shown
+end
+
+"The size and the place of a window that opens beside the window `by`: at its right where the screen has room, or else at its left, or else over its right half"
+window_beside(by) = begin
+  by === nothing && return (paper_window(screen_room(), 0px), (0px, 0px))
+  screen = Screen().size[1]
+  wide, tall = min(by.size[1], 760px), by.size[2]
+  left, top = by.position
+  right = left + by.size[1]
+  at = right + wide <= screen ? right : left - wide >= 0px ? left - wide : max(0px, screen - wide)
+  ((wide, tall), (at, top))
+end
+
+"Draw each window again with the methods that Julia has now, after code gave a function a new one"
+redraw_windows!() =
+  for o in editors
+    w = window_of(o)
+    w === nothing && continue
+    invalidate_layout!(w)
+    redraw_in!(o, 0)
+  end
+
+"Show the code that draws the next thing that you click. Esc leaves it."
+show_code!(e) = (code_picker(e).picking = true; redraw_in!(e, 0); nothing)
+
+add_command!(show_code!, title="Show the code that draws the next thing that you click")
 
 # --- a folder's own page ----------------------------------------------------------------
 #
@@ -33515,6 +34382,360 @@ onkey(v::TilesView, ev::KeyPress{K}) where K = begin
   redraw_in!(v, 0)
   handled
 end
+
+# --- a folder that's a blog ------------------------------------------------------------------
+#
+# A blog is a folder whose pages are the posts of a site. blog.jl says what a
+# post is. A folder is a blog when its own page, the file `.ladder`, ends with
+# this block. Show Folder As, in the command palette, writes it:
+#
+#     ```julia
+#     Ladder.BlogDirectory
+#     ```
+#
+# The folder's own page lists the posts, the newest first, and says which the
+# site hasn't got yet. Its buttons:
+#
+#   - Publish makes each post a page of HTML, as ⌘⇧E does for one page, in
+#     the folder `docs` of the blog. It writes a first page that lists the
+#     posts, and copies the pictures that the posts show. A draft stays out.
+#     Then, when git keeps the blog and it has a remote called origin, Ladder
+#     commits the folder `docs` and pushes it. It commits nothing else: the
+#     posts' own files are yours to commit, since a draft is in them.
+#   - Open Site shows the site in the browser: at its address on GitHub Pages
+#     when it has one, or else the first page in `docs`.
+#   - New Post starts a page in the folder.
+#
+# Publish writes one post in each frame, so the window goes on. git's push
+# runs beside the window, and a later frame reads what it said.
+
+"A blog: a folder whose pages are the posts of a site that Publish writes and sends to GitHub"
+@def struct BlogDirectory <: AbstractDirectory end
+
+entry_icon(::BlogDirectory) = "rss"
+entry_marks(e, o::BlogDirectory) = git_marks(e, o)
+entry_marks(e, ::BlogDirectory, o::FSObject) = git_marks(e, o)
+push!(BLOCK_ICONS, "rss", "globe", "cloud-upload", "pencil-square")
+
+"The publishing of a blog that's under way: the posts that are still to write, how many there were, what it does now, and git's push while it runs"
+@def mutable struct Publishing
+  folder::String = ""
+  posts::Vector{Blogs.Post} = Blogs.Post[]
+  every::Vector{Blogs.Post} = Blogs.Post[]
+  count::Int = 0
+  step::Symbol = :write      # :write, :index or :send
+  push::Any = nothing        # git's process and what it prints
+  since::Float64 = 0.0       # when the push started
+  wrote::Vector{String} = String[]   # the pages of the site that this publishing wrote, by their names
+end
+
+"The blogs that are being published now, by their folders"
+const PUBLISHING = Dict{String,Publishing}()
+"What the last publishing of each blog came to, by the blog's folder, for the folder's page to say"
+const PUBLISHED = Dict{String,String}()
+"How many seconds git has to push a site before Ladder stops it"
+const PUSH_LIMIT = 90.0
+"The file in a site's folder that lists the pages that Ladder wrote there, so that it can take away the page of a post that's gone"
+const SITE_LIST = ".ladder-site"
+
+"The posts of the blog in `folder`, as blog.jl reads them. They're read again after 2 seconds."
+blog_posts(folder) = begin
+  kept = get(BLOG_POSTS, folder, nothing)
+  kept !== nothing && time() - kept[1] < 2 && return kept[2]
+  list = try Blogs.posts(folder) catch; Blogs.Post[] end
+  BLOG_POSTS[folder] = (time(), list)
+  list
+end
+const BLOG_POSTS = Dict{String,Tuple{Float64,Vector{Blogs.Post}}}()
+
+"What the blog in `folder` is called: the title of its page `index.md`, or else its folder's name"
+blog_name(folder) = begin
+  top = joinpath(folder, Blogs.INDEX)
+  isfile(top) ? (try Blogs.post(top).title catch; basename(folder) end) : basename(folder)
+end
+
+"The address of the blog's site on GitHub Pages, or \"\" when git doesn't keep the blog or its remote isn't on GitHub"
+blog_address(folder) = begin
+  root = git_top(folder)
+  isempty(root) && return ""
+  url = something(Git.ask(root, `remote get-url origin`), "")
+  site = Blogs.address(strip(url))
+  # GitHub Pages serves the folder docs at the top of the repository. A blog deeper in has its site under its own folders.
+  rel = relpath(realpath(folder), realpath(root))
+  isempty(site) || rel == "." ? site : ""
+end
+
+"The post `p` of the blog called `blog` as a page of the site: what ⌘⇧E makes of it, with links to the other posts' pages, and a line at its top that leads back to the first page"
+post_html(p::Blogs.Post, blog) = begin
+  o = build_editor(p.path)
+  layout!(o)
+  heading = !any(l -> startswith(l, "# "), o.buf.lines)
+  Blogs.framed(Blogs.linked(page_html(o)), escape(blog), escape(p.title), p; heading)
+end
+
+"Copy each file that the page `html` shows from the blog's folder into its site, when the site hasn't got it as it is"
+copy_assets!(folder, html) = begin
+  site = Blogs.site(folder)
+  for rel in Blogs.assets(html)
+    from = normpath(joinpath(folder, rel))
+    # A file outside the blog's folder isn't the blog's to put on the web
+    (startswith(from, folder * "/") && isfile(from) && !startswith(from, site * "/")) || continue
+    to = joinpath(site, rel)
+    (isfile(to) && mtime(to) >= mtime(from) && filesize(to) == filesize(from)) && continue
+    mkpath(dirname(to))
+    cp(from, to, force=true)
+  end
+end
+
+"""
+Start to publish the blog in `folder`: every post that's no draft is written
+again, so that each page has the look of this version of Ladder. `publish_tick!`
+does the work, a post in each frame.
+"""
+publish!(folder::AbstractString) = begin
+  haskey(PUBLISHING, folder) && return nothing
+  list = blog_posts(folder)
+  todo = filter(p -> !p.draft, list)
+  PUBLISHING[folder] = Publishing(folder=folder, posts=copy(todo), every=todo, count=length(todo))
+  delete!(PUBLISHED, folder)
+  foreach(e -> redraw_in!(e, 0), editors)
+  nothing
+end
+
+"Do the next part of each publishing that's under way. Each frame of each window calls this."
+publish_tick!(e) = begin
+  isempty(PUBLISHING) && return nothing
+  for job in collect(values(PUBLISHING))
+    said = try
+      publish_step!(job)
+    catch err
+      "Publish stopped. " * trouble(err)
+    end
+    said === nothing && continue
+    delete!(PUBLISHING, job.folder)
+    PUBLISHED[job.folder] = said
+    empty!(BLOG_POSTS)
+  end
+  redraw_in!(e, 0)
+  nothing
+end
+
+"The next part of the publishing `job`. It gives nothing while there's more to do, and at the end the words that say what it came to."
+publish_step!(job::Publishing) = begin
+  folder, site = job.folder, Blogs.site(job.folder)
+  if job.step == :write
+    isempty(job.posts) && (job.step = :index; return nothing)
+    p = popfirst!(job.posts)
+    made = post_html(p, blog_name(folder))
+    mkpath(site)
+    write(Blogs.page(folder, p), made)
+    copy_assets!(folder, made)
+    push!(job.wrote, p.name * ".html")
+    nothing
+  elseif job.step == :index
+    top = joinpath(folder, Blogs.INDEX)
+    lines = isfile(top) ? text(top) : ["# " * basename(folder), ""]
+    made = Blogs.linked(html(Blogs.index(lines, job.every), title=blog_name(folder)))
+    mkpath(site)
+    write(joinpath(site, "index.html"), made)
+    copy_assets!(folder, made)
+    push!(job.wrote, "index.html")
+    # GitHub Pages leaves out a folder whose name starts with a dot, like .media, unless this file is there
+    touch(joinpath(site, ".nojekyll"))
+    # The page of a post that's gone, or that's a draft now, goes from the site
+    list = joinpath(site, SITE_LIST)
+    for name in (isfile(list) ? readlines(list) : String[])
+      name in job.wrote || !endswith(name, ".html") || occursin('/', name) || rm(joinpath(site, name), force=true)
+    end
+    write(list, join(job.wrote, "\n") * "\n")
+    job.step = :send
+    nothing
+  else
+    send_step!(job)
+  end
+end
+
+"How many posts, in words"
+posts_words(n) = n == 1 ? "1 post" : "$n posts"
+
+"Send the site of the publishing `job` to GitHub: commit the site's folder, and push. It gives nothing while git's push runs, and then the words that say what the publishing came to."
+send_step!(job::Publishing) = begin
+  folder = job.folder
+  wrote = "Ladder wrote $(posts_words(job.count)) into the folder $(Blogs.SITE)."
+  root = git_top(folder)
+  isempty(root) && return wrote * " git doesn't keep this folder, so nothing went to the web."
+  if job.push === nothing
+    isempty(strip(something(Git.ask(root, `remote get-url origin`), ""))) &&
+      return wrote * " The repository has no remote called origin, so nothing went to the web."
+    rel = relpath(realpath(Blogs.site(folder)), realpath(root))
+    Git.act(root, `add -- $rel`)
+    # With nothing new in the site, git has nothing to commit, and the push still sends what an earlier commit left
+    done, why = Git.act(root, `commit -m "Publish the blog" -- $rel`)
+    done || occursin(r"nothing (added )?to commit|no changes added", why) ||
+      return wrote * " git couldn't commit it: " * String(first(split(isempty(strip(why)) ? "it gave no reason" : strip(why), '\n')))
+    job.push = Git.start(root, `push origin HEAD`)
+    job.since = time()
+    return nothing
+  end
+  p, out = job.push
+  if process_running(p)
+    time() - job.since > PUSH_LIMIT || return nothing
+    kill(p)
+    return wrote * " git didn't finish sending it in $(round(Int, PUSH_LIMIT)) seconds, so the site on the web is as it was."
+  end
+  Git.forget!()
+  success(p) && return (site = blog_address(folder); "Published $(posts_words(job.count))." * (isempty(site) ? "" : " The site is at $site"))
+  said = strip(String(take!(out)))
+  wrote * " git couldn't send it: " * String(first(split(isempty(said) ? "it gave no reason" : said, '\n')))
+end
+
+"What the page shows of a blog: its posts, and the buttons that publish it"
+@def mutable struct BlogView <: SemanticUI
+  path::String = ""
+  rows::Dict{Any,PageRow} = Dict{Any,PageRow}()
+  buttons::Dict{Any,PageButton} = Dict{Any,PageButton}()
+end
+
+page_view(e, d::BlogDirectory) = (path = path_of(d); node!(() -> BlogView(path=path), e, (:blog, path)))
+# A click on a blog in the sidebar shows its own page, and the sidebar lists its posts
+open!(e, d::BlogDirectory; record=true) = (open!(e, string(d.path); record); go_folder!(e, string(d.path)))
+
+"Show the site of the blog in `folder` in the browser: at its address on the web when it has one, or else the first page that Publish wrote"
+open_site(folder) = begin
+  site = blog_address(folder)
+  page = joinpath(Blogs.site(folder), "index.html")
+  isempty(site) ? (isfile(page) && open_url(page)) : open_url(site)
+  nothing
+end
+
+describe(v::BlogView) = begin
+  e = editor(v)
+  folder = v.path
+  list = blog_posts(folder)
+  job = get(PUBLISHING, folder, nothing)
+  redraw_in!(e, job === nothing ? 2.1 : 0.03)   # a post that was saved shows here soon after
+  stands = [Blogs.standing(folder, p) for p in list]
+  waiting = count(s -> s in (:new, :changed), stands)
+  about = join([posts_words(length(list));
+                (waiting == 0 ? String[] : ["$waiting that the site hasn't got as it is"]);
+                (count(==(:draft), stands) == 0 ? String[] : [count(==(:draft), stands) == 1 ? "1 draft" : "$(count(==(:draft), stands)) drafts"])], "  ·  ")
+  said = job === nothing ? get(PUBLISHED, folder, "") :
+         job.step == :send ? "Sending the site to GitHub…" : "Writing post $(job.count - length(job.posts)) of $(job.count)…"
+  row((p, s)) = page_row!(v, (:post, p.path), _ -> (show_path!(e, p.path); nothing),
+    Icon("file-earmark-text", size=13px, color=colours.dim),
+    Box(label(p.title, 13px, color=s == :draft ? colours.dim : colours.ink)),
+    Box(width(grow=grow)),
+    (isempty(Blogs.words(s)) ? () : (Box(label(Blogs.words(s), 12px, color=s == :draft ? colours.faint : colours.accent)),))...,
+    Box(label(Blogs.long(p.day), 12px, color=colours.dim)))
+  Column(width(grow=grow), Alignment.Start, name="Blog",
+    page_title("rss", blog_name(folder), about),
+    Row(padding(8px, 0px, 10px, 8px), child_gap=8px,
+      page_button!(v, :publish, _ -> publish!(folder), icon="cloud-upload", words="Publish", off=job !== nothing || !any(s -> s != :draft, stands)),
+      page_button!(v, :open, _ -> open_site(folder), icon="globe", words="Open Site", off=!isfile(joinpath(Blogs.site(folder), "index.html"))),
+      page_button!(v, :new, _ -> new_page!(e, folder), icon="pencil-square", words="New Post")),
+    (isempty(said) ? () : (page_note(said),))...,
+    page_heading("Posts"),
+    (isempty(list) ? (page_note("This folder has no page yet. New Post starts one."),) : map(row, zip(list, stands)))...)
+end
+
+cursor(::BlogView) = :arrow
+
+# --- a kind for a folder, in one step ---------------------------------------------------
+#
+# Show Folder As, in the command palette, gives the folder in focus a kind. It
+# asks for the kind: one of Ladder's own, like Desktop or Notes, or the
+# address of a repository on GitHub that has one, like
+# github.com/jkroso/Media.lad. Then it writes the folder's own page, the file
+# `.ladder`, which says the kind: see "a folder's own page". Plain takes the
+# page away again.
+#
+# A kind of Ladder's own is in the list when it's in `OWN_KINDS`, by the name
+# that `kind_name` gives its type. A repository has a kind of folder when its
+# main file has a function `kind` that takes Ladder's module and gives the
+# type:
+#
+#     kind(Ladder::Module) = library(Ladder)
+#
+# The page that the command writes for a repository calls `kind_from`, which
+# loads the repository and calls that function. The command writes only a
+# page that it wrote before. A page that you wrote stays as it is.
+
+"What the list of Show Folder As calls the kind of folder `T`"
+kind_name(T::Type) = replace(replace(string(nameof(T)), r"Directory$" => ""), r"(?<=[a-z0-9])(?=[A-Z])" => " ")
+
+"The kinds of folder of Ladder's own that Show Folder As offers. Code from the startup page can add a type of Ladder's."
+const OWN_KINDS = Any[DesktopDirectory, NotesDirectory, BlogDirectory, DownloadsDirectory, PicturesDirectory, ScreenshotsDirectory]
+
+"""
+A kind of folder, for a command to take. `from` is one of Ladder's own types,
+or the address of a repository on GitHub that has a kind, or nothing for a
+plain folder.
+"""
+struct KindChoice
+  name::String
+  from::Any
+end
+choices_for(::Type{KindChoice}, e) = [[KindChoice(kind_name(T), T) for T in OWN_KINDS]; KindChoice("Plain", nothing)]
+# An address can have https:// before it, as a browser shows it, and .git or a / after it
+typed_as(::Type{KindChoice}, text) = begin
+  m = match(r"^(?:https?://)?(github\.com/[\w\-.]+/[\w\-.]+?)(?:\.git)?/?$", strip(text))
+  # The list calls it by its owner and its name, which fit in a row
+  m === nothing ? nothing : KindChoice(String(split(m[1], '/', limit=2)[2]), String(m[1]))
+end
+worded(k::KindChoice) = k.name
+sidenote(k::KindChoice) = k.from === nothing ? "as the Finder has it" : k.from isa AbstractString ? "from GitHub" : ""
+
+"The text of the page that gives a folder the kind `k`"
+kind_page(k::KindChoice) =
+  k.from isa AbstractString ? "Ladder shows this folder with $(k.from).\n\n```julia\nLadder.kind_from(\"$(k.from)\")\n```\n" :
+                              "Ladder shows this folder as a kind of its own: $(k.name).\n\n```julia\nLadder.$(nameof(k.from))\n```\n"
+
+"True when `text` is a folder's page as `kind_page` writes it, and not one that somebody wrote"
+kind_page_written(text::AbstractString) =
+  occursin(r"^Ladder shows this folder [^\n]*\n\n```julia\nLadder\.\w+(\(\"[^\"\n]*\"\))?\n```\n$", text)
+
+"""
+The kind of folder that the repository `source` has, like
+`github.com/jkroso/Media.lad`: what the function `kind` of its main file gives
+for Ladder's module. Kip gets the repository if it isn't on this Mac. A
+folder's own page calls this.
+"""
+kind_from(source::AbstractString) = begin
+  m = Base.invokelatest(Kip.require, String(source), homedir())
+  Base.invokelatest(isdefined, m, :kind) || error("$source has no function called kind, so it has no kind of folder.")
+  Base.invokelatest(Base.invokelatest(getglobal, m, :kind), @__MODULE__)
+end
+
+"""
+Show a folder as a kind of folder: one of Ladder's own, or one from a
+repository on GitHub. It writes the folder's own page, and the window shows
+the folder.
+"""
+show_folder_as!(e, folder::AbstractDirectory, kind::KindChoice) = begin
+  path = path_of(folder)
+  file = joinpath(path, FOLDER_PAGE)
+  text = kind.from === nothing ? "" : kind_page(kind)
+  was = isfile(file) ? read(file, String) : ""
+  was == text && return nothing
+  isempty(was) || kind_page_written(was) ||
+    error("$(basename(path)) has a $FOLDER_PAGE page that somebody wrote. Change that page to change the folder's kind.")
+  isempty(text) ? rm(file) : write(file, text)
+  # The page runs now, and what it loaded is newer than this call
+  folder_pages!(path)
+  Base.invokelatest(folder_shown!, e, path)
+  nothing
+end
+
+"Show the folder at `path` in the window of `e`, as its kind shows it, after its page ran"
+folder_shown!(e, path) = begin
+  list_files!(e)
+  delete!(e.nodes, :page_object)
+  d = try FS.get(FSPath(path)) catch; nothing end
+  d isa AbstractDirectory && open!(e, d)
+  nothing
+end
+
+add_command!(show_folder_as!, title="Show a folder as a kind of folder: a desktop, notes, or a kind from GitHub")
 
 # --- the startup page ------------------------------------------------------------------
 #

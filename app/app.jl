@@ -11,7 +11,7 @@
 
 include("start.jl")
 
-@use ".." build_editor open_editor move_old_folders! run_startup! startup_page STARTUP_FOLDER STARTUP WELCOME restyle! problems pages_dir SIDEBAR_ICONS FILE_ICONS todo_at inbox Agent INSERTS PLAN_ICONS SCHEDULE_ICONS BLOCK_ICONS window! editors settings_editor theme! Update open! level!
+@use ".." build_editor open_editor move_old_folders! run_startup! startup_page STARTUP_FOLDER STARTUP WELCOME restyle! problems pages_dir SIDEBAR_ICONS FILE_ICONS todo_at inbox Agent INSERTS PLAN_ICONS SCHEDULE_ICONS BLOCK_ICONS window! editors settings_editor theme! Update open! level! SOURCE_FILES
 @use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse Typed ontype
 @use "github.com/jkroso/Font.jl/units" px
 @use "github.com/jkroso/UI.jl/Interface/abstract" focus window_of
@@ -56,11 +56,13 @@ const page = read(WELCOME, String)
 const PAGES = dirname(WELCOME)
 "The text of each of the app's own pages, by the file's place in the folder of pages. The model, the video, the recording, the plan, the table and the pictures that the pages show are here too, as the bytes of their files."
 const pages = Dict(name => read(joinpath(PAGES, name), String)
-                   for name in ("welcome.md", "examples.md", "components.md", "julia.md", "settings/settings.md", "settings/code-editor.md", "settings/key-bindings.md", "schedule.md", "counter.md", "widgets.jl", "progress.jl", "knot.stl", "knot.mp4", "hello.m4a", "plan.pdf", "costs.csv",
+                   for name in ("welcome.md", "examples.md", "components.md", "julia.md", "settings/settings.md", "settings/code-editor.md", "settings/key-bindings.md", "schedule.md", "counter.md", "widgets.jl", "progress.jl", "knot.stl", "knot.mp4", "hello.m4a", "plan.pdf", "costs.csv", "orders.json",
                                "photos/1 footings.png", "photos/2 frame.png", "photos/3 roof.png", "photos/4 bricks.png", "photos/5 window.png", "photos/6 finished.png"))
 
-"The `user/repo/file` that a file Kip got from GitHub has there, or nothing for any other file"
+"The `user/repo/file` that a file Kip got from GitHub has there, or nothing for any other file. A file of Ladder's own has a place too, so that the app can show the code that draws a thing."
 place(path) = begin
+  ladder = realpath(dirname(@__DIR__))
+  startswith(path, ladder * "/") && return joinpath("jkroso", "Ladder", relpath(path, ladder))
   if startswith(path, Kip.refs * "/")
     # Kip keeps a copy of each commit at refs/user/repo/commit
     user, repo, _, rest... = splitpath(relpath(path, Kip.refs))
@@ -84,6 +86,9 @@ const packages = [joinpath(m[1], m[2]) for m in (match(r"^github\.com/([^/]+)/([
 "The Julia files that the pages load, and where each one was when the app was built"
 const code_files = Dict(name => realpath(joinpath(PAGES, name)) for name in ("widgets.jl", "progress.jl"))
 
+"The text of the `ladder` command for the terminal, which shows a file or what a pipe sends: see plugin/bin/ladder"
+const ladder_command = read(joinpath(dirname(@__DIR__), "plugin", "bin", "ladder"), String)
+
 "Ladder's folder for its own files"
 support() = joinpath(homedir(), "Library", "Application Support", "Ladder")
 
@@ -103,6 +108,8 @@ unpack(dir) = begin
     file = joinpath(repos, at)
     put(file, text)
     Kip.modules[realpath(file)] = Kip.modules[old]
+    # A method names its file as it was on the Mac that built the app. This says where the file is here.
+    SOURCE_FILES[old] = realpath(file)
   end
   # Kip loads a registered package by name if its folder has a Project.toml with a name
   foreach(p -> put(joinpath(repos, p, "Project.toml"), "name = \"$(splitext(basename(p))[1])\"\n"), packages)
@@ -142,7 +149,13 @@ unpack(dir) = begin
   end
   for (name, file) in code_files
     Kip.modules[realpath(joinpath(welcome, name))] = Kip.modules[file]
+    # The code of a block of the welcome pages shows in the copy that's beside those pages, which a save loads again
+    SOURCE_FILES[file] = realpath(joinpath(welcome, name))
   end
+  # The command for the terminal is in a folder that the user's PATH can name, as the welcome page says
+  command = joinpath(dir, "bin", "ladder")
+  put(command, ladder_command)
+  chmod(command, 0o755)
   pages_dir[] = welcome
   joinpath(welcome, "welcome.md")
 end

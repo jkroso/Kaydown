@@ -253,6 +253,39 @@ forget!() = (foreach(a -> (a.at = a.took = 0.0), values(STATES)); foreach(a -> (
 "What the file at `rel` had in the last commit, or nothing when the commit hasn't got it. It asks git and waits."
 committed(root::AbstractString, rel::AbstractString) = ask(root, `show HEAD:$rel`)
 
+"""
+Start git in the folder `root` to change the repository or to send it, and
+give the process and what it prints as it runs. git never asks for a password
+here: with none to hand, it fails. The caller waits for the process, or looks
+at it in a later frame.
+"""
+start(root::AbstractString, args) = begin
+  out = IOBuffer()
+  cmd = setenv(`$(program[]) -C $root $args`, merge(ENV, Dict("LC_ALL" => "C", "GIT_TERMINAL_PROMPT" => "0")))
+  (run(pipeline(cmd, stdout=out, stderr=out), wait=false), out)
+end
+
+"Run git in the folder `root` to change the repository. It gives true when git did it, and what git printed. It waits for git."
+act(root::AbstractString, args) = begin
+  p, out = try start(root, args) catch; return (false, "git didn't start") end
+  wait(p)
+  (success(p), String(take!(out)))
+end
+
+"The commits that changed the file at `rel`, the newest first: the hash of each, and when it was made, in seconds. It asks git and waits."
+history(root::AbstractString, rel::AbstractString) = begin
+  out = Tuple{String,Float64}[]
+  for line in eachline(IOBuffer(something(ask(root, `log --format=%H%x1f%ct -- $rel`), "")))
+    parts = split(line, '\x1f')
+    at = length(parts) == 2 ? tryparse(Float64, parts[2]) : nothing
+    at === nothing || push!(out, (String(parts[1]), at))
+  end
+  out
+end
+
+"What the file at `rel` had in the commit `hash`, or nothing when that commit hasn't got it. It asks git and waits."
+at_commit(root::AbstractString, hash::AbstractString, rel::AbstractString) = ask(root, `show $hash:$rel`)
+
 "The changes of the file at `rel` since the last commit, as `git diff` writes them, or \"\". It asks git and waits."
 changes(root::AbstractString, rel::AbstractString) = something(ask(root, `diff HEAD -- $rel`), "")
 

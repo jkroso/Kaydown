@@ -24,6 +24,11 @@
 # A to-do item with a day in its text shows on that day only, and not on the
 # days that the schedule gives it.
 #
+# A line like `in: jobs` makes it a calendar of a folder: its to-do items are
+# those of every page in the folder `jobs` beside the page, and in the folders
+# inside that one. `in: .` is the page's own folder. The tasks, the events and
+# the hours are still the page's own.
+#
 # This file reads and writes those lines, finds the day in a to-do item's
 # text, and works out the things of each day. It draws nothing. schedule.jl
 # works out the days of each task.
@@ -81,6 +86,19 @@ event(line::AbstractString) = begin
   m === nothing && return nothing
   d = day(m)
   d === nothing || isempty(m[4]) ? nothing : (d, String(m[4]))
+end
+
+"""
+The folder whose pages the calendar shows the to-do items of, as a line like
+`in: jobs` among `lines` names it: a folder beside the page, or `.` for the
+page's own folder. It's nothing for a calendar of its own page's items.
+"""
+folder(lines) = begin
+  for line in lines
+    m = match(r"^\s*in\s*:\s*(.*?)\s*$"i, line)
+    m === nothing || return isempty(m[1]) ? "." : String(m[1])
+  end
+  nothing
 end
 
 "Read a calendar from the lines of its block. A line that it can't read is left out."

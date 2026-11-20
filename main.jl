@@ -3620,7 +3620,7 @@ end
 # in a row. Click the last name to list what's in that folder under the
 # breadcrumb, and click an earlier name to go to that folder. A click on a
 # line of the list makes that file or folder the path, so its name joins the
-# breadcrumb. The Open button at the right end of the names shows the file in
+# breadcrumb. The Open button, a square at the right end of the names, shows the file in
 # the window, or the folder in the sidebar, as a link to it does. A click with ⌘
 # held on a name or on a line of the list does the same for that file or folder.
 # A breadcrumb in a line of text has no Open button, but a click with ⌘ held works.
@@ -3731,7 +3731,7 @@ describe(l::Breadcrumb) = begin
   # A breadcrumb in a line of text has no room for it: a click with ⌘ held does the same.
   opens = !l.inline && !l.folders && ispath(l.at)
   opens && l.button === nothing && (l.button = own!(l, OpenButton()))
-  n = fitting(map(wide, names), something(l.room, editor(l).width) - (panel ? 2PANEL_PAD : 0px) - (opens ? OPEN_W + 2CRUMB_GAP : 0px))
+  n = fitting(map(wide, names), something(l.room, editor(l).width) - (panel ? 2PANEL_PAD : 0px) - (opens ? FILL_SIDE + 2CRUMB_GAP : 0px))
   kept = n < length(names) - 1 ? Any[names[1], Box(width(DOTS_W), label("…", color=colours.dim)), names[end-n+1:end]...] : names
   parts = Iterators.flatten(i == 1 ? (c,) : (arrow(), c) for (i, c) in enumerate(kept))
   l.inline && return Row(height(24px), child_gap=CRUMB_GAP, clip=true, parts...)
@@ -3812,15 +3812,10 @@ onkey(c::Crumb, ev::KeyPress{Keys.mouse_left}) = begin
   nothing
 end
 
-const OPEN_W = 62px   # how wide the button is that shows a breadcrumb's file in the window
-
+# It looks like the button that makes a picture fill the window, as it also shows one thing in the whole window
 describe(b::OpenButton) = begin
   ishovered(b) || (b.quiet = false)
-  Box(width(OPEN_W), height(24px), radius(5px), Alignment.Center, justify=Alignment.Center, name="Button",
-      background(ishovered(b) ? colours.hover : clear),
-    Row(Alignment.Center, child_gap=5px,
-      Icon("box-arrow-up-right", size=11px, color=colours.dim),
-      label("Open", 12px, color=colours.dim)))
+  square_button("arrows-fullscreen", ishovered(b))
 end
 
 cursor(::OpenButton) = :hand
@@ -9660,6 +9655,16 @@ end
 const FILL_SIDE = 24px   # how wide and how tall the button is that makes a picture fill the window
 const FILL_GAP = 4px     # between that button and the picture, and between it and the window's edge
 
+"""
+A small square button with a line round it and the icon `icon`, like the one
+that makes a picture fill the window. `lit` while the mouse is over it, or
+while what it opens is open.
+"""
+square_button(icon, lit) =
+  Box(width(FILL_SIDE), height(FILL_SIDE), radius(6px), Alignment.Center, justify=Alignment.Center, name="Button",
+      background(lit ? colours.hover : colours.float), border(1px, :solid, colours.line),
+    Icon(icon, size=12px, color=colours.dim))
+
 "A part of `v` that's kept between frames"
 part!(make, v::ZoomView, key) = begin
   node = get!(make, v.parts, key)
@@ -9773,9 +9778,7 @@ end
 
 describe(b::FillButton) = begin
   ishovered(b) || (b.quiet = false)
-  Box(width(FILL_SIDE), height(FILL_SIDE), radius(6px), Alignment.Center, justify=Alignment.Center, name="Button",
-      background(ishovered(b) ? colours.hover : colours.float), border(1px, :solid, colours.line),
-    Icon("arrows-fullscreen", size=12px, color=colours.dim))
+  square_button("arrows-fullscreen", ishovered(b))
 end
 
 cursor(::FillButton) = :hand
@@ -23232,9 +23235,7 @@ transcript_w(e) = min(e.width, TRANSCRIPT_W)
 
 describe(b::TranscriptButton) = begin
   ishovered(b) || (b.quiet = false)
-  Box(width(FILL_SIDE), height(FILL_SIDE), radius(6px), Alignment.Center, justify=Alignment.Center, name="Button",
-      background(b.open || ishovered(b) ? colours.hover : colours.float), border(1px, :solid, colours.line),
-    Icon("text-paragraph", size=12px, color=colours.dim))
+  square_button("text-paragraph", b.open || ishovered(b))
 end
 
 cursor(::TranscriptButton) = :hand

@@ -21096,6 +21096,155 @@ toggle_comment!(e) = begin
   touch!(e)
 end
 
+# ⌃↑ and ⌃↓ change the value at the caret a step. A number goes a step bigger or smaller, as a drag on a
+# sum does: a step is one of its last digit. Unlike a drag, ⌃↓ takes a number under 0. true and false swap,
+# with either key. Any other word goes up from small letters, to a capital at its front, to all capitals,
+# and ⌃↓ takes it back down. The value can be anywhere in the text: in a sum, in a sheet, in code, in a
+# date or a time. Presses one after another are taken back by one ⌘Z.
+
+"""
+Where the number is that the column `col` of `line` is in, or at either end
+of: the columns that it runs from and to. Nothing when no digit touches the
+column. A number has digits, and can have a dot and more digits after them,
+like 2.40. Digits with a dot on each side, like the parts of 1.2.3, are each a
+number of their own. A - just before the digits is the number's sign, unless a
+letter, a digit or a bracket comes before it, like the - of x-1 or of 2026-11-21.
+"""
+caret_number(line::AbstractString, col::Int) = begin
+  c = collect(line)
+  n = length(c)
+  digit(i) = 1 <= i <= n && isdigit(c[i])
+  at = digit(col + 1) ? col + 1 : digit(col) ? col : col < n && c[col+1] == '-' && digit(col + 2) ? col + 2 : 0
+  at == 0 && return nothing
+  lo = hi = at                      # the first and the last of the number's characters, from 1
+  while digit(lo - 1) lo -= 1 end
+  while digit(hi + 1) hi += 1 end
+  run = (lo, hi)
+  # Digits, a dot and digits are one number
+  if lo > 2 && c[lo-1] == '.' && digit(lo - 2)
+    lo -= 2
+    while digit(lo - 1) lo -= 1 end
+  elseif hi < n - 1 && c[hi+1] == '.' && digit(hi + 2)
+    hi += 2
+    while digit(hi + 1) hi += 1 end
+  end
+  # With a dot more at either end, it's a list of numbers, like 1.2.3 or 192.168.0.1, and the caret's is one of them
+  dotted(i, j) = (i >= 2 && c[i-1] == '.' && digit(i - 2)) || (j < n && c[j+1] == '.' && digit(j + 2))
+  (lo, hi) != run && dotted(lo, hi) && ((lo, hi) = run)
+  lo >= 2 && c[lo-1] == '-' && !(lo >= 3 && (isletter(c[lo-2]) || isdigit(c[lo-2]) || c[lo-2] in ")]}_")) && (lo -= 1)
+  # The caret was before a - that isn't a sign, like the one of x|-1
+  lo - 1 <= col || return nothing
+  (lo - 1, hi)
+end
+
+"""
+The number that `text` writes, `steps` steps on. A step is one of its last
+digit: 16 goes to 17, 2.40 to 2.41, and 0 to -1 after a step back. It has as
+many digits after its dot as before, and a number with a 0 at its front keeps
+its width, so 09 goes to 10 and 007 to 008.
+"""
+number_plus(text::AbstractString, steps::Int) = begin
+  neg = startswith(text, '-')
+  body = neg ? text[2:end] : text
+  dot = findfirst('.', body)
+  places = dot === nothing ? 0 : length(body) - dot
+  whole = dot === nothing ? body : body[1:dot-1]
+  digits = replace(body, "." => "")
+  # In whole numbers, so that 2.4 and a step of 0.01 don't make 2.4099999
+  v = parse(BigInt, digits) * (neg ? -1 : 1) + steps
+  wide = length(whole) > 1 && startswith(whole, '0') ? length(digits) : places + 1
+  s = lpad(string(abs(v)), wide, '0')
+  places > 0 && (s = s[1:end-places] * "." * s[end-places+1:end])
+  v < 0 ? "-" * s : s
+end
+
+"""
+Where the word is that the column `col` of `line` is in, or at either end of:
+the columns that it runs from and to. A word has letters, digits and _, and an
+apostrophe between two letters, like don't. Nothing when no word touches the column.
+"""
+caret_word(line::AbstractString, col::Int) = begin
+  c = collect(line)
+  n = length(c)
+  inword(i) = 1 <= i <= n && (isletter(c[i]) || isdigit(c[i]) || c[i] == '_' ||
+                              (c[i] in "'’" && 1 < i < n && isletter(c[i-1]) && isletter(c[i+1])))
+  lo = hi = col
+  while inword(lo) lo -= 1 end
+  while inword(hi + 1) hi += 1 end
+  lo == hi ? nothing : (lo, hi)
+end
+
+"""
+The word `w` a step up, or a step down when `up` is false. It's `w` itself
+when it can't go further. true and false swap, and so do True and False, and
+TRUE and FALSE. Any other word goes up from small letters, to a capital at its
+front, to all capitals: word, Word, WORD. A step down goes back: WORD, Word, word.
+"""
+word_step(w::AbstractString, up::Bool) = begin
+  low = lowercase(w)
+  if low in ("true", "false")
+    other = low == "true" ? "false" : "true"
+    return w == uppercase(w) ? uppercase(other) : isuppercase(first(w)) ? uppercasefirst(other) : other
+  end
+  c = collect(w)
+  letters = findall(isletter, c)
+  isempty(letters) && return w
+  f = first(letters)
+  caps = all(i -> isuppercase(c[i]), letters)
+  if up
+    !isuppercase(c[f]) ? (c[f] = uppercase(c[f])) : caps || (c = collect(uppercase(w)))
+  else
+    caps && length(letters) > 1 ? (c = collect(lowercase(w)); c[f] = uppercase(c[f])) : isuppercase(c[f]) && (c[f] = lowercase(c[f]))
+  end
+  String(c)
+end
+
+"""
+The value at the column `col` of `line`, `steps` steps on: the columns that it
+runs from and to, and its new text. It's the number that the column is in or at,
+or else the word. A word with digits, like 16m or h1, is its number, so the
+caret can be after the unit of 16m. Nothing when there's no value there, or
+when it can't go further.
+"""
+caret_value(line::AbstractString, col::Int, steps::Int) = begin
+  at = caret_number(line, col)
+  w = caret_word(line, col)
+  if at === nothing && w !== nothing
+    # The digit in the word that's nearest the caret, before it or else after it
+    c = collect(line)
+    lo, hi = w
+    before = findlast(isdigit, c[lo+1:col])
+    after = findfirst(isdigit, c[col+1:hi])
+    at = before !== nothing ? caret_number(line, lo + before) : after !== nothing ? caret_number(line, col + after - 1) : nothing
+  end
+  at === nothing || return (at..., number_plus(rest(head(line, at[2]), at[1]), steps))
+  w === nothing && return nothing
+  word = rest(head(line, w[2]), w[1])
+  new = word_step(word, steps > 0)
+  new == word ? nothing : (w..., new)
+end
+
+"Make the value at the caret `steps` steps bigger, or smaller for steps under 0. See `caret_value`. The caret and the selection stay with their text."
+step_value!(e, steps::Int) = begin
+  b = e.buf
+  (readonly(b) || b.fixed) && return
+  i, col = b.caret
+  found = caret_value(b.lines[i], col, steps)
+  found === nothing && return
+  lo, hi, new = found
+  caret, anchor = b.caret, b.anchor
+  # A press right after a press, with no other change between them, is taken back with it
+  b.typed = get(e.nodes, :value_stepped, -1) == b.version ? time() : 0.0
+  edit!(b, (i, lo), (i, hi), new, typing=true)
+  b.typed = 0.0   # and what's typed after it is taken back by itself
+  e.nodes[:value_stepped] = b.version
+  # A place in the number stays as far from its end as it was, so the caret at the end of 9 is at the end of 10
+  by = length(new) - (hi - lo)
+  kept(p) = p[1] != i || p[2] <= lo ? p : (i, max(lo, p[2] + by))
+  b.caret, b.anchor = kept(caret), kept(anchor)
+  touch!(e)
+end
+
 """
 The commands, in the groups and the order that the key bindings page shows
 them. Each has its shortcuts in the bundle called Ladder.
@@ -21133,6 +21282,8 @@ const COMMAND_GROUPS = [
     Command(:find_last, "Go to the place that's found before", :look, "cmd+shift+g", (e, w, _) -> find_step!(e, -1)),
     Command(:bold, "Make the selection bold", :edit, "cmd+b", (e, w, _) -> e.buf.view == :markdown && surround!(e, "**")),
     Command(:italic, "Make the selection italic", :edit, "cmd+i", (e, w, _) -> e.buf.view == :markdown && surround!(e, "*")),
+    Command(:value_up, "Make the number or the word at the caret a step bigger", :edit, "ctrl+up", (e, w, _) -> step_value!(e, 1)),
+    Command(:value_down, "Make the number or the word at the caret a step smaller", :edit, "ctrl+down", (e, w, _) -> step_value!(e, -1)),
     # In a `julia` code block these run the code that the caret is in. Anywhere else, the first sends the page
     # to the agent that waits for it, and with no agent, each starts a new line as Return does.
     Command(:run, "Run the code at the caret, or nudge the agent", :edit, "cmd+enter",
@@ -21261,7 +21412,7 @@ command!(e, w, K) = begin
 end
 
 "The commands that are done at each selection when there are several: the ones that go along a line, and the ones that delete"
-const AT_EACH = Set([:left, :right, :word_left, :word_right, :line_start, :line_end, :bold, :italic,
+const AT_EACH = Set([:left, :right, :word_left, :word_right, :line_start, :line_end, :bold, :italic, :value_up, :value_down,
                      :erase_back, :erase, :erase_word_back, :erase_word, :erase_line_start, :erase_line_end])
 
 "Run the command called `name` in the window `w` of `e`"

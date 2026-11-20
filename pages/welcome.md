@@ -175,6 +175,8 @@ Click a cell and type. Tab goes to the next cell and Return starts a row. To see
 
 A row that is one number, like the wall's length, changes with a drag. Put the mouse on the `12m` at the right end of its row, and drag to the right or to the left. The rows under it follow while the mouse moves. Hold ⇧ to make each step ten times as big.
 
+The keyboard can do the same to any number in the page. Put the caret in the number, or at either end of it, and press ⌃↑ to make it a step bigger or ⌃↓ to make it a step smaller. A step is one of its last digit, so 12 goes to 13 and 2.40 to 2.41. The unit stays as it is, so the caret can be after the m of 12m. The same keys change true to false, and false to true. Any other word gets capitals: ⌃↑ makes word into Word, then WORD, and ⌃↓ takes it back down. One ⌘Z takes back all the presses that came one after another.
+
 A sheet can work a row out backwards. Start the row's expression with a `?`, and write the answer that you want after a second `=` in a row under it. This sheet finds the wall that 6 litres of paint cover. The value after the `?` is where the sheet starts to look, and it gives the row its unit. A line in the accent colour goes round the value that the sheet found.
 
 ```sheet

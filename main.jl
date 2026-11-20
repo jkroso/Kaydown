@@ -129,8 +129,9 @@
 #     opens the item and esc goes back to the text.
 #   - Click the eye beside the button that shows that list, or press ⌘⇧., to
 #     list the hidden files and folders too: the ones whose names start with a dot.
-#   - Right-click a file in that list, or the file's name in the top bar, to
-#     rename it, copy its path, show it in the Finder or move it to the Trash.
+#   - Right-click a file or a folder in that list, or the file's name in the
+#     top bar, to rename it, copy its path, show it in the Finder or move it to
+#     the Trash. A folder goes to the Trash with everything in it.
 #   - Right-click the page to cut, copy and paste, and to insert a new block
 #     where you clicked: a heading, a list, a to-do item, a table, a sheet, a
 #     spreadsheet, a code block, a live block, a takeoff, a schedule, a chart, a
@@ -22058,9 +22059,9 @@ panel_theme() = Theme(size=Tree.LABEL_SIZE, surface=colours.panel, text=colours.
 
 # --- the menu of a file ---------------------------------------------------------------------
 #
-# A right-click on a file in the sidebar, or on the name of the file that shows
-# in the top bar, shows a menu that renames the file, copies its path, shows it
-# in the Finder or moves it to the Trash. It's a menu of macOS's own, so it
+# A right-click on a file or a folder in the sidebar, or on the name of the file
+# that shows in the top bar, shows a menu that renames it, copies its path,
+# shows it in the Finder or moves it to the Trash. It's a menu of macOS's own, so it
 # looks and works like the other menus on the Mac. A window that isn't on a
 # screen, like the one a test makes, gets a menu that Ladder draws.
 
@@ -22072,19 +22073,19 @@ menu_theme() = Theme(size=12px, surface=colours.float, text=colours.ink, dim=col
                      hover=colours.hover, select=colours.active, family=SANS)
 
 """
-Show the menu of the file at `path`. `at` is where you right-clicked: the
-file's name in the `:sidebar` or in the `:title` of the top bar. Rename puts
-the text field there.
+Show the menu of the file or the folder at `path`. `at` is where you
+right-clicked: its name in the `:sidebar` or in the `:title` of the top bar.
+Rename puts the text field there.
 """
 file_menu!(e, w, path; at=:sidebar) = begin
   act(i) = file_act!(e, path, get(FILE_MENU, i, ""); at)
   # A new file that isn't saved yet isn't on the disk, so the Finder can't show it
-  off = isfile(path) ? () : (findfirst(==("Show in Finder"), FILE_MENU),)
+  off = ispath(path) ? () : (findfirst(==("Show in Finder"), FILE_MENU),)
   system_menu(w, FILE_MENU, act; off) || drawn_menu!(w, FILE_MENU, act; off)
   nothing
 end
 
-"Do to the file at `path` what the item `name` of its menu says"
+"Do to the file or the folder at `path` what the item `name` of its menu says"
 file_act!(e, path, name; at=:sidebar) =
   name == "Rename" ? rename!(e, path; at) :
   name == "Copy Path" ? clipboard(path) :
@@ -22094,14 +22095,13 @@ file_act!(e, path, name; at=:sidebar) =
 "Open a Finder window on the folder of the file at `path`, with the file selected"
 show_in_finder(path) = (Sys.isapple() && ispath(path) && run(pipeline(`open -R $path`, stdout=devnull, stderr=devnull), wait=false); nothing)
 
-"Show the menu of the file in the sidebar that the mouse is over, if it's over one"
+"Show the menu of the file or the folder in the sidebar that the mouse is over, if it's over one"
 file_menu!(e, w) = begin
   e.panel || return
   tree = file_tree(e)
   item = Tree.item_under(tree, w)
   (item === nothing || !(item.firstchild isa FileLabel)) && return
   path = item.firstchild.path
-  isdir(path) && return
   # The tree takes the keyboard, so the file that the menu is for stays marked
   focus(tree)
   tree.focused = item
@@ -22115,15 +22115,16 @@ renamer(e) = node!(e, :renamer) do
 end
 
 """
-Start to rename the file at `path`. Its name becomes a text field, in the
-sidebar or in the top bar, as `at` says. Both show the whole name, so the
-field has the whole name, with the part before the ending selected.
+Start to rename the file or the folder at `path`. Its name becomes a text
+field, in the sidebar or in the top bar, as `at` says. Both show the whole
+name, so the field has the whole name. The part of a file's name before its
+ending is selected, and all of a folder's name, since a folder has no ending.
 """
 rename!(e, path; at=:sidebar) = begin
   i = renamer(e)
   i.color = colours.ink
   i.text = basename(path)
-  i.anchor, i.cursor = 0, length(title(path))
+  i.anchor, i.cursor = 0, length(isdir(path) ? i.text : title(path))
   e.nodes[:renaming] = path
   e.nodes[:renaming_at] = at
   focus(i)
@@ -22159,16 +22160,17 @@ ended_rename!(e) = begin
 end
 
 """
-Give the file that's being renamed the name in the text field. The file keeps
-its ending, like .md, unless the name is typed with one: a Markdown ending, or
-the ending it has. It's false when another file has that name already, and
-then nothing changes.
+Give the file or the folder that's being renamed the name in the text field.
+A file keeps its ending, like .md, unless the name is typed with one: a
+Markdown ending, or the ending it has. A folder has no ending, so a dot in its
+name is only part of the name. It's false when another file or folder has
+that name already, and then nothing changes.
 """
 finish_rename!(e) = begin
   old = get(e.nodes, :renaming, "")
   name = String(strip(renamer(e).text))
   (isempty(old) || isempty(name) || occursin('/', name)) && return true
-  ending = splitext(old)[2]
+  ending = isdir(old) ? "" : splitext(old)[2]
   typed = ismarkdown(name) || lowercase(splitext(name)[2]) == lowercase(ending)
   new = joinpath(dirname(old), typed ? name : name * ending)
   new == old && return true
@@ -22178,33 +22180,50 @@ finish_rename!(e) = begin
   true
 end
 
-"Give the file at `old` the path `new`: on the disk, and in everything the editor keeps by path"
+"True when `p` is the path `at`, or the path of something in the folder at `at`"
+inside_path(p, at) = p == at || startswith(p, at * "/")
+
+"The path that `p` gets when what's at `old` gets the path `new`. What's in a folder moves with it."
+repath(p, old, new) = inside_path(p, old) ? new * p[ncodeunits(old)+1:end] : p
+
+"The keys of `d` that are paths of what's at `at`: `at` itself, and what's in it when it's a folder"
+paths_inside(d, at) = [p for p in keys(d) if inside_path(p, at)]
+
+"The keys of the editor's nodes that it keeps for a file by its path, for the files at `at`"
+nodes_inside(e, at; kinds=(:read, :outline, :fileview)) =
+  [k for k in keys(e.nodes) if k isa Tuple{Symbol,String} && k[1] in kinds && inside_path(k[2], at)]
+
+"""
+Give the file or the folder at `old` the path `new`: on the disk, and in
+everything the editor keeps by path. The files in a folder go with it, so a
+file of the folder that shows, or that's open with changes, keeps showing.
+"""
 move!(e, old, new) = begin
-  if isfile(old)
+  if ispath(old)
     try
       Base.Filesystem.rename(old, new)
     catch
-      return   # the disk said no, so the file keeps its name
+      return   # the disk said no, so it keeps its name
     end
   end
-  if haskey(e.buffers, old)
-    b = e.buffers[new] = pop!(e.buffers, old)
-    b.path = new
+  to(p) = repath(p, old, new)
+  for p in paths_inside(e.buffers, old)
+    b = e.buffers[to(p)] = pop!(e.buffers, p)
+    b.path = to(p)
   end
   # Going back to the file still finds it
-  replace!(e.back, old => new)
-  replace!(e.ahead, old => new)
-  haskey(READ, old) && (READ[new] = pop!(READ, old))
-  for kind in (:read, :outline)
-    haskey(e.nodes, (kind, old)) && (e.nodes[(kind, new)] = pop!(e.nodes, (kind, old)))
-  end
+  map!(to, e.back, e.back)
+  map!(to, e.ahead, e.ahead)
+  foreach(p -> READ[to(p)] = pop!(READ, p), paths_inside(READ, old))
+  foreach(k -> e.nodes[(k[1], to(k[2]))] = pop!(e.nodes, k), nodes_inside(e, old, kinds=(:read, :outline)))
   for item in items(file_tree(e), hidden=true)
-    item.firstchild.path == old && (item.firstchild.path = new)
+    item.firstchild.path = to(item.firstchild.path)
   end
+  e.folder = to(e.folder)
   list_files!(e)
 end
 
-"Move the file at `path` to the Trash. It's true when the file went there."
+"Move the file or the folder at `path` to the Trash. It's true when it went there."
 trash(path) = begin
   Sys.isapple() || return false
   try
@@ -22222,22 +22241,23 @@ end
 const trasher = Ref{Function}(trash)
 
 """
-Move the file at `path` to the Trash and take it out of the sidebar. Changes
-that aren't saved are written to the file first, so they are in the Trash
-too. If the file was showing, the next file in the sidebar shows.
+Move the file or the folder at `path` to the Trash and take it out of the
+sidebar. A folder goes with everything in it. Changes that aren't saved are
+written to their files first, so they are in the Trash too. If the file that
+was showing went, the next file in the sidebar shows.
 """
 trash!(e, path) = begin
-  b = get(e.buffers, path, nothing)
-  b !== nothing && dirty(b) && save!(b)
-  isfile(path) && !trasher[](path) && return
+  gone = paths_inside(e.buffers, path)
+  foreach(p -> dirty(e.buffers[p]) && save!(e.buffers[p]), gone)
+  ispath(path) && !trasher[](path) && return
   at = something(findfirst(==(path), e.files), 1)
-  delete!(e.buffers, path)
-  delete!(READ, path)
-  delete!(e.nodes, (:read, path))
-  delete!(e.nodes, (:outline, path))
-  delete!(e.nodes, (:fileview, path))
+  foreach(p -> delete!(e.buffers, p), gone)
+  foreach(p -> delete!(READ, p), paths_inside(READ, path))
+  foreach(k -> delete!(e.nodes, k), nodes_inside(e, path))
+  # The sidebar never lists a folder that went to the Trash
+  inside_path(e.folder, path) && (e.folder = dirname(path))
   list_files!(e)
-  if e.buf.path == path
+  if inside_path(e.buf.path, path)
     open!(e, isempty(e.files) ? joinpath(e.folder, "Untitled.md") : e.files[min(at, end)])
   else
     focus(e)

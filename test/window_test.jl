@@ -128,7 +128,10 @@ end
   @test K.settings_editor() !== nothing
   @test K.settings_editor() !== s
   close_all()
+  # In a window with a file, ⌘W closes the file, and the window stays. ⌘W again closes the window.
   e, w = window(page)
+  press(w, Keys.w, Keys.cmd)
+  @test K.editors == [e] && K.nofile(e)
   press(w, Keys.w, Keys.cmd)
   @test isempty(K.editors)
   # A plain W doesn't close the window
@@ -152,6 +155,8 @@ end
   # The find bar has the keyboard in the page's window
   press(w, Keys.f, Keys.cmd)
   @test w.focus !== e
+  press(w, Keys.w, Keys.cmd)
+  @test K.nofile(e)
   press(w, Keys.w, Keys.cmd)
   @test isempty(K.editors)
 end

@@ -209,7 +209,8 @@
 #     that has it. Those are the places that ⌘D goes to.
 #   - ⌘/ makes a comment of a line of code. ⌘L selects a line, ⌘⇧D copies it
 #     to the line under it, ⌘⇧K deletes it, and ⌘⌥[ and ⌘⌥] move it up and down.
-#   - ⌘W closes a window. Ladder quits when its last window closes.
+#   - ⌘W closes the file, and the window stays open with no file. ⌘W in a
+#     window with no file closes it. Ladder quits when its last window closes.
 #   - ⌘⌥I opens the layout inspector.
 #
 # It uses these UI.jl features: a `Scroll` that only builds the lines
@@ -1380,14 +1381,7 @@ A folder shows too, when its kind has a method of `page_view`. The sidebar
 then lists the folder that it's in, as it does for a file.
 """
 open!(e, path; record=true) = begin
-  # A sound that the last page was playing stops. A new window has no last page, and another window's sound plays on.
-  isempty(e.buffers) || silence!()
-  write_blocks!(e)   # the page that leaves keeps what its blocks hold
-  e.buf.offset = e.scroll.offset
-  from = e.buf.path
-  from == path || forget_ticked!(e)   # an item that was ticked in a list of what's found leaves that list
-  # A new file ends the list of files to go forward to, as a new address does in a web browser
-  record && !isempty(from) && from != path && (push!(e.back, from); empty!(e.ahead))
+  leave_page!(e, path; record)
   e.buf = get!(e.buffers, path) do
     isfile(path) ? load(path) : isdir(path) ? Buffer(path=path, view=:file) : Buffer(path=path)
   end
@@ -1402,6 +1396,50 @@ open!(e, path; record=true) = begin
   w === nothing || focus(e)
   e
 end
+
+"""
+Get the window ready to show the page at `path`, or no page when `path` is "".
+The page that leaves keeps what its blocks hold and where it was scrolled to.
+It goes on the list that `go_back!` reads, unless `record` is false.
+"""
+leave_page!(e, path; record=true) = begin
+  # A sound that the last page was playing stops. A new window has no last page, and another window's sound plays on.
+  isempty(e.buffers) || silence!()
+  write_blocks!(e)   # the page that leaves keeps what its blocks hold
+  e.buf.offset = e.scroll.offset
+  from = e.buf.path
+  from == path || forget_ticked!(e)   # an item that was ticked in a list of what's found leaves that list
+  # A new file ends the list of files to go forward to, as a new address does in a web browser
+  record && !isempty(from) && from != path && (push!(e.back, from); empty!(e.ahead))
+  e
+end
+
+# --- closing a file ----------------------------------------------------------------------
+#
+# ⌘W closes the file that the window shows, and the window stays open with no
+# file in it. ⌘W in a window that shows no file closes the window, and Ladder
+# quits when its last window closes. The settings window closes at once while
+# it shows a page of the settings. A file that closes keeps its changes, and
+# ⌘⌥← shows it again.
+
+"True when the window shows no file, because ⌘W closed the file that it showed"
+nofile(e) = isempty(e.buf.path) && e.buf.fixed
+
+"""
+Close the file that the window shows. The window then shows no file. The
+file's page keeps its changes, and goes on the list that `go_back!` reads.
+"""
+close_file!(e) = begin
+  leave_page!(e, "")
+  e.buf = Buffer(fixed=true)   # an empty page that nothing can be typed in
+  e.scroll.offset = 0px
+  e.popup = :none
+  e.goal = nothing
+  e
+end
+
+"What ⌘W does: close the file that the window shows, or the window when it shows no file or a page of the settings"
+close_file_or_window!(e, w) = (nofile(e) || issettings(e)) ? close(w) : close_file!(e)
 
 # --- the files that showed before --------------------------------------------------------
 #
@@ -18839,6 +18877,7 @@ page_bottom(e) = numbered(e.buf) ? max(PAGE_BOTTOM, e.scroll.viewport - CODE_END
 
 describe(p::Page) = begin
   e = editor(p)
+  nofile(e) && return nofile_view(e)
   # A kind of folder or of file can cover the page's whole space, as a desktop does with its wallpaper
   cover = page_cover(e)
   cover === nothing || return cover
@@ -18851,6 +18890,16 @@ describe(p::Page) = begin
     Row(width(grow=grow), Alignment.Start, padding(page_top(e), 0px, page_bottom(e), PAGE_X + gutter(e)), clip_x=true,
       Box(Alignment.Start, offset_x=-sideways(e), node!(Document, e, :document)))
   reuse!(e.scroll, guide_under(e, page))
+end
+
+"What the page shows in a window with no file: the keys that open a file and that close the window"
+nofile_view(e) = begin
+  open_keys, close_keys = strip(hint(e, :open)), strip(hint(e, :close))
+  Box(width(grow=grow), height(grow=grow),
+    Column(child_gap=8px,
+      Box(label("No file is open", 15px, color=colours.dim)),
+      (isempty(open_keys) ? () : (Box(label("$open_keys finds a file", 13px, color=colours.faint)),))...,
+      (isempty(close_keys) ? () : (Box(label("$close_keys closes the window", 13px, color=colours.faint)),))...))
 end
 
 """
@@ -20922,7 +20971,7 @@ const COMMAND_GROUPS = [
     Command(:print, "Print the page", :window, "cmd+p", (e, w, _) -> print!(e, w)),
     Command(:export, "Export the page as HTML", :window, "cmd+shift+e", (e, w, _) -> export_html!(e, w)),
     Command(:slides, "Show the page as slides, or as a page again", :window, "ctrl+cmd+shift+p", (e, w, _) -> slides!(e)),
-    Command(:close, "Close the window", :window, "cmd+w", (e, w, _) -> close(w)),
+    Command(:close, "Close the file, or the window when it shows no file", :window, "cmd+w", (e, w, _) -> close_file_or_window!(e, w)),
     Command(:settings, "Show or hide the settings", :window, "cmd+comma", (e, w, _) -> toggle_settings!(e)),
     Command(:sidebar, "Show or hide the sidebar", :window, "cmd+backslash", (e, w, _) -> toggle_panel!(e)),
     Command(:sidebar_keys, "Give the sidebar the keyboard", :window, "cmd+shift+backslash", (e, w, _) -> focus_panel!(e)),
@@ -22028,7 +22077,8 @@ describe(t::TopBar) = begin
       # slider opens out to the left, and the parts before it move aside to make room.
       # The words have the room that the picture or the slider, the button after it and the edge leave them.
       # What covers the page's whole space, like a desktop, is no file that's only shown, so the bar says nothing of it.
-      (page_covered(e) ? () :
+      # Nor does it say anything when the window shows no file.
+      (page_covered(e) || nofile(e) ? () :
        readonly(b) ? (said_part(isempty(b.about) ? "Read only" : b.about * "  ·  Read only", side - 40px - (isempty(mode) ? 0px : MODE_W + grown)),
                       mode...,
                       # The app that the Mac uses for the file can change it, so a button opens the file there
@@ -22956,6 +23006,7 @@ onkey(t::TopBar, ::KeyPress{Keys.mouse_left}) = drag_window!(window_of(t))
 describe(t::Title) = begin
   e = editor(t)
   b = e.buf
+  nofile(e) && return Box()   # a window with no file has no name to show
   if !isempty(b.path) && renaming(e, :title) == b.path
     # The field grows as the name gets longer
     wide = clamp(measure(Face(SANS, "", 13px, colours.ink, false), renamer(e).text) + 24px, 160px, 420px)
@@ -28798,8 +28849,8 @@ end
 #
 # Ladder can have more than one window open, each with an editor of its own.
 # The settings page opens in a window of its own, so the page you were working
-# on stays as it was. ⌘W closes a window, and Ladder quits when its last
-# window closes.
+# on stays as it was. ⌘W closes the file that a window shows, and then the
+# window. Ladder quits when its last window closes. See "closing a file".
 
 const WELCOME = joinpath(@__DIR__, "pages", "welcome.md")
 

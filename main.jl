@@ -130,8 +130,11 @@
 #   - Click the eye beside the button that shows that list, or press ⌘⇧., to
 #     list the hidden files and folders too: the ones whose names start with a dot.
 #   - Right-click a file or a folder in that list, or the file's name in the
-#     top bar, to rename it, copy its path, show it in the Finder or move it to
-#     the Trash. A folder goes to the Trash with everything in it.
+#     top bar, to rename it, duplicate it, copy its path, show it in the Finder
+#     or move it to the Trash. A folder goes to the Trash with everything in it.
+#     A folder's menu makes a new page or a new folder in it. A file's menu
+#     opens it in a new window or in the Mac's app for it, and copies a wiki
+#     link to it. Right-click under the list for a new page or folder there.
 #   - Right-click the page to cut, copy and paste, and to insert a new block
 #     where you clicked: a heading, a list, a to-do item, a table, a sheet, a
 #     spreadsheet, a code block, a live block, a takeoff, a schedule, a chart, a
@@ -905,10 +908,15 @@ end
 undo!(b::Buffer) = isempty(b.undo) || (push!(b.redo, snapshot(b)); restore!(b, pop!(b.undo)))
 redo!(b::Buffer) = isempty(b.redo) || (push!(b.undo, snapshot(b)); restore!(b, pop!(b.redo)))
 
+"""
+True when the lines of `b` are what its file holds, so they can be written to
+it. The lines of a file that's only shown can be a part of the file, or its
+bytes. The lines of an email are the email as a page, which isn't what its file holds.
+"""
+writes(b::Buffer) = !(isempty(b.path) || readonly(b) || b.fixed || Eml.isemail(b.path))
+
 save!(b::Buffer) = begin
-  # The lines of a file that's only shown can be a part of the file, or its bytes, so they're never written
-  # ... and the lines of an email are the email as a page, which isn't what its file holds
-  (isempty(b.path) || readonly(b) || b.fixed || Eml.isemail(b.path)) && return
+  writes(b) || return
   refresh!(b)   # a change that something else made to the file a moment ago is kept
   write(b.path, join(b.lines, "\n"))
   READ[b.path] = mtime(b.path)
@@ -21925,6 +21933,18 @@ items(parent; hidden=false, out=Tree.TreeItem[]) = begin
 end
 
 """
+Mark that the sidebar's tree took a key, like Return on a heading, which comes
+to the editor next, so that the editor doesn't take it too. The tree keeps a
+click that chose an item, so a click is never marked: the mark would stay,
+and the editor would leave out the next click or key, like a right-click.
+"""
+chose!(e) = begin
+  w = window_of(e)
+  (w === nothing || !(Keys.mouse_left in w.keys)) && (e.nodes[:chose] = true)
+  nothing
+end
+
+"""
 A click on the name of a file shows the file in the page. A file that isn't
 Markdown is only shown: the page doesn't change it. A folder shows its own folders and files. A click on a heading or a
 component goes to it, and opens its file first if another file is showing.
@@ -21934,12 +21954,12 @@ to the text.
 choose!(e, item) = begin
   l = item.firstchild
   o = l isa FileLabel ? object(e, l.path) : nothing
-  o isa AbstractDirectory && return (open!(e, o); e.nodes[:chose] = true; nothing)
+  o isa AbstractDirectory && return (open!(e, o); chose!(e); nothing)
   # A group's name shows what's in the group. Only its icon hides that.
   item isa Tree.ItemGroup && (item.collapsed = false)
   l.path == e.buf.path || (o === nothing ? open!(e, l.path) : open!(e, o))
   focus(e)
-  e.nodes[:chose] = true
+  chose!(e)
   (l isa EntryLabel && l.line > 0) || return
   b = e.buf
   b.reading = false
@@ -22060,12 +22080,30 @@ panel_theme() = Theme(size=Tree.LABEL_SIZE, surface=colours.panel, text=colours.
 # --- the menu of a file ---------------------------------------------------------------------
 #
 # A right-click on a file or a folder in the sidebar, or on the name of the file
-# that shows in the top bar, shows a menu that renames it, copies its path,
-# shows it in the Finder or moves it to the Trash. It's a menu of macOS's own, so it
+# that shows in the top bar, shows a menu that renames it, duplicates it,
+# copies its path, shows it in the Finder or moves it to the Trash. A folder's
+# menu also makes a new page or a new folder in it, and opens it in a new
+# window. A file's menu also opens it in a new window or in the app that the
+# Mac uses for it, and copies a wiki link to it. A right-click under the files
+# shows the menu of the sidebar's own folder. It's a menu of macOS's own, so it
 # looks and works like the other menus on the Mac. A window that isn't on a
 # screen, like the one a test makes, gets a menu that Ladder draws.
 
-const FILE_MENU = ["Rename", "Copy Path", "Show in Finder", "-", "Move to Trash"]   # "-" is a line between two groups
+"""
+The items of the menu of the file or the folder at `path`, as `system_menu`
+takes them. "-" is a line between two groups. A file has an item that opens it
+in the app that the Mac uses for it, unless that's Ladder.
+"""
+file_menu(path) = begin
+  isdir(path) && return ["New Page", "New Folder", "-", "Open in New Window", "-", "Rename", "Duplicate", "-",
+                         "Copy Path", "Show in Finder", "-", "Move to Trash"]
+  app = opener(path)
+  outside = isempty(app) || app_name(app) == "Ladder" ? String[] : ["Open in $(app_name(app))"]
+  ["Open in New Window", outside..., "-", "Rename", "Duplicate", "-", "Copy Path", "Copy Link", "Show in Finder", "-", "Move to Trash"]
+end
+
+"The menu of the sidebar's own folder, for a right-click under the files that it lists"
+const FOLDER_MENU = ["New Page", "New Folder", "-", "Copy Path", "Show in Finder"]
 
 # A menu's text is 13/12 of its theme's size. This size makes it 13px, the size of a file's name in the sidebar.
 "The colours and the text size of a menu that floats over the window"
@@ -22077,36 +22115,107 @@ Show the menu of the file or the folder at `path`. `at` is where you
 right-clicked: its name in the `:sidebar` or in the `:title` of the top bar.
 Rename puts the text field there.
 """
-file_menu!(e, w, path; at=:sidebar) = begin
-  act(i) = file_act!(e, path, get(FILE_MENU, i, ""); at)
-  # A new file that isn't saved yet isn't on the disk, so the Finder can't show it
-  off = ispath(path) ? () : (findfirst(==("Show in Finder"), FILE_MENU),)
-  system_menu(w, FILE_MENU, act; off) || drawn_menu!(w, FILE_MENU, act; off)
+file_menu!(e, w, path; at=:sidebar, items=file_menu(path)) = begin
+  act(i) = file_act!(e, path, get(items, i, ""); at)
+  # A new file that isn't saved yet isn't on the disk, so the Finder can't show it, and there's nothing to copy or to open
+  off = ispath(path) ? Int[] : findall(in(("Open in New Window", "Duplicate", "Show in Finder")), items)
+  system_menu(w, items, act; off) || drawn_menu!(w, items, act; off)
   nothing
 end
 
 "Do to the file or the folder at `path` what the item `name` of its menu says"
 file_act!(e, path, name; at=:sidebar) =
+  name == "New Page" ? new_page!(e, path) :
+  name == "New Folder" ? new_folder!(e, path) :
+  name == "Open in New Window" ? (show_window!(page_window(path, e), window_of(e)); nothing) :
+  startswith(name, "Open in ") ? open_outside(path) :
   name == "Rename" ? rename!(e, path; at) :
+  name == "Duplicate" ? duplicate!(e, path) :
   name == "Copy Path" ? clipboard(path) :
+  name == "Copy Link" ? clipboard(wiki_link(path)) :
   name == "Show in Finder" ? show_in_finder(path) :
   name == "Move to Trash" ? trash!(e, path) : nothing
 
 "Open a Finder window on the folder of the file at `path`, with the file selected"
 show_in_finder(path) = (Sys.isapple() && ispath(path) && run(pipeline(`open -R $path`, stdout=devnull, stderr=devnull), wait=false); nothing)
 
-"Show the menu of the file or the folder in the sidebar that the mouse is over, if it's over one"
+"""
+Show the menu of the file or the folder in the sidebar that the mouse is over,
+if it's over one. Under the files, it's the menu of the sidebar's own folder,
+unless a kind of folder lists what it holds its own way.
+"""
 file_menu!(e, w) = begin
   e.panel || return
   tree = file_tree(e)
   item = Tree.item_under(tree, w)
-  (item === nothing || !(item.firstchild isa FileLabel)) && return
+  if item === nothing
+    (w.mouse[2] > TOPBAR_H && isdir(e.folder) && ishovered(node!(Sidebar, e, :sidebar)) &&
+     folder_view(e, directory(e)).list === nothing) || return
+    return file_menu!(e, w, e.folder, items=FOLDER_MENU)
+  end
+  item.firstchild isa FileLabel || return
   path = item.firstchild.path
   # The tree takes the keyboard, so the file that the menu is for stays marked
   focus(tree)
   tree.focused = item
   file_menu!(e, w, path)
 end
+
+"""
+A path in the folder `dir` for something new called `base`, with the ending
+`ending`, that nothing has yet: `base` itself, or else `base` with 2, 3 and so
+on after it, as the Finder does. A page that's open and not saved yet has its path.
+"""
+free_path(e, dir, base, ending="") = begin
+  taken(p) = ispath(p) || haskey(e.buffers, p)
+  path = joinpath(dir, base * ending)
+  n = 2
+  while taken(path)
+    path = joinpath(dir, "$base $n$ending")
+    n += 1
+  end
+  path
+end
+
+"Make a new empty page in the folder `dir` and show it. Its name is a text field in the sidebar, to type the name it should have."
+new_page!(e, dir) = begin
+  path = free_path(e, dir, "Untitled", ".md")
+  try touch(path) catch; return end   # the disk said no
+  open!(e, path)
+  list_files!(e)
+  rename!(e, path)
+  e.nodes[:renaming_new] = :page
+  nothing
+end
+
+"Make a new empty folder in the folder `dir`, and show `dir` in the sidebar. The new folder's name is a text field, to type the name it should have."
+new_folder!(e, dir) = begin
+  path = free_path(e, dir, "Untitled")
+  try mkdir(path) catch; return end
+  dir == e.folder ? list_files!(e) : go_folder!(e, dir)
+  rename!(e, path)
+  e.nodes[:renaming_new] = :folder
+  nothing
+end
+
+"""
+Make a copy of the file or the folder at `path` beside it, with a name like
+"notes copy.md", as the Finder does. A page with changes that aren't saved is
+copied with them.
+"""
+duplicate!(e, path) = begin
+  ispath(path) || return
+  folder = isdir(path)
+  dup = free_path(e, dirname(path), (folder ? basename(path) : title(path)) * " copy", folder ? "" : splitext(path)[2])
+  try cp(path, dup) catch; return end
+  b = get(e.buffers, path, nothing)
+  b !== nothing && dirty(b) && writes(b) && write(dup, join(b.lines, "\n"))
+  list_files!(e)
+  nothing
+end
+
+"The wiki link to the file at `path`, like [[Ideas]] for a page or [[plan.pdf]] for another file"
+wiki_link(path) = "[[" * (ismarkdown(path) ? title(path) : basename(path)) * "]]"
 
 "The text field that a file's new name is typed in"
 renamer(e) = node!(e, :renamer) do
@@ -22133,10 +22242,14 @@ end
 "The path of the file that's being renamed in `at`, the `:sidebar` or the `:title`. It's \"\" when none is."
 renaming(e, at) = get(e.nodes, :renaming_at, :sidebar) == at ? get(e.nodes, :renaming, "") : ""
 
-"Take the text field away. The keyboard goes back to the sidebar, or to the text when the field was in the top bar."
+"""
+Take the text field away. The keyboard goes back to the sidebar, or to the
+text when the field was in the top bar or was the name of a new page.
+"""
 stop_rename!(e) = begin
   delete!(e.nodes, :renaming)
-  pop!(e.nodes, :renaming_at, :sidebar) == :title ? focus(e) : focus(file_tree(e))
+  new = pop!(e.nodes, :renaming_new, nothing)
+  pop!(e.nodes, :renaming_at, :sidebar) == :title || new == :page ? focus(e) : focus(file_tree(e))
 end
 
 "Return gives the file the name that's typed, and esc leaves it with the name it has"
@@ -22156,6 +22269,7 @@ ended_rename!(e) = begin
   finish_rename!(e)
   delete!(e.nodes, :renaming)
   delete!(e.nodes, :renaming_at)
+  delete!(e.nodes, :renaming_new)
   nothing
 end
 
@@ -22732,19 +22846,17 @@ opener(path) = begin
 end
 
 """
-Open the file that the page shows in the app that the Mac uses for it. A file
-that the Mac has no app for shows in the Finder.
+Open the file at `path` in the app that the Mac uses for it. A file that the
+Mac has no app for shows in the Finder.
 """
-open_outside!(e) = begin
-  path = e.buf.path
-  isfile(path) || return e
-  if isempty(opener(path)) && Sys.isapple()
-    show_in_finder(path)
-  else
-    open_url(path)
-  end
-  e
+open_outside(path) = begin
+  isfile(path) || return
+  isempty(opener(path)) && Sys.isapple() ? show_in_finder(path) : open_url(path)
+  nothing
 end
+
+"Open the file that the page shows in the app that the Mac uses for it"
+open_outside!(e) = (open_outside(e.buf.path); e)
 
 "The name of the app at `path`, like Ladder for /Applications/Ladder.app"
 app_name(path) = splitext(basename(path))[1]

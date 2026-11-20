@@ -631,7 +631,7 @@ Click a file in the list that isn't Markdown to see it in the page. Ladder shows
 
 A Markdown page or a file of code that your Mac marks as read-only shows as it always does. Ladder doesn't change it, and the top bar says "Read only". A click on a link in it opens the link, with no key held. Take the mark off in the Finder's Get Info window, and you can write in the page again.
 
-Right-click a file or a folder in the list to rename it, copy its path, show it in the Finder or move it to the Trash. A folder goes to the Trash with everything in it. Right-click the file's name at the top of the window for the same menu.
+Right-click a file or a folder in the list to rename it, duplicate it, copy its path, show it in the Finder or move it to the Trash. A folder goes to the Trash with everything in it. A folder's menu also makes a new page or a new folder in it, and opens it in a new window. A file's menu also opens it in a new window or in the Mac's app for it. Its Copy Link item copies a wiki link to the file, like `[[examples]]`. Right-click under the list to make a new page or folder in the folder that the list shows. Right-click the file's name at the top of the window for the file's menu.
 
 Right-click the page to cut, copy or paste. The menu's Insert item adds a new block where you clicked: a heading, a list, a to-do item, a table, a sheet, a spreadsheet, a diagram, a takeoff, a schedule, a chart, a board, a calendar, a sketch, a live block and more.
 

@@ -31,6 +31,8 @@ key(k) = (onkey(w, KeyPress{k}(0, w)); frames())
 typed(s) = (foreach(c -> ontype(w, Typed(c, w)), s); frames())
 
 title() = e.nodes[:title]
+"The items of a menu, without the one that opens the file in the Mac's app for it, which this Mac chooses"
+ours(items) = filter(i -> i == "Open in New Window" || !startswith(i, "Open in "), items)
 "The menu that Ladder drew, or nothing"
 menu() = (ps = [p for p in popups(w) if p.key == :menu]; isempty(ps) ? nothing : only(ps).content)
 "Choose the item called `name` in the menu that Ladder drew, with ↓ and Return"
@@ -49,7 +51,7 @@ shot(name) = isempty(shots) || save_png(joinpath(shots, name * ".png"), w)
   @test r !== nothing
   right_click(middle(r))
   @test menu() !== nothing
-  @test menu().items == ["Rename", "Copy Path", "Show in Finder", "Move to Trash"]
+  @test ours(menu().items) == ["Open in New Window", "Rename", "Duplicate", "Copy Path", "Copy Link", "Show in Finder", "Move to Trash"]
   key(Keys.escape)
   @test menu() === nothing
 end
@@ -132,7 +134,8 @@ end
 @testset "Show in Finder is grey for a file that isn't on the disk yet" begin
   rm(joinpath(dir, "draft.md"))
   right_click(middle(rect(title())))
-  @test menu().items == ["Rename", "Copy Path", "Move to Trash"]
+  # Nor is there a file to open in a new window or to copy
+  @test menu().items == ["Rename", "Copy Path", "Copy Link", "Move to Trash"]
   key(Keys.escape)
   write(e.buf.path, join(e.buf.lines, "\n"))
 end
@@ -154,7 +157,7 @@ end
   other = joinpath(dir, "other.md")
   label = only(n for n in K.items(K.file_tree(e)) if n.firstchild isa K.FileLabel && n.firstchild.path == other).firstchild
   right_click(middle(rect(label)))
-  @test menu().items == ["Rename", "Copy Path", "Show in Finder", "Move to Trash"]
+  @test ours(menu().items) == ["Open in New Window", "Rename", "Duplicate", "Copy Path", "Copy Link", "Show in Finder", "Move to Trash"]
   choose("Rename")
   @test K.renaming(e, :sidebar) == other && renaming() == ""
   @test K.renamer(e).text == "other.md"

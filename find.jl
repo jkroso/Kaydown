@@ -20,7 +20,7 @@
 #
 # - `code blocks`: the blocks of code that Ladder shows as code
 # - `sheets`, `spreadsheets`, `live blocks`, `diagrams`, `takeoffs`,
-#   `schedules`, `charts`, `boards`, `calendars`, `day sliders`, `columns`, `sketches`, `signatures`, `contacts`, `maps`, `find lists`, `filters`, `email lists`,
+#   `schedules`, `charts`, `boards`, `calendars`, `day sliders`, `columns`, `sketches`, `signatures`, `contacts`, `maps`, `find lists`, `filters`, `save blocks`, `email lists`,
 #   `time logs`, `questions`, `changes`: the blocks that Ladder shows as that component
 #
 # A block is listed by the heading that it's under. A block of code, and a
@@ -81,6 +81,7 @@ const WHATS = (todo=what_is("to-do items", "to-dos", "todos", "todo", "to-do", "
                map=what_is("maps", "map", one="map", langs=("map",)),
                find=what_is("find lists", "find list", "finds", one="find list", langs=(FIND,)),
                filter=what_is("filters", "filter", one="filter", langs=("filter",)),
+               save=what_is("save blocks", "save block", "saves", one="save block", langs=("save",)),
                email=what_is("email lists", "email list", "emails", one="email list", langs=("email",)),
                timelog=what_is("time logs", "time log", "timelogs", "timesheets", one="time log", langs=("timelog",)),
                question=what_is("questions", "question", one="question", langs=("ask",)),

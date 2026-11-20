@@ -674,6 +674,23 @@ from: costs.csv
 where: Supplier is The yard
 ```
 
+## Saving rows
+
+A code block in the language `save` writes the rows of the table above it into a file. Nothing is written until you click its button. This block saves the rows that the filter above it shows:
+
+```save
+to: yard costs.csv
+```
+
+The end of the file's name says how the rows are written: `.csv`, `.tsv` or `.json`. A line like `as: json` says it instead. Each click writes the file again, with the rows as they are then. Without a `to` line, the button asks where to save the file.
+
+When `to` is a web address, like `to: https://example.com/api/costs`, the button sends the rows to that server as JSON. Two more lines say how:
+
+- `key: costs-api` names a password in your Keychain. Ladder sends it with the rows. The page holds only the name, so you can share the page and keep the key private. When the Keychain has no key with that name, the block's Add Key button asks for it.
+- `method: PUT` says how the server is asked: POST, PUT or PATCH. Without the line, it's POST.
+
+The line under the top of the block says what a click will do. After a click, it says when the rows went and what the server said.
+
 ## Time logs
 
 A code block in the language `timelog` keeps the hours that you work on each task. Type a task in the field at its top and click Start. The block adds a line for now, and the row counts up. Click Stop when you stop. With an empty field, Start goes on with the task of the last line.

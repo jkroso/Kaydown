@@ -24938,7 +24938,12 @@ end
 
 "One row of the table for each method of `f`: what it takes, and the module, the file and the line that it's in"
 method_rows(f) = map(collect(Base.invokelatest(methods, f))) do m
-  takes = String(first(split(Base.invokelatest(sprint, show, m), " @ ")))
+  # A package's own way to write a type in the method can fail. The method's name and the names of its arguments can't.
+  takes = try
+    String(first(split(Base.invokelatest(sprint, show, m), " @ ")))
+  catch
+    string(m.name, "(", join(Base.method_argnames(m)[2:end], ", "), ")")
+  end
   (takes, "", string(m.module, " · ", basename(string(m.file)), ":", m.line))
 end
 
@@ -25007,7 +25012,8 @@ about(m::Module, name::Symbol, v) = begin
     isempty(words) && (words = try doc_sentence(m, name) catch; "" end)
     isempty(words) || return words
     v isa Function && return (n = length(Base.invokelatest(methods, v)); n == 1 ? "1 method" : "$n methods")
-    v isa DataType && supertype(v) !== Any && return "a kind of $(supertype(v))"
+    # A package's own way to write a type can fail, as Prospects.jl's does for ScopedEnum{UInt8}. Its name alone can't.
+    v isa DataType && supertype(v) !== Any && return "a kind of " * (try string(supertype(v)) catch; string(nameof(supertype(v))) end)
     return ""
   end
   # A small value is written out. A big one is named by its type and its size: its row shows all of it when it's open.

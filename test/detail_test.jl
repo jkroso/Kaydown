@@ -278,3 +278,18 @@ end
     filter!(m -> m !== stripped, Base.Docs.modules)
   end
 end
+
+@testset "a type that its package can't write doesn't stop a box" begin
+  # Prospects.jl writes an enum type with its values, and it throws for a kind of enum, like ScopedEnum{UInt8}, that has none.
+  # UI.jl's Geometric module has types of that kind, so its box closed Ladder.
+  odd = Module(:Odd)
+  Core.eval(odd, quote
+    abstract type Kind{T} end
+    Base.show(io::IO, T::Type{<:Kind}) = error("a kind has no values")
+    struct Plain <: Kind{UInt8} end
+    take(x::Plain) = x
+  end)
+  rows = Dict(r[1] => r for r in K.name_rows(odd))
+  @test rows["Plain"][3] == "a kind of Kind"
+  @test only(K.method_rows(Base.invokelatest(getglobal, odd, :take)))[1] == "take(x)"
+end

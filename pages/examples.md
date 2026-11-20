@@ -48,6 +48,7 @@ The block at the top of this page is front matter: lines at the very top of a fi
 - [A row that uses a measure of a takeoff, a task of a time log or a row of another sheet](welcome.md#sheets)
 - [A spreadsheet: a grid of cells with formulas](welcome.md#spreadsheets)
 - [A chart of a table's numbers](welcome.md#charts)
+- [A filter: the rows of a CSV file, a JSON file or a table that meet some conditions](welcome.md#filters)
 - [Sums in a line of text](components.md#sums-in-a-line-of-text)
 - [Julia code that runs where it is](julia.md)
 - [A live block, which shows what its code makes](welcome.md#live-blocks)

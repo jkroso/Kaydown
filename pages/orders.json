@@ -1,0 +1,13 @@
+{
+  "shop": "Timber and Paint",
+  "data": {
+    "orders": [
+      {"id": "1041", "date": "2026-11-02", "status": "shipped", "total": 342.50, "customer": {"name": "Aroha Ngata", "city": "Hamilton"}, "items": ["Paint", "Brushes"]},
+      {"id": "1042", "date": "2026-11-03", "status": "packed", "total": 86.00, "customer": {"name": "Sam Wu", "city": "Auckland"}, "items": ["Nails"]},
+      {"id": "1043", "date": "2026-11-05", "status": "shipped", "total": 1280.00, "customer": {"name": "Mere Tane", "city": "Te Rapa"}, "items": ["Timber", "Nails", "Plaster"]},
+      {"id": "1044", "date": "2026-11-09", "status": "waiting", "total": 54.90, "customer": {"name": "Jo Brown", "city": "Hamilton"}, "items": ["Plaster"]},
+      {"id": "1045", "date": "2026-11-12", "status": "packed", "total": 415.00, "customer": {"name": "Ana Lopez", "city": "Cambridge"}, "items": ["Timber"]},
+      {"id": "1046", "date": "2026-11-18", "status": "waiting", "total": 199.95, "customer": {"name": "Tom Reid", "city": "Auckland"}, "items": ["Paint"]}
+    ]
+  }
+}

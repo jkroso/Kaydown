@@ -638,6 +638,42 @@ what: headings
 with: email
 ```
 
+## Filters
+
+A code block in the language `filter` shows only the rows of a table that meet some conditions. The table can be a CSV file, a JSON file, or a table of the page above the block. The block below shows the orders in [orders.json](orders.json) that are over $100, largest first:
+
+```filter
+from: orders.json
+where: total > 100
+sort: total, largest first
+```
+
+In a JSON file, each thing in the list is a row, and each of its keys is a column. A key of an object inside a thing is a column too, with a dot: `customer.city`. When the list isn't the file's whole value, Ladder uses the first list of objects in it. A line like `at: data.orders` names the list.
+
+Each `where` line is a condition. A row shows only when it meets every condition:
+
+- `status is shipped, packed`: the cell is one of the values. `is not` is the opposite.
+- `customer.name has an`: the cell has those letters in it. `has no` is the opposite.
+- `total > 100`: `>`, `<`, `>=` and `<=` compare numbers, like $1,200 or 45%, and dates written as 2026-11-21.
+- `items is empty` and `items is not empty`
+- `customer.city starts with Ham`, and `ends with`
+
+Capitals don't count. A `show` line names the columns to show, and a `sort` line names the column that puts the rows in order.
+
+The top of the block changes what it shows, so you needn't see its lines:
+
+- Type a condition in the field, and press Return.
+- Click the × of a condition to take it away.
+- Click a heading of the table to open its menu. The menu sorts the rows by that column, ticks the values to show, or keeps the rows that have some words in that column. It can also hide the column.
+- Click Save to write the rows that show into a new file.
+
+Each change goes into the block's lines, so ⌘Z takes it back. To see the lines, hold ⌥ and click the block. A chart under a filter draws the rows that the filter shows. This filter shows the items of [costs.csv](costs.csv) that come from The yard:
+
+```filter
+from: costs.csv
+where: Supplier is The yard
+```
+
 ## Time logs
 
 A code block in the language `timelog` keeps the hours that you work on each task. Type a task in the field at its top and click Start. The block adds a line for now, and the row counts up. Click Stop when you stop. With an empty field, Start goes on with the task of the last line.

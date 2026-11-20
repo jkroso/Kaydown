@@ -195,3 +195,26 @@ end
   @test K.num(rect(button).width) == 30
   K.Agent.place[] = ""
 end
+
+@testset "a name too long for the sidebar stays where it is while its icon is an arrow" begin
+  e.panel || sidebar!()
+  long = "a-name-with-no-spaces-that-is-far-too-long-for-the-sidebar.md"
+  write(joinpath(dir, long), "# Top\n\nWords.\n\n## Part\n\nMore words.\n")
+  K.go_folder!(e, dir); frames()
+  "Where the icon of the row of the file `name` starts, how wide it is, and where the name starts"
+  parts(name) = begin
+    r = rect(file(name).firstchild)
+    while length(r.children) == 1; r = r.children[1]; end
+    (r.children[1].left, r.children[1].width, r.children[2].left)
+  end
+  move(x, y) = (w.mouse = typeof(w.mouse)(x, y); onmouse(w, MouseMove(Vec2{px}(x, y), w)); frames())
+  move(890px, 690px)
+  away = parts(long)
+  r = rect(file(long).firstchild)
+  move(r.left + 40px, r.top + r.height / 2)
+  @test K.Tree.hovered(file(long))
+  # The icon's box keeps its width, so the arrow doesn't pull the name to the left
+  @test parts(long) == away
+  # And the name starts where a short name starts
+  @test away == parts("b.md")
+end

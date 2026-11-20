@@ -23149,7 +23149,9 @@ mark(l, icon; size=13px) = begin
   # A file that's open and has nothing under it has no arrow, since there's nothing to open or close.
   # A closed file might have headings, so it has one.
   over = item isa Tree.ItemGroup && Tree.hovered(item) && (item.collapsed || any(c -> c isa Tree.TreeItem, item.children))
-  Box(width(18px), height(grow=grow), Alignment.Center,
+  # The box never shrinks. A name too long for the sidebar would shrink it to its icon, and the
+  # arrow is narrower than the icon, so the name would move left when the mouse came over it.
+  Box(fixed(18px), height(grow=grow), Alignment.Center,
     (isempty(icon) ? () : (Icon(over ? (item.collapsed ? "chevron-right" : "chevron-down") : icon,
                                 size=over ? 10px : size, color=colours.dim),))...)
 end

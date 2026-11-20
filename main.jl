@@ -991,6 +991,9 @@ end
   panel::Bool = false                   # is the sidebar showing?
   slid::Float64 = 0.0                   # when the sidebar last started to slide in or out
   slid_from::Float64 = 0.0              # how far open it was then, from 0 to 1
+  full_screen::Bool = false             # does the window fill a screen of its own? macOS hides its close, minimise and zoom buttons then.
+  screened::Float64 = 0.0               # when the window last started or stopped filling its screen
+  screened_from::Float64 = 0.0          # how far the top bar's buttons had slid into the room of the close, minimise and zoom buttons then, from 0 to 1
   side::px = PANEL_W                    # how wide the sidebar is. Drag its right edge to change it.
   hidden::Bool = false                  # the sidebar lists the hidden files and folders too: the ones whose names start with a dot
   theme::Symbol = :sepia
@@ -20578,14 +20581,47 @@ toggle_panel!(e) = (e.slid_from = opened(e); e.slid = time(); e.panel = !e.panel
 
 sliding(e) = time() - e.slid < SLIDE_TIME
 
-"How far the sidebar is open, from 0 to 1"
-opened(e) = begin
-  to = e.panel ? 1.0 : 0.0
-  sliding(e) || return to
-  t = (time() - e.slid) / SLIDE_TIME
+"How far a slide from `from` to `to` that started at the time `at` has gone. It takes `SLIDE_TIME`."
+eased(from, to, at) = begin
+  t = (time() - at) / SLIDE_TIME
+  t < 1 || return to
   t = t < 0.5 ? 4t^3 : 1 - (2 - 2t)^3 / 2   # slow at the start and the end
-  e.slid_from + (to - e.slid_from) * t
+  from + (to - from) * t
 end
+
+"How far the sidebar is open, from 0 to 1"
+opened(e) = eased(e.slid_from, e.panel ? 1.0 : 0.0, e.slid)
+
+"""
+Notice when the window starts or stops filling a screen of its own, as the
+green button makes it do. macOS hides the close, minimise and zoom buttons
+then, so the buttons of the top bar slide left into their room. They slide
+back when the window leaves full screen.
+"""
+screen_tick!(e) = begin
+  w = window_of(e)
+  # A window that isn't on the screen can't fill one. Its setting stays as it is, so a test can set it.
+  (w === nothing || isempty(w.glfw)) && return
+  on = fills_screen(w)
+  on == e.full_screen && return
+  e.screened_from = cleared(e)
+  e.screened = time()
+  e.full_screen = on
+end
+
+clearing(e) = time() - e.screened < SLIDE_TIME
+
+"How far the buttons of the top bar have slid into the room of the close, minimise and zoom buttons, from 0 to 1"
+cleared(e) = eased(e.screened_from, e.full_screen ? 1.0 : 0.0, e.screened)
+
+const MAC_BUTTONS_W = 84px   # the room at the left of the top bar for the close, minimise and zoom buttons
+
+"""
+The room that the top bar leaves at its left for the close, minimise and zoom
+buttons. In full screen they're hidden, and it leaves 8px, as it does after
+the arrows at the right.
+"""
+mac_buttons_room(e) = MAC_BUTTONS_W - (MAC_BUTTONS_W - 8px) * cleared(e)
 
 "The most of the window's width that the sidebar can have, so the page keeps room beside it"
 widest_panel(e) = max(PANEL_MIN, min(PANEL_MAX, px(floor(num(window_size(e)[1]) / 2))))
@@ -22105,7 +22141,7 @@ describe(t::TopBar) = begin
   arrows = full ? () : history_buttons(e)
   # Each button is 30px wide with 2px after it. The arrows have 8px after them, and so has the last
   # button when there are no arrows. The dot beside the sidebar's button has room of its own.
-  need = 84px + 32px * length(buttons) + (isempty(arrows) ? 8px : 72px) + (!full && waiting_dot(e) ? DOT_GAP + DOT_W : 0px)
+  need = mac_buttons_room(e) + 32px * length(buttons) + (isempty(arrows) ? 8px : 72px) + (!full && waiting_dot(e) ? DOT_GAP + DOT_W : 0px)
   over = max(need, panel_w(e) * showing)
   left = max(150px * (1 - showing), need - panel_w(e) * showing, min(side, wide - panel_w(e) * showing - side - TITLE_ROOM))
   # The slider never pushes the right end out of a narrow window, so the ladder stays under the mouse. The words
@@ -22116,8 +22152,8 @@ describe(t::TopBar) = begin
   # middle of the space beside the sidebar, so it moves as the sidebar slides.
   Row(width(grow=grow), height(TOPBAR_H), name="TopBar",
     Row(fixed(left + panel_w(e) * showing), height(grow=grow),
-      # The close, minimise and zoom buttons sit over the first 84px
-      Row(fixed(over), height(grow=grow), padding(0px, 8px, 0px, 84px), child_gap=2px,
+      # The close, minimise and zoom buttons sit over the first 84px. In full screen they're hidden, and the buttons slide left.
+      Row(fixed(over), height(grow=grow), padding(0px, 8px, 0px, mac_buttons_room(e)), child_gap=2px,
         buttons..., Box(width(grow=grow)), arrows...)),
     Box(width(grow=grow), height(grow=grow), clip=true, node!(Title, e, :title)),
     Row(fixed(side), height(grow=grow), justify=Alignment.End, padding(0px, 10px, 0px, 0px),
@@ -28860,6 +28896,7 @@ describe_window(e::Editor) = begin
   foreach(f -> f(e), values(EACH_FRAME))   # what code from the startup page does in each frame, like a look for new email
   zoom_tick!(e)
   slide_tick!(e)
+  screen_tick!(e)
   layout!(e)
   # A page whose long lines don't wrap scrolls sideways as far as its longest line goes, and no further when the window grows
   if !wraps(e)
@@ -28874,8 +28911,8 @@ describe_window(e::Editor) = begin
   # typing shows without waiting for a frame that was already under way. Between
   # times it only wakes to blink the caret.
   if win !== nothing
-    # While the sidebar slides, or the caret moves to a new place, each frame is drawn as soon as it can be
-    win.animating = sliding(e) || gliding(e)
+    # While the sidebar slides, the top bar's buttons slide, or the caret moves to a new place, each frame is drawn as soon as it can be
+    win.animating = sliding(e) || clearing(e) || gliding(e)
     # A part of a live block that has the keyboard, like a text field, blinks its own caret
     win.wake = pop!(e.nodes, :ran, false) ? 0.05 : win.focus === e ? 0.51 - mod(time() - e.blink, 0.5) :
                win.focus === nothing ? 0.0 : 0.25

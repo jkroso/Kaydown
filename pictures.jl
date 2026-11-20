@@ -10,7 +10,7 @@
 # macOS has no picture for the file. A picture is made once and kept, so it
 # costs nothing to ask for it in every frame. This file only works on macOS.
 
-@use "github.com/jkroso/UI.jl/Interface/objc" libobjc cls sel msg nsstring with_pool
+@use "github.com/jkroso/UI.jl/Interface/objc" libobjc cls sel msg nsstring jstring with_pool
 @use "github.com/jkroso/UI.jl/Interface/image" register_image has_image
 
 const AppKit = "/System/Library/Frameworks/AppKit.framework/AppKit"
@@ -424,3 +424,39 @@ pdf_lines(path::AbstractString, n::Integer) = begin
 end
 
 export picture, natural, thumbnail, pdf_pages, pdf_page, pdf_size, pdf_part, pdf_lines
+
+"""
+Forget the picture that's kept under `key`, so that its memory is free. A
+view that makes a picture for each of thousands of files, like a grid of
+photos, forgets the ones that it hasn't shown for a while.
+"""
+forget_picture(key::AbstractString) = (delete!(parentmodule(register_image)._images, String(key)); nothing)
+
+"""
+Where the photo in the file at `path` was taken, as a latitude and a
+longitude, or nothing when the file doesn't say. A camera or a phone writes
+it into the file. macOS reads only the start of the file to find it.
+"""
+photo_place(path::AbstractString) = begin
+  Sys.isapple() || return nothing
+  try
+    with_pool() do
+      source = ccall((:CGImageSourceCreateWithURL, ImageIO), Object, (Object, Object), fileurl(path), C_NULL)
+      source == C_NULL && return nothing
+      facts = ccall((:CGImageSourceCopyPropertiesAtIndex, ImageIO), Object, (Object, Csize_t, Object), source, 0, C_NULL)
+      release(source)
+      facts == C_NULL && return nothing
+      # macOS's dictionary is one of Objective-C's too
+      gps = msg(facts, "objectForKey:", nsstring("{GPS}"))
+      number(key) = (v = gps == C_NULL ? C_NULL : msg(gps, "objectForKey:", nsstring(key)); v == C_NULL ? nothing : ccall((:objc_msgSend, libobjc), Float64, (Object, Object), v, sel("doubleValue")))
+      side(key) = (v = gps == C_NULL ? C_NULL : msg(gps, "objectForKey:", nsstring(key)); v == C_NULL ? "" : jstring(msg(v, "description")))
+      lat, lon = number("Latitude"), number("Longitude")
+      found = (lat === nothing || lon === nothing || (lat == 0 && lon == 0)) ? nothing :
+              (side("LatitudeRef") == "S" ? -lat : lat, side("LongitudeRef") == "W" ? -lon : lon)
+      release(facts)
+      found
+    end
+  catch
+    nothing
+  end
+end

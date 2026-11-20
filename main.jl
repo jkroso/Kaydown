@@ -249,7 +249,7 @@
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Mermaid" => Diagrams
 @use "github.com/jkroso/UI.jl/Interface/media" silence! recording picture_size
 @use "github.com/jkroso/UI.jl/Interface/Semantic/ThreeMF" => ThreeMF
-@use "./pictures" picture natural thumbnail finder_icon pdf_pages pdf_page pdf_size pdf_part pdf_lines
+@use "./pictures" picture natural thumbnail finder_icon pdf_pages pdf_page pdf_size pdf_part pdf_lines forget_picture photo_place
 @use "./spelling" misspelt guesses learn!
 @use "./transcribe" Transcription check! finished phrases words_between
 @use "./html" html footnotes NOTE escape
@@ -289,6 +289,10 @@
 @use "./web/files" => Webfiles
 @use "./slides" => Slides
 @use "./desktop" => Desks
+@use "./git" => Git
+@use "./notes" => Notes
+@use "./zip" => Zips
+@use "./macfolders" => Mac
 @use "github.com/jkroso/UI.jl/Interface/draw" Bubble
 @use "github.com/jkroso/UI.jl/Interface/draw" popups sync_mouse!
 @use "github.com/jkroso/URI.jl/FSPath" FSPath
@@ -1236,7 +1240,7 @@ show_opened!(e) = begin
   path, was = on
   (e.folder == path && e.buf.path == was) || return (delete!(e.nodes, :opened_on); nothing)
   d = directory(e)
-  (d isa AbstractDirectory && !(d isa FS.Directory) && page_view(e, d) !== nothing) || return
+  (d isa AbstractDirectory && !(d isa FS.Directory) && page_first(e, d) && page_view(e, d) !== nothing) || return
   delete!(e.nodes, :opened_on)
   open!(e, d)
   nothing
@@ -1282,10 +1286,13 @@ end
 What the sidebar lists of the directory `d`: its folders, then its files, each
 in the order of their names. A name that starts with a dot is hidden, as it is
 in the Finder, unless the sidebar shows those. .DS_Store is the Finder's own
-file, and never shows. What's neither a folder nor a file isn't listed.
+file, and never shows. What's neither a folder nor a file isn't listed. The
+home folder lists the Mac's Trash, whose folder is hidden, since the Finder
+has it in the Dock and Ladder has no other place for it.
 """
 entries(e, d::AbstractDirectory) = begin
-  shows(n) = e.hidden ? n != ".DS_Store" : !ishidden(n)
+  trash = Sys.isapple() && string(d.path) == homedir() ? basename(Mac.trash()) : ""
+  shows(n) = e.hidden ? n != ".DS_Store" : !ishidden(n) || n == trash
   found = FSObject[]
   for name in sort!(readdir(string(d.path)), by=lowercase)
     shows(name) || continue
@@ -1302,12 +1309,21 @@ directory(e) = get(e.entries, e.folder, nothing)
 "The object of the folder or the file at `path`: the one that the sidebar lists, or else a new one. Nothing when nothing is there."
 object(e, path) = get(() -> ispath(path) ? FS.get(FSPath(path)) : nothing, e.entries, path)
 
+"The name that `o` has in the sidebar: its own name, unless its kind has a better one, as the Trash has"
+entry_name(o::FSObject) = basename(rstrip(string(o.path), '/'))
+
 "The icon that `o` has in the sidebar"
 entry_icon(o::AbstractDirectory) = "folder"
 entry_icon(o::FSObject) = file_icon(string(o.path))
 
-"What follows the name of `o` in its row of the sidebar, like how many emails of a folder aren't read: nodes, or `()`"
-entry_marks(e, o::FSObject) = ()
+"""
+What follows the name of `o` in its row of the sidebar, like how many emails of
+a folder aren't read: nodes, or `()`. A kind of folder has a method with three
+arguments to say it for each thing that it holds: `entry_marks(e, d, o)`,
+where `d` is the directory that holds `o`.
+"""
+entry_marks(e, o::FSObject) = entry_marks(e, o.parent, o)
+entry_marks(e, d, o) = ()
 
 """
 How the sidebar lists the directory `d`: `(list=..., bar=...)`. `list` is a
@@ -1328,6 +1344,13 @@ page_view(e, o) = nothing
 
 "True when what `page_view` gives for `o` is as wide as the window has room for, as a table is, and not as wide as a page's text"
 page_fills(e, o) = false
+
+"""
+True when a window that's opened on the folder `d` shows what `page_view`
+gives for it. It's false for a kind of folder whose first page of text is the
+better start, as a folder that git keeps is: its Readme shows.
+"""
+page_first(e, d) = true
 
 """
 The object of the file or the folder that the page shows in a viewer, or
@@ -1352,6 +1375,33 @@ the bottom. It has no space round it, and the page doesn't scroll. A desktop
 covers the page so, with its wallpaper.
 """
 page_covers(e, o) = false
+
+"""
+What shows under the text of the page `o`, which the directory `d` holds: a
+node, or nothing. A kind of folder has a method of this to add to each page
+that it holds, as a folder of notes lists the pages that link to the page.
+It's as wide as the page's text, `e.width`, and it scrolls with the text.
+"""
+page_foot(e, d, o) = nothing
+
+"The object of the page of text that shows, or nothing. One that the sidebar doesn't list is found again after a second, and not in each frame."
+text_object(e) = begin
+  path = e.buf.path
+  haskey(e.entries, path) && return e.entries[path]
+  kept = get(e.nodes, :text_object, nothing)
+  kept !== nothing && kept[1] == path && time() - kept[2] < 1 && return kept[3]
+  o = try object(e, path) catch; nothing end
+  e.nodes[:text_object] = (path, time(), o)
+  o
+end
+
+"What shows under the text of the page, or nothing: see `page_foot(e, d, o)`. Only a page of Markdown that shows whole has it."
+page_foot(e) = begin
+  b = e.buf
+  (b.view == :markdown && !isempty(b.path) && !filled(e) && slideshow(e) === nothing) || return nothing
+  o = text_object(e)
+  o === nothing ? nothing : with_theme(() -> page_foot(e, o.parent, o), component_theme(e.zoom))
+end
 
 "True when a kind of folder or of file shows the page its own way, as wide as the window has room for"
 own_page(e) = (o = page_object(e); o !== nothing && page_fills(e, o))
@@ -4433,9 +4483,7 @@ end
 look(path; tree=true) = begin
   ext = lowercase(splitext(path)[2])
   if ext in ZIPS
-    list = try zipped(path) catch; nothing end
-    n = list === nothing ? 0 : length(list.lines)
-    list === nothing || return Buffer(path=path, view=:text, lines=list.lines, about="$(commas(n)) file$(n == 1 ? "" : "s")")
+    return Buffer(path=path, view=:file)   # the list of what it holds: see "a zip file"
   elseif tree && ext in JSONS && json_of(path) !== nothing
     return Buffer(path=path, view=:file)
   elseif !viewed(ext)
@@ -18883,10 +18931,12 @@ describe(p::Page) = begin
   cover === nothing || return cover
   # Long lines that don't wrap go on to the right edge of the window. The text moves left as the page
   # scrolls sideways. None of it shows past the edges of the page, and the numbers of the lines go over it.
+  # A kind of folder can show something under the text of each page that it holds
+  foot = page_foot(e)
   page = wraps(e) ?
     Row(width(grow=grow), Alignment.Start, justify=numbered(e.buf) ? Alignment.Start : Alignment.Center,
         padding(page_top(e), PAGE_X, page_bottom(e), PAGE_X + gutter(e)),
-      node!(Document, e, :document)) :
+      foot === nothing ? node!(Document, e, :document) : Column(Alignment.Start, node!(Document, e, :document), foot)) :
     Row(width(grow=grow), Alignment.Start, padding(page_top(e), 0px, page_bottom(e), PAGE_X + gutter(e)), clip_x=true,
       Box(Alignment.Start, offset_x=-sideways(e), node!(Document, e, :document)))
   reuse!(e.scroll, guide_under(e, page))
@@ -23076,7 +23126,7 @@ describe(l::FileLabel) = begin
     Box(width(grow=grow), height(22px), padding(5px, 0px), radius(4px), Alignment.Start, background(colours.bg),
         border(1px, :solid, colours.accent), renamer(e)) :
     # A hidden folder or page is fainter than the others, as it is in the Finder
-    folder ? Box(width(grow=grow), Alignment.Start, label(basename(l.path), color=ishidden(l.path) ? colours.dim : colours.ink)) :
+    folder ? Box(width(grow=grow), Alignment.Start, label(entry_name(o), color=ishidden(entry_name(o)) ? colours.dim : colours.ink)) :
     ismarkdown(l.path) ?
     Box(width(grow=grow), Alignment.Start, label(basename(l.path), color=ishidden(l.path) && l.path != e.buf.path ? colours.dim : colours.ink,
                                                  weight=l.path == e.buf.path ? "Semibold" : "")) :
@@ -29351,11 +29401,17 @@ page_kind(path::AbstractString) = begin
   kept !== nothing && pages_callable() ? kept[2] : nothing
 end
 
-"The kind of the folder at `path`, when the folder that it's in doesn't say: the kind that code gave it by its path, or else the kind that its own page gives it"
+"""
+The kind of the folder at `path`, when the folder that it's in doesn't say: the
+kind that code gave it by its path, or else the kind that its own page gives
+it, or else the kind that Ladder finds for it by itself (see `found_kind`).
+"""
 folder_kind(path::FSPath) = begin
   k = get(FS.kinds, path, nothing)
   k === nothing || return k
-  something(page_kind(string(path)), FS.Directory)
+  k = page_kind(string(path))
+  k === nothing || return k
+  found_kind(string(path))
 end
 
 # A folder of no kind asks the page of each folder in it
@@ -30009,6 +30065,1510 @@ onkey(v::DesktopView, ev::KeyPress{K}) where K = begin
     rename!(e, joinpath(v.path, only(names)), at=:desktop)
   elseif !cmd && K in (Keys.left, Keys.right, Keys.up, Keys.down)
     desktop_step!(v, (K == Keys.right) - (K == Keys.left), (K == Keys.down) - (K == Keys.up))
+  else
+    return nothing   # any other key is the window's, like the one that goes back
+  end
+  redraw_in!(v, 0)
+  handled
+end
+
+# --- the kinds of folder that Ladder finds by itself ----------------------------------------
+#
+# A folder needs no page of its own to be one of these kinds. Ladder knows it
+# by what's in it, or by where it is on the Mac:
+#
+#   - a folder with a `.git` in it is the top folder of a repository, and it
+#     and the folders in it are each a `GitDirectory`
+#   - a folder with an `.obsidian` in it is a folder of notes, and it and the
+#     folders in it are each a `NotesDirectory`
+#   - the Mac's Downloads folder, its Pictures folder, the folder that it saves
+#     screenshots to and its Trash each have a kind: see "the Mac's own folders"
+#
+# A kind that code gave the folder by its path comes first, and then the kind
+# that the folder's own page gives it. So a page still makes any of these
+# folders another kind, and makes any other folder one of these kinds.
+
+"The kind of each folder that Ladder knows by where it is, by the folder's path. A test adds a folder of its own."
+const PLACE_KINDS = Dict{String,Any}()
+
+"The kind that Ladder gives the folder at `path` by itself, from where it is or from what's in it. It's `FS.Directory` for a folder of no kind."
+found_kind(path::AbstractString) = begin
+  k = get(PLACE_KINDS, path, nothing)
+  k === nothing || return k
+  k = mac_kind(path)
+  k === nothing || return k
+  # Obsidian keeps its settings for a folder of notes in a folder of this name
+  isdir(joinpath(path, ".obsidian")) && return NotesDirectory
+  Git.istop(path) && return GitDirectory
+  FS.Directory
+end
+
+"""
+A line of a folder's own page that a click acts on, like the name of a file
+that has changes. It's darker while the mouse is over it. The view that it
+belongs to gives it what it shows and does, in each frame.
+"""
+@def mutable struct PageRow <: SemanticUI
+  act::Any = nothing   # what a click does, a function of the window, or nothing for a line that only shows
+  parts::Any = ()      # what the line shows, from the left
+end
+
+const PAGE_ROW_H = 28px
+
+describe(r::PageRow) =
+  Row(width(grow=grow), height(PAGE_ROW_H), padding(8px, 0px), radius(6px), child_gap=8px, clip=true, name="Line",
+      background(r.act !== nothing && ishovered(r) ? colours.hover : clear), r.parts...)
+
+cursor(r::PageRow) = r.act === nothing ? :arrow : :hand
+onkey(r::PageRow, ev::KeyPress{Keys.mouse_left}) = r.act === nothing ? nothing : (r.act(ev.window); handled)
+
+"The line of the view `v` that's kept under `key`, with what a click on it does and what it shows now"
+page_row!(v, key, act, parts...) = begin
+  length(v.rows) > 4000 && empty!(v.rows)
+  r = get!(() -> own!(v, PageRow()), v.rows, key)
+  r.act, r.parts = act, parts
+  r
+end
+
+"The words over a part of a folder's own page"
+page_heading(s) = Box(width(grow=grow), height(30px), padding(8px, 0px), Alignment.Start,
+                      Row(height(grow=grow), Box(label(s, 12px, color=colours.dim, weight="Semibold"))))
+
+"A line of a folder's own page that only says something, like that a list is empty"
+page_note(s) = Box(width(grow=grow), height(PAGE_ROW_H), padding(8px, 0px), Alignment.Start,
+                   Row(height(grow=grow), Box(label(s, 13px, color=colours.faint))))
+
+"""
+A button of a folder's own page, like the one that unpacks a zip file. The
+view that it belongs to gives it what it shows and does, in each frame.
+"""
+@def mutable struct PageButton <: SemanticUI
+  act::Any = nothing   # what a click does, a function of the window
+  icon::String = ""
+  words::String = ""
+  off::Bool = false    # it does nothing now, and shows that
+end
+
+describe(b::PageButton) =
+  Box(height(28px), padding(11px, 0px), radius(6px), name="Button",
+      background(b.off ? clear : ishovered(b) ? colours.active : colours.hover),
+    Row(child_gap=6px,
+      (isempty(b.icon) ? () : (Icon(b.icon, size=13px, color=b.off ? colours.faint : colours.dim),))...,
+      Box(label(b.words, 12px, color=b.off ? colours.faint : colours.ink, weight="Medium"))))
+
+cursor(b::PageButton) = b.off ? :arrow : :hand
+onkey(b::PageButton, ev::KeyPress{Keys.mouse_left}) = (b.off || b.act === nothing || b.act(ev.window); handled)
+
+"The button of the view `v` that's kept under `key`, with what a click on it does and what it shows now"
+page_button!(v, key, act; icon="", words="", off=false) = begin
+  b = get!(() -> own!(v, PageButton()), v.buttons, key)
+  b.act, b.icon, b.words, b.off = act, icon, words, off
+  b
+end
+
+"The name of a folder at the top of its own page, with an icon before it and a line of words under it"
+page_title(icon, name, about) =
+  Column(width(grow=grow), Alignment.Start, padding(8px, 0px, 14px, 8px), child_gap=6px,
+    Row(child_gap=10px, Icon(icon, size=22px, color=colours.dim), Box(label(name, 24px, weight="Bold"))),
+    Box(label(about, 13px, color=colours.dim)))
+
+# --- a folder with a git repository in it ----------------------------------------------------
+#
+# A folder with a `.git` in it is the top folder of a repository, and Ladder
+# asks git about it (see git.jl). Nothing here changes the repository: Ladder
+# only reads from it.
+#
+#   - In the sidebar, each file that has changes since the last commit has a
+#     letter after its name: M for changed lines, A for a file that the next
+#     commit adds, U for a file that git doesn't keep yet, R for a new name,
+#     and ! for a file that a merge left in two forms. A folder with such a
+#     file in it has a dot.
+#   - A line over the sidebar's list has the branch, how many commits it has
+#     to push and to pull, and how many files have changes. A click on the
+#     line shows the repository's page.
+#   - The repository's page lists the files that have changes, and the last
+#     commits. A click on a file shows it.
+#   - In the list of a folder that holds repositories, each one has its
+#     branch after its name, and how many of its files have changes.
+
+"A folder that git keeps: the top folder of a repository, or a folder in one"
+@def struct GitDirectory <: AbstractDirectory end
+
+# A folder in a repository is in the repository too, unless it has a kind of its own
+FS.kind(::GitDirectory, path::FSPath) = (k = folder_kind(path); k === FS.Directory ? GitDirectory : k)
+
+push!(BLOCK_ICONS, "git", "arrow-up", "arrow-down")
+
+"The top folder of the repository of each folder that was asked about, and when it was looked for"
+const GIT_TOPS = Dict{String,Tuple{Float64,String}}()
+
+"The top folder of the repository that the folder `dir` is in, or \"\" when it's in none. It's looked for again after 5 seconds."
+git_top(dir) = begin
+  kept = get(GIT_TOPS, dir, nothing)
+  kept !== nothing && time() - kept[1] < 5 && return kept[2]
+  length(GIT_TOPS) > 2000 && empty!(GIT_TOPS)
+  top = Git.top(dir)
+  GIT_TOPS[dir] = (time(), top)
+  top
+end
+
+"""
+What git says about the repository whose top folder is `root`, as it last said
+it. The window draws again when git has a newer answer: soon while git runs,
+and after `fresh` seconds otherwise.
+"""
+watch_git!(e, root; fresh=Git.FRESH) = begin
+  s = Git.state(root; fresh)
+  # git's answer is read by a task, which gets its turn here
+  Git.busy() ? (yield(); redraw_in!(e, 0.05)) : redraw_in!(e, fresh + 0.1)
+  s
+end
+
+"The letter that the sidebar has for each change of a file"
+const GIT_LETTERS = Dict(:changed => "M", :added => "A", :new => "U", :deleted => "D", :renamed => "R", :clash => "!")
+"What the repository's page calls each change of a file"
+const GIT_WORDS = Dict(:changed => "Changed", :added => "Added", :new => "New", :deleted => "Deleted", :renamed => "Renamed", :clash => "In two forms")
+
+"The colour of a change: green for a file that's new, red for one that's gone or in two forms, and the colour of a number for any other"
+git_colour(kind) = kind in (:new, :added) ? colours.string : kind in (:deleted, :clash) ? series_colours()[8] : colours.number
+
+"How many seconds the branch of a repository in a list of folders stays good. A folder can hold many repositories, and each look starts a git."
+const GIT_LIST_FRESH = 30.0
+
+"""
+What follows the name of `o` in the sidebar when git keeps it. The top folder
+of a repository has its branch and how many files have changes. A file with
+changes has its letter, and a folder with such a file in it has a dot.
+"""
+git_marks(e, o::FSObject) = begin
+  path = string(o.path)
+  root = git_top(o isa AbstractDirectory ? path : dirname(path))
+  isempty(root) && return ()
+  if root == path
+    # Its row is in the list of the folder that it's in, which can hold many repositories
+    s = watch_git!(e, root, fresh=GIT_LIST_FRESH)
+    s.known || return ()
+    n = length(s.changes)
+    return (Box(label(s.branch, 11px, color=colours.faint)),
+            (n == 0 ? () : (Box(label(string(n), 11px, color=git_colour(:changed), weight="Semibold")),))...)
+  end
+  kind = Git.mark(watch_git!(e, root), relpath(path, root))
+  kind === nothing && return ()
+  kind == :inside && return (Box(width(12px), Box(width(6px), height(6px), radius(3px), background(git_colour(:changed)))),)
+  (Box(width(12px), label(GIT_LETTERS[kind], 11px, color=git_colour(kind), weight="Semibold")),)
+end
+
+entry_marks(e, o::GitDirectory) = git_marks(e, o)
+entry_marks(e, ::GitDirectory, o::FSObject) = git_marks(e, o)
+
+"The line over the sidebar's list, when the sidebar's folder is in a repository"
+@def mutable struct GitBar <: SemanticUI
+  root::String = ""
+end
+
+folder_view(e, d::GitDirectory) = begin
+  root = git_top(string(d.path))
+  isempty(root) && return (list=nothing, bar=nothing)
+  bar = node!(GitBar, e, :git_bar)
+  bar.root = root
+  (list=nothing, bar=bar)
+end
+
+"How many files of a repository have changes, in words"
+changes_words(n) = n == 1 ? "1 change" : "$n changes"
+
+describe(b::GitBar) = begin
+  e = editor(b)
+  s = watch_git!(e, b.root)
+  n = length(s.changes)
+  count(icon, k) = k == 0 ? () : (Row(child_gap=1px, Icon(icon, size=10px, color=colours.dim), Box(label(string(k), 11px, color=colours.dim))),)
+  Row(width(grow=grow), height(26px), padding(16px, 0px), child_gap=6px, clip=true, name="Git",
+      background(e.buf.path == b.root ? colours.active : ishovered(b) ? colours.hover : clear),
+    Icon("git", size=12px, color=colours.dim),
+    Box(label(s.known ? s.branch : "…", 12px, color=colours.ink, weight="Medium")),
+    count("arrow-up", s.ahead)..., count("arrow-down", s.behind)...,
+    Box(width(grow=grow)),
+    (n == 0 ? () : (Box(label(changes_words(n), 11px, color=git_colour(:changed))),))...)
+end
+
+cursor(::GitBar) = :hand
+onkey(b::GitBar, ::KeyPress{Keys.mouse_left}) = (show_beside!(editor(b), b.root); handled)
+
+"Show the folder or the file at `path` in the page, like the page of a repository. The sidebar goes on with the folder that it lists."
+show_beside!(e, path) = begin
+  folder = e.folder
+  open!(e, path)
+  e.folder == folder || go_folder!(e, folder)
+  e
+end
+
+"What the page shows of the top folder of a repository: the files that have changes, and the last commits"
+@def mutable struct RepoView <: SemanticUI
+  path::String = ""
+  rows::Dict{Any,PageRow} = Dict{Any,PageRow}()
+end
+
+page_view(e, d::GitDirectory) = (path = string(d.path); Git.istop(path) ? node!(() -> RepoView(path=path), e, (:repo, path)) : nothing)
+# A window that's opened on a repository shows its first page of text, which is often its Readme
+page_first(e, ::GitDirectory) = false
+
+"What the repository's page says about the branch, in words"
+branch_words(s) = begin
+  s.known || return "Asking git…"
+  parts = ["On the branch $(s.branch)"]
+  isempty(s.follows) || push!(parts, "follows $(s.follows)")
+  s.ahead > 0 && push!(parts, s.ahead == 1 ? "1 commit to push" : "$(s.ahead) commits to push")
+  s.behind > 0 && push!(parts, s.behind == 1 ? "1 commit to pull" : "$(s.behind) commits to pull")
+  join(parts, "  ·  ")
+end
+
+describe(v::RepoView) = begin
+  e = editor(v)
+  s = watch_git!(e, v.path)
+  log = Git.commits(v.path, 30)
+  changes = Git.changed(s)
+  change(rel, kind) = begin
+    path = joinpath(v.path, rel)
+    dir = dirname(rel)
+    # A file that's gone has nothing to show
+    act = ispath(path) ? (_ -> (show_path!(e, path); nothing)) : nothing
+    page_row!(v, (:change, rel), act,
+      Box(width(14px), label(GIT_LETTERS[kind], 12px, color=git_colour(kind), weight="Semibold")),
+      Box(label(basename(rel), 13px)),
+      (isempty(dir) ? () : (Box(label(dir, 12px, color=colours.faint)),))...,
+      Box(width(grow=grow)),
+      Box(label(GIT_WORDS[kind] * ("$rel" in s.staged ? ", in the next commit" : ""), 12px, color=colours.dim)))
+  end
+  commit(c) = page_row!(v, (:commit, c.hash), nothing,
+    Box(width(62px), Alignment.Start, label(c.hash, 12px, color=colours.faint)),
+    Box(width(grow=grow), Alignment.Start, clip=true, height(PAGE_ROW_H), Row(height(grow=grow), Box(label(c.subject, 13px)))),
+    Box(label(c.author * "  ·  " * Git.ago(c.time), 12px, color=colours.dim)))
+  Column(width(grow=grow), Alignment.Start, name="Repository",
+    page_title("git", basename(v.path), branch_words(s)),
+    page_heading(isempty(changes) ? "Changes" : "Changes  ·  $(length(changes))"),
+    (!s.known ? (page_note("Asking git…"),) :
+     isempty(changes) ? (page_note("No file has changed since the last commit."),) :
+     [change(rel, kind) for (rel, kind) in changes])...,
+    Box(height(14px)),
+    page_heading("Last commits"),
+    (isempty(log) ? (page_note(s.known ? "This repository has no commit yet." : "Asking git…"),) : map(commit, log))...)
+end
+
+cursor(::RepoView) = :arrow
+
+# --- a folder of notes -------------------------------------------------------------------------
+#
+# A folder of notes is a folder whose pages link to each other, with wiki
+# links like [[Ideas]] or with Markdown links to their files. notes.jl reads
+# the pages and says which link to which. A folder is one when it has an
+# `.obsidian` folder in it, or when its own page, the file `.ladder`, ends with
+# this block:
+#
+#     ```julia
+#     Ladder.NotesDirectory
+#     ```
+#
+#   - Under the text of each page, "Linked from" lists the pages that link to
+#     it. A click on one shows it.
+#   - A line over the sidebar's list says how many pages the folder has. A
+#     click on it shows the folder's own page.
+#   - The folder's own page lists the pages that changed last, the names that
+#     pages link to and that no page has yet, and the pages that no page
+#     links to. A click on a name with no page starts that page.
+#
+# A folder of notes that git keeps has the letters of git's changes in the
+# sidebar too, and the line of its branch.
+
+"A folder of notes, or a folder in one: its pages link to each other"
+@def struct NotesDirectory <: AbstractDirectory end
+
+# A folder in a folder of notes holds notes too, unless it has a kind of its own
+FS.kind(::NotesDirectory, path::FSPath) = (k = folder_kind(path); k === FS.Directory ? NotesDirectory : k)
+
+push!(BLOCK_ICONS, "journal-text", "file-earmark-plus", "link-45deg")
+
+"The top folder of the notes that the folder `d` is in"
+notes_top(d::NotesDirectory) = d.parent isa NotesDirectory ? notes_top(d.parent) : string(d.path)
+
+"The pages and the links of each folder of notes, by its top folder, and when they were read"
+const NOTE_WEBS = Dict{String,Tuple{Float64,Notes.Web}}()
+
+"The pages of the notes whose top folder is `root`, and the links between them. They're read again after 2 seconds."
+notes_web(root) = begin
+  kept = get(NOTE_WEBS, root, nothing)
+  kept !== nothing && time() - kept[1] < 2 && return kept[2]
+  w = Notes.web(root)
+  NOTE_WEBS[root] = (time(), w)
+  w
+end
+
+"How many pages, in words"
+pages_words(n) = n == 1 ? "1 page" : "$n pages"
+
+entry_marks(e, o::NotesDirectory) = git_marks(e, o)
+entry_marks(e, ::NotesDirectory, o::FSObject) = git_marks(e, o)
+
+"The line over the sidebar's list, when the sidebar's folder holds notes"
+@def mutable struct NotesBar <: SemanticUI
+  root::String = ""
+end
+
+folder_view(e, d::NotesDirectory) = begin
+  bar = node!(NotesBar, e, :notes_bar)
+  bar.root = notes_top(d)
+  # Notes that git keeps have the line of their branch too
+  repo = git_top(string(d.path))
+  isempty(repo) && return (list=nothing, bar=bar)
+  git = node!(GitBar, e, :git_bar)
+  git.root = repo
+  (list=nothing, bar=Column(width(grow=grow), bar, git))
+end
+
+describe(b::NotesBar) = begin
+  e = editor(b)
+  n = length(notes_web(b.root).notes)
+  Row(width(grow=grow), height(26px), padding(16px, 0px), child_gap=6px, clip=true, name="Notes",
+      background(e.buf.path == b.root ? colours.active : ishovered(b) ? colours.hover : clear),
+    Icon("journal-text", size=12px, color=colours.dim),
+    Box(label("Notes", 12px, color=colours.ink, weight="Medium")),
+    Box(width(grow=grow)),
+    Box(label(pages_words(n), 11px, color=colours.dim)))
+end
+
+cursor(::NotesBar) = :hand
+onkey(b::NotesBar, ::KeyPress{Keys.mouse_left}) = (show_beside!(editor(b), b.root); handled)
+
+"What the page shows of the top folder of notes: the pages that changed last, the names with no page and the pages that nothing links to"
+@def mutable struct NotesView <: SemanticUI
+  path::String = ""
+  rows::Dict{Any,PageRow} = Dict{Any,PageRow}()
+end
+
+page_view(e, d::NotesDirectory) = (path = string(d.path); notes_top(d) == path ? node!(() -> NotesView(path=path), e, (:notes, path)) : nothing)
+
+"A click on the top folder of notes in the sidebar shows its own page, and the sidebar lists what it holds. A folder in it only shows in the sidebar."
+open!(e, d::NotesDirectory; record=true) = begin
+  path = string(d.path)
+  notes_top(d) == path && open!(e, path; record)
+  go_folder!(e, path)
+end
+
+"The most lines that one list of the page of a folder of notes has. A note under the list says how many more there are."
+const NOTES_MOST = 60
+
+"The names of the pages at `paths`, like `Home, Shed and 3 more`"
+page_names(paths; most=3) = begin
+  names = [title(p) for p in first(paths, most)]
+  length(paths) > most ? join(names, ", ") * " and $(length(paths) - most) more" : join(names, ", ")
+end
+
+"A line for the page `n` of the web `w`: its name, its folder, and `note` at the right. A click shows the page."
+note_row!(v, e, w, key, path, note="") =
+  page_row!(v, (key, path), _ -> (show_path!(e, path); nothing),
+    Icon("file-earmark-text", size=13px, color=colours.dim),
+    Box(label(title(path), 13px)),
+    (isempty(Notes.folder(w, path)) ? () : (Box(label(Notes.folder(w, path), 12px, color=colours.faint)),))...,
+    Box(width(grow=grow)),
+    (isempty(note) ? () : (Box(label(note, 12px, color=colours.dim)),))...)
+
+"The lines of `list`, no more than `NOTES_MOST`, with a note under them that says how many more there are"
+capped(row, list) = begin
+  shown = [row(x) for x in first(list, NOTES_MOST)]
+  length(list) > NOTES_MOST ? [shown; page_note("and $(length(list) - NOTES_MOST) more")] : shown
+end
+
+describe(v::NotesView) = begin
+  e = editor(v)
+  w = notes_web(v.path)
+  redraw_in!(e, 2.1)   # a page that was saved shows here soon after
+  loose, wanted = Notes.loose(w), w.wanted
+  about = join([pages_words(length(w.notes));
+                (isempty(wanted) ? String[] : [length(wanted) == 1 ? "1 name with no page" : "$(length(wanted)) names with no page"]);
+                (isempty(loose) ? String[] : ["$(length(loose)) that no page links to"])], "  ·  ")
+  # A name with no page starts its page at the top of the notes. Its file is made when you write in it.
+  want((name, from)) = page_row!(v, (:wanted, name), _ -> (open!(e, joinpath(v.path, basename(name) * ".md")); nothing),
+    Icon("file-earmark-plus", size=13px, color=colours.accent),
+    Box(label(name, 13px, color=colours.accent)),
+    Box(width(grow=grow)),
+    Box(label("linked from " * page_names(from), 12px, color=colours.dim)))
+  Column(width(grow=grow), Alignment.Start, name="Notes",
+    page_title("journal-text", basename(v.path), about),
+    page_heading("Changed last"),
+    (isempty(w.notes) ? (page_note("This folder has no page yet."),) :
+     [note_row!(v, e, w, :latest, n.path, Git.ago(n.changed)) for n in Notes.latest(w, 8)])...,
+    (isempty(wanted) ? () : (Box(height(14px)), page_heading("Names with no page  ·  $(length(wanted))"), capped(want, wanted)...))...,
+    (isempty(loose) ? () : (Box(height(14px)), page_heading("Pages that no page links to  ·  $(length(loose))"),
+                            capped(n -> note_row!(v, e, w, :loose, n.path), loose)...))...)
+end
+
+cursor(::NotesView) = :arrow
+
+"What's under the text of a page of a folder of notes: the pages that link to it"
+@def mutable struct LinkedFrom <: SemanticUI
+  root::String = ""
+  path::String = ""
+  rows::Dict{Any,PageRow} = Dict{Any,PageRow}()
+end
+
+page_foot(e, d::NotesDirectory, o::FS.File) = begin
+  path = string(o.path)
+  root = notes_top(d)
+  isempty(Notes.linked_from(notes_web(root), path)) && return nothing
+  f = node!(() -> LinkedFrom(root=root, path=path), e, (:linked_from, path))
+  f.root = root
+  f
+end
+
+describe(f::LinkedFrom) = begin
+  e = editor(f)
+  w = notes_web(f.root)
+  from = Notes.linked_from(w, f.path)
+  Column(fixed(e.width), Alignment.Start, padding(40px, 0px, 0px, 0px), name="Linked from",
+    Box(width(grow=grow), height(1px), background(colours.line)),
+    Box(height(10px)),
+    page_heading("Linked from  ·  $(length(from))"),
+    capped(p -> note_row!(f, e, w, :from, p), from)...)
+end
+
+cursor(::LinkedFrom) = :arrow
+
+# --- a zip file ---------------------------------------------------------------------------------
+#
+# A zip file shows what it holds, without being unpacked: its folders and
+# files as a list, each file with its size and when it changed. zip.jl reads
+# the list from the end of the zip file.
+#
+#   - A click on a folder of the list opens or closes it.
+#   - A click on a file shows that one file in the page. Ladder unpacks it into
+#     a folder of its own, beside the Mac's other caches, and the file can't
+#     be changed there, since a change wouldn't go into the zip file. The
+#     arrow that goes back shows the zip file again.
+#   - The Unpack button unpacks the whole file beside itself, as two clicks in
+#     the Finder do: one thing at the top of the zip file comes out as it is,
+#     and more than one go into a folder with the zip file's name. The sidebar
+#     then shows what came out.
+
+push!(BLOCK_ICONS, "file-zip", "box-arrow-up", "folder", "chevron-down", "chevron-right")
+
+"What the page shows of a zip file: the folders and files that it holds"
+@def mutable struct ZipView <: SemanticUI
+  path::String = ""
+  read::Float64 = -1.0                         # when the file had changed, as its list was read
+  zip::Any = nothing                           # what it holds, a `Zips.Zip`, or the words of why it can't be read
+  kids::Dict{String,Vector{Zips.Entry}} = Dict{String,Vector{Zips.Entry}}()   # what each of its folders holds, by the folder's name
+  open::Set{String} = Set{String}()            # the folders that are open
+  rows::Dict{Any,PageRow} = Dict{Any,PageRow}()
+  buttons::Dict{Any,PageButton} = Dict{Any,PageButton}()
+  job::Any = nothing                           # the program that unpacks the file, and the folder that it writes to
+  said::String = ""                            # what went wrong with the last click, or ""
+end
+
+# A file whose name ends as a zip file's does, in small letters or in capitals
+page_view(e, o::FS.File) = begin
+  path = string(o.path)
+  lowercase(splitext(path)[2]) in ZIPS ? node!(() -> ZipView(path=path), e, (:zip, path)) : nothing
+end
+
+"A folder for the files that Ladder unpacks to show them, in place of the one beside the Mac's caches. A test names one of its own."
+const ZIP_ROOM = Ref("")
+
+"The folder that the files of the zip file at `path` are unpacked into, one at a time, to show them. A zip file that changes gets a new one."
+zip_room(path) = joinpath(isempty(ZIP_ROOM[]) ? joinpath(homedir(), "Library", "Caches", "Ladder", "zips") : ZIP_ROOM[],
+                          string(hash((path, mtime(path))), base=16))
+
+"Read the list of the zip file of `v` again when the file has changed. A zip file with one folder at its top shows that folder open."
+zip_read!(v::ZipView) = begin
+  at = mtime(v.path)
+  at == v.read && return
+  v.read = at
+  empty!(v.kids)
+  v.zip = try Zips.contents(v.path) catch err; trouble(err) end
+  v.zip isa Zips.Zip || return
+  for en in v.zip.entries
+    inner = rstrip(en.name, '/')
+    push!(get!(() -> Zips.Entry[], v.kids, occursin('/', inner) ? dirname(inner) * "/" : ""), en)
+  end
+  # Each folder's folders come before its files
+  foreach(list -> sort!(list, by=!Zips.isfolder, alg=MergeSort), values(v.kids))
+  top = get(v.kids, "", Zips.Entry[])
+  isempty(v.open) && length(top) == 1 && Zips.isfolder(top[1]) && push!(v.open, top[1].name)
+  nothing
+end
+
+"The most lines of a zip file that show at once"
+const ZIP_MOST = 3000
+
+"The entries of the zip file of `v` that show: what's at its top, and what's in each open folder, under the folder"
+zip_lines(v::ZipView) = begin
+  lines = Zips.Entry[]
+  walk(dir) = for en in get(v.kids, dir, Zips.Entry[])
+    length(lines) >= ZIP_MOST && return
+    push!(lines, en)
+    Zips.isfolder(en) && en.name in v.open && walk(en.name)
+  end
+  walk("")
+  lines
+end
+
+"Show the file `en` of the zip file of `v` in the page. Ladder unpacks that one file to show it."
+zip_show!(v::ZipView, en::Zips.Entry) = begin
+  e = editor(v)
+  v.said = ""
+  path = try
+    Zips.keep(v.path, en, zip_room(v.path))
+  catch err
+    v.said = trouble(err)
+    return
+  end
+  show_beside!(e, path)
+  nothing
+end
+
+"""
+Unpack the whole zip file of `v` beside itself. A program of the Mac does it
+while the window goes on, into a folder with a name of its own, and
+`zip_unpacked!` gives what came out its name when the program is done.
+"""
+zip_unpack!(v::ZipView) = begin
+  v.job === nothing || return
+  v.said = ""
+  into = joinpath(dirname(v.path), ".unpacking-" * string(hash((v.path, time())), base=16))
+  v.job = try
+    (run(pipeline(`ditto -x -k $(v.path) $into`, stdout=devnull, stderr=devnull), wait=false), into)
+  catch err
+    v.said = trouble(err)
+    nothing
+  end
+  nothing
+end
+
+"When the program that unpacks the zip file of `v` is done, give what came out its name and show it in the sidebar"
+zip_unpacked!(v::ZipView) = begin
+  v.job === nothing && return
+  yield()   # the program's end is noticed by a task, which gets its turn here
+  proc, into = v.job
+  process_exited(proc) || return
+  v.job = nothing
+  e = editor(v)
+  dir = dirname(v.path)
+  found = try filter(n -> n != "__MACOSX" && n != ".DS_Store", readdir(into)) catch; String[] end
+  if proc.exitcode != 0 || isempty(found)
+    v.said = "The Mac couldn't unpack this file."
+    rm(into, recursive=true, force=true)
+    return
+  end
+  out = try
+    if length(found) == 1
+      # One thing at the top comes out as it is, as the Finder unpacks it
+      name = only(found)
+      to = isdir(joinpath(into, name)) ? free_path(e, dir, name) : free_path(e, dir, splitext(name)...)
+      mv(joinpath(into, name), to)
+      rm(into, recursive=true, force=true)
+      to
+    else
+      to = free_path(e, dir, title(v.path))
+      mv(into, to)
+      to
+    end
+  catch err
+    v.said = trouble(err)
+    return
+  end
+  list_files!(e)
+  isdir(out) ? go_folder!(e, out) : (e.folder == dir || go_folder!(e, dir))
+  nothing
+end
+
+"A line of the list of a zip file: a folder that a click opens or closes, or a file that a click shows"
+zip_row!(v::ZipView, en::Zips.Entry) = begin
+  folder = Zips.isfolder(en)
+  opened = folder && en.name in v.open
+  act = folder ? (_ -> (opened ? delete!(v.open, en.name) : push!(v.open, en.name); nothing)) : (_ -> zip_show!(v, en))
+  page_row!(v, en.name, act,
+    Box(width(px(16 * Zips.depth(en)))),
+    Box(width(10px), (folder ? (Icon(opened ? "chevron-down" : "chevron-right", size=9px, color=colours.dim),) : ())...),
+    Icon(folder ? "folder" : file_icon(en.name), size=13px, color=colours.dim),
+    Box(label(Zips.short(en), 13px)),
+    Box(width(grow=grow)),
+    (folder ? () : (Box(label(Zips.size_words(en.size), 12px, color=colours.dim)),
+                    Box(width(96px), Alignment.End, label(en.changed > 0 ? Libc.strftime("%-d %b %Y", en.changed) : "", 12px, color=colours.faint))))...)
+end
+
+describe(v::ZipView) = begin
+  e = editor(v)
+  zip_read!(v)
+  zip_unpacked!(v)
+  v.job === nothing || redraw_in!(e, 0.05)
+  z = v.zip
+  z isa Zips.Zip || return Column(width(grow=grow), Alignment.Start, name="Zip",
+    page_title("file-zip", basename(v.path), "Ladder can't read what this file holds."), page_note(string(z)))
+  n = Zips.files(z)
+  about = (n == 1 ? "1 file" : "$n files") * "  ·  " * Zips.size_words(z.size) * "  ·  " * Zips.size_words(filesize(v.path)) * " as a zip file"
+  lines = zip_lines(v)
+  Column(width(grow=grow), Alignment.Start, name="Zip",
+    page_title("file-zip", basename(v.path), about),
+    Row(padding(8px, 0px, 14px, 8px), child_gap=10px,
+      page_button!(v, :unpack, _ -> zip_unpack!(v), icon="box-arrow-up", words=v.job === nothing ? "Unpack" : "Unpacking…", off=v.job !== nothing),
+      (isempty(v.said) ? () : (Box(label(v.said, 12px, color=git_colour(:deleted))),))...),
+    (isempty(lines) ? (page_note("This zip file is empty."),) : [zip_row!(v, en) for en in lines])...,
+    (length(lines) >= ZIP_MOST ? (page_note("The list stops here. Unpack the file to see the rest."),) : ())...)
+end
+
+cursor(::ZipView) = :arrow
+
+# --- the Mac's own folders: Downloads and the Trash ------------------------------------------
+#
+# Ladder knows four of the Mac's folders by where they are: Downloads,
+# Pictures, the folder that the Mac saves screenshots to, and the Trash. A
+# click on one in the sidebar shows it in the page its own way, and the sidebar
+# lists what it holds. macfolders.jl reads what macOS knows of their files.
+#
+# Downloads and the Trash each show as a list with the newest thing first, in
+# the groups of days that the Finder has: Today, Yesterday, Previous 7 Days,
+# Previous 30 Days, and then each month. The sidebar lists them newest first too.
+#
+#   - In Downloads, a file that a browser saved has the site that it came from
+#     after its name. Each line has the file's size and when it came.
+#   - In the Trash, each line has the folder that the thing was in, and when
+#     it went to the Trash. Put Back moves it back there, under the name that
+#     it had. The Finder writes where each thing was, and a thing that
+#     it wrote nothing about can't be put back from here.
+#   - A click chooses a line, and ⌘ or ⇧ with a click chooses more. Two
+#     clicks, Return or ⌘↓ show what's chosen. ↑ and ↓ go from line to line,
+#     and ⌘A chooses every line. ⌘⌫ moves what's chosen to the Trash, and in
+#     the Trash it puts what's chosen back, as it does in the Finder. A
+#     right-click shows a menu.
+#
+# Nothing here empties the Trash. The Finder does that, and the button "Show
+# in Finder" opens the Trash there.
+#
+# Any other folder shows the same way with a page of its own that ends with
+# `Ladder.DownloadsDirectory`.
+
+"A folder that the page shows as a list of what it holds, the newest first, in groups of days, as the Mac's Downloads folder shows"
+@def struct DownloadsDirectory <: AbstractDirectory end
+"The Mac's Trash: a list of what it holds, each with the folder that it was in"
+@def struct TrashDirectory <: AbstractDirectory end
+const ListDirectory = Union{DownloadsDirectory,TrashDirectory}
+
+# What's in one of these folders is a folder or a file like any other
+FS.kind(::DownloadsDirectory, path::FSPath) = folder_kind(path)
+FS.kind(::TrashDirectory, path::FSPath) = folder_kind(path)
+
+push!(BLOCK_ICONS, "download", "trash", "arrow-counterclockwise", "folder2-open", "images", "camera", "search")
+entry_icon(::DownloadsDirectory) = "download"
+entry_icon(::TrashDirectory) = "trash"
+# The folder of the Mac's Trash is called .Trash, and the Mac calls it the Trash
+entry_name(d::TrashDirectory) = string(d.path) == Mac.trash() ? "Trash" : basename(string(d.path))
+
+"The folder that the Mac saves screenshots to, when that isn't its Desktop, and when macOS was asked. It's asked again after 10 seconds."
+const SCREENSHOTS = Ref((0.0, ""))
+
+"The folder that the Mac saves screenshots to, or \"\" when that's its Desktop, which shows as a desktop"
+screenshots_place() = begin
+  at, kept = SCREENSHOTS[]
+  time() - at < 10 && return kept
+  found = Mac.screenshots()
+  found == joinpath(homedir(), "Desktop") && (found = "")
+  SCREENSHOTS[] = (time(), found)
+  found
+end
+
+"The kind of the folder at `path` when it's one of the Mac's own folders, or nothing"
+mac_kind(path::AbstractString) = begin
+  Sys.isapple() || return nothing
+  home = homedir()
+  path == joinpath(home, "Downloads") ? DownloadsDirectory :
+  path == joinpath(home, "Pictures") ? PicturesDirectory :
+  path == Mac.trash() ? TrashDirectory :
+  path == screenshots_place() ? ScreenshotsDirectory : nothing
+end
+
+"`path` with ~ for the home folder, as the sidebar writes it"
+tilde(path::AbstractString) = (home = homedir(); path == home ? "~" : startswith(path, home * "/") ? "~" * path[length(home)+1:end] : String(path))
+
+"What a line of the list of a folder shows of a folder or a file"
+@def struct ListItem
+  name::String = ""
+  path::String = ""
+  folder::Bool = false
+  size::Int = 0            # of a file, in bytes
+  when::Float64 = 0.0      # when it came into the folder
+  site::String = ""        # the site that it was downloaded from, or ""
+end
+
+"What's known of each path of a list, with when the file had changed as it was read"
+const LIST_FACTS = Dict{String,Tuple{Float64,ListItem}}()
+
+"What the list of a folder shows of the folder or the file at `path`. macOS is asked again when it has changed."
+filelist_fact(path::AbstractString) = begin
+  st = try stat(path) catch; return ListItem(name=basename(path), path=path) end
+  kept = get(LIST_FACTS, path, nothing)
+  kept !== nothing && kept[1] == st.mtime && return kept[2]
+  length(LIST_FACTS) > 20_000 && empty!(LIST_FACTS)
+  folder = isdir(st)
+  it = ListItem(name=basename(path), path=path, folder=folder, size=folder ? 0 : Int(st.size),
+                when=Mac.added(path), site=folder ? "" : Mac.site(path))
+  LIST_FACTS[path] = (st.mtime, it)
+  it
+end
+
+# The sidebar lists these folders with the newest thing first, as their page does
+entries(e, d::ListDirectory) =
+  sort!(invoke(entries, Tuple{Any,AbstractDirectory}, e, d), by=o -> -filelist_fact(string(o.path)).when, alg=MergeSort)
+
+"What the page shows of Downloads or of the Trash: what the folder holds as a list, the newest first"
+@def mutable struct FileList <: SemanticUI
+  path::String = ""
+  trash::Bool = false                         # it's the Trash
+  lines::Vector{Any} = Any[]                  # the words over a group of days, or a `ListItem`, in the order that they show
+  origins::Dict{String,Mac.Origin} = Dict{String,Mac.Origin}()   # where each thing in the Trash was, by its name there
+  read::Float64 = 0.0                         # when the folder was read
+  problem::String = ""                        # why the folder can't be read, or ""
+  chosen::Set{String} = Set{String}()         # the names of the lines that are chosen
+  last::String = ""                           # the name that the last click or key chose
+  clicked::Tuple{Float64,String} = (0.0, "")  # the last click on a line: when, and its name
+  said::String = ""                           # what went wrong with the last thing that was asked, or ""
+  buttons::Dict{Any,PageButton} = Dict{Any,PageButton}()
+end
+
+"A click on one of these folders in the sidebar shows it in the page, and the sidebar lists what it holds"
+open!(e, d::ListDirectory; record=true) = (open!(e, string(d.path); record); go_folder!(e, string(d.path)))
+page_view(e, d::ListDirectory) = (path = string(d.path); node!(() -> FileList(path=path, trash=d isa TrashDirectory), e, (:filelist, path)))
+
+const LIST_ROW_H = 30.0     # how tall a line of the list is, and the words over a group
+const LIST_HEAD_H = 118.0   # how tall the part over the list is: the folder's name, and the buttons
+"The top folder of the disk that the Trash is on. A test names a folder of its own."
+const TRASH_DISK = Ref("/")
+"The page of the Mac's settings that lets an app read every folder"
+const FULL_ACCESS_SETTINGS = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+
+"Read the folder of the list `v` again, a second after it was last read"
+filelist_read!(e, v::FileList) = begin
+  time() - v.read < 1 && return
+  v.read = time()
+  names = try
+    v.problem = ""
+    readdir(v.path)
+  catch
+    v.problem = v.trash ? "macOS doesn't let Ladder read the Trash. Give Ladder Full Disk Access in the Mac's settings, and open Ladder again." :
+                          "Ladder can't read this folder."
+    String[]
+  end
+  # The Trash shows all that's in it. Any other folder leaves its hidden files out, as the sidebar does.
+  shows(n) = n != ".DS_Store" && n != ".localized" && (v.trash || e.hidden || !ishidden(n))
+  items = [filelist_fact(joinpath(v.path, n)) for n in names if shows(n)]
+  sort!(items, by=it -> -it.when, alg=MergeSort)
+  v.origins = v.trash ? Mac.origins(v.path, disk=TRASH_DISK[]) : Dict{String,Mac.Origin}()
+  lines, group = Any[], ""
+  for it in items
+    g = Mac.day_name(it.when)
+    g == group || (push!(lines, g); group = g)
+    push!(lines, it)
+  end
+  v.lines = lines
+  intersect!(v.chosen, names)
+  nothing
+end
+
+"The names of the lines of the list `v` that are chosen, from the top"
+filelist_chosen(v::FileList) = String[l.name for l in v.lines if l isa ListItem && l.name in v.chosen]
+
+"Which line of the list `v` the mouse is over, or 0 when it's over none, or over the words of a group"
+filelist_under(v::FileList) = begin
+  w = window_of(v)
+  r = rect(v)
+  (w === nothing || r === nothing || !ishovered(v)) && return 0
+  i = floor(Int, (num(w.mouse[2]) - num(r.top) - LIST_HEAD_H) / LIST_ROW_H) + 1
+  1 <= i <= length(v.lines) && v.lines[i] isa ListItem ? i : 0
+end
+
+"The small picture before a name in a list: the Finder's icon, by the path, or nothing until it's made"
+const LIST_ICONS = Dict{String,Any}()
+
+"The Finder's icon of the folder or the file at `path`, small. `budget` is how many more this frame can make."
+filelist_icon(e, path, budget) = begin
+  haskey(LIST_ICONS, path) && return LIST_ICONS[path]
+  budget[] > 0 || (redraw_in!(e, 0); return nothing)
+  budget[] -= 1
+  length(LIST_ICONS) > 20_000 && empty!(LIST_ICONS)
+  LIST_ICONS[path] = something(finder_icon(path, 40), Some(nothing))
+end
+
+"Line `i` of the list `v`: the words over a group of days, or a folder or a file"
+filelist_line(v::FileList, e, i, over, budget) = begin
+  it = v.lines[i]
+  it isa ListItem || return Row(width(grow=grow), height(px(LIST_ROW_H)), padding(0px, 0px, 5px, 8px), Alignment.End,
+                                Box(label(it, 12px, color=colours.dim, weight="Semibold")))
+  origin = get(v.origins, it.name, nothing)
+  # A thing in the Trash has the name that it had where it was. The Finder can give it another in the Trash.
+  name = origin === nothing ? it.name : origin.name
+  note = v.trash ? (origin === nothing ? "" : "from " * tilde(origin.folder)) : it.site
+  key = filelist_icon(e, it.path, budget)
+  picture = key === nothing ? Icon(it.folder ? "folder" : file_icon(it.path), size=15px, color=colours.dim) : Image(key, fixed(20px), height(20px))
+  Row(width(grow=grow), height(px(LIST_ROW_H)), padding(8px, 0px), radius(6px), child_gap=10px, clip=true, name="Item",
+      background(it.name in v.chosen ? colours.active : over ? colours.hover : clear),
+    Box(width(20px), picture),
+    Row(width(grow=grow), height(grow=grow), clip=true, child_gap=10px,
+      Box(label(name, 13px)), (isempty(note) ? () : (Box(label(note, 12px, color=colours.faint)),))...),
+    Box(label(it.folder ? "" : Zips.size_words(it.size), 12px, color=colours.dim)),
+    Box(width(84px), Alignment.End, label(Mac.when(it.when), 12px, color=colours.faint)))
+end
+
+describe(v::FileList) = begin
+  e = editor(v)
+  filelist_read!(e, v)
+  redraw_in!(e, 1)   # the folder is read again each second, so a new file gets its line
+  n = length(v.lines)
+  _, high = window_size(e)
+  # Only the lines that are in the window are made, and a few more above and below
+  lo = clamp(floor(Int, (num(e.scroll.offset) - num(page_top(e)) - num(LIVE_GAP) - LIST_HEAD_H) / LIST_ROW_H) - 6, 0, n)
+  hi = min(n, lo + ceil(Int, num(high) / LIST_ROW_H) + 12)
+  over = filelist_under(v)
+  budget = Ref(6)
+  things = count(l -> l isa ListItem, v.lines)
+  names = filelist_chosen(v)
+  about = (things == 1 ? "1 thing" : "$(commas(things)) things") * (isempty(names) ? "" : "  ·  $(length(names)) chosen")
+  some = !isempty(names)
+  buttons = v.trash ?
+    (page_button!(v, :back, _ -> filelist_put_back!(v, filelist_chosen(v)), icon="arrow-counterclockwise", words="Put Back",
+                  off=!any(n -> haskey(v.origins, n), names)),
+     page_button!(v, :finder, _ -> (Sys.isapple() && run(`open $(v.path)`, wait=false); nothing), icon="folder2-open", words="Show in Finder")) :
+    (page_button!(v, :open, _ -> filelist_open!(v, filelist_chosen(v)), icon="box-arrow-up-right", words="Open", off=!some),
+     page_button!(v, :trash, _ -> filelist_trash!(v, filelist_chosen(v)), icon="trash", words="Move to Trash", off=!some),
+     page_button!(v, :finder, _ -> show_in_finder(v.path), icon="folder2-open", words="Show in Finder"))
+  access = isempty(v.problem) || !v.trash ? () :
+    (page_button!(v, :access, _ -> (open_url(FULL_ACCESS_SETTINGS); nothing), words="Open the Mac's settings"),)
+  Column(width(grow=grow), Alignment.Start, name="List",
+    Column(width(grow=grow), height(px(LIST_HEAD_H)), Alignment.Start, justify=Alignment.Start, clip=true,
+      page_title(v.trash ? "trash" : "download", v.trash ? "Trash" : basename(v.path), about),
+      Row(padding(8px, 0px), child_gap=8px, buttons...,
+          (isempty(v.said) ? () : (Box(label(v.said, 12px, color=git_colour(:deleted))),))...)),
+    (isempty(v.problem) ? () : (page_note(v.problem), Row(padding(8px, 6px), access...)))...,
+    (isempty(v.problem) && n == 0 ? (page_note(v.trash ? "The Trash is empty." : "This folder is empty."),) : ())...,
+    spacer(px(LIST_ROW_H * lo)), [filelist_line(v, e, i, i == over, budget) for i in lo+1:hi]..., spacer(px(LIST_ROW_H * (n - hi))))
+end
+
+cursor(::FileList) = :arrow
+
+"Show the things of the list `v` that are called `names`, as a link to each would"
+filelist_open!(v::FileList, names) = (e = editor(v); foreach(n -> show_path!(e, joinpath(v.path, n)), names); nothing)
+
+"Move the things of the list `v` that are called `names` to the Trash, and keep the keyboard on the list"
+filelist_trash!(v::FileList, names) = begin
+  e = editor(v)
+  foreach(n -> trash!(e, joinpath(v.path, n)), names)
+  v.read = 0.0
+  e.buf.path == v.path && focus(v)
+  nothing
+end
+
+"Put the things of the Trash that are called `names` back where they were. One that the Finder wrote nothing about stays, and so does one whose folder is gone."
+filelist_put_back!(v::FileList, names) = begin
+  e = editor(v)
+  v.said = ""
+  for n in names
+    origin = get(v.origins, n, nothing)
+    origin === nothing && (v.said = "The Finder kept no note of where $n was."; continue)
+    try
+      Mac.put_back!(joinpath(v.path, n), origin)
+    catch err
+      v.said = trouble(err)
+    end
+  end
+  v.read = 0.0
+  list_files!(e)
+  nothing
+end
+
+"Choose the line of the list `v` that's `by` lines from the one that was chosen last, and scroll so that it shows. With `more`, the lines that were chosen stay chosen."
+filelist_step!(v::FileList, by, more=false) = begin
+  e = editor(v)
+  at = findall(l -> l isa ListItem, v.lines)
+  isempty(at) && return
+  from = findfirst(i -> v.lines[i].name == v.last, at)
+  k = from === nothing ? (by > 0 ? 1 : length(at)) : clamp(from + by, 1, length(at))
+  it = v.lines[at[k]]
+  more || empty!(v.chosen)
+  push!(v.chosen, it.name)
+  v.last = it.name
+  top = page_top(e) + LIVE_GAP + px(LIST_HEAD_H + LIST_ROW_H * (at[k] - 1))
+  scroll_into_view!(e.scroll, top - px(LIST_ROW_H), top + px(2LIST_ROW_H))
+  nothing
+end
+
+onkey(v::FileList, ev::KeyPress{Keys.mouse_left}) = begin
+  w = ev.window
+  focus(v)
+  i = filelist_under(v)
+  i == 0 && (empty!(v.chosen); v.clicked = (0.0, ""); return handled)
+  it = v.lines[i]
+  cmd, shift = Keys.cmd in w.keys, Keys.shft in w.keys
+  t, last = v.clicked
+  if time() - t < 0.4 && last == it.name && !cmd && !shift
+    v.clicked = (0.0, "")
+    filelist_open!(v, [it.name])
+    return handled
+  end
+  if cmd
+    it.name in v.chosen ? delete!(v.chosen, it.name) : push!(v.chosen, it.name)
+  elseif shift && !isempty(v.last)
+    # Every line from the one that was chosen last to this one
+    a = something(findfirst(l -> l isa ListItem && l.name == v.last, v.lines), i)
+    foreach(l -> l isa ListItem && push!(v.chosen, l.name), v.lines[min(a, i):max(a, i)])
+  else
+    v.chosen = Set([it.name])
+  end
+  v.last = it.name
+  v.clicked = cmd || shift ? (0.0, "") : (time(), it.name)
+  handled
+end
+
+"Show the menu of the line of the list `v` that has `it`. When more than one line is chosen, the menu is for them all."
+filelist_menu!(v::FileList, w, it::ListItem) = begin
+  e = editor(v)
+  names = filelist_chosen(v)
+  items = v.trash ? ["Put Back", "-", "Open", "Show in Finder"] :
+          length(names) > 1 ? ["Open", "-", "Move to Trash"] : ["Open", "-", file_menu(it.path)...]
+  act(i) = begin
+    item = get(items, i, "")
+    item == "Open" ? filelist_open!(v, names) :
+    item == "Put Back" ? filelist_put_back!(v, names) :
+    item == "Move to Trash" ? filelist_trash!(v, names) : file_act!(e, it.path, item)
+    nothing
+  end
+  off = v.trash && !any(n -> haskey(v.origins, n), names) ? [1] : Int[]
+  system_menu(w, items, act; off) || drawn_menu!(w, items, act; off)
+  nothing
+end
+
+onkey(v::FileList, ev::KeyPress{Keys.mouse_right}) = begin
+  focus(v)
+  i = filelist_under(v)
+  i == 0 && return handled
+  it = v.lines[i]
+  it.name in v.chosen || (v.chosen = Set([it.name]); v.last = it.name)
+  filelist_menu!(v, ev.window, it)
+  handled
+end
+
+onkey(v::FileList, ev::KeyPress{K}) where K = begin
+  w = ev.window
+  cmd, shift = Keys.cmd in w.keys, Keys.shft in w.keys
+  names = filelist_chosen(v)
+  if (K == Keys.down && cmd) || (K == Keys.enter && !cmd)
+    filelist_open!(v, names)
+  elseif K in (Keys.backspace, Keys.delete) && cmd
+    v.trash ? filelist_put_back!(v, names) : filelist_trash!(v, names)
+  elseif K == Keys.a && cmd
+    v.chosen = Set(l.name for l in v.lines if l isa ListItem)
+  elseif !cmd && K in (Keys.up, Keys.down)
+    filelist_step!(v, K == Keys.down ? 1 : -1, shift)
+  else
+    return nothing   # any other key is the window's, like the one that goes back
+  end
+  redraw_in!(v, 0)
+  handled
+end
+
+# --- the Mac's own folders: Pictures and the screenshots ------------------------------------
+#
+# The Pictures folder shows its pictures as a grid, the newest first, with the
+# month over each group. The folders in it come first, and each shows the same
+# way when it's opened. The folder that the Mac saves screenshots to, and a
+# folder called Screenshots in Pictures, show their pictures by the day. Files
+# that aren't pictures come last.
+#
+#   - The field over the grid leaves only the pictures that have what's typed
+#     in it: in their names, or in the words that the picture shows, like the
+#     text of a screenshot. macOS reads the words of each picture, on a second
+#     thread, the first time that something is typed. It takes a part of a
+#     second for each picture, and the grid fills as they're read. A file keeps
+#     what was read, so each picture is read once.
+#   - A click chooses a picture, and ⌘ or ⇧ with a click chooses more. Two
+#     clicks, Return or ⌘↓ show what's chosen: a picture in the page, and a
+#     folder as its own grid. The arrows go from picture to picture, ⌘A
+#     chooses them all, and ⌘⌫ moves what's chosen to the Trash. A right-click
+#     shows the menu that the sidebar has for the file.
+#
+#   - When photos of the Pictures folder say where they were taken, a map
+#     over the grid has a dot for each one. A camera or a phone writes the
+#     place into the photo's file. A click on a dot chooses its photo, and the
+#     grid scrolls to it. The map is Apple's, as a `map` block's is, so the
+#     first time it needs the network. A folder of screenshots has no map.
+#
+# A grid makes a small picture of each file when the file first shows, a few
+# in each frame, and forgets the ones that it hasn't shown for a while. So a
+# folder of thousands of photos opens at once and takes little memory.
+#
+# Any other folder shows the same way with a page of its own that ends with
+# `Ladder.PicturesDirectory` or `Ladder.ScreenshotsDirectory`.
+
+"A folder that the page shows as a grid of its pictures, the newest first, with the month over each group"
+@def struct PicturesDirectory <: AbstractDirectory end
+"A folder of screenshots: a grid of its pictures, the newest first, with the day over each group"
+@def struct ScreenshotsDirectory <: AbstractDirectory end
+const GridDirectory = Union{PicturesDirectory,ScreenshotsDirectory}
+
+# A folder of pictures holds folders of pictures, and one that's called Screenshots holds screenshots
+FS.kind(::PicturesDirectory, path::FSPath) = begin
+  k = folder_kind(path)
+  k === FS.Directory || return k
+  lowercase(basename(string(path))) == "screenshots" ? ScreenshotsDirectory : PicturesDirectory
+end
+FS.kind(::ScreenshotsDirectory, path::FSPath) = (k = folder_kind(path); k === FS.Directory ? ScreenshotsDirectory : k)
+
+entry_icon(::PicturesDirectory) = "images"
+entry_icon(::ScreenshotsDirectory) = "camera"
+
+"One square of a grid of pictures: a folder, a picture, or another file"
+@def struct Tile
+  name::String = ""
+  path::String = ""
+  kind::Symbol = :picture   # :folder, :picture, or :other for a file that isn't a picture
+  when::Float64 = 0.0       # when it last changed, which for a photo is when it was taken
+end
+
+"What the page shows of a folder of pictures: a grid of them, in groups of months or of days"
+@def mutable struct TilesView <: SemanticUI
+  path::String = ""
+  days::Bool = false                          # a group is a day, as for screenshots, and not a month
+  tiles::Vector{Tile} = Tile[]                # what the folder holds, as it was last read
+  read::Float64 = 0.0                         # when it was read
+  problem::String = ""                        # why the folder can't be read, or ""
+  made::Any = nothing                         # what `lines` was made for: the tiles, the width and what's typed in the field
+  lines::Vector{Any} = Any[]                  # the words over a group, or the tiles of one row of the grid
+  tops::Vector{Float64} = Float64[]           # where each line starts, from the top of the grid
+  tall::Float64 = 0.0                         # how tall the grid is
+  side::Float64 = 140.0                       # how wide and tall a square is
+  chosen::Set{String} = Set{String}()         # the names of the squares that are chosen
+  last::String = ""                           # the name that the last click or key chose
+  clicked::Tuple{Float64,String} = (0.0, "")  # the last click on a square: when, and its name
+  field::Any = nothing                        # the text field over the grid
+  wide::Float64 = 0.0                         # how wide the grid is
+  placed::Int = 0                             # how many of the folder's photos are known to say where they were taken
+  spots::Dict{String,Any} = Dict{String,Any}()   # the latitude and the longitude of each photo that shows and says where it was taken, by its name
+  map_asked::Any = nothing                    # how wide the map is, and since when
+  pins::Vector{Tuple{String,Float64,Float64}} = Tuple{String,Float64,Float64}[]   # each dot of the map as it was last drawn: its photo, and where it is on the map
+end
+
+open!(e, d::GridDirectory; record=true) = (open!(e, string(d.path); record); go_folder!(e, string(d.path)))
+page_view(e, d::GridDirectory) = (path = string(d.path); node!(() -> TilesView(path=path, days=d isa ScreenshotsDirectory), e, (:tiles, path)))
+page_fills(e, ::GridDirectory) = true
+
+const TILE_SIDE = 140.0      # the least that a square is wide and tall
+const TILE_GAP = 6.0         # between two squares
+const TILE_HEAD_H = 36.0     # how tall the words over a group are
+const TILES_HEAD_H = 118.0   # how tall the part over the grid is: the folder's name, and the field
+const TILE_PIXELS = 320      # how many pixels the small picture of a file has along its longer side
+const TILES_KEPT = 400       # how many small pictures stay in memory
+
+"Read the folder of the grid `v` again, 2 seconds after it was last read"
+tiles_read!(e, v::TilesView) = begin
+  time() - v.read < 2 && return
+  v.read = time()
+  names = try
+    v.problem = ""
+    readdir(v.path)
+  catch
+    v.problem = "Ladder can't read this folder."
+    String[]
+  end
+  tiles = Tile[]
+  for n in names
+    (n == ".DS_Store" || n == ".localized" || (!e.hidden && ishidden(n))) && continue
+    path = joinpath(v.path, n)
+    st = try stat(path) catch; continue end
+    ext = lowercase(splitext(n)[2])
+    # A folder that the Finder shows as one file, like the library of the Photos app, is a file here too
+    kind = isdir(st) ? (isempty(ext) ? :folder : :other) : ext in PICTURES || ext in MAC_PICTURES || ext in VIDEOS ? :picture : :other
+    push!(tiles, Tile(name=n, path=path, kind=kind, when=st.mtime))
+  end
+  v.tiles = tiles
+  intersect!(v.chosen, names)
+  nothing
+end
+
+"What's typed in the field over the grid `v`, in small letters"
+tiles_query(v::TilesView) = v.field === nothing ? "" : lowercase(strip(v.field.text))
+
+"""
+Lay the squares of the grid `v` out in a space `wide` wide: the folders, then
+the pictures in groups by when they changed, the newest first, then the other
+files. Each line is the words over a group or one row of squares.
+"""
+tiles_lay!(v::TilesView, wide) = begin
+  query = tiles_query(v)
+  # The words of more pictures can have been read since the last time
+  key = (v.tiles, wide, query, isempty(query) ? 0 : Mac.version[], v.placed)
+  v.made !== nothing && v.made[1] === key[1] && v.made[2:5] == key[2:5] && return
+  v.made = key
+  v.wide = wide
+  cols = max(1, floor(Int, (wide + TILE_GAP) / (TILE_SIDE + TILE_GAP)))
+  v.side = (wide - TILE_GAP * (cols - 1)) / cols
+  shown = isempty(query) ? v.tiles : filter(t -> occursin(query, lowercase(t.name)) || tile_says(t, query), v.tiles)
+  lines, tops, y = Any[], Float64[], 0.0
+  group(words, tiles) = begin
+    isempty(tiles) && return
+    push!(lines, words); push!(tops, y); y += TILE_HEAD_H
+    for row in Iterators.partition(tiles, cols)
+      push!(lines, collect(row)); push!(tops, y); y += v.side + TILE_GAP
+    end
+  end
+  pictures = sort!(filter(t -> t.kind == :picture, shown), by=t -> -t.when, alg=MergeSort)
+  # The photos that say where they were taken have a map, over everything else
+  empty!(v.spots)
+  for t in pictures
+    kept = get(TILE_PLACES, t.path, nothing)
+    kept !== nothing && kept[1] == t.when && kept[2] !== nothing && (v.spots[t.name] = kept[2])
+  end
+  if !isempty(v.spots)
+    n = length(v.spots)
+    push!(lines, n == 1 ? "Where 1 photo was taken" : "Where $(commas(n)) photos were taken"); push!(tops, y); y += TILE_HEAD_H
+    push!(lines, :map); push!(tops, y); y += TILES_MAP_H + 2TILE_GAP
+  end
+  group("Folders", sort!(filter(t -> t.kind == :folder, shown), by=t -> lowercase(t.name)))
+  words(t) = v.days ? Mac.date_name(t.when) : Mac.month_name(t.when)
+  i = 1
+  while i <= length(pictures)
+    j = i
+    while j < length(pictures) && words(pictures[j+1]) == words(pictures[i])
+      j += 1
+    end
+    group(words(pictures[i]), pictures[i:j])
+    i = j + 1
+  end
+  group("Other files", sort!(filter(t -> t.kind == :other, shown), by=t -> lowercase(t.name)))
+  v.lines, v.tops, v.tall = lines, tops, y
+  nothing
+end
+
+"True when the picture `t` shows the words `query`. A picture whose words macOS hasn't read yet is read soon, and it's false until then."
+tile_says(t::Tile, query) = begin
+  (t.kind == :picture && lowercase(splitext(t.name)[2]) in (PICTURES..., MAC_PICTURES...)) || return false
+  text = Mac.words(t.path, t.when)
+  text !== nothing && occursin(query, text)
+end
+
+"The squares of the grid `v` in the order that they show"
+tiles_shown(v::TilesView) = Tile[t for l in v.lines if l isa Vector for t in l]
+
+"The small picture of each file of a grid, by its path: when the file had changed, the picture's key or nothing, and when it last showed"
+const TILE_PICTURES = Dict{String,Tuple{Float64,Any,Float64}}()
+
+"""
+The small picture of the file `t` of a grid: the picture itself, or the
+Finder's icon for a folder or another file. It's nothing until it's made.
+`budget` is how many more this frame can make. The pictures that haven't
+shown for the longest are forgotten when there are more than `TILES_KEPT`.
+"""
+tile_picture(e, t::Tile, budget) = begin
+  kept = get(TILE_PICTURES, t.path, nothing)
+  if kept !== nothing && kept[1] == t.when
+    TILE_PICTURES[t.path] = (kept[1], kept[2], time())
+    return kept[2]
+  end
+  budget[] > 0 || (redraw_in!(e, 0); return nothing)
+  budget[] -= 1
+  key = t.kind == :picture ? something(thumbnail(t.path, TILE_PIXELS), finder_icon(t.path, 128), Some(nothing)) :
+                             something(finder_icon(t.path, 128), Some(nothing))
+  if length(TILE_PICTURES) >= TILES_KEPT
+    old = sort!(collect(TILE_PICTURES), by=p -> p[2][3])[1:TILES_KEPT÷4]
+    for (path, (_, k, _)) in old
+      # An icon is small and shared with the lists, so only a picture of a file's own is forgotten
+      k isa String && startswith(k, "thumbnail") && forget_picture(k)
+      delete!(TILE_PICTURES, path)
+    end
+  end
+  TILE_PICTURES[t.path] = (t.when, key, time())
+  key
+end
+
+"One square of the grid `v`: a picture fills it, and a folder or another file has its icon with its name under it"
+tile_box(v::TilesView, e, t::Tile, budget) = begin
+  s = v.side
+  chosen = t.name in v.chosen
+  key = tile_picture(e, t, budget)
+  inner = s - 6
+  face = if t.kind == :picture && key !== nothing
+    # The picture covers the square, and what doesn't fit is cut off at two sides
+    shape = image_aspect(key)
+    wide, tall = shape >= 1 ? (inner * shape, inner) : (inner, inner / shape)
+    # The picture keeps its size in the square, which is smaller, and the square cuts it
+    Stack(fixed(px(inner)), height(px(inner)), Alignment.Start, clip=true,
+      Image(key, width(min=px(wide), preferred=px(wide)), height(min=px(tall), preferred=px(tall)),
+            offset_x=px((inner - wide) / 2), offset_y=px((inner - tall) / 2)))
+  elseif t.kind == :picture
+    Box(fixed(px(inner)), height(px(inner)), radius(5px), background(colours.chip))
+  else
+    icon = 0.5inner
+    # A name that's too long for the square starts at its left edge, so that its start shows
+    long = num(measure(Face(SANS, "", 12px, colours.ink, false), t.name)) > inner - 12
+    Column(fixed(px(inner)), height(px(inner)), radius(5px), child_gap=8px, clip=true, justify=Alignment.Center,
+           background(chosen ? colours.active : colours.chip),
+      key === nothing ? Icon(t.kind == :folder ? "folder" : file_icon(t.path), size=px(0.4inner), color=colours.dim) :
+                        Image(key, fixed(px(icon)), height(px(icon))),
+      Row(fixed(px(inner - 12)), height(18px), clip=true, justify=long ? Alignment.Start : Alignment.Center, Box(label(t.name, 12px))))
+  end
+  Box(fixed(px(s)), height(px(s)), radius(7px), background(chosen ? colours.accent : clear), face)
+end
+
+"Where each photo of a grid was taken, by its path: when its file had changed, and its latitude and longitude, or nothing when the file doesn't say"
+const TILE_PLACES = Dict{String,Tuple{Float64,Any}}()
+# What reads where a photo was taken. A test puts a function of its own here.
+const TILE_PLACER = Ref{Function}(photo_place)
+const TILES_MAP_H = Float64(Maps.TALL)   # how tall the map over a grid is
+
+"""
+Read where the photos of the grid `v` were taken, no more than 40 files in a
+frame, so that a folder of thousands of photos doesn't hold the window up. A
+folder of screenshots isn't read: a screenshot has no place.
+"""
+tiles_places!(e, v::TilesView) = begin
+  v.days && return
+  budget, placed = 40, 0
+  for t in v.tiles
+    t.kind == :picture || continue
+    kept = get(TILE_PLACES, t.path, nothing)
+    if kept === nothing || kept[1] != t.when
+      budget > 0 || (redraw_in!(e, 0); continue)
+      budget -= 1
+      length(TILE_PLACES) > 50_000 && empty!(TILE_PLACES)
+      kept = TILE_PLACES[t.path] = (t.when, try TILE_PLACER[](t.path) catch; nothing end)
+    end
+    kept[2] === nothing || (placed += 1)
+  end
+  v.placed = placed
+  nothing
+end
+
+"""
+The map over the grid `v`, with a dot where each photo that shows was taken.
+It's as wide as the grid, to the hundred px below, so a window that changes
+its size asks Apple's maps for few pictures. The picture is asked for when the
+width has stayed for half a second.
+"""
+tiles_map(v::TilesView, e) = begin
+  wide = max(300, 100 * floor(Int, v.wide / 100))
+  tall = round(Int, TILES_MAP_H)
+  a = Maps.around(collect(values(v.spots)), 15, wide, tall)
+  zoom = Maps.fit(a.zoom, wide, tall)
+  centre = Maps.rounded(a.centre)
+  (v.map_asked === nothing || v.map_asked[1] != wide) && (v.map_asked = (wide, time()))
+  stayed = time() - v.map_asked[2] >= 0.5
+  # A window that isn't on a screen, like a test's, doesn't start the program that asks Apple's maps
+  runs = on_screen(v) || Maps.HELPER[] !== Maps.run_program
+  ask(start) = Maps.picture!(media_dir(), centre, zoom, wide, tall, dark_page(); start)
+  p = ask(runs && stayed)
+  # A file that was cut short is no picture. It's taken away, and made again later.
+  p.state == :there && !whole_picture(p.file) && (Maps.spoiled!(p.file); p = ask(false))
+  stayed || redraw_in!(e, 0.5)
+  isfinite(p.wait) && redraw_in!(e, max(p.wait, 0.05))
+  key = p.state == :there ? picture(p.file) : nothing
+  empty!(v.pins)
+  for (name, at) in v.spots
+    x, y = Maps.point(at, centre, zoom, wide, tall)
+    (0 <= x <= wide && 0 <= y <= tall) && push!(v.pins, (name, x, y))
+  end
+  # The dots of the photos that are chosen are bigger, and drawn last, over the others
+  sort!(v.pins, by=pin -> pin[1] in v.chosen)
+  dot((name, x, y)) = (r = name in v.chosen ? 8.0 : 5.5;
+    Box(fixed(px(2r)), height(px(2r)), radius(px(r)), background(colours.accent), border(2px, :solid, RGBA(1, 1, 1, 0.95)),
+        offset_x=px(x - r), offset_y=px(y - r)))
+  face = key === nothing ?
+    Box(fixed(px(wide)), height(px(tall)), background(colours.chip),
+        Box(label(isempty(p.problem) ? (runs ? "Drawing the map…" : "The map shows in a window that's on the screen.") : p.problem, 13px, color=colours.dim))) :
+    Image(key, fixed(px(wide)), height(px(tall)))
+  Stack(fixed(px(wide)), height(px(tall)), Alignment.Start, clip=true, name="Map", face, map(dot, v.pins)...)
+end
+
+"The photo whose dot on the map of the grid `v` the mouse is over, or nothing"
+tiles_pin_under(v::TilesView) = begin
+  w = window_of(v)
+  r = rect(v)
+  i = findfirst(==(:map), v.lines)
+  (w === nothing || r === nothing || i === nothing || !ishovered(v)) && return nothing
+  x, y = num(w.mouse[1]) - num(r.left), num(w.mouse[2]) - num(r.top) - TILES_HEAD_H - v.tops[i]
+  best, least = nothing, 10.0
+  for (name, px_, py_) in v.pins
+    d = hypot(px_ - x, py_ - y)
+    d <= least && ((best, least) = (name, d))
+  end
+  best
+end
+
+"Scroll the page so that the square of the photo called `name` shows in the grid `v`"
+tiles_reveal!(v::TilesView, name) = begin
+  e = editor(v)
+  i = findfirst(l -> l isa Vector && any(t -> t.name == name, l), v.lines)
+  i === nothing && return
+  top = page_top(e) + LIVE_GAP + px(TILES_HEAD_H + v.tops[i])
+  scroll_into_view!(e.scroll, top - px(TILE_HEAD_H), top + px(v.side + 2TILE_GAP))
+  nothing
+end
+
+"Line `i` of the grid `v`: the words over a group, the map, or a row of squares"
+tiles_line(v::TilesView, e, i, budget) = begin
+  l = v.lines[i]
+  l === :map && return Row(width(grow=grow), height(px(TILES_MAP_H + 2TILE_GAP)), Alignment.Start, tiles_map(v, e))
+  l isa Vector || return Row(width(grow=grow), height(px(TILE_HEAD_H)), padding(0px, 0px, 8px, 2px), Alignment.End,
+                             Box(label(l, 13px, color=colours.dim, weight="Semibold")))
+  Row(width(grow=grow), height(px(v.side + TILE_GAP)), Alignment.Start, child_gap=px(TILE_GAP), [tile_box(v, e, t, budget) for t in l]...)
+end
+
+"The text field over the grid `v`, to leave only the pictures that have what's typed, in their names or in the words that they show"
+tiles_field(v::TilesView) = begin
+  v.field === nothing && (v.field = own!(v, TextInput(placeholder="Find by name, or by words in a picture", font_family=SANS, font_size=13px,
+                                                      look=(_, text) -> Row(width(grow=grow), height(grow=grow), clip=true, text))))
+  v.field
+end
+
+describe(v::TilesView) = begin
+  e = editor(v)
+  tiles_read!(e, v)
+  redraw_in!(e, 2)   # the folder is read again, so a new picture gets its square
+  wide = max(num(e.width), TILE_SIDE)
+  tiles_places!(e, v)
+  # With nothing typed, nobody asks for the words of the pictures that still wait
+  isempty(tiles_query(v)) && v.made !== nothing && !isempty(v.made[3]) && Mac.stop_reading!()
+  tiles_lay!(v, wide)
+  waits = isempty(tiles_query(v)) ? 0 : Mac.reading()
+  waits > 0 && redraw_in!(e, 0.2)   # the grid fills as the pictures are read
+  n = length(v.lines)
+  _, high = window_size(e)
+  # Only the lines that are in the window are made, and one more above and below
+  from = num(e.scroll.offset) - num(page_top(e)) - num(LIVE_GAP) - TILES_HEAD_H
+  lo = clamp(searchsortedlast(v.tops, from) - 1, 0, n)
+  hi = clamp(searchsortedlast(v.tops, from + num(high)) + 1, lo, n)
+  above = lo == 0 ? 0.0 : v.tops[lo+1]
+  below = hi == n ? 0.0 : v.tall - v.tops[hi+1]
+  budget = Ref(3)
+  pictures, folders = count(t -> t.kind == :picture, v.tiles), count(t -> t.kind == :folder, v.tiles)
+  shown = length(tiles_shown(v))
+  about = join([(pictures == 1 ? "1 picture" : "$(commas(pictures)) pictures");
+                (folders == 0 ? String[] : [folders == 1 ? "1 folder" : "$folders folders"]);
+                (isempty(tiles_query(v)) ? String[] : ["$shown with “$(strip(v.field.text))”"]);
+                (waits == 0 ? String[] : [waits == 1 ? "reading the words of 1 more picture" : "reading the words of $waits more pictures"]);
+                (isempty(v.chosen) ? String[] : ["$(length(v.chosen)) chosen"])], "  ·  ")
+  Column(fixed(px(wide)), Alignment.Start, name="Pictures",
+    Column(width(grow=grow), height(px(TILES_HEAD_H)), Alignment.Start, clip=true,
+      page_title(v.days ? "camera" : "images", basename(v.path), about),
+      Row(padding(8px, 0px),
+        Row(fixed(320px), height(28px), padding(9px, 0px), radius(6px), child_gap=7px, background(colours.hover),
+          Icon("search", size=12px, color=colours.dim), tiles_field(v)))),
+    (isempty(v.problem) ? () : (page_note(v.problem),))...,
+    (isempty(v.problem) && n == 0 ? (page_note(isempty(v.tiles) ? "This folder is empty." : waits > 0 ? "No name has that in it. Ladder is still reading the pictures." :
+                                               "No name has that in it, and no picture shows it."),) : ())...,
+    spacer(px(above)), [tiles_line(v, e, i, budget) for i in lo+1:hi]..., spacer(px(below)))
+end
+
+cursor(::TilesView) = :arrow
+
+"The square of the grid `v` that the mouse is over, or nothing"
+tile_under(v::TilesView) = begin
+  w = window_of(v)
+  r = rect(v)
+  (w === nothing || r === nothing || !ishovered(v)) && return nothing
+  x, y = num(w.mouse[1]) - num(r.left), num(w.mouse[2]) - num(r.top) - TILES_HEAD_H
+  i = searchsortedlast(v.tops, y)
+  (1 <= i <= length(v.lines) && v.lines[i] isa Vector) || return nothing
+  (y - v.tops[i] <= v.side && x >= 0) || return nothing
+  k = floor(Int, x / (v.side + TILE_GAP)) + 1
+  (k <= length(v.lines[i]) && x - (k - 1) * (v.side + TILE_GAP) <= v.side) ? v.lines[i][k] : nothing
+end
+
+"Show the squares of the grid `v` that are called `names`: a picture in the page, and a folder as a grid of its own"
+tiles_open!(v::TilesView, names) = (e = editor(v); foreach(n -> show_path!(e, joinpath(v.path, n)), names); nothing)
+
+"Move the squares of the grid `v` that are called `names` to the Trash, and keep the keyboard on the grid"
+tiles_trash!(v::TilesView, names) = begin
+  e = editor(v)
+  foreach(n -> trash!(e, joinpath(v.path, n)), names)
+  v.read = 0.0
+  e.buf.path == v.path && focus(v)
+  nothing
+end
+
+"The names of the squares of the grid `v` that are chosen, in the order that they show"
+tiles_chosen(v::TilesView) = String[t.name for t in tiles_shown(v) if t.name in v.chosen]
+
+onkey(v::TilesView, ev::KeyPress{Keys.mouse_left}) = begin
+  w = ev.window
+  focus(v)
+  # A click on a dot of the map chooses its photo, and the grid scrolls to it
+  pin = tiles_pin_under(v)
+  if pin !== nothing
+    v.chosen, v.last, v.clicked = Set([pin]), pin, (0.0, "")
+    tiles_reveal!(v, pin)
+    return handled
+  end
+  t = tile_under(v)
+  t === nothing && (empty!(v.chosen); v.clicked = (0.0, ""); return handled)
+  cmd, shift = Keys.cmd in w.keys, Keys.shft in w.keys
+  at, last = v.clicked
+  if time() - at < 0.4 && last == t.name && !cmd && !shift
+    v.clicked = (0.0, "")
+    tiles_open!(v, [t.name])
+    return handled
+  end
+  if cmd
+    t.name in v.chosen ? delete!(v.chosen, t.name) : push!(v.chosen, t.name)
+  elseif shift && !isempty(v.last)
+    all = tiles_shown(v)
+    a, b = findfirst(x -> x.name == v.last, all), findfirst(x -> x.name == t.name, all)
+    a === nothing || foreach(x -> push!(v.chosen, x.name), all[min(a, b):max(a, b)])
+  else
+    v.chosen = Set([t.name])
+  end
+  v.last = t.name
+  v.clicked = cmd || shift ? (0.0, "") : (time(), t.name)
+  handled
+end
+
+onkey(v::TilesView, ev::KeyPress{Keys.mouse_right}) = begin
+  focus(v)
+  t = tile_under(v)
+  t === nothing && return handled
+  t.name in v.chosen || (v.chosen = Set([t.name]); v.last = t.name)
+  e = editor(v)
+  names = tiles_chosen(v)
+  items = length(names) > 1 ? ["Open", "-", "Move to Trash"] : ["Open", "-", file_menu(t.path)...]
+  act(i) = begin
+    item = get(items, i, "")
+    item == "Open" ? tiles_open!(v, names) : item == "Move to Trash" ? tiles_trash!(v, names) : file_act!(e, t.path, item)
+    nothing
+  end
+  system_menu(ev.window, items, act) || drawn_menu!(ev.window, items, act)
+  handled
+end
+
+"Choose the square of the grid `v` that's `by` squares on from the one that was chosen last, and scroll so that it shows"
+tiles_step!(v::TilesView, by, more=false) = begin
+  e = editor(v)
+  all = tiles_shown(v)
+  isempty(all) && return
+  from = findfirst(t -> t.name == v.last, all)
+  k = from === nothing ? 1 : clamp(from + by, 1, length(all))
+  more || empty!(v.chosen)
+  push!(v.chosen, all[k].name)
+  v.last = all[k].name
+  tiles_reveal!(v, v.last)
+  nothing
+end
+
+onkey(v::TilesView, ev::KeyPress{K}) where K = begin
+  w = ev.window
+  cmd, shift = Keys.cmd in w.keys, Keys.shft in w.keys
+  names = tiles_chosen(v)
+  cols = max(1, floor(Int, (max(num(editor(v).width), TILE_SIDE) + TILE_GAP) / (TILE_SIDE + TILE_GAP)))
+  if (K == Keys.down && cmd) || (K == Keys.enter && !cmd)
+    tiles_open!(v, names)
+  elseif K in (Keys.backspace, Keys.delete) && cmd
+    tiles_trash!(v, names)
+  elseif K == Keys.a && cmd
+    v.chosen = Set(t.name for t in tiles_shown(v))
+  elseif !cmd && K in (Keys.left, Keys.right, Keys.up, Keys.down)
+    tiles_step!(v, K == Keys.left ? -1 : K == Keys.right ? 1 : K == Keys.up ? -cols : cols, shift)
   else
     return nothing   # any other key is the window's, like the one that goes back
   end

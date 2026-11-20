@@ -706,6 +706,20 @@ Ladder.DesktopDirectory
 
 Click an icon to choose it, and click it twice to open it. Hold ⌘ to choose more than one, or drag from the wallpaper to choose the icons in a box. Right-click the wallpaper to choose how the icons are laid out, as you do on the Mac. Sort By keeps them in an order. With None or Snap to Grid, you drag each icon to where you want it, and Ladder keeps its place. Clean Up puts the icons back in the grid. Drop an icon on a folder to move it into that folder. Right-click an icon for the menu of its file. Ladder's layout is its own: macOS doesn't let another app move the icons of the Mac's desktop, so those stay where they are.
 
+Ladder knows some folders by itself, and shows each in its own way:
+
+- **A folder that git keeps**, which is a folder with a `.git` in it. In the list, each file with changes since the last commit has a letter after its name: M for changed lines, A for a file that the next commit adds, U for a file that git doesn't keep yet, and R for a new name. A folder with such a file in it has a dot. A line over the list has the branch and how many files have changes. Click that line to see the repository's page: the files with changes, and the last commits. In a folder that holds repositories, each one has its branch after its name. Ladder only reads from a repository, and never changes it.
+- **A folder of notes**, which is a folder with an `.obsidian` in it. Under the text of each page, "Linked from" lists the pages that link to it. Click the line over the list to see the folder's own page: the pages that changed last, the names that pages link to and that no page has yet, and the pages that no page links to. Click a name with no page to start that page.
+- **Downloads.** The newest file is first, in the groups of days that the Finder has. A file that a browser saved has the site that it came from after its name.
+- **Pictures.** The pictures show as a grid, the newest first, with the month over each group. The folders in it come first. Type in the field over the grid to leave only the pictures that have what you typed, in their names or in the words that they show, like the text of a screenshot. Your Mac reads the words of each picture the first time that you type there, which takes a part of a second for each picture. When photos say where they were taken, as a phone's photos do, a map over the grid has a dot for each one. Click a dot to go to its photo. The folder that your Mac saves screenshots to, and a folder called Screenshots in Pictures, show their pictures by the day.
+- **The Trash.** Your home folder lists it. Each thing has the folder that it was in. Choose one and click Put Back, or press ⌘⌫, to move it back there. Ladder never empties the Trash: "Show in Finder" opens it in the Finder, which does.
+
+In Downloads, Pictures and the Trash, click a line or a picture to choose it, and click it twice to show it. Hold ⌘ or ⇧ to choose more. The arrow keys go from one to the next, Return shows what's chosen, and ⌘⌫ moves it to the Trash. Right-click for the menu of the file.
+
+To show another folder in one of these ways, put a file called `.ladder` in it that ends with a block like the one for a desktop, with `Ladder.NotesDirectory`, `Ladder.DownloadsDirectory`, `Ladder.PicturesDirectory` or `Ladder.ScreenshotsDirectory`.
+
+A zip file shows what it holds, without being unpacked: its folders and files, each file with its size and when it changed. Click a folder to open it, and click a file to see that one file. Ladder doesn't change a file that it shows from a zip file. Click Unpack to unpack the whole file beside itself, as two clicks in the Finder do.
+
 Right-click the page to cut, copy or paste. The menu's Insert item adds a new block where you clicked: a heading, a list, a to-do item, a table, a sheet, a spreadsheet, a diagram, a takeoff, a schedule, a chart, a board, a calendar, a sketch, a live block and more.
 
 A file can start with front matter: lines like `title: Notes` between two lines of `---`. Ladder shows it as a block of its own, and leaves it out of the word count.

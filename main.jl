@@ -1626,12 +1626,77 @@ one that shows now. With `e.ahead` as the `list`, it's the file that
 """
 last_shown(e, list=e.back) = (i = findlast(p -> p != e.buf.path && showable(e, p), list); i === nothing ? nothing : list[i])
 
+"What the arrow that goes back (or forward, with `e.ahead` as `list`) goes to, in words: a line of the file that shows, or a file. It's nothing when there's neither."
+step_words(e, list=e.back) = begin
+  j = jump_list(e)
+  p = place_back(e, list === e.back ? j.back : j.ahead, list)
+  p !== nothing && return "line $(p.caret[1])"
+  to = last_shown(e, list)
+  to === nothing ? nothing : basename(to)
+end
+
+# A jump to another line of the same file, as Go To, Go To Definition, Find
+# Uses and Show Steps make, is a step too. ⌘⌥← goes back to the line that the
+# jump left, with the caret and the scroll as they were, before it goes back
+# to another file. ⌘⌥→ goes to the jump's line again.
+
+"""
+The places of the files that showed that the window of `e` jumped from: `back`
+for ⌘⌥←, and `ahead` for ⌘⌥→. Each has the file's path, where the caret and
+the scroll were, and how many files the list of files to go back to (or
+forward to) had then: a place comes before the files that the list got
+after it.
+"""
+jump_list(e) = get!(() -> (back=Any[], ahead=Any[]), e.nodes, :jumps)
+
+"Where the window of `e` is: its file, its caret, its anchor and how far it's scrolled"
+place_now(e) = begin
+  # While the palette showed a row of its list, the window scrolled to it. The place is where it was before that.
+  was = get(e.nodes, :unpreviewed, nothing)
+  (path=e.buf.path, caret=e.buf.caret, anchor=e.buf.anchor, offset=was isa typeof(e.scroll.offset) ? was : e.scroll.offset)
+end
+
+"Note where the window of `e` is, before it jumps to another line of the file, so ⌘⌥← comes back to it. A new jump ends what ⌘⌥→ would go to."
+note_place!(e) = begin
+  isempty(e.buf.path) && return nothing
+  j = jump_list(e)
+  push!(j.back, (; place_now(e)..., depth=length(e.back)))
+  empty!(j.ahead)
+  empty!(e.ahead)
+  nothing
+end
+
+"The place of the file that shows that a step from the list of files `files` goes to first, from the places `places`, or nothing"
+place_back(e, places, files) = !isempty(places) && last(places).depth == length(files) && last(places).path == e.buf.path ? last(places) : nothing
+
+"Put the window of `e` where it was at the place `p`: its caret, its anchor and its scroll"
+go_place!(e, p) = begin
+  b = e.buf
+  fit(c) = (n = clamp(c[1], 1, length(b.lines)); (n, clamp(c[2], 0, length(b.lines[n]))))
+  b.caret, b.anchor = fit(p.caret), fit(p.anchor)
+  e.scroll.offset = p.offset
+  delete!(e.nodes, :hold)
+  focus(e)
+  redraw_in!(e, 0)
+  nothing
+end
+
 """
 Show the last file of `from` that's still there, and put the file that leaves
 on `to`. A file that was renamed is there under its new name. One that went to
-the Trash is passed over. It's true when there was a file to show.
+the Trash is passed over. It's true when there was a file to show. A jump in
+the file that shows comes first: see `jump_list`.
 """
 step_back!(e, from, to) = begin
+  j = jump_list(e)
+  mine, theirs = from === e.back ? (j.back, j.ahead) : (j.ahead, j.back)
+  p = place_back(e, mine, from)
+  if p !== nothing
+    pop!(mine)
+    push!(theirs, (; place_now(e)..., depth=length(to)))
+    go_place!(e, p)
+    return true
+  end
   while !isempty(from)
     path = pop!(from)
     (path == e.buf.path || !showable(e, path)) && continue
@@ -12619,6 +12684,83 @@ file_checks_tick!(e) = begin
   nothing
 end
 
+# A function with checks over it runs again by itself, a second after you stop
+# typing, in the module that the file's code has: the one that Ladder made
+# when it loaded the file, or when ⌘Return ran code of it. Then its checks run
+# again. Other code runs only when you run it, as code that does something
+# when it runs can do harm. Code that doesn't run yet, like a line that's half
+# typed, leaves the checks as they were.
+
+"How long after the last change to its text a function with checks over it runs again, in seconds"
+const LIVE_WAIT = 1.0
+
+"""
+The expression of `code`, a top part of a file of Julia code, or nothing when
+Julia can't read it or it has more than one. Comments after it are read as
+nothing, which `Meta.parse` doesn't do.
+"""
+part_expr(code::AbstractString) = begin
+  all = try Meta.parseall(code) catch; return nothing end
+  found = [x for x in all.args if !(x isa LineNumberNode)]
+  length(found) == 1 && !Meta.isexpr(found[1], (:error, :incomplete)) ? found[1] : nothing
+end
+
+"True when `ex`, a top part of a file of Julia code, defines a function, with its documentation or without"
+defines_function(ex) = definition_of(ex) !== nothing
+
+"""
+In each frame: a second after the text of a file of Julia code last changed,
+run each function of it that has checks over it, and that changed since it
+last ran. See "checks in a file of Julia code".
+"""
+live_checks_tick!(e) = begin
+  julia_file(e) || return nothing
+  b = e.buf
+  s = get(e.nodes, :file_checks, nothing)
+  (s === nothing || isempty(s.found)) && return nothing
+  key = page_key(b.path)
+  mod = something(loaded_module(key), Some(get(PAGE_MODULES, key, nothing)))
+  mod === nothing && return nothing
+  live = get(e.nodes, :live_checks, nothing)
+  # The module has each function as the window had it when the module was first seen, or as it last ran since
+  if live === nothing || live.mod !== mod
+    e.nodes[:live_checks] = (mod=mod, version=b.version, typed=b.version, changed=0.0,
+                             start=Set(t for (_, t) in part_texts(b.lines)), ran=Dict{String,String}())
+    return nothing
+  end
+  live.version == b.version && return nothing
+  # Each change starts the wait again
+  if live.typed != b.version
+    e.nodes[:live_checks] = (; live..., typed=b.version, changed=time())
+    redraw_in!(e, LIVE_WAIT)
+    return nothing
+  end
+  wait = LIVE_WAIT - (time() - live.changed)
+  wait > 0 && (redraw_in!(e, wait); return nothing)
+  # The first line of code under each check is a line of the function that it checks
+  under = Set(code_start(b.lines, i) for (i, _) in s.found)
+  ran = 0
+  for (first, code) in part_texts(b.lines)
+    any(l -> first <= l <= first + count('\n', code), under) || continue
+    def = definition_of(part_expr(code))
+    def === nothing && continue
+    # The function is known by its first line, like `twice(x)`
+    key = string(def_call(def))
+    (haskey(live.ran, key) ? live.ran[key] == code : code in live.start) && continue
+    try
+      # Blank lines before the code give each of its lines the number that it has in the file
+      Base.include_string(mod, "\n"^(first - 1) * code, String(b.path))
+      live.ran[key] = code
+      ran += 1
+    catch
+      # Code that doesn't run yet leaves the checks as they were
+    end
+  end
+  e.nodes[:live_checks] = (; live..., version=b.version)
+  ran > 0 && (CODE_RUNS[] += 1; redraw_windows!())   # the checks run again
+  nothing
+end
+
 "What a check of a file says after its dot: nothing when it passed, the values that it compared, or why it stopped"
 check_note(r::Checked, loaded::Bool) = begin
   r.went == :pass && return ""
@@ -12628,12 +12770,21 @@ check_note(r::Checked, loaded::Bool) = begin
   length(note) > 100 ? first(note, 99) * "…" : note
 end
 
-"Draw a dot at the end of each line of a file of Julia code that's a check, green or red, and what a check that failed found. The page's text is at `ui`."
+"""
+Draw a dot at the end of each line of a file of Julia code that's a check,
+green or red, and what a check that failed found. While the mouse or the
+caret is on a check's line, buttons follow: Show Steps, and Fix It for one
+that fails. The page's text is at `ui`.
+"""
 mark_checks(ctx, e, ui) = begin
+  buttons = get!(() -> Any[], e.nodes, :check_buttons)
+  empty!(buttons)
   s = get(e.nodes, :file_checks, nothing)
   (s === nothing || isempty(s.found) || s.version != e.buf.version) && return nothing
   rows = Dict(s.found)
   loaded = loaded_module(page_key(e.buf.path)) !== nothing
+  w = window_of(e)
+  mouse = w === nothing ? -1.0 : num(w.mouse[2])
   for it in e.layout[e.shown]
     f = it.content
     f isa Flow || continue
@@ -12648,8 +12799,34 @@ mark_checks(ctx, e, ui) = begin
     x = num(ui.left + right) + 10
     round_box(ctx, x, mid - 4, 8, 8, 4; fill=check_colour(r))
     note = check_note(r, loaded)
-    isempty(note) || write_ink(ctx, note, x + 14, mid + 4, Face(SANS, "", px(round(num(f.size) * 0.85)), check_colour(r), false))
+    face = Face(SANS, "", px(round(num(f.size) * 0.85)), check_colour(r), false)
+    isempty(note) || write_ink(ctx, note, x + 14, mid + 4, face)
+    # Buttons for the check that the mouse or the caret is on: see "a check that fails"
+    top = num(ui.top + it.top)
+    (e.buf.caret[1] == it.first || top <= mouse < top + num(it.tall)) || continue
+    left = x + 14 + (isempty(note) ? 0 : num(measure(face, note)) + 10)
+    small = Face(SANS, "Medium", px(round(num(f.size) * 0.75)), colours.dim, false)
+    for (action, words) in ((:steps, "Show Steps"), (:fix, "Fix It"))
+      (action == :fix && (r.went == :pass || needs_run(e, r))) && continue
+      across = num(measure(small, words)) + 14
+      round_box(ctx, left, mid - 9, across, 18, 5; fill=colours.hover)
+      write_ink(ctx, words, left + 7, mid + 4, small)
+      push!(buttons, (action, (left, mid - 9, across, 18.0), FileCheck(it.first, code, r.went)))
+      left += across + 6
+    end
   end
+  nothing
+end
+
+"Draw the window again when the mouse at `pos` moves onto the line of a check of a file of Julia code, or off it, for the buttons beside a check: see `mark_checks`"
+hover_check!(e, pos) = begin
+  s = get(e.nodes, :file_checks, nothing)
+  (julia_file(e) && s !== nothing && !isempty(s.found) && !isempty(e.layout)) || return nothing
+  i = locate(e, pos)[1]
+  on = any(((l, _),) -> l == i, s.found) ? i : 0
+  get(e.nodes, :check_hover, 0) == on && return nothing
+  e.nodes[:check_hover] = on
+  redraw_in!(e, 0)
   nothing
 end
 
@@ -12681,6 +12858,7 @@ next_check!(e) = begin
   lines = first.(isempty(failing) ? found : failing)
   isempty(lines) && return nothing
   i = something(findfirst(>(e.buf.caret[1]), lines), 1)
+  note_place!(e)   # ⌘⌥← comes back here
   show_line!(e, lines[i])
   e.nodes[:hold] = (max(lines[i] - 3, 1), 24px - PAGE_TOP)
   nothing
@@ -22552,6 +22730,7 @@ draw(ctx, size, ui::ConcreteRect, d::Document) = begin
   underline_scrubs(ctx, e, ui)
   mark_clickable(ctx, e, ui)
   mark_checks(ctx, e, ui)
+  mark_steps(ctx, e, ui)
   ring_part(ctx, e, ui)
   annotate(ctx, e, ui)
   glow_bracket_pair(ctx, e, ui)
@@ -23257,7 +23436,7 @@ end
 
 onkey(d::Document, ev::KeyPress{Keys.mouse_left}) = press!(editor(d), ev.window.mouse)
 onkey(p::Page, ev::KeyPress{Keys.mouse_left}) = press!(editor(p), ev.window.mouse)
-onmouse(d::Document, ev::MouseMove) = drag!(editor(d), ev.position)
+onmouse(d::Document, ev::MouseMove) = (Base.invokelatest(hover_check!, editor(d), ev.position); drag!(editor(d), ev.position))
 onmouse(p::Page, ev::MouseMove) = drag!(editor(p), ev.position)
 
 # --- editing -----------------------------------------------------------------------------
@@ -24671,8 +24850,8 @@ const COMMAND_GROUPS = [
     Command(:save, "Save the file", :window, "cmd+s", (e, w, _) -> save_page!(e)),
     Command(:open, "Find a file by name", :window, "cmd+o", (e, w, _) -> open_finder!(e)),
     Command(:commands, "Show the command palette, to run a command by its name", :window, "cmd+shift+p", (e, w, _) -> toggle_palette!(e)),
-    Command(:back, "Go back to the file that showed before", :window, "cmd+opt+left", (e, w, _) -> go_back!(e)),
-    Command(:forward, "Go forward again, to the file that you went back from", :window, "cmd+opt+right", (e, w, _) -> go_forward!(e)),
+    Command(:back, "Go back to the line or the file that showed before", :window, "cmd+opt+left", (e, w, _) -> go_back!(e)),
+    Command(:forward, "Go forward again, to the line or the file that you went back from", :window, "cmd+opt+right", (e, w, _) -> go_forward!(e)),
     Command(:print, "Print the page", :window, "cmd+p", (e, w, _) -> print!(e, w)),
     Command(:export, "Export the page as HTML", :window, "cmd+shift+e", (e, w, _) -> export_html!(e, w)),
     Command(:slides, "Show the page as slides, or as a page again", :window, "ctrl+cmd+shift+p", (e, w, _) -> slides!(e)),
@@ -25384,11 +25563,11 @@ tip(b::ToolButton) = begin
   b.action == :marks && return marking(e) ? "Hide $(whose(e)) changes" : "Show $(whose(e)) changes"
   b.action == :hidden && return (e.hidden ? "Leave out hidden files" : "Show hidden files") * hint(e, :hidden_files)
   if b.action == :back
-    to = last_shown(e)
-    return to === nothing ? "No file to go back to" : "Back to $(basename(to))" * hint(e, :back)
+    to = step_words(e)
+    return to === nothing ? "No file to go back to" : "Back to $to" * hint(e, :back)
   elseif b.action == :forward
-    to = last_shown(e, e.ahead)
-    return to === nothing ? "No file to go forward to" : "Forward to $(basename(to))" * hint(e, :forward)
+    to = step_words(e, e.ahead)
+    return to === nothing ? "No file to go forward to" : "Forward to $to" * hint(e, :forward)
   end
   b.action == :job && return job_tip(e)
   haskey(BUTTONS, b.action) && return BUTTONS[b.action].tip(e)
@@ -25638,8 +25817,8 @@ go back and forward, when they have no file to go to, and one that code from
 the startup page added, when that code says so
 """
 off(b::ToolButton) = (b.action == :job && (!Centient.available() || making(editor(b)))) ||
-                     (b.action == :back && last_shown(editor(b)) === nothing) ||
-                     (b.action == :forward && last_shown(editor(b), editor(b).ahead) === nothing) ||
+                     (b.action == :back && step_words(editor(b)) === nothing) ||
+                     (b.action == :forward && step_words(editor(b), editor(b).ahead) === nothing) ||
                      # A button that code from the startup page added says so itself
                      (haskey(BUTTONS, b.action) && BUTTONS[b.action].off(editor(b)))
 
@@ -28276,8 +28455,8 @@ Markdown. The palette leaves out a command that has none.
 works_here(e, ::Val) = true
 works_here(e, ::Union{Val{:bold},Val{:italic},Val{:print},Val{:export},Val{:slides},Val{:insert}}) = e.buf.view == :markdown
 works_here(e, ::Val{:save}) = writes(e.buf)
-works_here(e, ::Val{:back}) = !isempty(e.back)
-works_here(e, ::Val{:forward}) = !isempty(e.ahead)
+works_here(e, ::Val{:back}) = !isempty(e.back) || step_words(e) !== nothing
+works_here(e, ::Val{:forward}) = !isempty(e.ahead) || step_words(e, e.ahead) !== nothing
 works_here(e, ::Union{Val{:find_next},Val{:find_last}}) = !isempty(found(e))
 # A comment is made of a line of code: a file of code, or a line in a code block of a page
 works_here(e, ::Val{:comment}) = begin
@@ -29165,11 +29344,16 @@ palette_run!(e, w, p::CommandPalette) = begin
   args = palette_args(e, w, sig, said)
   named = Pair{Symbol,Any}[name => x for (name, x) in p.keywords]
   # The palette closes first, so that the function finds the page with the keyboard, and can show something of its own.
-  # A row that the window showed stays, as the command runs with it.
+  # A row that the window showed stays, as the command runs with it. A jump notes the place from before that: see `place_now`.
+  p.before === nothing || (e.nodes[:unpreviewed] = p.before)
   p.before = nothing
   close_palette!(e)
   try
-    value = Base.invokelatest(p.command.call, args...; named...)
+    value = try
+      Base.invokelatest(p.command.call, args...; named...)
+    finally
+      delete!(e.nodes, :unpreviewed)
+    end
     # What a command of the page's own gave back shows under the top bar
     if p.command.kind == :page && value !== nothing
       said = first(split(value isa AbstractString ? value : value_text(value, parentmodule(p.command.call)), '\n'))
@@ -34570,6 +34754,7 @@ describe_window(e::Editor) = begin
   code_tick!(e)
   ask_tick!(e)
   about_tick!(e)
+  live_checks_tick!(e)
   file_checks_tick!(e)
   rename_tick!(e)
   line_tick!(e)
@@ -35247,6 +35432,7 @@ definition!(e, at::Pos) = begin
     place = (settled_line(place, e.buf.lines, here[2]), 0)
   end
   place == at && return true
+  note_place!(e)   # ⌘⌥← comes back here
   e.buf.caret = e.buf.anchor = place
   focus(e)
   touch!(e)
@@ -35527,6 +35713,7 @@ shown_at(e, u::Use) = !isempty(e.buf.path) && page_key(e.buf.path) == u.file ? s
 "Find each place that uses the name at the caret, and go to the one that you choose: in this window, or in a window beside for another file"
 find_uses!(e, place::Use) = begin
   if !isempty(e.buf.path) && page_key(e.buf.path) == place.file
+    note_place!(e)   # ⌘⌥← comes back here
     show_line!(e, place.line)
     e.buf.caret = e.buf.anchor = (place.line, place.col)
     e.nodes[:hold] = (max(place.line - 3, 1), 24px - PAGE_TOP)
@@ -35563,6 +35750,7 @@ sidenote(h::HeadingLine) = isempty(h.what) ? "line $(h.line)" : "$(h.what) · li
 # Two methods, so the chip takes a heading or a number, and the type of what's said chooses the method
 "Put the caret on a heading of the page, or on a place of a file of code, and bring it in sight"
 go_to!(e, heading::HeadingLine) = begin
+  note_place!(e)   # ⌘⌥← comes back here
   show_line!(e, heading.line)
   # A place of a file of code goes near the top of the window, with a few lines over it
   e.buf.view == :code && (e.nodes[:hold] = (max(heading.line - 3, 1), 24px - PAGE_TOP))
@@ -35572,6 +35760,7 @@ end
 go_to!(e, line::Integer) = begin
   n = length(e.buf.lines)
   1 <= line <= n || error("The page has $n line$(n == 1 ? "" : "s").")
+  note_place!(e)   # ⌘⌥← comes back here
   show_line!(e, Int(line))
   nothing
 end
@@ -35902,17 +36091,19 @@ tool_input(t::CodePicker, w, ::KeyPress{Keys.mouse_left}) = begin
       left <= x <= left + wide && top <= y <= top + tall && (t.swallow = true; return true)
     end
   end
-  # A click on the label that says what an agent changed shows the change
+  # A click on the label of an agent stops it while it works, and shows the change that it made after
   a = t.asked
-  if a !== nothing && a.ended > 0 && a.changed && a.label !== nothing
+  if a !== nothing && (a.ended == 0 || a.changed) && a.label !== nothing
     x, y = num(w.mouse[1]), num(w.mouse[2])
     left, top, wide, tall = a.label
     if left <= x <= left + wide && top <= y <= top + tall
       t.swallow = true
-      show_change!(t.editor)
+      a.ended == 0 ? stop_agent!(t.editor) : show_change!(t.editor)
       return true
     end
   end
+  # A button of a check of a file of Julia code, like Fix It: see "a check that fails"
+  check_button!(t.editor, w) && (t.swallow = true; return true)
   picks(t, w) || return false
   found = code_under(w)
   t.swallow = true   # the window's parts see neither the press nor the release
@@ -35920,9 +36111,13 @@ tool_input(t::CodePicker, w, ::KeyPress{Keys.mouse_left}) = begin
   true
 end
 tool_input(t::CodePicker, w, ::KeyRelease{Keys.mouse_left}) = (was = t.swallow; t.swallow = false; was)
-# Esc takes the card of an agent's answer away, while the palette doesn't show
+# Esc stops an agent that's working, and takes the card of an agent's answer away, while no popup and no search shows
 tool_input(t::CodePicker, w, ::KeyPress{Keys.escape}) = begin
-  (t.about !== nothing && t.about.ended > 0 && unmodified(w) && t.editor.popup == :none) || return false
+  (unmodified(w) && t.editor.popup == :none && !finding(t.editor)) || return false
+  isempty(working_agents(t.editor)) || (stop_agent!(t.editor); return true)
+  # The values of Show Steps go: see "the steps of a check"
+  haskey(t.editor.nodes, :steps) && (delete!(t.editor.nodes, :steps); redraw_in!(t.editor, 0); return true)
+  (t.about !== nothing && t.about.ended > 0) || return false
   t.about = nothing
   redraw_in!(t.editor, 0)
   true
@@ -35965,7 +36160,7 @@ draw_tool(ctx, w, t::CodePicker, scene) = begin
       r = asked_rect(t.editor, c)
       r === nothing || pick_mark(ctx, w, r, string('A' + n - 1); colour=CHIP_MARKS[mod1(n, length(CHIP_MARKS))])
     end
-    words = a.ended == 0 ? asking_words(a.words, a.step) : a.changed ? "$(a.said)  ·  Show Change" : a.said
+    words = a.ended == 0 ? asking_words(a.words, a.step) * "  ·  Esc stops it" : a.changed ? "$(a.said)  ·  Show Change" : a.said
     words = length(words) > 140 ? first(words, 139) * "…" : words
     a.label = pick_mark(ctx, w, asked_rect(t.editor, isempty(a.places) ? nothing : first(a.places)), words; colour=a.failed ? PICK_FAILED : PICK_LINE)
   end
@@ -36599,7 +36794,7 @@ in, before the agent started and after it ended. `said` is what there is to
 say when it has ended, at the time `ended`. `label` is where the label with
 those words was drawn last, for a click on it. `undone` is true once Undo
 Change put its files back. `step` is what the agent is doing now, in a few
-words.
+words. `stopped` is true when you stopped the agent before it ended.
 """
 @def mutable struct AskedChange
   words::String = ""
@@ -36616,6 +36811,7 @@ words.
   ended::Float64 = 0.0
   label::Any = nothing
   undone::Bool = false
+  stopped::Bool = false
 end
 
 "Each change that an agent made since Ladder started, the last last, for Show Change and Undo Change"
@@ -36641,8 +36837,12 @@ asked_rect(e, ::Nothing) = nothing
 "The lines of the file text `s`, as `text` reads them from a file"
 text_lines(s::AbstractString) = String.(split(replace(s, "\r\n" => "\n"), '\n'))
 
-"Ask an agent to make the change to the things `places` that `words` say. The picker of the window of `e` shows how it goes."
-ask_change!(e, places::AbstractVector, words::AbstractString) = begin
+"""
+Ask an agent to make the change to the things `places` that `words` say. The
+picker of the window of `e` shows how it goes. `prompt` is what the agent is
+told, when it's other than the words that ask for a change, as for Fix Check.
+"""
+ask_change!(e, places::AbstractVector, words::AbstractString; prompt=change_prompt(places, words)) = begin
   t = code_picker(e)
   files = unique(c.file for c in places)
   # The agent reads the files, so what a window shows of one and didn't write goes to its file first
@@ -36652,7 +36852,7 @@ ask_change!(e, places::AbstractVector, words::AbstractString) = begin
   before = Dict(f => read(f, String) for f in files)
   a = AskedChange(words=words, places=collect(places), before=before)
   # What you asked about the things before, from the card of an answer, goes with your words
-  prompt = change_prompt(places, words) * talk_words(follow_up!(e, places))
+  prompt *= talk_words(follow_up!(e, places))
   try
     a.process, a.out = start_agent(agent_command(), prompt, dirname(first(files)), a)
   catch err
@@ -36698,11 +36898,13 @@ ask_tick!(e) = begin
     # What it printed is all read a moment after it ends. A program that it left running can hold that up, so the wait has an end.
     if a.gone > 0 && (istaskdone(a.out) || time() - a.gone > 2)
       printed = agent_text(istaskdone(a.out) && !istaskfailed(a.out) ? fetch(a.out) : "")
-      ran, failed = reload_files!(a.places, a.before)
+      # What an agent that you stopped changed can be half done, so it doesn't run
+      ran, failed = a.stopped ? (0, "") : reload_files!(a.places, a.before)
       a.after = Dict(f => read(f, String) for f in keys(a.before))
       a.changed = a.after != a.before
       a.failed = !success(a.process) || !isempty(failed)
-      a.said = !success(a.process) ? "The agent stopped. " * agent_said(printed) :
+      a.said = a.stopped ? (a.changed ? "You stopped the agent. Ladder didn't run what it changed. Undo Change puts it back." : "You stopped the agent. Nothing changed.") :
+               !success(a.process) ? "The agent stopped. " * agent_said(printed) :
                !isempty(failed) ? "The new code doesn't run. " * failed :
                !a.changed ? "Nothing changed. " * agent_said(printed) : agent_said(printed)
       a.ended = time()
@@ -36727,11 +36929,53 @@ See "ask for a change to a thing".
 """
 ask_for_change!(e, node::Union{ToChange,Things}, request::String) = begin
   isempty(strip(request)) && error("Say what should change, in a few words.")
-  t = code_picker(e)
-  t.asked !== nothing && t.asked.ended == 0 && error("The agent is still making the last change.")
-  agent_command()   # it says so now if this Mac has no agent
+  agent_free(e)
   ask_change!(e, collect(each_thing(node)), String(strip(request)))
 end
+
+"It's an error while an agent is still making a change in the window of `e`, or when this Mac has no agent"
+agent_free(e) = begin
+  t = code_picker(e)
+  t.asked !== nothing && t.asked.ended == 0 && error("The agent is still making the last change. Esc stops it.")
+  agent_command()   # it says so now if this Mac has no agent
+  nothing
+end
+
+# --- stop an agent ---
+#
+# Esc stops the agent that's making a change or answering a question, while
+# no popup and no search shows, and so does a click on its label, or the
+# command Stop Agent. What the agent changed before it stopped stays in its
+# files, and doesn't run, because it can be half done. Undo Change puts it
+# back, and Show Change shows it.
+
+"The agents that are working in the window of `e` now: the one making a change, and the one answering a question"
+working_agents(e) = begin
+  t = get(e.nodes, :code_picker, nothing)
+  t isa CodePicker || return Any[]
+  Any[a for a in (t.asked, t.about) if a !== nothing && a.ended == 0]
+end
+
+"""
+Stop the agent that's working in the window of `e`: the one making a change,
+and the one answering a question. What it changed so far stays in its files,
+and doesn't run. Undo Change puts it back. See "stop an agent".
+"""
+stop_agent!(e) = begin
+  found = working_agents(e)
+  isempty(found) && error("No agent is working now.")
+  t = code_picker(e)
+  for a in found
+    a.process === nothing || process_exited(a.process) || kill(a.process)
+    a isa AskedChange && (a.stopped = true)
+    # A question that you stopped has no answer to show
+    a === t.about && (t.about = nothing)
+  end
+  redraw_in!(e, 0)
+  nothing
+end
+
+works_here(e, ::Val{:stop_agent}) = !isempty(working_agents(e))
 
 # --- ask about a thing ---
 #
@@ -36898,7 +37142,7 @@ draw_answer(ctx, w, t::CodePicker) = begin
   e = t.editor
   for (n, c) in enumerate(q.places)
     r = asked_rect(e, c)
-    label = n == 1 && q.ended == 0 ? asking_words(q.words, q.step) : length(q.places) > 1 ? string('A' + n - 1) : ""
+    label = n == 1 && q.ended == 0 ? asking_words(q.words, q.step) * "  ·  Esc stops it" : length(q.places) > 1 ? string('A' + n - 1) : ""
     r === nothing || pick_mark(ctx, w, r, label; colour=CHIP_MARKS[mod1(n, length(CHIP_MARKS))])
   end
   q.ended == 0 && (q.card = nothing; return nothing)
@@ -37142,6 +37386,7 @@ show_code!(e, node::ToChange) = begin
   b = e.buf
   # A block of the page or the file that this window shows is shown here
   if !isempty(b.path) && page_key(b.path) == node.file
+    note_place!(e)   # ⌘⌥← comes back here
     show_line!(e, line)
     e.nodes[:hold] = (line, 24px - PAGE_TOP)
     return e
@@ -37151,6 +37396,361 @@ end
 
 add_command!(show_code!, title="Show the code that draws a part of the window, or a block of Julia code")
 add_command!(keep_change!, name=:keep_this_change, title="Keep the function at the caret for each time that Ladder starts: a change to Ladder's own code")
+add_command!(stop_agent!, title="Stop the agent that's working now. What it changed so far stays, for Undo Change")
+
+# --- a check that fails ---
+#
+# A check of a file of Julia code that fails can ask an agent to fix it: the
+# command Fix Check, or Fix It beside the check while the mouse or the caret
+# is on its line. The agent gets the check, what it came to, and the function
+# under it. It changes the function, or the check when the check is what's
+# wrong, and says which. When it ends, the changed code runs, and so the check
+# runs again. Ask For Checks asks an agent to write checks of a function, with
+# the values that the function should give, which it works out from what the
+# function is for. See "checks in a file of Julia code" and "ask for a change
+# to a thing".
+
+"A check of a file of Julia code, for Fix Check and Show Steps: its line, its code, and how it went when it last ran"
+struct FileCheck
+  line::Int
+  code::String
+  went::Symbol
+end
+worded(c::FileCheck) = c.code
+sidenote(c::FileCheck) = (c.went == :pass ? "passes" : c.went == :fail ? "fails" : "stops") * " · line $(c.line)"
+
+"The checks of the file that the window of `e` shows, for the palette's list: the one on the caret's line first, then those that fail, from the top"
+choices_for(::Type{FileCheck}, e) = begin
+  at = e.buf.caret[1]
+  sort!([FileCheck(i, r.code, r.went) for (i, r) in file_results(e)], by=c -> (c.line != at, c.went == :pass, c.line))
+end
+# The check on the caret's line is the one, or else the first that fails
+chip_start(::Type{FileCheck}, e) = begin
+  found = choices_for(FileCheck, e)
+  isempty(found) || (first(found).line != e.buf.caret[1] && first(found).went == :pass) ? nothing : first(found)
+end
+shown_at(e, c::FileCheck) = line_rect(e, c.line)
+
+"The check `c` as the file has it now: its line, and how it went when it last ran. It's an error when the file doesn't have it."
+check_now(e, c::FileCheck) = begin
+  found = file_results(e)
+  k = findfirst(((i, r),) -> r.code == c.code && i == c.line, found)
+  k === nothing && (k = findfirst(((_, r),) -> r.code == c.code, found))
+  k === nothing && error("The file doesn't have the check $(c.code) now.")
+  found[k]
+end
+
+"True when the check that went as `r` stopped only because the code of the file that the window of `e` shows hasn't run"
+needs_run(e, r::Checked) = r.went == :stop && occursin("UndefVarError", r.said) && loaded_module(page_key(e.buf.path)) === nothing
+
+"The block of code that the check on line `i` checks: the one that has the first line of code under it"
+checked_block(e, i::Int) = begin
+  at = code_start(e.buf.lines, i)
+  blocks = code_blocks(e)
+  k = findfirst(x -> x.first <= at <= x.last, blocks)
+  (k === nothing || at == i) && error("Ladder can't find the function under the check on line $i.")
+  blocks[k]
+end
+
+"""
+Ask an agent to make the check `check` of the file that the window of `e`
+shows pass. It changes the function under the check, or the check when the
+check is what's wrong. See "a check that fails".
+"""
+fix_check!(e, check::FileCheck) = begin
+  julia_file(e) || error("Fix Check is for a check of a file of Julia code.")
+  i, r = check_now(e, check)
+  r.went == :pass && error("This check passes.")
+  needs_run(e, r) && error("The file's code hasn't run, so the check can't. Press ⌘Return in its function first.")
+  agent_free(e)
+  c = checked_block(e, i)
+  _, start = thing_words(c)
+  how = r.went == :fail ? (isempty(r.said) ? "Now it comes to false." : "Now it comes to false: $(r.said).") : "Now it stops: $(r.said)"
+  prompt = """
+    The user of the app Ladder asked for a check of a file of Julia code to pass.
+
+    The check is the comment on line $i of the file $(c.file):
+
+        $(strip(e.buf.lines[i]))
+
+    Ladder runs the code after `# check:` in the module of the file's code, and it should come to true. $how
+
+    It checks the code at lines $(c.first) to $(c.last) of the file, which starts:
+
+        $start
+
+    Change that code, or the code that it uses, so that the check passes. If the check is what's wrong, as when it expects a value that the code shouldn't give, change the check, and say so. Change only files in $(dirname(c.file)). Keep the change small, and write code that looks like the code around it. Ladder runs the changed code as soon as you end, so leave the file in a state that runs. Then say what you changed, in one short sentence.
+    """
+  ask_change!(e, [c], "Fix the check $(r.code)"; prompt)
+end
+
+works_here(e, ::Val{:fix_check}) = julia_file(e) && any(((_, r),) -> r.went != :pass, file_results(e))
+
+"""
+Ask an agent to write checks of `node`, a function of a file of Julia code, as
+comments like `# check: share("70%") == 0.7` over it. The agent works out the
+value that each call should give from what the function is for, and not from
+what it does now. See "a check that fails".
+"""
+ask_for_checks!(e, node::ToChange) = begin
+  (node.node === nothing && endswith(node.file, ".jl")) || error("Checks of this kind go over a function of a file of Julia code.")
+  agent_free(e)
+  what, start = thing_words(node)
+  prompt = """
+    The user of the app Ladder asked for checks of $what.
+
+    It's in the file $(node.file), lines $(node.first) to $(node.last). It starts:
+
+        $start
+
+    A check is a comment over a function, like this one over a function called share:
+
+        # check: share("70%") == 0.7
+
+    Ladder runs the code after `# check:` in the module of the file's code. It shows a green dot when the code comes to true, and a red dot when it doesn't.
+
+    Write two to four checks of each function in that code. Choose calls that show what the function is for, and one at an edge of what it takes. Work out the value that each call should give from what the function is for: its name, its documentation, and the code that calls it. Don't copy what the code does now, because a check finds a fault only when it says what the code should do. Put each check on a line of its own, after the function's documentation and the checks that it has, just over its first line of code. Each check is one line of Julia. Change nothing else. Then say what the checks check, in one short sentence.
+    """
+  ask_change!(e, [node], "Write checks"; prompt)
+end
+
+works_here(e, ::Val{:ask_for_checks}) = julia_file(e)
+
+add_command!(fix_check!, title="Ask an agent to make a check of the file pass, by changing the function under it", kind=:edit)
+add_command!(ask_for_checks!, title="Ask an agent to write checks of a function, with the values that it should give")
+
+"""
+What a click at the mouse of the window `w` does on a button beside a check
+of a file of Julia code: Fix It or Show Steps. It's true when the click was on
+one. What goes wrong shows under the top bar.
+"""
+check_button!(e, w) = begin
+  found = get(e.nodes, :check_buttons, nothing)
+  (found === nothing || isempty(found)) && return false
+  x, y = num(w.mouse[1]), num(w.mouse[2])
+  for (action, (left, top, wide, tall), check) in found
+    (left <= x <= left + wide && top <= y <= top + tall) || continue
+    try
+      Base.invokelatest(action == :fix ? fix_check! : show_steps!, e, check)
+    catch err
+      err isa InterruptException && rethrow()
+      e.nodes[:result] = (String(first(split(sprint(showerror, err), '\n'))), time())
+      redraw_in!(e, 0)
+    end
+    return true
+  end
+  false
+end
+
+# --- the steps of a check ---
+#
+# Show Steps runs a check of a file of Julia code again, and writes what each
+# line of the function that it calls came to, at the end of that line: what
+# the function was given on its first line, and the value of each line after
+# that. A line that ran more than once shows its last value and how many
+# times it ran. The line where the function stopped says why. The function
+# runs as the window has it, which can be newer than the code that ran last.
+# The values go when the text changes, and with Esc. ⌘⌥← goes back to where
+# the caret was, when the window scrolled to the function.
+
+const STEP_INK = colorant"rgb(48,128,236)"
+
+"The function that the top part `ex` of a file of Julia code defines: its definition without its documentation, or nothing when it defines none"
+definition_of(ex) = begin
+  Meta.isexpr(ex, :macrocall) && length(ex.args) == 4 && ex.args[1] == GlobalRef(Core, Symbol("@doc")) && return definition_of(ex.args[4])
+  Meta.isexpr(ex, (:function, :(=))) && Meta.isexpr(def_call(ex), :call) ? ex : nothing
+end
+
+"The call that the definition `def` of a function starts with, like `share(s)`, without what's written after it, like `where T`"
+def_call(def) = (x = def.args[1]; while Meta.isexpr(x, (:where, :(::))) x = x.args[1] end; x)
+
+"The name of each value that the function of the definition `def` takes, from its first line, like `share(s; places=2)`"
+arg_names(def) = begin
+  out = Symbol[]
+  for a in def_call(def).args[2:end], x in (Meta.isexpr(a, :parameters) ? a.args : (a,))
+    n = arg_name(x)
+    n === nothing || push!(out, n)
+  end
+  out
+end
+
+"The name of a value that a function takes, from how its definition writes it, like `s`, `s::String`, `places=2` or `rest...`. It's nothing for one with no name, like `::Int`."
+arg_name(a) = a isa Symbol ? a :
+  Meta.isexpr(a, :(::)) ? (length(a.args) == 2 ? arg_name(a.args[1]) : nothing) :
+  Meta.isexpr(a, (:kw, :(=), :(...))) ? arg_name(a.args[1]) : nothing
+
+"""
+The block `ex` of a function's code, with each of its lines sending what it
+came to and its line's number to `note` as it runs. The lines in an `if`, a
+loop, a `let` or a `try` send theirs too. `line` is the line that the block
+starts on.
+"""
+noted(ex, note, line::Int) = begin
+  Meta.isexpr(ex, :block) || return noted_line(ex, note, line)
+  out = Expr(:block)
+  for x in ex.args
+    x isa LineNumberNode ? (line = x.line; push!(out.args, x)) : push!(out.args, noted_line(x, note, line))
+  end
+  out
+end
+
+"One line `x` of a function's code, on line `line`, that sends what it came to to `note`: see `noted`"
+noted_line(x, note, line) = begin
+  x isa Expr || return Expr(:call, note, line, x)
+  h = x.head
+  h in (:if, :elseif, :while, :for, :let) && return Expr(h, x.args[1], (noted(a, note, line) for a in x.args[2:end])...)
+  h == :try && return Expr(h, (Meta.isexpr(a, :block) ? noted(a, note, line) : a for a in x.args)...)
+  h == :block && return noted(x, note, line)
+  h == :return && return Expr(:return, Expr(:call, note, line, isempty(x.args) ? nothing : x.args[1]))
+  # A line that defines something, or that goes to another line, has no value to show
+  (h in (:function, :macro, :struct, :abstract, :primitive, :const, :global, :local, :break, :continue, :using, :import, :meta) ||
+    definition_of(x) !== nothing || (h == :macrocall && x.args[1] in (Symbol("@goto"), Symbol("@label")))) && return x
+  # A line in a block is still a line of the function, so a name that it gives a value to is the function's
+  Expr(:call, note, line, Expr(:block, x))
+end
+
+"The first call in `ex`, from the outside in, of a name in `names`, or nothing"
+first_call(ex, names) = begin
+  ex isa Expr || return nothing
+  Meta.isexpr(ex, :call) && ex.args[1] isa Symbol && ex.args[1] in names && return ex
+  for a in ex.args
+    found = first_call(a, names)
+    found === nothing || return found
+  end
+  nothing
+end
+
+"Each name that `ex` calls, from the outside in, that a function of a file can have: not an operator like `==`"
+called_names(ex, out=Symbol[]) = begin
+  ex isa Expr || return out
+  Meta.isexpr(ex, :call) && ex.args[1] isa Symbol && occursin(r"^[\p{L}_][\p{L}\p{N}_!]*$", String(ex.args[1])) && !(ex.args[1] in out) && push!(out, ex.args[1])
+  foreach(a -> called_names(a, out), ex.args)
+  out
+end
+
+"""
+The definitions of the function called `name` in the lines `lines` of a file
+of Julia code, each with the line that it starts on: one for each method.
+Their lines have the numbers that they have in the file.
+"""
+definitions(lines::Vector{String}, name::Symbol) = begin
+  out = Tuple{Int,Expr}[]
+  word = String(name)
+  for (first, code) in part_texts(lines)
+    occursin(word, code) || continue
+    def = definition_of(part_expr("\n"^(first - 1) * code))
+    def !== nothing && def_call(def).args[1] == name && push!(out, (code_start(lines, first), def))
+  end
+  out
+end
+
+"""
+Run the check `check` of the file that the window of `e` shows again, with
+each line of the function that it calls first sending what it came to: see
+"the steps of a check". It gives the line that the function starts on, the
+words for the end of each line, and the line where the function stopped, or 0.
+"""
+check_steps(e, check::FileCheck) = begin
+  b = e.buf
+  ex = Meta.parse(check.code, raise=false)
+  Meta.isexpr(ex, (:error, :incomplete)) && error("Julia can't read this check.")
+  name, defs = nothing, Tuple{Int,Expr}[]
+  for n in called_names(ex)
+    defs = definitions(b.lines, n)
+    isempty(defs) || (name = n; break)
+  end
+  name === nothing && error("This check calls no function of this file.")
+  # A name that no code can write, so the function is no other
+  traced = Symbol("steps of ", name)
+  seen = Dict{Int,Tuple{Any,Int}}()   # the last value of each line, and how many times it ran
+  given = Dict{Int,Any}()             # what the function was given, by the line that it starts on
+  note = (line, value) -> (was = get(seen, line, (nothing, 0)); seen[line] = (value, was[2] + 1); value)
+  give = (line, values) -> (given[line] = values; nothing)
+  call = first_call(ex, (name,))
+  call.args[1] = traced
+  stopped, why = 0, ""
+  dir = isdir(docdir(e)) ? docdir(e) : pwd()
+  cd(dir) do
+    running_code(e) do m
+      try
+        for (line, def) in defs
+          def = copy(def)
+          head = def_call(def)
+          head.args[1] = traced
+          names = arg_names(def)
+          body = noted(def.args[2], note, line)
+          isempty(names) || pushfirst!(body.args, Expr(:call, give, line, Expr(:tuple, Expr(:parameters, names...))))
+          Core.eval(m, Expr(def.head, def.args[1], body))
+        end
+        Core.eval(m, ex)
+      catch err
+        err isa InterruptException && rethrow()
+        # The line of the function that was running when it stopped
+        for f in stacktrace(catch_backtrace())
+          f.func === traced && (stopped = f.line; break)
+        end
+        why = replace(String(first(split(trouble(err), '\n'))), r" in `Main\.[^`]*`" => "")
+        stopped == 0 && !isempty(seen) && (stopped = maximum(keys(seen)))
+      finally
+        Base.invokelatest(isdefined, m, traced) && foreach(Base.delete_method, Base.invokelatest(methods, Base.invokelatest(getfield, m, traced)))
+      end
+    end
+  end
+  isempty(seen) && isempty(given) && error(isempty(why) ? "The check didn't call $name." : "The check stopped before it called $name: $why")
+  words = Dict{Int,String}()
+  for (line, (value, n)) in seen
+    words[line] = "→ " * value_brief(value) * (n > 1 ? "  ($n times)" : "")
+  end
+  for (line, values) in given
+    gave = join(("$k = $(value_brief(v))" for (k, v) in pairs(values)), ", ")
+    words[line] = haskey(words, line) ? gave * "  " * words[line] : gave
+  end
+  stopped > 0 && (words[stopped] = get(words, stopped, "") * (haskey(words, stopped) ? "  " : "") * "stopped: $why")
+  (first=minimum(first.(defs)), words=words, stopped=stopped)
+end
+
+"""
+Run the check `check` of a file of Julia code again, and write what each line
+of the function that it calls came to at the end of that line. See "the steps
+of a check".
+"""
+show_steps!(e, check::FileCheck) = begin
+  julia_file(e) || error("Show Steps is for a check of a file of Julia code.")
+  steps = check_steps(e, check)
+  e.nodes[:steps] = (; steps..., version=e.buf.version)
+  # The function comes in sight, near the top of the window, when it isn't
+  r = line_rect(e, steps.first)
+  _, tall = window_size(e)
+  if r === nothing || r.top < TOPBAR_H || r.top + r.height > tall
+    note_place!(e)
+    e.nodes[:hold] = (max(steps.first - 3, 1), 24px - PAGE_TOP)
+  end
+  redraw_in!(e, 0)
+  nothing
+end
+
+works_here(e, ::Val{:show_steps}) = julia_file(e) && !isempty(file_results(e))
+
+add_command!(show_steps!, title="Run a check of the file again, and show what each line of the function that it calls came to", kind=:look)
+
+"Draw what each line of the function of Show Steps came to, at the end of the line. The page's text is at `ui`."
+mark_steps(ctx, e, ui) = begin
+  s = get(e.nodes, :steps, nothing)
+  s === nothing && return nothing
+  s.version == e.buf.version || (delete!(e.nodes, :steps); return nothing)
+  for it in e.layout[e.shown]
+    f = it.content
+    f isa Flow || continue
+    words = get(s.words, it.first, nothing)
+    words === nothing && continue
+    k = length(f.lines)
+    vl = f.lines[k]
+    right = isempty(vl.segs) ? 0px : last(vl.segs).x + last(vl.segs).w
+    mid = num(ui.top + it.top + line_top(f, k) + vl.high / 2)
+    write_ink(ctx, words, num(ui.left + right) + 14, mid + 4, Face(SANS, "", px(round(num(f.size) * 0.85)), it.first == s.stopped ? CHECK_BAD : STEP_INK, false))
+  end
+  nothing
+end
 
 # --- a folder's own page ----------------------------------------------------------------
 #

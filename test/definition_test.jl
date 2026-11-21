@@ -354,6 +354,40 @@ end
   @test [(K.worded(p), K.sidenote(p)) for p in K.choices_for(K.HeadingLine, e)] == [("One", "line 1"), ("Two", "line 5")]
 end
 
+@testset "⌘⌥← goes back to the line that a jump left, and ⌘⌥→ to the jump's line again" begin
+  K.open!(e, rooms)
+  frames()
+  b.caret = b.anchor = at("* HEIGHT", "HEIGHT")
+  was = b.caret
+  K.go_to_definition!(e)
+  def = b.caret
+  @test def == (line("const HEIGHT"), 6) && K.step_words(e) == "line $(was[1])"
+  # Go To is a jump too
+  K.go_to!(e, 16)
+  @test b.caret[1] == 16
+  @test K.go_back!(e) && b.caret == def
+  @test K.go_back!(e) && b.caret == was
+  # Before the jumps, the file that showed before this one
+  @test K.step_words(e) == "page.md"
+  @test K.go_forward!(e) && b.caret == def
+  @test K.go_forward!(e) && b.caret[1] == 16 && K.step_words(e, e.ahead) === nothing
+  w.keys |= Keys.cmd | Keys.opt; onkey(w, KeyPress{Keys.left}(0, w)); w.keys ⊻= Keys.cmd | Keys.opt
+  frames()
+  @test b.caret == def
+  # A new jump ends what ⌘⌥→ goes to
+  K.go_to!(e, 5)
+  @test K.step_words(e, e.ahead) === nothing && K.step_words(e) == "line $(def[1])"
+  # After another file showed, ⌘⌥← shows this file again, and then the line that the jump left
+  K.open!(e, joinpath(dir, "page.md"))
+  frames()
+  @test K.go_back!(e) && e.buf === b && b.caret[1] == 5
+  @test K.go_back!(e) && b.caret == def
+  # The window scrolls back to where it was too
+  frames()
+  K.go_to!(e, 1)
+  @test K.go_back!(e) && b.caret == def
+end
+
 @testset "with ⌘ held, a link's words are marked" begin
   page = joinpath(dir, "links.md")
   write(page, "See [the **walls** file](walls.jl) for more.\n")

@@ -351,6 +351,51 @@ end
   @test K.reload_changed!(mod, realpath(source), K.text(source)) == (0, "")
 end
 
+@testset "Esc, a click on the label, or Stop Agent stops the agent, and what it changed doesn't run" begin
+  level = first(offered(e, (3, 0)))
+  # An agent that changes the file, and then works on
+  half = agent("half.sh", "sed -i '' 's/^wide(l::Level) = 80px/wide(l::Level) = 60px/' \"$source\"\nexec sleep 30")
+  K.AGENT_COMMAND[] = `sh $half`
+  K.ask_for_change!(e, level, "make it thinner")
+  from = time()
+  while !occursin("60px", read(source, String)) && time() - from < 10
+    frames(w, 1); sleep(0.05)
+  end
+  @test picker().asked.ended == 0 && K.works_here(e, Val(:stop_agent))
+  runs = K.CODE_RUNS[]
+  press(w, Keys.escape)
+  finish()
+  a = picker().asked
+  @test a.stopped && a.changed && a.said == "You stopped the agent. Ladder didn't run what it changed. Undo Change puts it back."
+  @test !K.works_here(e, Val(:stop_agent)) && last(K.AGENT_CHANGES) === a
+  @test K.CODE_RUNS[] == runs   # Ladder didn't run the half-done change
+  K.undo_change!(e)
+  @test occursin("wide(l::Level) = 80px", read(source, String))
+  # A click on the label while the agent works stops it
+  K.AGENT_COMMAND[] = `sh -c "exec sleep 30"`
+  K.ask_for_change!(e, level, "make it red")
+  frames(w, 2)
+  left, top, wide, tall = picker().asked.label
+  click(w, left + wide / 2, top + tall / 2)
+  finish()
+  @test picker().asked.stopped && picker().asked.said == "You stopped the agent. Nothing changed."
+  # So does the command, which says so when no agent works
+  K.ask_for_change!(e, level, "make it blue")
+  K.stop_agent!(e)
+  finish()
+  @test picker().asked.stopped
+  @test_throws ErrorException K.stop_agent!(e)
+  picker().asked = nothing
+  # Esc stops an agent that's answering a question too, and there's no card
+  K.ask_about!(e, level, "why is it blue?")
+  @test picker().about.ended == 0
+  process = picker().about.process
+  press(w, Keys.escape)
+  @test picker().about === nothing
+  sleep(0.2)
+  @test process_exited(process)
+end
+
 @testset "Ask About shows the agent's answer in a card beside the thing, and changes nothing" begin
   level = first(offered(e, (3, 0)))
   answers = agent("answers.sh", "true", "The bar is blue because describe(l::Level) gives it a steelblue background.", "", "It is 12 pixels tall.")

@@ -3257,7 +3257,7 @@ gives a row that has no name a place for one.
 """
 press!(e, it::Item, s::Sheet, pos) = begin
   b = e.buf
-  if held(e, Keys.opt)
+  if only_held(e, Keys.opt)
     b.caret = b.anchor = line_end(b, it.first)
     return true
   end
@@ -4070,8 +4070,8 @@ cursor(::Crumb) = :hand
 onkey(c::Crumb, ev::KeyPress{Keys.mouse_left}) = begin
   l = c.parent::Breadcrumb
   # In a line of text, a click with ⌥ held shows the code and leaves the path as it is
-  l.inline && held(c, Keys.opt) && return nothing
-  held(c, Keys.cmd) && !l.folders && return show_crumb!(l, c.path, ev.window)
+  l.inline && only_held(c, Keys.opt) && return nothing
+  only_held(c, Keys.cmd) && !l.folders && return show_crumb!(l, c.path, ev.window)
   c.path == l.at ? (l.open = !l.open) : (l.at = c.path; l.open = true)
   l.inline && list!(l, ev.window)
   nothing
@@ -4390,8 +4390,8 @@ onkey(p::Pages, ev::KeyPress{Keys.mouse_left}) = begin
   r === nothing ? handled : turn!(p, ev.window.mouse[1] < r.left + p.wide / 2 ? -1 : 1)
 end
 # The arrow keys turn the pages too, once a click has given them the keyboard
-onkey(p::Pages, ::KeyPress{Keys.left}) = turn!(p, -1)
-onkey(p::Pages, ::KeyPress{Keys.right}) = turn!(p, 1)
+onkey(p::Pages, ev::KeyPress{Keys.left}) = unmodified(ev) ? turn!(p, -1) : nothing
+onkey(p::Pages, ev::KeyPress{Keys.right}) = unmodified(ev) ? turn!(p, 1) : nothing
 
 "The pages of the PDF file at `path`, or nothing if it isn't a PDF file that macOS can read"
 pager(l::Breadcrumb, path) = begin
@@ -4517,7 +4517,7 @@ cursor(::FileEntry) = :hand
 onkey(r::FileEntry, ev::KeyPress{Keys.mouse_left}) = begin
   l = r.parent::Breadcrumb
   # A click with ⌘ held shows the file in the window, as a click on a link with ⌘ held does
-  held(r, Keys.cmd) && !l.folders && return show_crumb!(l, r.path, ev.window)
+  only_held(r, Keys.cmd) && !l.folders && return show_crumb!(l, r.path, ev.window)
   l.at = r.path
 end
 
@@ -5099,7 +5099,7 @@ onkey(t::JSONTree, ev::KeyPress{Keys.mouse_left}) = begin
   focus(t)
   i == 0 && return handled
   t.chosen = i
-  json_toggle!(t, i, all=Keys.opt in ev.window.keys)
+  json_toggle!(t, i, all=only_held(ev, Keys.opt))
   handled
 end
 
@@ -5117,26 +5117,28 @@ json_choose!(t::JSONTree, i) = begin
   handled
 end
 
-onkey(t::JSONTree, ::KeyPress{Keys.down}) = json_choose!(t, t.chosen + 1)
-onkey(t::JSONTree, ::KeyPress{Keys.up}) = json_choose!(t, max(1, t.chosen - 1))
+onkey(t::JSONTree, ev::KeyPress{Keys.down}) = unmodified(ev) ? json_choose!(t, t.chosen + 1) : nothing
+onkey(t::JSONTree, ev::KeyPress{Keys.up}) = unmodified(ev) ? json_choose!(t, max(1, t.chosen - 1)) : nothing
 # → opens a closed row, and goes into one that's open
-onkey(t::JSONTree, ::KeyPress{Keys.right}) = begin
+onkey(t::JSONTree, ev::KeyPress{Keys.right}) = begin
+  unmodified(ev) || return nothing
   i = t.chosen
   i == 0 && return json_choose!(t, 1)
   json_length(t.rows[i].value) == 0 && return handled
   json_opened(t, i) ? json_choose!(t, i + 1) : (json_toggle!(t, i); handled)
 end
 # ← closes an open row, and goes out of one that's closed, to the row that holds it
-onkey(t::JSONTree, ::KeyPress{Keys.left}) = begin
+onkey(t::JSONTree, ev::KeyPress{Keys.left}) = begin
+  unmodified(ev) || return nothing
   i = t.chosen
   i == 0 && return json_choose!(t, 1)
   json_opened(t, i) && return (json_toggle!(t, i); handled)
   d = t.rows[i].depth
   d == 0 ? handled : json_choose!(t, findprev(r -> r.depth < d, t.rows, i))
 end
-onkey(t::JSONTree, ::KeyPress{Keys.enter}) = (t.chosen > 0 && json_toggle!(t, t.chosen); handled)
+onkey(t::JSONTree, ev::KeyPress{Keys.enter}) = unmodified(ev) ? (t.chosen > 0 && json_toggle!(t, t.chosen); handled) : nothing
 onkey(t::JSONTree, ev::KeyPress{Keys.c}) = begin
-  Keys.cmd in ev.window.keys || return nothing
+  only_held(ev, Keys.cmd) || return nothing
   t.chosen > 0 && clipboard(json_copy(t.rows[t.chosen].value))
   handled
 end
@@ -6371,8 +6373,9 @@ describe(m::SheetMenu) = begin
 end
 
 # The menu sees a key before its text field does. Return keeps what's chosen, and esc puts back what the column kept before.
-onkey(m::SheetMenu, ::KeyPress{Keys.enter}) = close_sheet_menu!(m.of)
-onkey(m::SheetMenu, ::KeyPress{Keys.escape}) = begin
+onkey(m::SheetMenu, ev::KeyPress{Keys.enter}) = unmodified(ev) ? close_sheet_menu!(m.of) : nothing
+onkey(m::SheetMenu, ev::KeyPress{Keys.escape}) = begin
+  unmodified(ev) || return nothing
   s = m.of.table::FileSheet
   if values_of(s, m.column) === nothing
     keep!(s, m.column, s.was)
@@ -7241,20 +7244,22 @@ answer!(v::TakeoffView) = begin
 end
 
 # The keys of the text field that the field has no use for come here
-onkey(v::TakeoffView, ::KeyPress{Keys.enter}) = v.asking === nothing ? nothing : answer!(v)
-onkey(v::TakeoffView, ::KeyPress{Keys.escape}) = begin
+onkey(v::TakeoffView, ev::KeyPress{Keys.enter}) = unmodified(ev) ? (v.asking === nothing ? nothing : answer!(v)) : nothing
+onkey(v::TakeoffView, ev::KeyPress{Keys.escape}) = begin
+  unmodified(ev) || return nothing
   v.asking === nothing && return nothing
   v.asking[1] == :length && (empty!(v.draft); v.tool = :select)
   stop_asking!(v)
 end
 # ⌥ in an empty search for an item changes the catalogue that the list shows
-onkey(v::TakeoffView, ::KeyPress{Keys.opt}) = begin
+onkey(v::TakeoffView, ev::KeyPress{Keys.opt}) = begin
+  setdiff(held_keys(ev.window), Keys.opt) == Keys(0) || return nothing   # ⌥ by itself
   a = v.asking
   (a !== nothing && a[1] == :item && Centient.available() && isempty(strip(plan_input(v).text))) || return nothing
   toggle_catalogue!(v)
 end
-onkey(v::TakeoffView, ::KeyPress{Keys.down}) = v.asking === nothing ? nothing : (v.pick = min(v.pick + 1, max(1, length(v.rows))); handled)
-onkey(v::TakeoffView, ::KeyPress{Keys.up}) = v.asking === nothing ? nothing : (v.pick = max(v.pick - 1, 1); handled)
+onkey(v::TakeoffView, ev::KeyPress{Keys.down}) = unmodified(ev) ? (v.asking === nothing ? nothing : (v.pick = min(v.pick + 1, max(1, length(v.rows))); handled)) : nothing
+onkey(v::TakeoffView, ev::KeyPress{Keys.up}) = unmodified(ev) ? (v.asking === nothing ? nothing : (v.pick = max(v.pick - 1, 1); handled)) : nothing
 
 # --- the view of the plan ----------------------------------------------------------------
 
@@ -7290,7 +7295,7 @@ being dragged.
 """
 aim(v::TakeoffView, w, x, y; skip=nothing) = begin
   p = page_point(v, x, y)
-  (v.snap && !(Keys.cmd in w.keys)) || return (p, nothing)
+  (v.snap && !only_held(w, Keys.cmd)) || return (p, nothing)
   something(Plans.snap(v.data, lines_of(v), v.data.page, p, SNAP / v.zoom, skip=skip), (p, nothing))
 end
 
@@ -7953,7 +7958,7 @@ end
 onscroll(a::PlanArea, ev::MouseScroll) = begin
   v, w = a.of, ev.window
   v.zoom > 0 || return nothing
-  cmd = Keys.cmd in w.keys
+  cmd = only_held(w, Keys.cmd)
   (cmd || w.focus === a || v.full) || return nothing
   (cmd || ev.wheel) && return zoom_plan!(v, exp(num(ev.delta[2]) / 10), num(w.mouse[1]), num(w.mouse[2]))
   v.at = (v.at[1] - 30num(ev.delta[1]) / v.zoom, v.at[2] - 30num(ev.delta[2]) / v.zoom)
@@ -7968,8 +7973,9 @@ onpinch(a::PlanArea, ev::Pinch) = begin
   zoom_plan!(v, ev.scale, num(w.mouse[1]), num(w.mouse[2]))
 end
 
-onkey(a::PlanArea, ::KeyPress{Keys.enter}) = finish_shape!(a.of)
-onkey(a::PlanArea, ::KeyPress{Keys.escape}) = begin
+onkey(a::PlanArea, ev::KeyPress{Keys.enter}) = unmodified(ev) ? finish_shape!(a.of) : nothing
+onkey(a::PlanArea, ev::KeyPress{Keys.escape}) = begin
+  unmodified(ev) || return nothing
   v = a.of
   # Esc drops what's half drawn, then puts the arrow back, then puts a takeoff that fills the window
   # back in the page, then gives the keyboard back to the text
@@ -7978,7 +7984,7 @@ onkey(a::PlanArea, ::KeyPress{Keys.escape}) = begin
 end
 onkey(a::PlanArea, ::KeyPress{K}) where K = begin
   v = a.of
-  if K in (Keys.backspace, Keys.delete)
+  if K in (Keys.backspace, Keys.delete) && unmodified(window_of(a))
     # While something is being drawn, Delete takes its last corner back
     return isempty(v.draft) ? remove_picked!(v) : (pop!(v.draft); handled)
   elseif (command = command_of(editor(v), window_of(a), K)) in (:undo, :redo)
@@ -7990,7 +7996,8 @@ onkey(a::PlanArea, ::KeyPress{K}) where K = begin
 end
 
 ontype(a::PlanArea, ev::Typed) = begin
-  Keys.cmd in ev.window.keys && return nothing
+  # A letter picks a tool by itself, or with ⇧
+  (unmodified(ev) || only_held(ev, Keys.shft)) || return nothing
   i = findfirst(((_, (_, _, letter)),) -> letter == lowercase(ev.char), PLAN_TOOLS)
   i === nothing ? nothing : tool!(a.of, PLAN_TOOLS[i][1])
 end
@@ -8472,10 +8479,10 @@ placed!(m::UnitMenu, side) = (m.side = side; nothing)
 draw(ctx, size, ui::ConcreteRect, m::UnitMenu) = caret(ctx, ui, m.side, rect(unit_word(part!(() -> AmountCell(of=m.of, i=m.i), m.of, (:amount, m.i)))))
 
 # The list sees a key before its field does. The arrows pick a unit, Return takes it, and Esc closes the list.
-onkey(m::UnitMenu, ::KeyPress{Keys.enter}) = answer!(m.of)
-onkey(m::UnitMenu, ::KeyPress{Keys.escape}) = stop_asking!(m.of)
-onkey(m::UnitMenu, ::KeyPress{Keys.down}) = (v = m.of; v.pick = min(v.pick + 1, max(1, length(v.rows))); handled)
-onkey(m::UnitMenu, ::KeyPress{Keys.up}) = (v = m.of; v.pick = max(v.pick - 1, 1); handled)
+onkey(m::UnitMenu, ev::KeyPress{Keys.enter}) = unmodified(ev) ? answer!(m.of) : nothing
+onkey(m::UnitMenu, ev::KeyPress{Keys.escape}) = unmodified(ev) ? stop_asking!(m.of) : nothing
+onkey(m::UnitMenu, ev::KeyPress{Keys.down}) = unmodified(ev) ? (v = m.of; v.pick = min(v.pick + 1, max(1, length(v.rows))); handled) : nothing
+onkey(m::UnitMenu, ev::KeyPress{Keys.up}) = unmodified(ev) ? (v = m.of; v.pick = max(v.pick - 1, 1); handled) : nothing
 
 # --- the list that a search shows --------------------------------------------------------
 #
@@ -8802,8 +8809,9 @@ end
 draw(ctx, size, ui::ConcreteRect, m::ColumnMenu) = caret(ctx, ui, m.side, rect(head_words(m.of, m.key)))
 
 # The menu sees a key before its text field does. Return keeps the search, and Esc puts back the one before.
-onkey(m::ColumnMenu, ::KeyPress{Keys.enter}) = answer!(m.of)
-onkey(m::ColumnMenu, ::KeyPress{Keys.escape}) = begin
+onkey(m::ColumnMenu, ev::KeyPress{Keys.enter}) = unmodified(ev) ? answer!(m.of) : nothing
+onkey(m::ColumnMenu, ev::KeyPress{Keys.escape}) = begin
+  unmodified(ev) || return nothing
   v = m.of
   a = v.asking
   a !== nothing && a[1] == :filter && search_column!(v, a[2], a[3])
@@ -9719,7 +9727,7 @@ onscroll(v::ScheduleView, ev::MouseScroll) = begin
   w = ev.window
   v.zoom > 0 || return nothing
   dx, dy = num(ev.delta[1]), num(ev.delta[2])
-  Keys.cmd in w.keys && return zoom_days!(v, exp(dy / 10), zoom_x(v, w))
+  only_held(w, Keys.cmd) && return zoom_days!(v, exp(dy / 10), zoom_x(v, w))
   abs(dx) > abs(dy) || return nothing
   v.at -= 30dx / v.zoom
   handled
@@ -9730,14 +9738,15 @@ onpinch(v::ScheduleView, ev::Pinch) = zoom_days!(v, ev.scale, zoom_x(v, ev.windo
 onpinch(a::ChartArea, ev::Pinch) = onpinch(a.of, ev)
 
 # Esc takes the selection away, then puts a schedule that fills the window back in the page, then gives the keyboard back to the text
-onkey(a::ChartArea, ::KeyPress{Keys.escape}) = begin
+onkey(a::ChartArea, ev::KeyPress{Keys.escape}) = begin
+  unmodified(ev) || return nothing
   v = a.of
   v.picked === nothing || return (v.picked = nothing; handled)
   v.full ? full!(v, false) : nothing
 end
 onkey(a::ChartArea, ::KeyPress{K}) where K = begin
   v = a.of
-  if K in (Keys.backspace, Keys.delete)
+  if K in (Keys.backspace, Keys.delete) && unmodified(window_of(a))
     # Delete takes away the link that's selected
     p = v.picked
     (p !== nothing && p[1] == :link) || return handled
@@ -9854,8 +9863,8 @@ stop_asking!(v::ScheduleView) = begin
   handled
 end
 
-onkey(v::ScheduleView, ::KeyPress{Keys.enter}) = v.asking ? answer!(v) : nothing
-onkey(v::ScheduleView, ::KeyPress{Keys.escape}) = v.asking ? stop_asking!(v) : nothing
+onkey(v::ScheduleView, ev::KeyPress{Keys.enter}) = unmodified(ev) ? (v.asking ? answer!(v) : nothing) : nothing
+onkey(v::ScheduleView, ev::KeyPress{Keys.escape}) = unmodified(ev) ? (v.asking ? stop_asking!(v) : nothing) : nothing
 
 "What happens to a schedule in each frame, before the page is laid out: a drag that ended is written down, and the text field that lost the keyboard closes"
 tick!(v::ScheduleView) = begin
@@ -10785,7 +10794,7 @@ end
 # Scrolling with ⌘ held makes the picture bigger or smaller, round the mouse. Scrolling without ⌘ moves it.
 onscroll(a::ZoomArea, ev::MouseScroll) = begin
   v, w = a.of, ev.window
-  Keys.cmd in w.keys && return zoom_by!(v, exp(num(ev.delta[2]) / 10), num(w.mouse[1]), num(w.mouse[2]))
+  only_held(w, Keys.cmd) && return zoom_by!(v, exp(num(ev.delta[2]) / 10), num(w.mouse[1]), num(w.mouse[2]))
   s = subject_size(v)
   (s === nothing || v.zoom <= 0) && return handled
   v.at = (v.at[1] - 30num(ev.delta[1]) / v.zoom, v.at[2] - 30num(ev.delta[2]) / v.zoom)
@@ -10816,11 +10825,11 @@ zoom_key!(v::ZoomView, K, w, command) = begin
       return handled
     end
     # Return types the words of the part that's selected, ⌫ takes it away and Esc selects nothing
-    Keys.cmd in w.keys || !Diagrams.key!(m, K) || return handled
+    !unmodified(w) || !Diagrams.key!(m, K) || return handled
   end
-  K == Keys.escape && return zoom_out!(v)
+  K == Keys.escape && unmodified(w) && return zoom_out!(v)
   command in PAGE_COMMANDS && return nothing
-  if v.what[1] == :node && v.what[2] isa VideoPlayer && !(Keys.cmd in w.keys)
+  if v.what[1] == :node && v.what[2] isa VideoPlayer && unmodified(w)
     # F makes a video fill the screen, and puts it back. The keys of the video are its own here too.
     K == Keys.f && return screen!(v, !v.screen)
     K in (Keys.space, Keys.left, Keys.right) && return onkey(v.what[2], KeyPress{K}(0, w))
@@ -10829,9 +10838,9 @@ zoom_key!(v::ZoomView, K, w, command) = begin
   command == :bigger && return zoom_by!(v, ZOOM_STEP, view_middle(v)...)
   command == :smaller && return zoom_by!(v, 1 / ZOOM_STEP, view_middle(v)...)
   command == :usual_size && return fit_now!(v)
-  !(Keys.cmd in w.keys) && v.what[1] == :pdf && K in (Keys.left, Keys.right) && return turn!(v, K == Keys.left ? -1 : 1)
+  unmodified(w) && v.what[1] == :pdf && K in (Keys.left, Keys.right) && return turn!(v, K == Keys.left ? -1 : 1)
   # A picture of a gallery: ← and → go to the picture before it and the next one
-  !(Keys.cmd in w.keys) && v.from isa GalleryView && K in (Keys.left, Keys.right) && return step!(v.from, K == Keys.left ? -1 : 1)
+  unmodified(w) && v.from isa GalleryView && K in (Keys.left, Keys.right) && return step!(v.from, K == Keys.left ? -1 : 1)
   handled
 end
 
@@ -11822,6 +11831,7 @@ end
 
 # Return in the field adds what it holds as a condition. Esc empties it, and gives the keyboard back to the page.
 onkey(v::FilterView, ev::KeyPress{Keys.enter}) = begin
+  unmodified(ev) || return nothing
   adder = filter_adder(v)
   ev.window.focus === adder || return (focus(editor(v)); handled)
   words = String(strip(adder.text))
@@ -11833,6 +11843,7 @@ onkey(v::FilterView, ev::KeyPress{Keys.enter}) = begin
   handled
 end
 onkey(v::FilterView, ev::KeyPress{Keys.escape}) = begin
+  unmodified(ev) || return nothing
   adder = filter_adder(v)
   adder.text, adder.cursor, adder.anchor = "", 0, 0
   focus(editor(v))
@@ -11955,8 +11966,9 @@ describe(m::FilterMenu) = begin
 end
 
 # The menu sees a key before its text field does. Return keeps what's chosen, and esc puts back the lines that the block had.
-onkey(m::FilterMenu, ::KeyPress{Keys.enter}) = close_filter_menu!(m.of)
-onkey(m::FilterMenu, ::KeyPress{Keys.escape}) = begin
+onkey(m::FilterMenu, ev::KeyPress{Keys.enter}) = unmodified(ev) ? close_filter_menu!(m.of) : nothing
+onkey(m::FilterMenu, ev::KeyPress{Keys.escape}) = begin
+  unmodified(ev) || return nothing
   v = m.of
   was = v.was
   close_filter_menu!(v)
@@ -13446,9 +13458,9 @@ onpinch(v::MapView, ev::Pinch) = pinch_open(v, ev)
 onkey(a::MapArea, ev::KeyPress{Keys.mouse_left}) = begin
   v = a.of
   # A click on the pin of a place from the rest of the page goes to the place's line
-  o = held(v, Keys.opt) ? nothing : other_at(v)
+  o = only_held(v, Keys.opt) ? nothing : other_at(v)
   o === nothing || (hide_tooltip!(ev.window); return show_line!(editor(v), o.line))
-  (held(v, Keys.opt) || !map_moves(v)) && return nothing
+  (only_held(v, Keys.opt) || !map_moves(v)) && return nothing
   w = ev.window
   focus(editor(v))
   v.grab = (from=(num(w.mouse[1]), num(w.mouse[2])), middle=map_middle(v), dragged=false)
@@ -13664,7 +13676,7 @@ describe(v::AskView) = begin
 end
 
 # Return in the field gives the keyboard back to the page
-onkey(v::AskView, ::KeyPress{Keys.enter}) = (focus(editor(v)); handled)
+onkey(v::AskView, ev::KeyPress{Keys.enter}) = unmodified(ev) ? (focus(editor(v)); handled) : nothing
 
 "The question as HTML: its words, and each answer with a mark on the ones that are chosen"
 ask_html(e, v::AskView) = begin
@@ -14016,8 +14028,8 @@ cursor(::ChangesView) = :arrow
 cursor(a::HunkArea) = a.over == 0 ? :arrow : :hand
 
 # Return closes the field for a comment, and Esc puts back what the comment said before
-onkey(v::ChangesView, ::KeyPress{Keys.enter}) = v.noting === nothing ? nothing : (stop_noting!(v); handled)
-onkey(v::ChangesView, ::KeyPress{Keys.escape}) = v.noting === nothing ? nothing : (stop_noting!(v, keep=false); handled)
+onkey(v::ChangesView, ev::KeyPress{Keys.enter}) = unmodified(ev) ? (v.noting === nothing ? nothing : (stop_noting!(v); handled)) : nothing
+onkey(v::ChangesView, ev::KeyPress{Keys.escape}) = unmodified(ev) ? (v.noting === nothing ? nothing : (stop_noting!(v, keep=false); handled)) : nothing
 
 "The line of the change of `a` at the place `x`, `y` of the window: a row of the change or the comment on one. 0 when no line is there."
 row_at(a::HunkArea, x, y) = begin
@@ -14037,7 +14049,7 @@ onmouse(a::HunkArea, ev::MouseMove) = (a.over = readonly(editor(a.of).buf) ? 0 :
 # A click on a line opens the field for what you say about it
 onkey(a::HunkArea, ev::KeyPress{Keys.mouse_left}) = begin
   # With ⌥ held, the click is the page's, and it shows the block's lines
-  (readonly(editor(a.of).buf) || held(a, Keys.opt)) && return nothing
+  (readonly(editor(a.of).buf) || only_held(a, Keys.opt)) && return nothing
   j = row_at(a, num(ev.window.mouse[1]), num(ev.window.mouse[2]))
   j == 0 ? stop_noting!(a.of) : a.of.noting == (a.k, j) || noting!(a.of, a.k, j)
   handled
@@ -14647,8 +14659,8 @@ settle!(v::CalendarView; keep=true) = begin
   handled
 end
 
-onkey(v::CalendarView, ::KeyPress{Keys.enter}) = v.adding === nothing ? nothing : settle!(v)
-onkey(v::CalendarView, ::KeyPress{Keys.escape}) = v.adding === nothing ? nothing : settle!(v, keep=false)
+onkey(v::CalendarView, ev::KeyPress{Keys.enter}) = unmodified(ev) ? (v.adding === nothing ? nothing : settle!(v)) : nothing
+onkey(v::CalendarView, ev::KeyPress{Keys.escape}) = unmodified(ev) ? (v.adding === nothing ? nothing : settle!(v, keep=false)) : nothing
 # A click beside a button is the block's, and doesn't move the caret
 onkey(v::CalendarView, ::KeyPress{Keys.mouse_left}) = (settle!(v); handled)
 # A drag is the calendar's, so the page's text doesn't select
@@ -15835,13 +15847,13 @@ placed!(m::ChoiceMenu, side) = (m.side = side; nothing)
 draw(ctx, size, ui::ConcreteRect, m::ChoiceMenu) = caret(ctx, ui, m.side, rect(m.button))
 
 # The list sees a key before its field does. The arrows pick a row, Return takes it, and Esc closes the list.
-onkey(m::ChoiceMenu, ::KeyPress{Keys.enter}) = choose!(m.of, m.of.pick)
-onkey(m::ChoiceMenu, ::KeyPress{Keys.escape}) = stop_choosing!(m.of)
-onkey(m::ChoiceMenu, ::KeyPress{Keys.down}) = (v = m.of; v.pick = min(v.pick + 1, max(1, length(v.rows))); handled)
-onkey(m::ChoiceMenu, ::KeyPress{Keys.up}) = (v = m.of; v.pick = max(v.pick - 1, 1); handled)
+onkey(m::ChoiceMenu, ev::KeyPress{Keys.enter}) = unmodified(ev) ? choose!(m.of, m.of.pick) : nothing
+onkey(m::ChoiceMenu, ev::KeyPress{Keys.escape}) = unmodified(ev) ? stop_choosing!(m.of) : nothing
+onkey(m::ChoiceMenu, ev::KeyPress{Keys.down}) = unmodified(ev) ? (v = m.of; v.pick = min(v.pick + 1, max(1, length(v.rows))); handled) : nothing
+onkey(m::ChoiceMenu, ev::KeyPress{Keys.up}) = unmodified(ev) ? (v = m.of; v.pick = max(v.pick - 1, 1); handled) : nothing
 
 # Return in the field gives the keyboard back to the page
-onkey(v::SearchView, ::KeyPress{Keys.enter}) = (focus(editor(v)); handled)
+onkey(v::SearchView, ev::KeyPress{Keys.enter}) = unmodified(ev) ? (focus(editor(v)); handled) : nothing
 
 """
 The Markdown files in `folder`, then those of each folder in it, in the order
@@ -17023,7 +17035,7 @@ cursor(::SketchView) = :arrow
 onkey(a::SketchArea, ev::KeyPress{Keys.mouse_left}) = begin
   v, w = a.of, ev.window
   # In the page, a click makes the sketch fill the window, where its tools are. With ⌥ held, the page shows its lines.
-  v.full || return held(v, Keys.opt) ? nothing : full!(v, true)
+  v.full || return only_held(v, Keys.opt) ? nothing : full!(v, true)
   readonly(editor(v).buf) && return handled
   p = sketch_place(v, w)
   twice = click_twice!(v, num(w.mouse[1]), num(w.mouse[2]))
@@ -17123,9 +17135,9 @@ stop_asking!(v::SketchView) = begin
 end
 
 # Return takes the number that was typed for how a shape is drawn, and Esc leaves the number as it was
-onkey(v::SketchView, ::KeyPress{Keys.enter}) =
+onkey(v::SketchView, ev::KeyPress{Keys.enter}) = !unmodified(ev) ? nothing :
   v.typing !== nothing ? (settle_number!(v); focus(sketch_area(v)); handled) : v.asking === nothing ? nothing : answer!(v)
-onkey(v::SketchView, ::KeyPress{Keys.escape}) =
+onkey(v::SketchView, ev::KeyPress{Keys.escape}) = !unmodified(ev) ? nothing :
   v.typing !== nothing ? (v.typing = nothing; focus(sketch_area(v)); handled) : v.asking === nothing ? nothing : stop_asking!(v)
 onmouse(v::SketchView, ::MouseMove) = v.full || (held(v, Keys.mouse_left) && (v.draft !== nothing || v.grab !== nothing)) ? handled : nothing
 # A click beside a button of a sketch that fills the window is the sketch's, and not the page's under it
@@ -17166,7 +17178,8 @@ end
 
 # Esc lets go of the shape that's selected, then chooses the arrow tool, then puts a sketch that fills the window
 # back in the page, then gives the keyboard back to the text. Delete takes the shape away.
-onkey(a::SketchArea, ::KeyPress{Keys.escape}) = begin
+onkey(a::SketchArea, ev::KeyPress{Keys.escape}) = begin
+  unmodified(ev) || return nothing
   v = a.of
   v.picked > 0 && return (v.picked = 0; handled)
   v.tool == :select || return (v.tool = :select; handled)
@@ -17174,7 +17187,7 @@ onkey(a::SketchArea, ::KeyPress{Keys.escape}) = begin
 end
 onkey(a::SketchArea, ::KeyPress{K}) where K = begin
   v = a.of
-  K in (Keys.backspace, Keys.delete) && return v.picked > 0 ? act!(v, :delete, window_of(a)) : handled
+  K in (Keys.backspace, Keys.delete) && unmodified(window_of(a)) && return v.picked > 0 ? act!(v, :delete, window_of(a)) : handled
   if (command = command_of(editor(v), window_of(a), K)) in (:undo, :redo)
     b = editor(v).buf
     command == :redo ? redo!(b) : undo!(b)
@@ -17424,6 +17437,7 @@ draw(ctx, size, ui::ConcreteRect, l::TaskOffers) = caret(ctx, ui, l.side, rect(t
 # The keys that a field of the log has no use for come here. Return in the field of a row writes what's typed
 # there. In the top field, it takes the task that's picked in the list, or does what the button does.
 onkey(v::TimelogView, ev::KeyPress{Keys.enter}) = begin
+  unmodified(ev) || return nothing
   w = ev.window
   if w.focus === cell_input(v)
     settle_cell!(v) && focus(editor(v))
@@ -17438,6 +17452,7 @@ onkey(v::TimelogView, ev::KeyPress{Keys.enter}) = begin
 end
 # Esc leaves a row as it was. In the top field, it closes the list, and then gives the keyboard back to the page.
 onkey(v::TimelogView, ev::KeyPress{Keys.escape}) = begin
+  unmodified(ev) || return nothing
   w = ev.window
   if w.focus === cell_input(v)
     v.editing, v.wrong = nothing, false
@@ -17449,8 +17464,8 @@ onkey(v::TimelogView, ev::KeyPress{Keys.escape}) = begin
   end
   handled
 end
-onkey(v::TimelogView, ::KeyPress{Keys.down}) = isempty(v.offers) ? nothing : (v.pick = min(v.pick + 1, length(v.offers)); handled)
-onkey(v::TimelogView, ::KeyPress{Keys.up}) = isempty(v.offers) ? nothing : (v.pick = max(v.pick - 1, 0); handled)
+onkey(v::TimelogView, ev::KeyPress{Keys.down}) = unmodified(ev) ? (isempty(v.offers) ? nothing : (v.pick = min(v.pick + 1, length(v.offers)); handled)) : nothing
+onkey(v::TimelogView, ev::KeyPress{Keys.up}) = unmodified(ev) ? (isempty(v.offers) ? nothing : (v.pick = max(v.pick - 1, 0); handled)) : nothing
 
 "True when the log is too narrow for a column of days. Each day is then on a line of its own, over its rows."
 log_narrow(v::TimelogView) = editor(v).width < LOG_NARROW
@@ -17870,8 +17885,8 @@ block_tick!(v::ContactView) = begin
 end
 
 # The keys that the field has no use for come here. Return keeps what's typed, and esc leaves the words as they were.
-onkey(v::ContactView, ev::KeyPress{Keys.enter}) = ev.window.focus === contact_input(v) ? (settle!(v); focus(editor(v)); handled) : nothing
-onkey(v::ContactView, ev::KeyPress{Keys.escape}) = ev.window.focus === contact_input(v) ? (v.editing = nothing; focus(editor(v)); handled) : nothing
+onkey(v::ContactView, ev::KeyPress{Keys.enter}) = unmodified(ev) ? (ev.window.focus === contact_input(v) ? (settle!(v); focus(editor(v)); handled) : nothing) : nothing
+onkey(v::ContactView, ev::KeyPress{Keys.escape}) = unmodified(ev) ? (ev.window.focus === contact_input(v) ? (v.editing = nothing; focus(editor(v)); handled) : nothing) : nothing
 
 # Return, while the caret is on the block as a whole, starts on the name of its first contact
 keyboard_part(v::ContactView) = locked(v) ? nothing : (v.editing === nothing && change!(v, 1, :name); contact_input(v))
@@ -17958,7 +17973,7 @@ cursor(t::ContactWords) = :arrow
 # Two clicks change the words. A contact with no name takes its name at the first click. Any other click goes on to the page.
 onkey(t::ContactWords, ev::KeyPress{Keys.mouse_left}) = begin
   v = t.of
-  (held(v, Keys.opt) || locked(v) || v.editing == (t.k, t.i)) && return nothing
+  (only_held(v, Keys.opt) || locked(v) || v.editing == (t.k, t.i)) && return nothing
   twice = contact_twice!(v, (t.k, t.i), ev.window)
   settle!(v) && return nothing   # the click kept what was being changed, and the lines aren't where they were
   nameless = t.i === :name && isempty(Contacts.title(contact_of(v, t.k)))
@@ -18013,7 +18028,7 @@ end
 # the row's value. The click goes on to the page, which takes the keyboard back from the field.
 onkey(r::ContactRow, ev::KeyPress{Keys.mouse_left}) = begin
   v = r.of
-  (held(v, Keys.opt) || v.editing == (r.k, r.i)) && return nothing
+  (only_held(v, Keys.opt) || v.editing == (r.k, r.i)) && return nothing
   twice = contact_twice!(v, (r.k, r.i), ev.window)
   settle!(v) && return nothing   # the click kept what was being changed, and the lines aren't where they were
   c = contact_of(v, r.k)
@@ -18326,7 +18341,7 @@ cursor(::SignatureView) = :arrow
 # name's field. With ⌥ held the page shows the block's lines, and a page that can't be changed takes no strokes.
 onkey(a::SignArea, ev::KeyPress{Keys.mouse_left}) = begin
   v = a.of
-  (held(v, Keys.opt) || locked(v) || v.box[3] <= 0) && return nothing
+  (only_held(v, Keys.opt) || locked(v) || v.box[3] <= 0) && return nothing
   v.draft === nothing || drop!(v)   # a stroke that no frame has taken yet
   v.draft = Signatures.Place[sign_place(v, ev.window.mouse)]
   v.stay = editor(v).scroll.offset
@@ -18402,7 +18417,7 @@ act!(v::SignatureView, action, w) = begin
 end
 
 # Return in the name's field gives the keyboard back to the page
-onkey(v::SignatureView, ::KeyPress{Keys.enter}) = (focus(editor(v)); handled)
+onkey(v::SignatureView, ev::KeyPress{Keys.enter}) = unmodified(ev) ? (focus(editor(v)); handled) : nothing
 
 "The signature as HTML: a picture of the box and its strokes, with who signed and when under it"
 signature_html(e, v::SignatureView) = begin
@@ -18561,8 +18576,8 @@ describe(c::LinkCard) = begin
     (across > 0px ? (covered(c.picture, across, inside),) : ())...)
 end
 
-"True when a click on the card now opens its address: ⌘ is held, or the page is one that's never changed"
-opening(c::LinkCard) = held(c, Keys.cmd) || (editor(c).buf.fixed && !held(c, Keys.shft))
+"True when a click on the card now opens its address: ⌘ alone is held, or the page is one that's never changed and no key is held"
+opening(c::LinkCard) = only_held(c, Keys.cmd) || (editor(c).buf.fixed && unmodified(c))
 
 cursor(c::LinkCard) = opening(c) ? :hand : :ibeam
 # A click with ⌘ held opens the address. Any other click puts the caret on the card's line, so the line shows as it's written.
@@ -18805,20 +18820,21 @@ cursor(v::WebView) = :arrow
 # ⌥ held the document shows the block's lines. A click beside a button of one that fills the window is the block's.
 onkey(v::WebView, ::KeyPress{Keys.mouse_left}) = begin
   v.full && return (focus(web_browser(v)); handled)
-  held(v, Keys.opt) && return nothing
-  held(v, Keys.cmd) && return (isempty(web_address(v)) || BROWSER[](web_address(v)); handled)
+  only_held(v, Keys.opt) && return nothing
+  only_held(v, Keys.cmd) && return (isempty(web_address(v)) || BROWSER[](web_address(v)); handled)
   full!(v, true)
 end
 
 # Return in the field goes to the address that's typed there. Esc leaves the field first, and then puts the block
 # back in the document. The page has taken its own Esc by then: see web/browser.jl.
-onkey(v::WebView, ev::KeyPress{Keys.enter}) = v.full && ev.window.focus === web_input(v) ? web_go!(v) : nothing
+onkey(v::WebView, ev::KeyPress{Keys.enter}) = unmodified(ev) ? (v.full && ev.window.focus === web_input(v) ? web_go!(v) : nothing) : nothing
 onkey(v::WebView, ev::KeyPress{Keys.escape}) = begin
+  unmodified(ev) || return nothing
   v.full || return nothing
   ev.window.focus === web_input(v) ? (focus(web_browser(v)); handled) : full!(v, false)
 end
 onkey(v::WebView, ev::KeyPress{K}) where K = begin
-  (v.full && Keys.cmd in ev.window.keys) || return nothing
+  (v.full && only_held(ev, Keys.cmd)) || return nothing
   K == Keys.l && return (focus(web_input(v)); tabbed!(web_input(v)); handled)
   K == Keys.r && return act!(v, :reload, ev.window)
   K == Keys.left_bracket && return act!(v, :back, ev.window)
@@ -19265,9 +19281,9 @@ onkey(t::DayTrack, ev::KeyPress{Keys.mouse_left}) = begin
   v.at = day_near(v, num(ev.window.mouse[1]))
   handled
 end
-onkey(t::DayTrack, ::KeyPress{Keys.left}) = act!(t.of, :back, nothing)
-onkey(t::DayTrack, ::KeyPress{Keys.right}) = act!(t.of, :on, nothing)
-onkey(t::DayTrack, ::KeyPress{Keys.escape}) = (focus(editor(t.of)); handled)
+onkey(t::DayTrack, ev::KeyPress{Keys.left}) = unmodified(ev) ? act!(t.of, :back, nothing) : nothing
+onkey(t::DayTrack, ev::KeyPress{Keys.right}) = unmodified(ev) ? act!(t.of, :on, nothing) : nothing
+onkey(t::DayTrack, ev::KeyPress{Keys.escape}) = unmodified(ev) ? (focus(editor(t.of)); handled) : nothing
 # A click beside a button is the block's, and doesn't move the caret
 onkey(::DayView, ::KeyPress{Keys.mouse_left}) = handled
 # A drag is the slider's, so the page's text doesn't select
@@ -19524,7 +19540,7 @@ end
 scrub_to!(e, pos) = begin
   s = e.nodes[:scrub]
   b = e.buf
-  steps = round(Int, (num(pos[1]) - s.x) / SCRUB_STEP) * (held(e, Keys.shft) ? 10 : 1)
+  steps = round(Int, (num(pos[1]) - s.x) / SCRUB_STEP) * (only_held(e, Keys.shft) ? 10 : 1)
   (steps == s.steps || !(1 <= s.line <= length(b.lines))) && return e
   new = nudged(s.text, steps)
   caret, anchor = b.caret, b.anchor
@@ -20918,7 +20934,7 @@ end
 cursor(::EmailHead) = :arrow
 onkey(h::EmailHead, ::KeyPress{Keys.mouse_left}) = (focus(h); handled)
 # On a page that can change, Return shows the front matter as it's written, as it does for any front matter
-onkey(h::EmailHead, ::KeyPress{Keys.enter}) = caretless(editor(h).buf) ? nothing : edit_matter!(h, isempty(h.rows) ? 1 : first(h.rows)[1])
+onkey(h::EmailHead, ev::KeyPress{Keys.enter}) = unmodified(ev) ? (caretless(editor(h).buf) ? nothing : edit_matter!(h, isempty(h.rows) ? 1 : first(h.rows)[1])) : nothing
 # A key that isn't held with ⌘ or ⌃, like Space or ↓, gives the keyboard back to the page, and the page takes the key.
 # So the keys that scroll an email still scroll it. A shortcut like ⌘E goes on to the window with the top keeping the keyboard.
 onkey(h::EmailHead, ev::KeyPress{K}) where K = begin
@@ -21375,8 +21391,8 @@ describe(d::Document) = begin
     spacer(total - lowest(e, view(items, lo:hi))))
 end
 
-# With ⌘ held, a click on a link opens it, so the mouse shows a hand there. In a page that's never
-# changed, a click on a link opens it with no key held.
+# With ⌘ and no other key held, a click on a link opens it, so the mouse shows a hand there. In a page
+# that's never changed, a click on a link opens it with no key held.
 cursor(d::Document) = begin
   e = editor(d)
   e.buf.view == :file && return :arrow   # a viewer has no text to select
@@ -21388,8 +21404,10 @@ cursor(d::Document) = begin
   # A drag on what a number comes to changes the number
   (haskey(e.nodes, :scrub) || scrub_at(e, w.mouse) !== nothing) && return :resize_x
   # With ⌘ held, a click on a name of Julia code goes to where the name is defined. Julia compiles definition only when ⌘ is first held.
-  Keys.cmd in w.keys && !(Keys.opt in w.keys) && link_at(e, w.mouse) === nothing && Base.invokelatest(definition, e, locate(e, w.mouse)) !== nothing && return :hand
-  (Keys.cmd in w.keys && link_at(e, w.mouse) !== nothing) || (e.buf.fixed && link_on(e, w.mouse) !== nothing) ? :hand : :ibeam
+  # ⌘ with another key held, like ⇧ or ⌃, does neither, so the mouse isn't a hand.
+  cmd = only_held(w, Keys.cmd)
+  cmd && link_at(e, w.mouse) === nothing && Base.invokelatest(definition, e, locate(e, w.mouse)) !== nothing && return :hand
+  (cmd && link_at(e, w.mouse) !== nothing) || (e.buf.fixed && unmodified(w) && link_on(e, w.mouse) !== nothing) ? :hand : :ibeam
 end
 
 """
@@ -21826,6 +21844,23 @@ end
 
 held(node, key) = (w = window_of(node); w !== nothing && key in w.keys)
 
+"The keys of ⌃, ⌘, ⌥ and ⇧ that are down in the window `w`"
+held_keys(w::Window) = w.keys & HELD
+
+"""
+True when the keys of ⌃, ⌘, ⌥ and ⇧ that are down are `keys` and no others,
+like `Keys.cmd` for ⌘ alone. It takes a window, the event of a key, a click or
+the wheel, or a part of a window. Each key and click that does something else
+with ⌃, ⌘, ⌥ or ⇧ held asks this, so each does it only with the keys that it's
+for. A key that holds all four, like a hyper key, does none of those things.
+"""
+only_held(w::Window, keys::Keys) = held_keys(w) == keys
+only_held(ev::Union{KeyPress,KeyRelease,MouseScroll,Typed}, keys::Keys) = only_held(ev.window, keys)
+only_held(node, keys::Keys) = (w = window_of(node); w === nothing ? keys == Keys(0) : only_held(w, keys))
+
+"True when no key of ⌃, ⌘, ⌥ and ⇧ is down: in a window, with a key's event, or in the window of a part"
+unmodified(x) = only_held(x, Keys(0))
+
 "The caret moved or the text changed, so show the caret"
 touch!(e; keep_goal=false) = begin
   e.buf.reading = false
@@ -21897,7 +21932,7 @@ press!(e, pos) = begin
   # Julia compiles line_history! and definition! when they're first used, not with this function, so a first click doesn't wait for them.
   numbered = number_at(e, pos)
   numbered === nothing || Base.invokelatest(line_history!, e, numbered)
-  box = held(e, Keys.opt) ? nothing : todo_at(e, pos)
+  box = only_held(e, Keys.opt) ? nothing : todo_at(e, pos)
   if box !== nothing
     # A click on a to-do item's box ticks it, and doesn't move the caret
     focus(e)
@@ -21906,10 +21941,10 @@ press!(e, pos) = begin
     return tick!(e, box)
   end
   # A press on what a number comes to takes hold of the number: a drag then changes it
-  found = any(k -> held(e, k), (Keys.opt, Keys.cmd, Keys.shft)) ? nothing : scrub_at(e, pos)
+  found = unmodified(e) ? scrub_at(e, pos) : nothing
   found === nothing || return scrub!(e, found, pos)
   it = e.layout[item_under(e, pos[1] - e.origin[1], pos[2] - e.origin[2])]
-  made = held(e, Keys.opt) ? nothing : inline_at(e, pos)
+  made = only_held(e, Keys.opt) ? nothing : inline_at(e, pos)
   # A click on a formula in a line of text puts the caret beside it, as a click on a word does
   if made !== nothing && !(made.node isa Equation)
     # What inline code made takes its own clicks, as a live block does. A click with ⌥ held shows the code.
@@ -21918,7 +21953,7 @@ press!(e, pos) = begin
     took(e) || focus(e)
     return
   end
-  if it.content isa Live && !held(e, Keys.opt)
+  if it.content isa Live && !only_held(e, Keys.opt)
     # A live block takes its own clicks. A part of it that took the keyboard, like a text field, keeps it.
     e.popup = :none
     e.clicked = (time(), (it.first, 0), 0)
@@ -21927,13 +21962,14 @@ press!(e, pos) = begin
   end
   focus(e)
   e.popup = :none
-  if held(e, Keys.cmd)
+  # ⌘ with another key held, like ⇧ or ⌃, opens no link
+  if only_held(e, Keys.cmd)
     url = link_at(e, pos)
     url === nothing || return follow!(e, url)
     # In Julia code, a click on a name goes to where the name is defined
-    it.content isa Flow && !held(e, Keys.opt) && !held(e, Keys.shft) && Base.invokelatest(definition!, e, locate(e, pos)) === true && return
-  elseif b.fixed && !held(e, Keys.shft)
-    # A page that's never changed has no caret for a click to place, so a click on a link opens it
+    it.content isa Flow && Base.invokelatest(definition!, e, locate(e, pos)) === true && return
+  elseif b.fixed && only_held(e, Keys(0))
+    # A page that's never changed has no caret for a click to place, so a click with no key held on a link opens it
     url = link_on(e, pos)
     url === nothing || return follow!(e, url)
   end
@@ -21944,7 +21980,7 @@ press!(e, pos) = begin
     return touch!(e)
   end
   it.content isa Sheet && press!(e, it, it.content, pos) && return touch!(e)
-  if it.content isa Grid && isspread(it.content) && held(e, Keys.opt)
+  if it.content isa Grid && isspread(it.content) && only_held(e, Keys.opt)
     # A click on a spreadsheet with ⌥ held shows it as lines of code
     b.caret = b.anchor = line_end(b, it.first)
     return touch!(e)
@@ -21963,7 +21999,7 @@ press!(e, pos) = begin
     b.anchor, b.caret = (at[1], lo), (at[1], hi)
   else
     b.caret = at
-    held(e, Keys.shft) || (b.anchor = at)
+    only_held(e, Keys.shft) || (b.anchor = at)
   end
   touch!(e)
 end
@@ -21976,15 +22012,17 @@ a screen, and Space, scroll a screen less a little, so a line or two stays in
 sight. Home, End and the keys that move the caret to the top or the bottom of
 the page scroll that far.
 """
-read_step(e, K, command, shift) = begin
+read_step(e, K, command, down) = begin
   screen = e.scroll.viewport - 40px
+  # Home, End and Space with no command scroll only by themselves, with no key of ⌃, ⌘, ⌥ and ⇧ held. Space with ⇧ goes back.
+  plain = down == Keys(0)
   command == :up ? -50px :
   command == :down ? 50px :
   command == :page_up ? -screen :
   command == :page_down ? screen :
-  command == :doc_start || (K == Keys.home && command in (nothing, :line_start)) ? px(-Inf) :
-  command == :doc_end || (K == Keys._end && command in (nothing, :line_end)) ? px(Inf) :
-  command === nothing && K == Keys.space ? (shift ? -screen : screen) : nothing
+  command == :doc_start || (K == Keys.home && (command == :line_start || (command === nothing && plain))) ? px(-Inf) :
+  command == :doc_end || (K == Keys._end && (command == :line_end || (command === nothing && plain))) ? px(Inf) :
+  command === nothing && K == Keys.space && (plain || down == Keys.shft) ? (plain ? screen : -screen) : nothing
 end
 
 "Scroll the page by `by`, as far as it goes"
@@ -24070,7 +24108,7 @@ onkey(e::Editor, ev::KeyPress{K}) where K = begin
   zoomed === nothing || e.popup != :none || zoom_key!(zoomed, K, w, command) !== handled || return
   # While the page shows as slides, the keys go from one slide to another. Esc shows the page again.
   slideshow(e) === nothing || slide_key!(e, K, w, command) !== handled || return
-  shift, cmd, opt = Keys.shft in w.keys, Keys.cmd in w.keys, Keys.opt in w.keys
+  shift = only_held(w, Keys.shft)
   b = e.buf
   # While a part of a live block has the keyboard, the keys are its own and don't change the text.
   # Escape gives the keyboard back to the text. A command for the window, like the one that saves, still runs.
@@ -24079,7 +24117,7 @@ onkey(e::Editor, ev::KeyPress{K}) where K = begin
       find_key!(e, w, K, command)
     elseif w.focus === renamer(e)
       rename_key!(e, K)
-    elseif K == Keys.escape
+    elseif K == Keys.escape && unmodified(w)
       hide_menu!(w)
       focus(e)
     elseif command in (:sidebar, :sidebar_keys) && w.focus === file_tree(e)
@@ -24097,14 +24135,14 @@ onkey(e::Editor, ev::KeyPress{K}) where K = begin
   end
   e.popup == :finder && return (finder_key!(e, K); K == Keys.tab ? handled : nothing)
   # The list of names under a sheet's expression takes ↑, ↓, Return, Tab and esc
-  !cmd && !opt && !shift && suggest_key!(e, K) && return nothing
+  unmodified(w) && suggest_key!(e, K) && return nothing
   # Esc hides the box that lists what a function takes
-  !cmd && !opt && !shift && call_key!(e, K) && return nothing
+  unmodified(w) && call_key!(e, K) && return nothing
   # While the page is read, there's no caret to move, so the keys that would move it scroll the
   # page. A key that would change the text at the caret does nothing. Any other command still
   # works, and one that moves the caret, like undo, puts it back.
   if caretless(b) || readonly(b)
-    step = read_step(e, K, command, shift)
+    step = read_step(e, K, command, held_keys(w))
     step === nothing || return (scroll_page!(e, step); nothing)
     K == Keys.escape || kind in (:window, :look, :edit) || return nothing
   end
@@ -24112,9 +24150,9 @@ onkey(e::Editor, ev::KeyPress{K}) where K = begin
   if readonly(b) && K != Keys.escape
     kind == :window || (kind == :look && b.view != :file) || return nothing
   end
-  if K == Keys.escape && finding(e)
+  if K == Keys.escape && finding(e) && unmodified(w)
     close_find!(e)
-  elseif K == Keys.escape
+  elseif K == Keys.escape && unmodified(w)
     # Escape closes a popup. With none open, it takes away what the page's code came to. With
     # none of that either, it hides the caret, and so every line shows as it reads.
     if e.popup != :none
@@ -24133,7 +24171,7 @@ onkey(e::Editor, ev::KeyPress{K}) where K = begin
     end
   elseif command !== nothing
     run!(e, w, command, select)
-  elseif K == Keys.enter
+  elseif K == Keys.enter && (unmodified(w) || shift)
     each_selection!(() -> newline!(e), e)
   end
   nothing
@@ -25553,7 +25591,7 @@ a key that the page still takes: the key of a command in `SLIDE_COMMANDS`, and
 Esc while a part of a block has the keyboard, which gives the keyboard back.
 """
 slide_key!(e, K, w, command) = begin
-  if K == Keys.escape
+  if K == Keys.escape && unmodified(w)
     (w.focus === e || w.focus === nothing) || return nothing
     return end_slides!(e)
   end
@@ -25561,9 +25599,10 @@ slide_key!(e, K, w, command) = begin
   command in SLIDE_COMMANDS && return nothing
   # A sketch that fills the window has the keys that come this far
   full_block(e) === nothing || return handled
-  (Keys.cmd in w.keys || Keys.ctrl in w.keys || Keys.opt in w.keys) && return handled
+  # Each key turns the slides only by itself. Space with ⇧ goes back.
+  back = K == Keys.space && only_held(w, Keys.shft)
+  (unmodified(w) || back) || return handled
   s = slideshow(e)
-  back = Keys.shft in w.keys
   K in (Keys.right, Keys.down, Keys.pagedown, Keys.enter) || (K == Keys.space && !back) ? go_slide!(e, s.at + 1) :
   K in (Keys.left, Keys.up, Keys.pageup) || (K == Keys.space && back) ? go_slide!(e, s.at - 1) :
   K == Keys.home ? go_slide!(e, 1) :
@@ -25597,6 +25636,8 @@ slide_press!(e, pos) = begin
   box === nothing || return (focus(e); tick!(e, box); handled)
   takes_click(e) && return nothing
   focus(e)
+  # A click with a key of ⌃, ⌘, ⌥ or ⇧ held opens no link and turns no slide
+  unmodified(e) || return handled
   url = link_on(e, pos)
   url === nothing || return (follow!(e, url); handled)
   s = slideshow(e)
@@ -25606,7 +25647,7 @@ end
 "The mouse over a slide is a hand on a to-do item's box and on a link, and an arrow anywhere else"
 slide_cursor(e) = begin
   w = window_of(e)
-  w !== nothing && (todo_at(e, w.mouse) !== nothing || link_on(e, w.mouse) !== nothing) ? :hand : :arrow
+  w !== nothing && (todo_at(e, w.mouse) !== nothing || (unmodified(w) && link_on(e, w.mouse) !== nothing)) ? :hand : :arrow
 end
 
 """
@@ -26311,6 +26352,7 @@ end
 
 "Return gives the file the name that's typed, and esc leaves it with the name it has"
 rename_key!(e, K) = begin
+  unmodified(e) || return nothing
   if K == Keys.escape
     stop_rename!(e)
   elseif K == Keys.enter && finish_rename!(e)
@@ -26835,6 +26877,9 @@ end
 
 finder_key!(e, K) = begin
   found = matches(e)
+  # Esc, Return, ↓ and ↑ do what they do here only by themselves
+  stepping = K in (Keys.escape, Keys.enter, Keys.down, Keys.up)
+  stepping && !unmodified(e) && return nothing
   if K == Keys.escape
     e.popup = :none
     focus(e)
@@ -28023,6 +28068,10 @@ palette_key!(e, w, K, command) = begin
   p = palette(e)
   palette_sync!(e, p)
   command == :commands && return close_palette!(e)
+  # Esc, Return, ↑, ↓ and ⌫ do what they do here only by themselves. Tab can have ⇧ with it, to go back. ⌥ goes down by itself.
+  K in (Keys.escape, Keys.enter, Keys.up, Keys.down, Keys.backspace) && !unmodified(w) && return nothing
+  K == Keys.tab && !(unmodified(w) || only_held(w, Keys.shft)) && return nothing
+  K == Keys.opt && setdiff(held_keys(w), Keys.opt) != Keys(0) && return nothing
   if K == Keys.escape
     # Esc empties the bar. In an empty bar, it closes the palette.
     p.command === nothing && isempty(input(e).text) ? close_palette!(e) : palette_clear!(e, p)
@@ -28035,7 +28084,7 @@ palette_key!(e, w, K, command) = begin
       isempty(palette_ghost(e, p)) || palette_text!(e, p, first(palette_rows(e, p)).name)
     end
   elseif K == Keys.tab
-    palette_tab!(e, p, Keys.shft in w.keys ? -1 : 1)
+    palette_tab!(e, p, only_held(w, Keys.shft) ? -1 : 1)
   elseif K == Keys.opt
     palette_advanced!(e, p)
   else
@@ -29714,10 +29763,11 @@ end
 
 "What a key does while the bar has the keyboard. `command` is the command that the key bindings give the key, or nothing."
 find_key!(e, w, K, command) = begin
-  if K == Keys.escape
+  if K == Keys.escape && unmodified(w)
     close_find!(e)
-  elseif K == Keys.enter
-    find_step!(e, Keys.shft in w.keys ? -1 : 1)
+  elseif K == Keys.enter && (unmodified(w) || only_held(w, Keys.shft))
+    # ⇧Return goes back to the place found before
+    find_step!(e, only_held(w, Keys.shft) ? -1 : 1)
   elseif command == :find
     i = find_input(e)
     i.anchor, i.cursor = 0, length(i.text)
@@ -31495,8 +31545,9 @@ describe(m::NameMenu) = begin
 end
 
 # The menu sees a key before its text field does. Return keeps what the field holds, and esc puts back what it held before.
-onkey(m::NameMenu, ::KeyPress{Keys.enter}) = close_menu!(m.of)
-onkey(m::NameMenu, ::KeyPress{Keys.escape}) = begin
+onkey(m::NameMenu, ev::KeyPress{Keys.enter}) = unmodified(ev) ? close_menu!(m.of) : nothing
+onkey(m::NameMenu, ev::KeyPress{Keys.escape}) = begin
+  unmodified(ev) || return nothing
   t = m.of.detail
   m.column == 2 || keep!(t, m.column, t.was)
   close_menu!(m.of)
@@ -33095,11 +33146,11 @@ onkey(a::SentPage, ev::KeyPress{Keys.mouse_left}) = begin
   n = time() - t < 0.4 && before == at ? n % 3 + 1 : 1
   a.clicked = (time(), at, n)
   a.grain = n
-  a.grown = n == 2 ? Webpages.word(s, at) : n == 3 ? Webpages.paragraph(s, at) : held(a, Keys.shft) ? (a.anchor, a.anchor) : (at, at)
+  a.grown = n == 2 ? Webpages.word(s, at) : n == 3 ? Webpages.paragraph(s, at) : only_held(a, Keys.shft) ? (a.anchor, a.anchor) : (at, at)
   sent_select!(a, at)
   a.down = (w.mouse[1], w.mouse[2])
   l = sent_link(a)
-  a.link = l === nothing || held(a, Keys.opt) || held(a, Keys.shft) ? "" : l.url
+  a.link = l === nothing || !unmodified(a) ? "" : l.url
   nothing
 end
 
@@ -33126,10 +33177,10 @@ scroll an email still scroll it. Esc only gives the keyboard back.
 onkey(a::SentPage, ev::KeyPress{K}) where K = begin
   w = ev.window
   (ismouse(K) || K in (Keys.cmd, Keys.ctrl, Keys.opt, Keys.shft, Keys.fn, Keys.capslock)) && return nothing
-  cmd = Keys.cmd in w.keys
+  cmd = only_held(w, Keys.cmd)
   cmd && K == Keys.c && return (sent_copy!(a); handled)
   cmd && K == Keys.a && return (sent_select_all!(a); handled)
-  (cmd || Keys.ctrl in w.keys) && return nothing
+  (Keys.cmd in w.keys || Keys.ctrl in w.keys) && return nothing
   focus(editor(a))
   K == Keys.escape ? handled : nothing
 end
@@ -33297,7 +33348,7 @@ onmouse(f::AttachedFile, ev::MouseMove) = f.cut ?
 
 # A click opens the file, as a click on its link did. A click with ⌥ held is the page's.
 onkey(f::AttachedFile, ::KeyPress{Keys.mouse_left}) = begin
-  held(f, Keys.opt) && return nothing
+  only_held(f, Keys.opt) && return nothing
   isfile(f.path) && open!(editor(f), f.path)
   handled
 end
@@ -34212,8 +34263,12 @@ end
 
 code_picker(e) = get!(() -> CodePicker(editor=e), e.nodes, :code_picker)::CodePicker
 
-"True while a click in the window `w` shows the code of the thing that it's on: after Show Code, or while ⌘ and ⌥ are down"
-picks(t::CodePicker, w) = t.picking || (Keys.cmd in w.keys && Keys.opt in w.keys)
+"""
+True while a click in the window `w` shows the code of the thing that it's on:
+after Show Code, or while ⌘ and ⌥ are down with no other key that's held. With
+⇧ or ⌃ down as well, as with a key that holds all four, it isn't.
+"""
+picks(t::CodePicker, w) = t.picking || only_held(w, Keys.cmd | Keys.opt)
 
 "Give the window of `e` its picker, unless it has a tool, like the layout inspector"
 code_tick!(e) = begin
@@ -35357,7 +35412,7 @@ onkey(v::DesktopView, ev::KeyPress{Keys.mouse_left}) = begin
   at === nothing && return handled
   focus(v)   # a name that was being typed is given to its file, since the field lost the keyboard
   name = icon_at(v, at)
-  more = Keys.cmd in w.keys || Keys.shft in w.keys
+  more = only_held(w, Keys.cmd) || only_held(w, Keys.shft)
   v.moved, v.dragging, v.over = (0.0, 0.0), false, ""
   t, last = v.clicked
   # A click with ⌘ or ⇧, or on the wallpaper, isn't the first of the two clicks that open an icon
@@ -35646,7 +35701,7 @@ end
 onkey(v::DesktopView, ev::KeyPress{K}) where K = begin
   w = ev.window
   e = editor(v)
-  cmd = Keys.cmd in w.keys
+  cmd, none = only_held(w, Keys.cmd), unmodified(w)
   names = sort!(collect(v.chosen))
   if K == Keys.down && cmd
     foreach(n -> desktop_open!(v, n), names)
@@ -35654,9 +35709,9 @@ onkey(v::DesktopView, ev::KeyPress{K}) where K = begin
     desktop_trash!(v, names)
   elseif K == Keys.a && cmd
     v.chosen = Set(v.names)
-  elseif K == Keys.enter && !cmd && length(names) == 1
+  elseif K == Keys.enter && none && length(names) == 1
     rename!(e, joinpath(v.path, only(names)), at=:desktop)
-  elseif !cmd && K in (Keys.left, Keys.right, Keys.up, Keys.down)
+  elseif none && K in (Keys.left, Keys.right, Keys.up, Keys.down)
     desktop_step!(v, (K == Keys.right) - (K == Keys.left), (K == Keys.down) - (K == Keys.up))
   else
     return nothing   # any other key is the window's, like the one that goes back
@@ -36600,9 +36655,9 @@ onkey(v::FileList, ev::KeyPress{Keys.mouse_left}) = begin
   i = filelist_under(v)
   i == 0 && (empty!(v.chosen); v.clicked = (0.0, ""); return handled)
   it = v.lines[i]
-  cmd, shift = Keys.cmd in w.keys, Keys.shft in w.keys
+  cmd, shift, none = only_held(w, Keys.cmd), only_held(w, Keys.shft), unmodified(w)
   t, last = v.clicked
-  if time() - t < 0.4 && last == it.name && !cmd && !shift
+  if time() - t < 0.4 && last == it.name && none
     v.clicked = (0.0, "")
     filelist_open!(v, [it.name])
     return handled
@@ -36617,7 +36672,7 @@ onkey(v::FileList, ev::KeyPress{Keys.mouse_left}) = begin
     v.chosen = Set([it.name])
   end
   v.last = it.name
-  v.clicked = cmd || shift ? (0.0, "") : (time(), it.name)
+  v.clicked = !none ? (0.0, "") : (time(), it.name)
   handled
 end
 
@@ -36651,15 +36706,15 @@ end
 
 onkey(v::FileList, ev::KeyPress{K}) where K = begin
   w = ev.window
-  cmd, shift = Keys.cmd in w.keys, Keys.shft in w.keys
+  cmd, shift, none = only_held(w, Keys.cmd), only_held(w, Keys.shft), unmodified(w)
   names = filelist_chosen(v)
-  if (K == Keys.down && cmd) || (K == Keys.enter && !cmd)
+  if (K == Keys.down && cmd) || (K == Keys.enter && none)
     filelist_open!(v, names)
   elseif K in (Keys.backspace, Keys.delete) && cmd
     v.trash ? filelist_put_back!(v, names) : filelist_trash!(v, names)
   elseif K == Keys.a && cmd
     v.chosen = Set(l.name for l in v.lines if l isa ListItem)
-  elseif !cmd && K in (Keys.up, Keys.down)
+  elseif (none || shift) && K in (Keys.up, Keys.down)
     filelist_step!(v, K == Keys.down ? 1 : -1, shift)
   else
     return nothing   # any other key is the window's, like the one that goes back
@@ -37101,9 +37156,9 @@ onkey(v::TilesView, ev::KeyPress{Keys.mouse_left}) = begin
   end
   t = tile_under(v)
   t === nothing && (empty!(v.chosen); v.clicked = (0.0, ""); return handled)
-  cmd, shift = Keys.cmd in w.keys, Keys.shft in w.keys
+  cmd, shift, none = only_held(w, Keys.cmd), only_held(w, Keys.shft), unmodified(w)
   at, last = v.clicked
-  if time() - at < 0.4 && last == t.name && !cmd && !shift
+  if time() - at < 0.4 && last == t.name && none
     v.clicked = (0.0, "")
     tiles_open!(v, [t.name])
     return handled
@@ -37118,7 +37173,7 @@ onkey(v::TilesView, ev::KeyPress{Keys.mouse_left}) = begin
     v.chosen = Set([t.name])
   end
   v.last = t.name
-  v.clicked = cmd || shift ? (0.0, "") : (time(), t.name)
+  v.clicked = !none ? (0.0, "") : (time(), t.name)
   handled
 end
 
@@ -37155,16 +37210,16 @@ end
 
 onkey(v::TilesView, ev::KeyPress{K}) where K = begin
   w = ev.window
-  cmd, shift = Keys.cmd in w.keys, Keys.shft in w.keys
+  cmd, shift, none = only_held(w, Keys.cmd), only_held(w, Keys.shft), unmodified(w)
   names = tiles_chosen(v)
   cols = max(1, floor(Int, (max(num(editor(v).width), TILE_SIDE) + TILE_GAP) / (TILE_SIDE + TILE_GAP)))
-  if (K == Keys.down && cmd) || (K == Keys.enter && !cmd)
+  if (K == Keys.down && cmd) || (K == Keys.enter && none)
     tiles_open!(v, names)
   elseif K in (Keys.backspace, Keys.delete) && cmd
     tiles_trash!(v, names)
   elseif K == Keys.a && cmd
     v.chosen = Set(t.name for t in tiles_shown(v))
-  elseif !cmd && K in (Keys.left, Keys.right, Keys.up, Keys.down)
+  elseif (none || shift) && K in (Keys.left, Keys.right, Keys.up, Keys.down)
     tiles_step!(v, K == Keys.left ? -1 : K == Keys.right ? 1 : K == Keys.up ? -cols : cols, shift)
   else
     return nothing   # any other key is the window's, like the one that goes back

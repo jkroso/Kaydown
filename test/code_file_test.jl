@@ -347,6 +347,14 @@ end
   @test K.link_on(e, (e.origin[1] - 20px, y)) === nothing && K.link_on(e, (e.origin[1] + seg.x - 6px, y)) === nothing
   K.press!(e, (e.origin[1] + seg.x - 6px, y)); frames()
   @test e.buf.path == locked
+  # With ⌥ or ⌃ held, or ⌘ with ⇧, a click on the link opens nothing
+  for others in (Keys.opt, Keys.ctrl, Keys.cmd | Keys.shft)
+    w.keys |= others
+    K.press!(e, (e.origin[1] + seg.x + seg.w / 2, y))
+    w.keys = Keys(0)
+    frames()
+    @test e.buf.path == locked
+  end
   K.press!(e, (e.origin[1] + seg.x + seg.w / 2, y)); frames()
   @test e.buf.path == notes
   K.open!(e, locked); frames()

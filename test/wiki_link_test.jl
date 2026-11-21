@@ -8,7 +8,7 @@
 @use "../main" => K
 @use "../markdown" spans wikitarget
 @use "../html" html
-@use "github.com/jkroso/MiniFB.jl" Window KeyPress MouseMove Keys onkey onmouse Typed ontype
+@use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse Typed ontype
 @use "github.com/jkroso/UI.jl/Interface/draw" frame
 @use GeometryBasics: Vec2
 const px = K.px
@@ -89,6 +89,16 @@ end
   x, y = e.origin[1] + seg.x + seg.w / 2, e.origin[2] + it.top + f.above + vl.top + vl.high / 2
   w.mouse = typeof(w.mouse)(x, y)
   onmouse(w, MouseMove(Vec2{px}(x, y), w))
+  here = e.buf.path
+  # With ⇧ or ⌃ held as well as ⌘, or a key that holds all four, the click opens nothing
+  for others in (Keys.shft, Keys.ctrl, Keys.shft | Keys.ctrl | Keys.opt)
+    w.keys |= Keys.cmd | others | Keys.mouse_left
+    onkey(w, KeyPress{Keys.mouse_left}(0, w))
+    w.keys = Keys(0)
+    onkey(w, KeyRelease{Keys.mouse_left}(0, w))
+    frames()
+    @test e.buf.path == here
+  end
   w.keys |= Keys.cmd | Keys.mouse_left
   onkey(w, KeyPress{Keys.mouse_left}(0, w))
   w.keys = Keys(0)

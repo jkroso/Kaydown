@@ -742,23 +742,36 @@ send!(b::Browser, e::Element, by=nothing) = begin
   handled
 end
 
+"""
+The keys of ⌃, ⌘, ⌥ and ⇧ that are down in the window `w`. Each key and click
+that does something else with one of them held asks for all four, so that it
+does it only with the keys that it's for. A key that holds all four does none.
+"""
+held_keys(w) = w.keys & (Keys.ctrl | Keys.cmd | Keys.opt | Keys.shft)
+
 "What the key `K` does in the field `e` that has the keyboard: `handled`, or nothing for a key that's for the app"
 edit!(b::Browser, e::Element, K, w) = begin
-  cmd, shift = Keys.cmd in w.keys, Keys.shft in w.keys
+  down = held_keys(w)
+  shift = Keys.shft in down
   n = length(Forms.value(e))
   lo, hi = selected(b, e)
-  if cmd
-    K == Keys.a && return (b.anchor = 0; caret!(b, e, n, true))
-    K == Keys.left && return caret!(b, e, 0, shift)
-    K == Keys.right && return caret!(b, e, n, shift)
+  if Keys.cmd in down
+    # ⌘A, ⌘C, ⌘X and ⌘V with ⌘ alone. ⌘← and ⌘→ can have ⇧ with them, to grow the selection.
+    alone, moving = down == Keys.cmd, down in (Keys.cmd, Keys.cmd | Keys.shft)
+    K == Keys.a && alone && return (b.anchor = 0; caret!(b, e, n, true))
+    K == Keys.left && moving && return caret!(b, e, 0, shift)
+    K == Keys.right && moving && return caret!(b, e, n, shift)
     secret = Forms.kind(e) == "password"
-    if K == Keys.c || K == Keys.x
+    if (K == Keys.c || K == Keys.x) && alone
       (hi > lo && !secret) && clipboard!(w, String(collect(Forms.value(e))[lo+1:hi]))
       return K == Keys.x && hi > lo ? type!(b, e, "") : handled
     end
-    K == Keys.v && return type!(b, e, clipboard(w))
+    K == Keys.v && alone && return type!(b, e, clipboard(w))
     return nothing
   end
+  # The keys below work by themselves, or with ⇧: it grows the selection, and Tab goes back
+  plain = down in (Keys(0), Keys.shft)
+  plain || return handled
   K == Keys.left && return caret!(b, e, hi > lo && !shift ? lo : b.caret - 1, shift)
   K == Keys.right && return caret!(b, e, hi > lo && !shift ? hi : b.caret + 1, shift)
   K == Keys.home && return caret!(b, e, 0, shift)
@@ -774,7 +787,7 @@ edit!(b::Browser, e::Element, K, w) = begin
     l === nothing || Live.fire!(l, "change", e)
     return send!(b, e)
   end
-  K == Keys.escape && return (field!(b, nothing); wake!(b); handled)
+  K == Keys.escape && !shift && return (field!(b, nothing); wake!(b); handled)
   if K == Keys.tab
     all = fields(e)
     i = findfirst(f -> f === e, all)
@@ -836,7 +849,7 @@ onkey(b::Browser, ev::KeyPress{Keys.mouse_left}) = begin
   x, y = at
   l = live(b)
   b.down, b.drag, b.dragged = (x, y), :none, time()
-  shift = Keys.shft in ev.window.keys
+  shift = held_keys(ev.window) == Keys.shft   # ⇧ by itself grows the selection
   # A script that says to do no more with the button going down keeps the keyboard where it is, and selects nothing
   if l === nothing || Live.press!(l, x, y)
     e = element(b, x, y)
@@ -929,11 +942,14 @@ onkey(b::Browser, ev::KeyPress{K}) where K = begin
   end
   e = field(b)
   e === nothing || return edit!(b, e, K, w)
+  down = held_keys(w)
   if cmd
-    K == Keys.c && return (copy_words!(b, w); handled)
-    K == Keys.a && return (select_all!(b); handled)
+    K == Keys.c && down == Keys.cmd && return (copy_words!(b, w); handled)
+    K == Keys.a && down == Keys.cmd && return (select_all!(b); handled)
     return nothing
   end
+  # The keys that scroll the page work by themselves. Space with ⇧ goes back up.
+  (down == Keys(0) || (K == Keys.space && down == Keys.shft)) || return nothing
   page = Float64(flt(b.high))
   K == Keys.space ? scroll!(b, scrolled(b) + (shift ? -0.9 : 0.9) * page) :
   K == Keys.pagedown ? scroll!(b, scrolled(b) + 0.9page) :

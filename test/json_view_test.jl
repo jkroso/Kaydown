@@ -114,6 +114,11 @@ end
   @test !K.json_opened(t, c)
   press(Keys.enter)
   @test K.json_opened(t, c)
+  # With ⌃, ⌥ or ⇧ held, the arrows and Return are the window's, and the tree stays as it is
+  for (k, held) in ((Keys.left, Keys.opt), (Keys.left, Keys.ctrl), (Keys.down, Keys.shft), (Keys.enter, Keys.shft))
+    press(k, held)
+    @test K.json_opened(t, c) && t.chosen == c && w.focus === t
+  end
   press(Keys.up)
   @test t.chosen == c - 1
   # Esc gives the keyboard back to the page

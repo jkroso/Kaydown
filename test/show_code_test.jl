@@ -101,6 +101,16 @@ end
   # With only one of the two keys down, too
   click(Keys.cmd)
   @test isempty(code_windows())
+  # And with ⇧ or ⌃ down as well, as with a key that holds all four
+  t = K.code_picker(e)
+  for others in ((Keys.shft,), (Keys.ctrl,), (Keys.shft, Keys.ctrl))
+    foreach(h -> w.keys |= h, (Keys.cmd, Keys.opt, others...))
+    @test !K.picks(t, w)
+    foreach(h -> w.keys ⊻= h, (Keys.cmd, Keys.opt, others...))
+  end
+  n = node().clicks
+  click(Keys.cmd, Keys.opt, Keys.shft, Keys.ctrl)
+  @test node().clicks == n + 1 && isempty(code_windows())
   n = node().clicks
   over()
   w.keys |= Keys.cmd; w.keys |= Keys.opt

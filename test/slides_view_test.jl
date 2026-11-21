@@ -151,6 +151,13 @@ end
   shot("slide-table.png")
   key(Keys.space, shift)
   @test show().at == 4
+  # A key turns the slides only by itself, and Space only with ⇧. With ⌃ or ⌥, ⇧ on another key, or all four held, it turns none.
+  for held in ((Keys.opt,), (Keys.ctrl,), (shift,), (Keys.cmd, Keys.opt, Keys.ctrl, shift))
+    key(Keys.right, held...)
+    @test show().at == 4
+  end
+  key(Keys.space, Keys.opt)
+  @test show().at == 4
   key(Keys.home)
   @test show().at == 1 && shown() == ["Some words before the first heading."]
   # The front matter is in no slide
@@ -206,6 +213,11 @@ end
   @test show().at == 4
   click((60, 400))
   @test show().at == 3
+  # A click with ⌘, ⌥, ⌃ or ⇧ held turns no slide
+  for held in (Keys.cmd, Keys.opt, Keys.ctrl, shift)
+    w.keys |= held; click((900, 400)); w.keys ⊻= held
+    @test show().at == 3
+  end
   # The box of a to-do item
   box = place(p -> K.todo_at(e, p) == line_of("- [ ] Strip the room"))
   at(box)
@@ -217,6 +229,13 @@ end
   click(box)
   # A link to a heading of the page shows that heading's slide
   link = place(p -> K.link_on(e, p) == "#the-costs")
+  # With a key of ⌃, ⌘, ⌥ or ⇧ held, a click on the link opens nothing, and the mouse isn't a hand there
+  for held in (Keys.cmd, shift, Keys.cmd | Keys.opt | Keys.ctrl | shift)
+    at(link); w.keys |= held; frames(1)
+    @test K.cursor(e.nodes[:document]) != :hand
+    click(link); w.keys = Keys(0); frames()
+    @test show().at == 3
+  end
   click(link)
   @test show() !== nothing && show().at == 5 && shown()[1] == "## The costs"
   @test e.buf.reading && e.scroll.offset == 0px

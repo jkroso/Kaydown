@@ -107,21 +107,21 @@ end
   K.undo!(b)
 end
 
-"Hold ⌘ and click the place `p` of the page"
-click(p) = begin
+"Hold ⌘, and the keys `others`, and click the place `p` of the page. It's true when the mouse was a hand there."
+click(p, others...) = begin
   it = K.item(e, p[1])
   _, x = K.spot(it.content, p[2])
   pos = Vec2{px}(e.origin[1] + x + 1px, e.origin[2] + it.top + it.tall / 2)
   w.mouse = typeof(w.mouse)(pos...)
   onmouse(w, MouseMove(pos, w))
-  w.keys |= Keys.cmd
+  foreach(k -> w.keys |= k, (Keys.cmd, others...))
   frames(1)
   hand = cursor(e.nodes[:document]) == :hand
   w.keys |= Keys.mouse_left
   onkey(w, KeyPress{Keys.mouse_left}(0, w))
   w.keys ⊻= Keys.mouse_left
   onkey(w, KeyRelease{Keys.mouse_left}(0, w))
-  w.keys ⊻= Keys.cmd
+  foreach(k -> w.keys ⊻= k, (Keys.cmd, others...))
   frames()
   hand
 end
@@ -134,6 +134,12 @@ end
   # A name with no place leaves the caret where the click put it, and the mouse isn't a hand
   p = at("sum(w -> w.long", "long")
   @test !click(p) && b.caret[1] == p[1]
+  # With ⇧ or ⌃ held as well as ⌘, or a key that holds all four, the click goes nowhere and the mouse isn't a hand
+  p = at("total + area(r)", "area")
+  for others in ((Keys.shft,), (Keys.ctrl,), (Keys.shft, Keys.ctrl, Keys.opt))
+    b.caret = b.anchor = (1, 0)
+    @test !click(p, others...) && b.caret[1] == p[1]
+  end
   # A name of another file shows in a window beside this one, at its line
   @test click(at("Walls.paint(wall)", "paint"))
   shown = only(filter(o -> o.buf.path == realpath(walls), K.editors))

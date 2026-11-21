@@ -28267,6 +28267,8 @@ const OMNI_GAP = 6.0           # between the tag, the chips and the Run button
 const OMNI_CHIP_H = 32.0
 const OMNI_ROW = 70.0          # a row of a list with a name and what it does under it
 const OMNI_ROW_ONE = 50.0      # a row with a name only
+# The weight of a name in a list, and of the letters typed that it has. Centient's Medium looked fuzzy in the Mac's font.
+const OMNI_NAME, OMNI_MATCH = "SemiBold", "Heavy"
 const OMNI_LIST_MOST = 464.0   # the most of the commands' rows that show before the list scrolls
 const OMNI_CHOICES_MOST = 200.0   # and of the rows of a chip's list that's searched
 const OMNI_POP_GAP = 10.0      # between a list and what it hangs over
@@ -29778,7 +29780,7 @@ describe(p::CommandPalette) = begin
       p.shown == p.pick || (p.shown = p.pick; scroll_into_view!(p.scroll, px(list.row * (p.pick - 1)), px(list.row * p.pick)))
       reuse!(p.scroll, Column(width(grow=grow), Alignment.Start, [node!(() -> PaletteRow(k=k), e, (:palette_row, k)) for k in eachindex(p.rows)]...))
     else
-      Row(width(grow=grow), height(px(list.row)), padding(14px, 0px), Box(omni_label(list.words, 14, c.ink, weight="Medium")))
+      Row(width(grow=grow), height(px(list.row)), padding(14px, 0px), Box(omni_label(list.words, 14, c.ink, weight=OMNI_NAME)))
     end
     push!(layers, omni_at(f.x + 7, f.y + 7, Box(fixed(px(f.w - 14)), height(px(list.tall + 2)), radius(4px), clip=true, background(c.drop),
                                                 border(1px, :solid, c.drop_line), card)))
@@ -29947,12 +29949,12 @@ describe(r::PaletteRow) = begin
   look = (width(grow=grow), padding(14px, 0px), background(on ? c.selected : c.drop), border(1px, :solid, ruled ? c.rule : clear)[:top])
   if p.command !== nothing
     return Row(look..., height(px(OMNI_ROW_ONE)), child_gap=10px, name="Choice",
-      Box(width(grow=grow), Alignment.Start, clip_x=true, omni_label(row.name, 14, c.ink, weight="Medium")),
+      Box(width(grow=grow), Alignment.Start, clip_x=true, omni_label(row.name, 14, c.ink, weight=OMNI_NAME)),
       (isempty(row.note) ? () : (Box(omni_label(row.note, 12, on ? c.ink2 : c.muted)),))...)
   end
   # The letters that were typed are in bold where the name has them
   before, found, after = match_parts(row.name, lowercase(strip_text(input(e))))
-  parts = [Box(omni_label(text, 14, c.ink, weight=weight)) for (text, weight) in ((before, "Medium"), (found, "Bold"), (after, "Medium")) if !isempty(text)]
+  parts = [Box(omni_label(text, 14, c.ink, weight=weight)) for (text, weight) in ((before, OMNI_NAME), (found, OMNI_MATCH), (after, OMNI_NAME)) if !isempty(text)]
   Row(look..., height(px(OMNI_ROW)), child_gap=10px, name="Command",
     Column(width(grow=grow), Alignment.Start, child_gap=8px, clip_x=true,
       # What the command works on follows its name, fainter

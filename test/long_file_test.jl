@@ -105,10 +105,10 @@ end
   # A line on screen is drawn with the colours of its code: more runs of text than the one that the layout has
   it = e.layout[first(e.shown)+1]
   @test length(it.content.lines[1].segs) == 1 && length(K.in_colour(e, it, it.content).lines[1].segs) > 1
-  # Many lines laid out in full make room for more, and the file's layout stays. A long file keeps three for each of its lines.
+  # Many lines laid out in full make room for more, and the file's layout stays, with where its docstrings are. A long file keeps three for each of its lines.
   foreach(k -> e.flows[(:file, "line $k", code_line)] = it.content, 1:3length(b.lines)+100)
   K.spare_flows!(e)
-  @test length(e.flows) == 1 && K.file_lines(e, b) === kept
+  @test length(e.flows) == 2 && all(p -> p.second isa K.Laid || p.second isa K.Opens, e.flows) && K.file_lines(e, b) === kept
 end
 
 @testset "after a change, only the lines that changed are laid out again" begin

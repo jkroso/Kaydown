@@ -327,7 +327,7 @@
 @use "./transcribe" Transcription check! finished phrases words_between
 @use "./html" html footnotes NOTE escape
 @use "./markdown" Kind Line Span Cell classify spans tablecells isdivider words isdone front_matter MATTER TOML_MATTER MATH CALLOUTS callout opens_callout wikitarget
-@use "./highlight" tokens
+@use "./highlight" tokens left_open
 @use "./sheet" SHEET Result sheetcells parts uses tally known units shown number_at nudged name_values ident cases
 @use "./spreadsheet" SPREADSHEET Value spreadcells spreadtexts isformula letters answers moved
 @use "./merge" changes combine follow
@@ -908,6 +908,77 @@ kinds(b::Buffer) = begin
   end
   b.kinds
 end
+
+# --- strings in three quotes ---------------------------------------------------------------
+#
+# A string in three quotes, like a docstring, can run over several lines. The
+# lines inside it are all the colour of a string, though they have words like
+# for and end. Each line is coloured by itself, so the page keeps the quote of
+# the string that's open at the start of each line: see `string_opens`.
+
+"For the lines `lines` and their kinds `kinds`, of the version `version` of the file at `path` as `view` shows it: `at[i]` is the quote of a string in three quotes that's open at the start of line i, or '\\0'"
+struct Opens
+  path::String
+  view::Symbol
+  version::Int
+  lines::Vector{String}
+  kinds::Vector{Line}
+  at::Vector{Char}
+end
+
+const OPENS = WeakKeyDict{Buffer,Opens}()
+
+"What a string in three quotes is at the end of `text`, a line of the kind `line` that starts with `open` open: see `left_open`"
+leaves_open(text::String, line::Line, open::Char) = line.kind == Kind.code ? left_open(text, shared_lang(line.lang), open) : '\0'
+
+"""
+For each line of `b`, the quote of a string in three quotes that's open at the
+start of the line, like the middle of a docstring, or '\\0'. A code block of a
+page starts with none open. After a change, it's worked out again from the
+first line that changed, until a line after the change starts as it did before.
+"""
+string_opens(b::Buffer) = begin
+  kept = get(OPENS, b, nothing)
+  kept !== nothing && kept.version == b.version && kept.path == b.path && kept.view == b.view && return kept.at
+  # What was worked out for another file, or for another view of this one, is no help
+  kept !== nothing && (kept.path != b.path || kept.view != b.view) && (kept = nothing)
+  lines, ks = b.lines, kinds(b)
+  n = length(lines)
+  at = fill('\0', n)
+  was, before, wks = kept === nothing ? (Char[], String[], Line[]) : (kept.at, kept.lines, kept.kinds)
+  m = length(before)
+  head, tail = unchanged(lines, before)
+  # A line can change its kind though its text didn't, as when a ``` above it opens a code block
+  if b.view == :markdown
+    k = findfirst(k -> ks[k] != wks[k], 1:head)
+    k === nothing || (head = k - 1)
+    tail = min(tail, something(findfirst(k -> ks[n-k+1] != wks[m-k+1], 1:tail), tail + 1) - 1)
+  elseif n > 0 && m > 0 && ks[1] != wks[1]
+    head = tail = 0
+  end
+  copyto!(at, 1, was, 1, head)
+  q = head == 0 ? '\0' : leaves_open(lines[head], ks[head], at[head])
+  for i in head+1:n
+    j = i - n + m
+    # The rest of the lines are as they were, and so are the strings in them
+    if i > n - tail && q == was[j]
+      copyto!(at, i, was, j, n - i + 1)
+      break
+    end
+    at[i] = q
+    q = leaves_open(lines[i], ks[i], q)
+  end
+  OPENS[b] = Opens(b.path, b.view, b.version, copy(lines), ks, at)
+  at
+end
+
+"True when the `n` characters of `a` from `i` are the ones of `b` from `j`. It compares them as memory, which is quick for the lines of a long file."
+same_chars(a::Vector{Char}, i::Int, b::Vector{Char}, j::Int, n::Int) =
+  n <= 0 || GC.@preserve a b ccall(:memcmp, Cint, (Ptr{Char}, Ptr{Char}, Csize_t), pointer(a, i), pointer(b, j), n * sizeof(Char)) == 0
+
+"The quote of a string in three quotes that's open at the start of line `i` of the page `b`, when `text` is that line, or '\\0'"
+string_open(b::Buffer, i::Int, text::AbstractString) =
+  1 <= i <= length(b.lines) && same_text(b.lines[i], String(text)) ? string_opens(b)[i] : '\0'
 
 """
 Count the words and the characters of a page or of a file of code. After a
@@ -1970,7 +2041,8 @@ pieces(e, text::String, line::Line, raw::Bool, i::Int=0) = begin
     return out
   elseif k == Kind.code
     # Each part of a line of code has its own colour, and comments slant. A `check` block's lines are Julia.
-    for t in tokens(text, shared_lang(line.lang))
+    # A line inside a docstring of several lines is all the colour of a string.
+    for t in tokens(text, shared_lang(line.lang), i > 0 ? string_open(e.buf, i, text) : '\0')
       colour = t.kind == :plain ? base.color : getfield(colours, t.kind)
       push!(out, piece(t.text, t.col, Face(base, color=colour, style=t.kind == :comment ? codeslant() : base.style)))
     end
@@ -2550,9 +2622,9 @@ flow(e, i::Int, raw::Bool=israw(e.buf, i)) = begin
   column === nothing || return column_flow(e, column, i, raw)
   text, line = e.buf.lines[i], kinds(e.buf)[i]
   if e.buf.view == :code
-    # A line of a file of code is laid out as a line of a file that's only shown is
+    # A line of a file of code is laid out as a line of a file that's only shown is. Inside a docstring its colours differ.
     spare_flows!(e)
-    return get!(() -> file_line(e, text, line, i), e.flows, (:file, text, line))
+    return get!(() -> file_line(e, text, line, i), e.flows, (:file, text, line, string_opens(e.buf)[i]))
   end
   # The lines that open and close a code block show while the caret is in the block. As rich text, one only shows while it's typed.
   line.kind == Kind.fence && (raw = rich(e.buf) ? israw(e.buf, i) : incode(e.buf, i))
@@ -2566,6 +2638,8 @@ flow(e, i::Int, raw::Bool=israw(e.buf, i)) = begin
   # On a day before today, the box of a to-do item shows the tick of that day, so the line is kept with it
   then = line.kind == Kind.todo && !raw ? ticked_then(e, i) : nothing
   then === nothing || return get!(build, e.flows, (text, line, raw, :then, then))
+  # A line of code inside a docstring has other colours than the same line outside it
+  line.kind == Kind.code && return get!(build, e.flows, (text, line, raw, string_opens(e.buf)[i]))
   get!(build, e.flows, (text, line, raw))
 end
 
@@ -4321,16 +4395,23 @@ scrolled(row, scroll::Scroll, n, high=LINE_H) = begin
       spacer(TEXT_PAD + high * (n - hi)))))
 end
 
+"For each line of a file's text, the quote of a docstring that's open at its start, or '\\0', worked out once for each FileText"
+const TEXT_OPENS = WeakKeyDict{FileText,Vector{Char}}()
+
 "The text of a file. `lang` is the end of the file's name, like jl."
-textview(t::FileText, lang) = scrolled(i -> codeline(t.lines[i], lang), t.scroll, length(t.lines))
+textview(t::FileText, lang) = begin
+  at = get!(() -> (q = '\0'; [(o = q; q = left_open(l, lang, q); o) for l in t.lines]), TEXT_OPENS, t)
+  scrolled(i -> codeline(t.lines[i], lang, at[i]), t.scroll, length(t.lines))
+end
 
 """
 One line of a file's text. A file of code has the colours that a code block
 has: `lang` is the end of the file's name, like jl, and a file that isn't code
-is all one colour.
+is all one colour. `open` is the quote of a docstring that's open at the start
+of the line, or '\\0'.
 """
-codeline(line, lang) = Row(height(LINE_H),
-  [part for t in tokens(line, lang)
+codeline(line, lang, open='\0') = Row(height(LINE_H),
+  [part for t in tokens(line, lang, open)
         for part in spared(t.text, Face(codefont(), t.kind == :comment ? codeslant() : codestyle(), 12px,
                                         t.kind == :plain ? colours.ink : getfield(colours, t.kind), false))]...)
 
@@ -5927,8 +6008,19 @@ file_lines(e, b::Buffer) = begin
   # The lines before the first that changed, and the lines after the last, keep their layout
   m = length(before)
   head, tail = unchanged(lines, before)
+  # Except a line that `file_line` laid out in its colours, when a docstring above it opened or closed. Its text is the same, so it's as tall.
+  at = string_opens(b)::Vector{Char}
+  laid = get(e.flows, (:opens, key), nothing)
+  laid_at::Vector{Char} = kept isa Laid && laid isa Opens ? laid.at : Char[]
+  recoloured(it, i) = all(vl -> length(vl.segs) == 1, it.content.lines) ? it : Item(i, i, it.top, it.tall, quick_line(e, lines[i], ks[i], i, f, lh, wide))
   top = 0px
   copyto!(items, 1, was, 1, head)
+  h = min(head, length(laid_at))
+  if !same_chars(at, 1, laid_at, 1, h)
+    for i in 1:h
+      @inbounds laid_at[i] == at[i] || (items[i] = recoloured(items[i], i))
+    end
+  end
   head > 0 && (top = items[head].top + items[head].tall)
   for i in head+1:n-tail
     flow = quick_line(e, lines[i], ks[i], i, f, lh, wide)
@@ -5936,12 +6028,17 @@ file_lines(e, b::Buffer) = begin
     items[i] = Item(i, i, top, high, flow)
     top += high
   end
+  # A long file has many lines after the change, and most often a docstring opened or closed above none of them
+  kept_same = m == length(laid_at) && same_chars(at, n - tail + 1, laid_at, m - tail + 1, tail)
   for i in n-tail+1:n
-    it = was[i-n+m]
+    j = i - n + m
+    it = was[j]
+    kept_same || j > length(laid_at) || laid_at[j] == at[i] || (it = recoloured(it, i))
     items[i] = Item(i, i, top, it.tall, it.content)
     top += it.tall
   end
   e.flows[key] = Laid(b.version, copy(lines), items)
+  e.flows[(:opens, key)] = Opens(b.path, b.view, b.version, String[], Line[], at)
   items
 end
 
@@ -5960,7 +6057,7 @@ in_colour(e, it::Item, f::Flow) = begin
   (last(f.lines).to == length(text) && startswith(text, f.lines[1].segs[1].text)) || return f
   line = kinds(b)[it.first]
   spare_flows!(e)
-  full = get!(() -> file_line(e, text, line, it.first), e.flows, (:file, text, line))::Flow
+  full = get!(() -> file_line(e, text, line, it.first), e.flows, (:file, text, line, string_opens(b)[it.first]))::Flow
   length(full.lines) == length(f.lines) && all(k -> full.lines[k].from == f.lines[k].from, eachindex(f.lines)) ? full : f
 end
 
@@ -5972,7 +6069,7 @@ whole file's lines stays: it's made again only after a change.
 """
 spare_flows!(e) = begin
   length(e.flows) > max(4000, 3length(e.buf.lines)) || return e
-  kept = [p for p in e.flows if p.second isa Laid || p.second isa Vector{Union{Nothing,PlainLine}}]
+  kept = [p for p in e.flows if p.second isa Laid || p.second isa Opens || p.second isa Vector{Union{Nothing,PlainLine}}]
   empty!(e.flows)
   foreach(p -> e.flows[p.first] = p.second, kept)
   e
@@ -20532,6 +20629,14 @@ documentation above it, and the lines of its code, as many as `most`, up to
 the line `last`.
 """
 peek_lines(lines, at::Int, last::Int, most=PEEK_LINES) = begin
+  from = peek_from(lines, at)
+  stop = min(last, at + most - 1)
+  while stop > at && isempty(strip(lines[stop])); stop -= 1 end
+  [length(l) > 100 ? first(l, 99) * "…" : l for l in lines[from:stop]]
+end
+
+"The first line that a card shows for the definition on line `at` of `lines`: the first of the documentation above it that shows"
+peek_from(lines, at::Int) = begin
   from = at
   above = at > 1 ? strip(lines[at-1]) : ""
   if startswith(above, '"') && endswith(above, '"')
@@ -20544,10 +20649,7 @@ peek_lines(lines, at::Int, last::Int, most=PEEK_LINES) = begin
   elseif endswith(above, "\"\"\"")
     from = something(findprev(l -> startswith(strip(l), "\"\"\""), lines, at - 2), at)
   end
-  from = max(from, at - 6)   # long documentation shows its last lines, next to the code
-  stop = min(last, at + most - 1)
-  while stop > at && isempty(strip(lines[stop])); stop -= 1 end
-  [length(l) > 100 ? first(l, 99) * "…" : l for l in lines[from:stop]]
+  max(from, at - 6)   # long documentation shows its last lines, next to the code
 end
 
 """
@@ -20567,7 +20669,8 @@ peek_card(e, found) = begin
   k === nothing || return Box(padding(10px, 7px), said(segs[k].link))
   place = Base.invokelatest(definition, e, (line, lo))
   place === nothing && return nothing
-  head, lines, lang = if place isa Method
+  # `open` says if the first line that shows is inside a docstring, when long documentation shows only its last lines
+  head, lines, lang, open = if place isa Method
     spot = code_place(place)
     spot === nothing && return nothing
     file, at = spot
@@ -20575,7 +20678,8 @@ peek_card(e, found) = begin
     at = settled_line(place, all, at)
     j = max(1, searchsortedlast(starts, at))
     last = j == length(starts) ? length(all) : starts[j+1] - 1
-    ("$(basename(file)):$at", peek_lines(all, at, last), "julia")
+    open = foldl((q, l) -> left_open(l, "julia", q), view(all, 1:peek_from(all, at)-1), init='\0')
+    ("$(basename(file)):$at", peek_lines(all, at, last), "julia", open)
   else
     at = place[1]
     # A name of a function, like a variable in it, is one line. A name of the whole page shows its code.
@@ -20583,10 +20687,11 @@ peek_card(e, found) = begin
     j = local_name ? nothing : findfirst(c -> c.first <= at <= c.last, code_blocks(e))
     last = local_name ? at : j === nothing ? at + PEEK_LINES - 1 : code_blocks(e)[j].last
     l = kinds(b)[at]
-    ("line $at", peek_lines(b.lines, at, min(last, length(b.lines))), l.kind == Kind.code ? shared_lang(l.lang) : "julia")
+    ("line $at", peek_lines(b.lines, at, min(last, length(b.lines))), l.kind == Kind.code ? shared_lang(l.lang) : "julia",
+     string_opens(b)[peek_from(b.lines, at)])
   end
   # The code has the colours that it has in the page
-  Box(padding(10px, 8px), Column(Alignment.Start, child_gap=1px, said(head, color=faint), tip_code(lines, lang)...))
+  Box(padding(10px, 8px), Column(Alignment.Start, child_gap=1px, said(head, color=faint), tip_code(lines, lang; open)...))
 end
 
 """
@@ -25565,17 +25670,16 @@ const TIP_CODE = (comment=colorant"rgb(150,150,156)", string=NIGHT.string, numbe
 Lines of code in a tooltip, each a row `high` tall, with the colours that code
 has in the page. `lang` is the code's language, like julia: text that isn't
 code is all `TIP_INK`. The lines inside three quotes, like the middle of a
-docstring, are all the colour of a string.
+docstring, are all the colour of a string. `open` is the quote of one that's
+open at the first line, as `string_opens` gives it, or '\\0'.
 """
-tip_code(lines, lang="julia"; high=17px) = begin
+tip_code(lines, lang="julia"; high=17px, open='\0') = begin
   face(kind) = Face(codefont(), kind == :comment ? codeslant() : codestyle(), 12px,
                     kind == :plain ? TIP_INK : getfield(TIP_CODE, kind), false)
-  triple = lowercase(lang) in ("julia", "jl", "python", "py")
-  inside = false   # in three quotes that opened on a line above
   rows = Any[]
   for line in lines
-    parts = inside ? [(text=String(line), kind=:string)] : tokens(line, lang)
-    triple && isodd(count("\"\"\"", line)) && (inside = !inside)
+    parts = tokens(line, lang, open)
+    open = left_open(line, lang, open)
     push!(rows, Box(height(high), Row(Alignment.Start, [p for t in parts if !isempty(t.text) for p in spared(t.text, face(t.kind))]...)))
   end
   rows
@@ -36399,8 +36503,8 @@ end
 "The day of a time in seconds, like 14 Nov 2026"
 day_words(at::Real) = Dates.format(Dates.unix2datetime(at) + (Dates.now() - Dates.now(Dates.UTC)), "d u yyyy")
 
-"What the window says of the commit that last changed a line. The line as it was has the colours of code in `lang`, like julia."
-history_words(a::LineAsked, lang="") = begin
+"What the window says of the commit that last changed a line. The line as it was has the colours of code in `lang`, like julia, and `open` is the quote of a docstring that's open at its start, or '\\0'."
+history_words(a::LineAsked, lang="", open='\0') = begin
   c = a.found
   c === false && return Box(padding(10px, 7px), label("git has nothing on this line.", 12px, color=TIP_INK))
   isempty(c.hash) && return Box(padding(10px, 7px), label("Changed since the last commit.", 12px, color=TIP_INK))
@@ -36410,7 +36514,7 @@ history_words(a::LineAsked, lang="") = begin
     push!(rows, said("This commit added the line.", color=RGBA(TIP_INK.r, TIP_INK.g, TIP_INK.b, 0.65)))
   else
     push!(rows, said("Before:", color=RGBA(TIP_INK.r, TIP_INK.g, TIP_INK.b, 0.65)))
-    append!(rows, tip_code([length(l) > 90 ? first(l, 89) * "…" : l for l in first(a.before, 6)], lang))
+    append!(rows, tip_code([length(l) > 90 ? first(l, 89) * "…" : l for l in first(a.before, 6)], lang; open))
     length(a.before) > 6 && push!(rows, said("and $(length(a.before) - 6) more", color=RGBA(TIP_INK.r, TIP_INK.g, TIP_INK.b, 0.65)))
   end
   Box(padding(10px, 8px), Column(Alignment.Start, child_gap=3px, [Box(r) for r in rows]...))
@@ -36439,7 +36543,8 @@ line_tick!(e) = begin
   # The words look as a tooltip does. They stay while the mouse moves, which a tooltip doesn't.
   l = kinds(b)[a.line]
   lang = l.kind == Kind.code ? shared_lang(l.lang) : ""
-  popup!(w, Bubble(content=history_words(a, lang), target=spot), anchor=spot, placement=:bottom, gap=4px, key=:line_asked, input=false)
+  # The line as it was is taken to start inside a docstring when the line as it is does
+  popup!(w, Bubble(content=history_words(a, lang, string_opens(b)[a.line]), target=spot), anchor=spot, placement=:bottom, gap=4px, key=:line_asked, input=false)
   nothing
 end
 

@@ -2,10 +2,10 @@
 # them with `julia -O0 --project=. test/highlight_test.jl`.
 
 @use Test: @test, @testset
-@use "../highlight" tokens
+@use "../highlight" tokens left_open
 
 "Each part of `line` in `lang` as text => kind, without the plain parts that are only spaces"
-parts(line, lang="julia") = [t.text => t.kind for t in tokens(line, lang) if !(t.kind == :plain && all(isspace, t.text))]
+parts(line, lang="julia", open='\0') = [t.text => t.kind for t in tokens(line, lang, open) if !(t.kind == :plain && all(isspace, t.text))]
 
 "True when the tokens of `line` hold all of its characters, in order, at the right columns"
 whole(line, lang="julia") = begin
@@ -83,4 +83,27 @@ end
     ["@def" => :call, "mutable" => :keyword, "struct" => :keyword, "Counter" => :type, " <: " => :plain,
      "SemanticUI" => :type]
   @test parts("push!(xs, 0x1f)") == ["push!" => :call, "(xs, " => :plain, "0x1f" => :number, ")" => :plain]
+end
+
+@testset "a string in three quotes runs over several lines" begin
+  # A docstring of several lines: the line that opens it leaves it open, and the lines inside it are all string
+  @test left_open("\"\"\"", "julia") == '"' && left_open("f(x) = 1", "julia") == '\0'
+  @test parts("Shows it for a time, to the end", "julia", '"') == ["Shows it for a time, to the end" => :string]
+  @test left_open("Shows it for a time", "julia", '"') == '"'
+  @test parts("", "julia", '"') == [] && left_open("", "julia", '"') == '"'
+  # The line that closes it is string up to the three quotes, and code after them
+  @test parts("the end\"\"\" f(x) = 2", "julia", '"') == ["the end\"\"\"" => :string, "f" => :call, "(x) = " => :plain, "2" => :number]
+  @test left_open("the end\"\"\"", "julia", '"') == '\0' && left_open("\"\"\"", "julia", '"') == '\0'
+  # Three quotes that close on their line, and two quotes, leave nothing open
+  @test left_open("\"\"\"Short\"\"\"", "julia") == '\0' && parts("\"\"\"Short\"\"\"") == ["\"\"\"Short\"\"\"" => :string]
+  @test left_open("x = \"\"", "julia") == '\0' && left_open("x = \"\"\"", "julia") == '"'
+  # Three quotes in a comment or in a string of one quote open nothing, nor does an escaped quote close one
+  @test left_open("# like \"\"\"", "julia") == '\0' && left_open("s = \"a \\\"\\\"\\\" b\"", "julia") == '\0'
+  @test left_open("a \\\"\"\"\" b", "julia", '"') == '\0' && left_open("a \\\"\"\" b", "julia", '"') == '"'
+  # Code in a docstring has the colours of code, as in a string of one line
+  @test parts("costs \$(price) now", "julia", '"') == ["costs " => :string, "\$(" => :keyword, "price" => :plain, ")" => :keyword, " now" => :string]
+  # Python has ''' as well. A language with no such strings leaves nothing open.
+  @test left_open("'''", "python") == '\'' && parts("it's here", "python", '\'') == ["it's here" => :string]
+  @test left_open("\"\"\"", "js") == '\0' && left_open("\"\"\"", "") == '\0'
+  @test whole("the end\"\"\" g(\"x\")", "julia")
 end

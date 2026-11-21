@@ -1,8 +1,9 @@
 # Splits a line of code into the parts a code block draws in different colours:
 # comments, strings, numbers, keywords, the names of functions being called and
 # the names of types. It reads one line at a time and knows a little about each
-# language, so it's quick, and it's wrong about things that run over several
-# lines, like a string in triple quotes.
+# language, so it's quick. Of the things that run over several lines, it knows
+# only a string in three quotes, like a docstring: `left_open` says when a line
+# leaves one open, and `tokens` reads the next line from inside it.
 #
 # Code in a string, like the $(c.count) in "Clicked $(c.count) times", has the
 # colours of code. Its $( and ) have the colour of a keyword.
@@ -111,13 +112,20 @@ end
 
 const NUMBER = r"^(0[xX][0-9a-fA-F_]+|0[bB][01_]+|\d[\d_]*(\.\d+)?([eE][+-]?\d+)?)"
 
+"True when three of the quote `q` open a string in `lang` that can run over several lines, like a docstring"
+triples(lang, q) = (lang.code == :julia && q == '"') || (lang.code == :python && q in "\"'")
+
+"True when the string that opens at `chars[i]` opens with three quotes"
+triple_at(lang, chars, i) = triples(lang, chars[i]) && i + 2 <= length(chars) && chars[i+1] == chars[i] && chars[i+2] == chars[i]
+
 """
 Marks the parts of the code that starts at `chars[i]`. A mark is the first and
 last character of a part and its kind. It stops at the end of the line, or at a
 `close` that has no partner, like the ) at the end of \$(x). It gives the place it
-stopped.
+stopped. `left` gets the quote of a string in three quotes that's still open at
+the end of the line.
 """
-code!(marks, chars, lang, i, close=nothing) = begin
+code!(marks, chars, lang, i, close=nothing, left=Ref('\0')) = begin
   n = length(chars)
   open = close == ')' ? '(' : close == '}' ? '{' : nothing
   depth = 0
@@ -134,7 +142,9 @@ code!(marks, chars, lang, i, close=nothing) = begin
       push!(marks, (i, n, :comment))
       return n + 1
     elseif c in lang.quotes
-      i = string!(marks, chars, lang, i) + 1
+      k = string!(marks, chars, lang, i)
+      close === nothing && k > n && triple_at(lang, chars, i) && (left[] = c)
+      i = k + 1
     elseif c == '\'' && lang.chars
       # 'x' and '\n' are characters. A lone ' is something else, like a transpose.
       j = i + 2 <= n && chars[i+1] != '\\' && chars[i+2] == '\'' ? i + 2 :
@@ -163,25 +173,31 @@ end
 
 """
 Marks the string that opens at `chars[i]` and gives the place it closes. A string
-that doesn't close runs to the end of the line. Code in the string, like \$(x) in
+that doesn't close runs to the end of the line, and gives the place after it.
+Three quotes, like \"\"\", open a string that only three quotes close. `open` is
+the quote of a string in three quotes that a line above opened: the string then
+starts at `chars[i]`, which isn't a quote of its own. Code in the string, like \$(x) in
 Julia, gets the marks that code gets, and the \$( and ) get the colour of a keyword.
 A name like \$x has the colour of a name.
 """
-string!(marks, chars, lang, i) = begin
+string!(marks, chars, lang, i, open=nothing) = begin
   n = length(chars)
-  q = chars[i]
-  how = holds(lang, chars, i)
+  q = open === nothing ? chars[i] : open
+  triple = open !== nothing || triple_at(lang, chars, i)
+  # A string that a line above opened can't be raw"..." or a Python f-string, as far as this line knows
+  how = open === nothing ? holds(lang, chars, i) : lang.code == :julia ? :julia : :none
   from = i                          # the first character of the string that has no mark yet
   text!(j) = from < j && push!(marks, (from, j - 1, :string))
-  j = i + 1
+  j = open !== nothing ? i : triple ? i + 3 : i + 1
   while j <= n
     c = chars[j]
     d = j < n ? chars[j+1] : '\0'
     if c == '\\'
       j += 2
-    elseif c == q
-      push!(marks, (from, j, :string))
-      return j
+    elseif c == q && (!triple || (j + 2 <= n && chars[j+1] == q && chars[j+2] == q))
+      k = triple ? j + 2 : j
+      push!(marks, (from, k, :string))
+      return k
     elseif how == :python && c == '{' && d == '{'
       j += 2                        # {{ is a {
     elseif (how in (:julia, :shell) && c == '$' && d == '(') || (how == :javascript && c == '$' && d == '{') ||
@@ -210,16 +226,44 @@ string!(marks, chars, lang, i) = begin
     end
   end
   text!(n + 1)
-  n
+  n + 1
 end
 
-"The parts of one line of code written in the language named `name`"
-tokens(text::AbstractString, name::AbstractString) = begin
+"""
+The parts of one line of code written in the language named `name`. `open` is
+the quote of a string in three quotes that a line above left open, like the
+middle of a docstring, or '\\0' when there's none: see `left_open`.
+"""
+tokens(text::AbstractString, name::AbstractString, open::Char='\0') = first(read_line(text, name, open))
+
+"""
+The quote of the string in three quotes that's still open at the end of the
+line `text`, or '\\0' when there's none. `open` is the quote of the one that's
+open at its start. A line with no three quotes leaves things as they were, so
+for most lines this is quick.
+"""
+left_open(text::AbstractString, name::AbstractString, open::Char='\0') =
+  occursin("\"\"\"", text) || occursin("'''", text) ? last(read_line(text, name, open)) : open
+
+"The parts of the line `text`, and what `left_open` says of it"
+read_line(text, name, open) = begin
   lang = get(LANGUAGES, lowercase(name), nothing)
-  lang === nothing && return [Token(0, String(text), :plain)]
+  lang === nothing && return ([Token(0, String(text), :plain)], '\0')
   chars = collect(text)
   marks = Tuple{Int,Int,Symbol}[]
-  code!(marks, chars, lang, 1)
+  left = Ref('\0')
+  i = 1
+  if open != '\0' && triples(lang, open)
+    i = string!(marks, chars, lang, 1, open) + 1
+    # A line that doesn't close the string is all string
+    i > length(chars) + 1 && (left[] = open)
+  end
+  i <= length(chars) && code!(marks, chars, lang, i, nothing, left)
+  (marked(chars, marks), left[])
+end
+
+"The tokens of the characters `chars`, which have the marks `marks`"
+marked(chars, marks) = begin
   out = Token[]
   plain = 1                         # the first character that isn't in a token yet
   for (i, j, kind) in marks
@@ -231,4 +275,4 @@ tokens(text::AbstractString, name::AbstractString) = begin
   out
 end
 
-export Token, tokens
+export Token, tokens, left_open

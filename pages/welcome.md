@@ -704,7 +704,7 @@ A code block in the language `save` writes the rows of the table above it into a
 to: yard costs.csv
 ```
 
-The end of the file's name says how the rows are written: `.csv`, `.tsv` or `.json`. A line like `as: json` says it instead. Each click writes the file again, with the rows as they are then. Without a `to` line, the button asks where to save the file.
+The end of the file's name says how the rows are written: `.csv`, `.tsv` or `.json`. A line like `as: json` says it instead. Each click writes the file again, with the rows as they are then. Without a `to` line, the block lists the folders beside the page, with a field for the file's name: click a folder to go into it, type the name, and click Save. The Choose button of a save block with a file opens that list again.
 
 When `to` is a web address, like `to: https://example.com/api/costs`, the button sends the rows to that server as JSON. Two more lines say how:
 

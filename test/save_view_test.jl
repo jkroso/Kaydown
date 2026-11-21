@@ -189,11 +189,9 @@ end
   click(middle(button(v).rect))
   @test read(joinpath(dir, "notes.md"), String) == "# Notes\n"
   shot("save-problem.png")
-  # Without `to`, the button asks where. A window that isn't on the screen can't ask, so nothing happens.
+  # Without `to`, the block lists folders and asks for a name: see save_picker_test.jl
   v = show_save(12)
-  @test button(v).words == "Save As…" && note(v) == "A click asks where to save the 3 rows, as a file."
-  click(middle(button(v).rect))
-  @test v.lines == String[]
+  @test K.asks_where(v) && button(v).words == "Save" && K.save_name_field(v).text == "orders (saved).csv"
 end
 
 @testset "rows go to a server" begin

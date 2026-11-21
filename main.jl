@@ -12565,6 +12565,7 @@ push!(BLOCK_ICONS, "save", "cloud-arrow-up", "arrow-right", "key", "check2", "ex
   said::String = ""                        # what happened at the last click, or ""
   failed::Bool = false                     # true when that went wrong
   nokey::Bool = false                      # the Keychain had no key with the name that `key` gives
+  choosing::Bool = false                   # the list of folders is open, after a click on Choose
   parts::Dict{Any,Any} = Dict{Any,Any}()   # its buttons, kept between frames
 end
 
@@ -12619,13 +12620,12 @@ save_target(v::SaveView) = (to = String(strip(v.spec.to)); isempty(to) || Saves.
 "True when `a` and `b` are one file"
 same_file(a, b) = !isempty(a) && !isempty(b) && (a == b || (ispath(a) && ispath(b) && samefile(a, b)))
 
-"Why the save block `v` can't write `d`, its rows, now, or \"\""
-save_problem(v::SaveView, d) = begin
+"Why the save block `v` can't write `d`, its rows, now, or \"\". `path` is the file that it would write."
+save_problem(v::SaveView, d; path=save_target(v)) = begin
   isempty(d.problem) || return d.problem
   length(d.rows) < 2 && return "The table above has no rows to save."
   p = Saves.problem(v.spec)
   isempty(p) || return p
-  path = save_target(v)
   isempty(path) && return ""
   name = basename(path)
   isdir(path) && return "$name is a folder. Name a file in it, like “$name/rows.csv”."
@@ -12653,18 +12653,17 @@ save_text(d::FilterRows, format) = begin
   sprint(json_write, things) * "\n"
 end
 
-"What the button of `v` will do, before it's clicked"
-save_plan(v::SaveView, d) = begin
+"What the button of `v` will do, before it's clicked. `to` is where the rows would go."
+save_plan(v::SaveView, d; to=String(strip(v.spec.to))) = begin
   rows = "the " * Saves.rows_words(length(d.rows) - 1)
-  as = uppercase(Saves.format(v.spec))
-  to = String(strip(v.spec.to))
+  as = uppercase(Saves.format(Saves.Save(to=to, as=v.spec.as)))
   more = d.more ? " $(d.name) has more rows than Ladder reads, so only these go." : ""
   words = if isempty(to)
     "A click asks where to save $rows, as a file."
   elseif Saves.isurl(to)
     key = String(strip(v.spec.key))
     "A click sends $rows to $to as $as, with $(Saves.method(v.spec))$(isempty(key) ? "" : ", and the key “$(key)” from your Keychain")."
-  elseif isfile(save_target(v))
+  elseif isfile(abspath(docdir(editor(v)), expanduser(to)))
     "A click replaces $(basename(to)) with $rows, as $as."
   else
     "A click writes $rows into a new file, $(basename(to)), as $as."
@@ -12836,6 +12835,95 @@ key_given!(v::SaveView, key) = begin
   v
 end
 
+# A save block with no `to` lists the folders beside the page, as a breadcrumb
+# that's open, with a field for the name of the file under it. A click on a
+# folder goes into it, and a click on a name of the path goes back up. Its
+# button saves the rows in that folder, with that name, and makes that file
+# the block's `to`. A save block that has a `to` has a Choose button, which
+# opens the list in the folder of its file. When a file of that name is there,
+# the button says Replace.
+
+"True when the save block `v` shows where to save: it has no `to` yet, or Choose was clicked"
+asks_where(v::SaveView) = v.choosing || isempty(strip(v.spec.to))
+
+"The folder that the save block `v` lists first: the folder of its file, or the page's folder"
+save_folder(v::SaveView) = begin
+  path, dir = save_target(v), docdir(editor(v))
+  !isempty(path) && isdir(dirname(path)) ? dirname(path) : isdir(dir) ? dir : homedir()
+end
+
+"The breadcrumb that picks the folder of the save block `v`. It lists only folders."
+save_picker(v::SaveView) = block_part!(() -> Breadcrumb(at=save_folder(v), open=true, folders=true), v, :picker)
+
+"The field for the name of the file that the save block `v` makes"
+save_name_field(v::SaveView) = block_part!(v, :name) do
+  TextInput(text=save_start(save_data(v)), placeholder="The name of the file", font_family=SANS, font_size=13px,
+            look=(_, text) -> Row(width(grow=grow), height(grow=grow), clip=true, text))
+end
+
+"""
+The file that the save block `v` would save `d` in, from its list of folders
+and its name field. A name that has no end, like .csv, gets the end of the
+kind that the rows are written as. It's \"\" when the field is empty.
+"""
+save_chosen(v::SaveView, d) = begin
+  name = String(strip(save_name_field(v).text))
+  isempty(name) && return ""
+  isempty(splitext(name)[2]) && (name *= isempty(d.things) ? ".csv" : ".json")
+  joinpath(save_picker(v).at, name)
+end
+
+"What the save block `v` shows while it asks where to save: what to do, the breadcrumb, and the field for the name"
+save_picker_section(v::SaveView) = begin
+  e = editor(v)
+  p, field = save_picker(v), save_name_field(v)
+  p.room = e.width - 24px
+  w = window_of(v)
+  typing = w !== nothing && w.focus === field
+  name = Row(width(grow=grow), height(30px), child_gap=8px, Alignment.Center,
+    Box(label("Name", 12px, color=colours.dim)),
+    Row(width(grow=grow), height(28px), padding(8px, 0px), radius(6px), Alignment.Center,
+        background(colours.bg), border(1px, :solid, typing ? colours.accent : colours.line),
+        Box(width(grow=grow), height(grow=grow), field)))
+  (Column(width(grow=grow), Alignment.Start, padding(10px, 12px, 4px, 12px), child_gap=8px, name="Picker",
+     Box(width(grow=grow), Text("Choose a folder, and type the file's name. The end of the name says how the rows are written: .csv, .tsv or .json.",
+                                size=12px, family=SANS, color=colours.dim, wrap=WrapMode.words)),
+     p, name),)
+end
+
+"Open the list of folders of the save block `v` at the folder of its file, with the file's name in the field, or close it"
+toggle_save_picker!(v::SaveView) = begin
+  v.choosing = !v.choosing
+  v.choosing || return v
+  p, field = save_picker(v), save_name_field(v)
+  p.at, p.open = save_folder(v), true
+  to = String(strip(v.spec.to))
+  field.text = isempty(to) || Saves.isurl(to) ? save_start(save_data(v)) : basename(to)
+  field.cursor = field.anchor = length(field.text)
+  v
+end
+
+"Save `d`, the rows of `v`, in the file that its list of folders and its name field say, and make that file its `to`"
+save_here!(v::SaveView, d) = begin
+  path = save_chosen(v, d)
+  (isempty(path) || !isempty(save_problem(v, d; path))) && return v
+  v.choosing = false
+  write_block!(v, SAVE, Saves.with_line(v.lines, :to, tilde(named(editor(v), path))))
+  write_rows!(v, d)
+end
+
+# Return in the field for the file's name saves, as the button does. Esc closes the list that Choose opened.
+onkey(v::SaveView, ev::KeyPress{Keys.enter}) = begin
+  unmodified(ev) && ev.window.focus === get(v.parts, :name, nothing) || return nothing
+  act!(v, :save, ev.window)
+end
+onkey(v::SaveView, ev::KeyPress{Keys.escape}) = begin
+  unmodified(ev) && ev.window.focus === get(v.parts, :name, nothing) || return nothing
+  v.choosing = false
+  focus(editor(v))
+  handled
+end
+
 act!(v::SaveView, action, w) = begin
   # A window that isn't on the screen, like one a test makes, has no panel to ask with
   asks = Sys.isapple() && !isempty(w.glfw)
@@ -12847,18 +12935,12 @@ act!(v::SaveView, action, w) = begin
     key === nothing || isempty(key) || key_given!(v, key)
     return handled
   end
+  action == :choose && return (toggle_save_picker!(v); handled)
   action == :save && v.job === nothing || return handled
   d = save_data(v)
+  # Without a `to`, or after Choose, the rows go where the list of folders and the name field say
+  asks_where(v) && return (save_here!(v, d); handled)
   isempty(save_problem(v, d)) || return handled
-  if isempty(strip(v.spec.to))
-    asks || return handled
-    path = save_panel(editor(v), save_start(d))
-    w.keys = Keys(0)
-    path === nothing && return handled
-    write_block!(v, SAVE, Saves.with_line(v.lines, :to, tilde(named(editor(v), path))))
-    p = save_problem(v, d)
-    isempty(p) || ((v.said, v.failed) = (p, true); return handled)
-  end
   Saves.isurl(v.spec.to) ? send_save!(v, d) : write_rows!(v, d)
   handled
 end
@@ -12866,32 +12948,41 @@ end
 describe(v::SaveView) = begin
   e = editor(v)
   d = save_data(v)
-  problem = save_problem(v, d)
-  to = String(strip(v.spec.to))
+  asks = asks_where(v)
+  # While it asks where to save, the file is the one that the list of folders and the name field say
+  chosen = asks ? save_chosen(v, d) : ""
+  problem = !asks ? save_problem(v, d) : isempty(chosen) ? "Type a name for the file." : save_problem(v, d; path=chosen)
+  to = asks ? chosen : String(strip(v.spec.to))
   url = Saves.isurl(to)
   key = String(strip(v.spec.key))
   v.job === nothing || redraw_in!(v, 0.2)   # so that a frame comes soon to see if the rows have gone
   with_theme(component_theme(e.zoom)) do
     what = isempty(d.problem) ? "$(Saves.rows_words(length(d.rows) - 1)) of $(d.name)" : "Save"
-    go = v.job !== nothing ? "Sending…" : isempty(to) ? "Save As…" : url ? "Send" : isfile(save_target(v)) ? "Replace" : "Save"
-    tip = isempty(to) ? "Choose a file, and save the rows in it" : url ? "Send the rows to $(Saves.host(to))" :
+    path = asks ? chosen : save_target(v)
+    go = v.job !== nothing ? "Sending…" : url ? "Send" : !isempty(path) && isfile(path) ? "Replace" : "Save"
+    tip = url ? "Send the rows to $(Saves.host(to))" : isempty(to) ? "Type a name for the file first" :
           go == "Replace" ? "Write the rows over $(basename(to))" : "Save the rows in $(basename(to))"
+    # A save block that has a `to` has a button that chooses another file. One without asks anyway.
+    choose = isempty(strip(v.spec.to)) ? () :
+      (block_button!(v, :choose, :choose, icon="folder2-open", words="Choose", tip=v.choosing ? "Close the list of folders" : "Choose another file to save in", on=v.choosing),)
     bar = block_bar(Box(width(6px)), Icon(url ? "cloud-arrow-up" : "save", size=14px, color=colours.dim), Box(width(4px)),
       Box(label(what, 13px, weight="Semibold")),
       (isempty(to) ? () : (Box(width(6px)), Icon("arrow-right", size=12px, color=colours.dim), Box(width(6px)),
                            Box(label(url ? Saves.host(to) : basename(to), 13px))))...,
       (url && !isempty(key) ? (Box(width(10px)), Icon("key", size=12px, color=colours.dim), Box(width(4px)), Box(label(key, 12px, color=colours.dim))) : ())...,
       Box(width(grow=grow)),
+      choose...,
       block_button!(v, :go, :save, icon=url ? "cloud-arrow-up" : "save", words=go, tip=tip, off=!isempty(problem) || v.job !== nothing, bold=true),
       Box(width(6px)))
+    picker = asks ? save_picker_section(v) : ()
     words, icon, colour = !isempty(problem) ? (problem, "exclamation-circle", colours.accent) :
-                          isempty(v.said) ? (save_plan(v, d), "", colours.dim) :
+                          isempty(v.said) || asks ? (save_plan(v, d; to), "", colours.dim) :
                           (v.said, v.failed ? "exclamation-circle" : v.job === nothing ? "check2" : "", v.failed ? colours.accent : colours.dim)
     note = Row(width(grow=grow), padding(9px, 12px, 9px, 12px), Alignment.Center, child_gap=6px, clip=true, name="Said",
       (isempty(icon) ? () : (Icon(icon, size=13px, color=colour),))...,
       Box(width(grow=grow), Text(words, size=12px, family=SANS, color=colour, wrap=WrapMode.words)),
       (v.nokey && Sys.isapple() ? (block_button!(v, :key, :key, icon="key", words="Add Key…", tip="Type the key, and Ladder keeps it in your Keychain"),) : ())...)
-    Column(block_look()..., clip=true, name="Save", bar, note)
+    Column(block_look()..., clip=true, name="Save", bar, picker..., note)
   end
 end
 

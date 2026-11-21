@@ -188,10 +188,15 @@ end
   @test e.buf.caret[1] == i + 1 && K.picked(e.buf) === nothing
   press(Keys.up)
   @test K.picked(e.buf) == (i, i)
-  # A click on the table puts the caret in its line, which then shows as it's written
+  # A click on the table puts the caret on it as a whole
   caret!(1, 0)
   goto("A job")
   click(shown("prices.csv"))
+  @test e.buf.caret == (i, 0) && K.picked(e.buf) == (i, i) && K.cursor(shown("prices.csv")) == :arrow
+  # With ⌥ held, a click puts the caret in its line, which then shows as it's written
+  caret!(1, 0)
+  goto("A job")
+  w.keys |= Keys.opt; click(shown("prices.csv")); w.keys ⊻= Keys.opt
   @test e.buf.caret == (i, length(e.buf.lines[i]))
   @test (c = K.item(e, i).content; c isa K.Flow && c.raw)
   shot("csv-raw.png")

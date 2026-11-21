@@ -235,7 +235,7 @@ end
   caret!((1, 0))
   was = e.buf.caret
   c = card(paint)
-  @test K.cursor(c) == :ibeam && !K.opening(c)
+  @test K.cursor(c) == :arrow && !K.opening(c)
   # With ⌘ held, the mouse shows a hand, and a click opens the address
   w.keys = Keys.cmd
   @test K.cursor(c) == :hand
@@ -244,8 +244,11 @@ end
   @test opened == [PAINT] && e.buf.caret == was && card(paint) !== nothing
   click(card(gone), Keys.cmd)
   @test opened == [PAINT, GONE]
-  # A click with no key held opens nothing, and puts the caret on the card's line, which then shows as it's written
+  # A click with no key held opens nothing, and puts the caret on the card as a whole
   click(c)
+  @test opened == [PAINT, GONE] && e.buf.caret == (paint, 0) && K.picked(e.buf) == (paint, paint) && card(paint) !== nothing
+  # With ⌥ held, a click shows the card's line as it's written, with the caret at its end
+  click(card(paint), Keys.opt)
   @test opened == [PAINT, GONE] && e.buf.caret == (paint, length(e.buf.lines[paint])) && card(paint) === nothing && flows(paint)
   caret!((1, 0))
   # In a page that's never changed, a click opens the address with no key held

@@ -96,8 +96,9 @@
 #     code and its assembly.
 #   - Move the caret down the page onto a form, a diagram or a picture. A
 #     line goes round it. Return gives it the keyboard, ⌫ takes it away, and
-#     ↑ and ↓ go on to the lines beside it. A click on a block puts the caret
-#     on it too, unless the click was on a part of the block that takes clicks.
+#     ↑ and ↓ go on to the lines beside it. A click on such a part puts the
+#     caret on it too, unless the click was on a piece of it that takes clicks,
+#     like a button. ⌥-click shows the part as it's written.
 #   - ⌘B and ⌘I make the selection bold or italic. ⌘Z and ⌘⇧Z undo and redo.
 #   - Double-click selects a word, triple-click a line. ⌘-click opens a link. In a page
 #     that's read-only, like an email, a click opens it with no key held.
@@ -2333,8 +2334,8 @@ where it can stop. In a file that was just opened, and after a change from
 plain text to rich text, a caret that's in a part of the page that shows as
 one thing goes onto the part as a whole. At any other time it stays in such a
 part, which then shows as text: a key or a click can't take it there, so
-something meant to. A click on the front matter does, and so does the menu
-that inserts a block.
+something meant to. A click with ⌥ held does, and so does the menu that
+inserts a block.
 """
 stand!(b::Buffer) = begin
   b.caret == b.stood && return b
@@ -18838,9 +18839,9 @@ end
 "True when a click on the card now opens its address: ⌘ alone is held, or the page is one that's never changed and no key is held"
 opening(c::LinkCard) = only_held(c, Keys.cmd) || (editor(c).buf.fixed && unmodified(c))
 
-cursor(c::LinkCard) = opening(c) ? :hand : :ibeam
-# A click with ⌘ held opens the address. Any other click puts the caret on the card's line, so the line shows as it's written.
-onkey(c::LinkCard, ::KeyPress{Keys.mouse_left}) = opening(c) ? (BROWSER[](c.card.url); handled) : edit_matter!(c, c.line)
+cursor(c::LinkCard) = opening(c) ? :hand : :arrow
+# A click with ⌘ held opens the address. Any other click goes to the page, which puts the caret on the card as a whole.
+onkey(c::LinkCard, ev::KeyPress{Keys.mouse_left}) = opening(c) ? (BROWSER[](c.card.url); handled) : click_page!(c, ev)
 
 """
 The HTML of the line `text` when it shows a card: the card as a link in a box.
@@ -21175,7 +21176,8 @@ email_head(c::EmailHead, said) = begin
     (haskey(said, "cc") ? (line("Cc " * people("cc")),) : ())...)
 end
 
-cursor(::Union{MatterCard,MatterRow}) = :ibeam
+cursor(::Union{MatterCard,MatterRow}) = :arrow
+onkey(c::Union{MatterCard,MatterRow}, ev::KeyPress{Keys.mouse_left}) = click_page!(c, ev)
 
 "Put the caret at the end of line `i` of the front matter, so it shows as it's written"
 edit_matter!(node, i) = begin
@@ -21187,8 +21189,6 @@ edit_matter!(node, i) = begin
   handled
 end
 
-onkey(r::MatterRow, ::KeyPress{Keys.mouse_left}) = edit_matter!(r, r.line)
-onkey(c::MatterCard, ::KeyPress{Keys.mouse_left}) = edit_matter!(c, isempty(c.rows) ? 1 : first(c.rows)[1])
 
 # --- the top of an email -----------------------------------------------------------
 #
@@ -22397,9 +22397,9 @@ press!(e, pos) = begin
     url === nothing || return follow!(e, url)
   end
   if it.content isa Live
-    # A click with ⌥ held shows the block's code
+    # A click with ⌥ held shows the block's code. A part of one line, like a picture, shows its line, with the caret at the end.
     e.clicked = (time(), (it.first, 0), 0)
-    b.caret = b.anchor = (min(it.first + 1, it.last), 0)
+    b.caret = b.anchor = it.last > it.first ? (it.first + 1, 0) : line_end(b, it.first)
     return touch!(e)
   end
   it.content isa Sheet && press!(e, it, it.content, pos) && return touch!(e)
@@ -22445,6 +22445,15 @@ pick_clicked!(e, it::Item) = begin
   touch!(e)
   e.reveal = false
 end
+
+"""
+Give a click on `node` to the page, as a click on its text is given. A part of
+the page like a picture, a table from a CSV file or the front matter has no use
+for a click of its own, so the page puts the caret on the part as a whole, or
+with ⌥ held shows its lines as they're written. Such a part's node hangs from
+the editor, not from the page's text, so the click doesn't get there by itself.
+"""
+click_page!(node, ev) = (press!(editor(node), ev.window.mouse); handled)
 
 """
 How far a key scrolls the page while it's read, or nothing for a key that doesn't
@@ -29361,10 +29370,9 @@ const PICTURE_LINE = r"^\s*(?:\[\s*)?!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\
 end
 
 describe(p::Picture) = Box(width(grow=grow), Alignment.Start, fillable(p, (:picture, p.key), Image(p.key, fixed(p.w), height(p.h), radius(4px))))
-cursor(::Picture) = :ibeam
+cursor(::Picture) = :arrow
 onpinch(p::Picture, ev::Pinch) = pinch_open(p, ev)
-# A click on the picture puts the caret on its line, so the line shows as it's written
-onkey(p::Picture, ::KeyPress{Keys.mouse_left}) = edit_matter!(p, p.line)
+onkey(p::Picture, ev::KeyPress{Keys.mouse_left}) = click_page!(p, ev)
 
 # The files that turned out not to be pictures, and when each last changed, so that each is tried once
 const not_pictures = Dict{String,Float64}()
@@ -29548,9 +29556,8 @@ describe(n::MediaNote) = begin
     label(n.words, s, color=colours.dim))
 end
 
-cursor(::MediaNote) = :ibeam
-# A click on the note puts the caret on its line, so the line shows as it's written
-onkey(n::MediaNote, ::KeyPress{Keys.mouse_left}) = edit_matter!(n, n.line)
+cursor(::MediaNote) = :arrow
+onkey(n::MediaNote, ev::KeyPress{Keys.mouse_left}) = click_page!(n, ev)
 
 # --- a table from a CSV file -------------------------------------------------------------
 #
@@ -29563,7 +29570,7 @@ onkey(n::MediaNote, ::KeyPress{Keys.mouse_left}) = edit_matter!(n, n.line)
 #
 # A long file shows its first `TABLE_ROWS` rows. A line under them says how
 # many more there are, and a click on it shows them all. A click on the table
-# puts the caret on its line, so the line shows as it's written.
+# puts the caret on it as a whole, and ⌥-click shows its line as it's written.
 #
 # Ladder reads the file once, and again when the file changes on the disk. A
 # file that isn't there, or that isn't a table, shows a line that says so. A
@@ -29760,9 +29767,8 @@ describe(t::TableLine) = begin
     (has_more(t) ? (block_part!(() -> TableMore(of=t), t, :more),) : ())...)
 end
 
-cursor(::TableLine) = :ibeam
-# A click on the table puts the caret on its line, so the line shows as it's written
-onkey(t::TableLine, ::KeyPress{Keys.mouse_left}) = edit_matter!(t, t.line)
+cursor(::TableLine) = :arrow
+onkey(t::TableLine, ev::KeyPress{Keys.mouse_left}) = click_page!(t, ev)
 
 describe(m::TableMore) = begin
   t = m.of
@@ -29772,12 +29778,12 @@ describe(m::TableMore) = begin
     (isempty(after) ? () : (Box(label(after, t.size, color=colours.faint)),))...)
 end
 
-cursor(m::TableMore) = isempty(more_words(m.of)[1]) ? :ibeam : :hand
+cursor(m::TableMore) = isempty(more_words(m.of)[1]) ? :arrow : :hand
 
 # A click on the line under the table shows every row, or only the first ones again
 onkey(m::TableMore, ::KeyPress{Keys.mouse_left}) = begin
   t = m.of
-  isempty(more_words(t)[1]) && return edit_matter!(t, t.line)
+  isempty(more_words(t)[1]) && return nothing   # a line with nothing to show is part of the table
   e = editor(t)
   before = tall(t)
   t.whole = !t.whole
@@ -30144,11 +30150,9 @@ sound_over(e) = begin
   ()
 end
 
-# A click beside the player puts the caret on the line, so that the line shows as it's written
-onkey(s::SoundLine, ::KeyPress{Keys.mouse_left}) = begin
-  i = sound_line(editor(s), s.path)
-  i === nothing ? handled : edit_matter!(s, i)
-end
+# A click beside the player goes to the page, which puts the caret on the line as a whole
+cursor(::SoundLine) = :arrow
+onkey(s::SoundLine, ev::KeyPress{Keys.mouse_left}) = click_page!(s, ev)
 
 "Is the file at `path` being transcribed now?"
 transcribing(path) = (t = get(transcriptions, path, nothing); t !== nothing && !finished(t))

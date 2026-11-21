@@ -6,6 +6,7 @@
 
 @use Test: @test, @testset
 @use "../main" => K
+K.RUN_WAIT[] = Inf   # the code runs in a thread of its own, and each result is there when the key's handler ends
 @use "github.com/jkroso/MiniFB.jl" Window KeyPress Keys onkey Typed ontype
 @use "github.com/jkroso/UI.jl/Interface/draw" frame
 const px = K.px

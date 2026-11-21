@@ -31762,6 +31762,13 @@ end
 # fails doesn't stop the ones under it, so every result shows. Then the first
 # one that failed comes in sight. See `run_all!`.
 #
+# The code runs in a thread of its own, so the window goes on drawing while it
+# runs. Its box shows at once. A result that comes within a tenth of a second
+# shows straight away. A box whose code takes longer has a spinner in it until
+# the result comes. Pieces of code run one at a time, in the order that they
+# were asked for. A name that acts on the window, like `page_theme!`, does it
+# on the main thread. See `run_pieces!`.
+#
 # The code of a page runs in a module of the page's own, so a name that one
 # block makes is there for the next, and isn't on another page. The module has
 # the names that a live block has, like Slider and px, and the units of a
@@ -31833,6 +31840,7 @@ outcome_face(size, ink=colours.ink) = Face(codefont(), codestyle(), size, ink, f
   source::Any = nothing             # what the levels under the value show the code of: a Defined or a Thunk, or nothing
   form::Int = 1                     # which of a function's methods and sets of types those levels show
   views::Dict{Any,Any} = Dict{Any,Any}()   # the top line and the lines of each level that has shown, for each set of types
+  since::Float64 = 0.0              # when its code was asked to run, while what the code came to isn't here. It's 0 once it is.
   # Each frame sets these, for the room that the window has
   shown::String = ""                # as much of `brief` as fits
   rest::String = ""                 # what shows under the box when it's open
@@ -31976,7 +31984,10 @@ window_names!(m::Module, e, key=nothing) = begin
     julias = Base.isexported(Base, n)
     source !== from && julias && return
     value = Base.invokelatest(getglobal, source, n)
-    key !== nothing && acts_on_window(value) && (value = window_call(key, n, source))
+    # A name that acts on a window does it on the main thread, as the code of a page runs in a thread of its own: see `on_main`
+    if acts_on_window(value)
+      value = key !== nothing ? window_call(key, n, source) : (f -> (args...; kw...) -> on_main(() -> f(args...; kw...)))(value)
+    end
     Core.eval(usual, :(const $n = $value))
     Core.eval(usual, Expr(:export, n))
     julias && !(try Base.which(m, n) === m catch; false end) && Core.eval(m, :(const $n = $value))
@@ -31994,9 +32005,10 @@ acts_on_window(f) = f isa Function && any(i -> isdefined(f, i) && getfield(f, i)
 A function that calls the function `name` of the window that the names of
 the module of the page at `key` act on: see `acting_window`. When that window
 is older than the name and hasn't got it, it calls the one of `given`, the
-module of the window that gave the page's module the name.
+module of the window that gave the page's module the name. It runs on the
+main thread: see `on_main`.
 """
-window_call(key::String, name::Symbol, given::Module) = (args...; kw...) -> begin
+window_call(key::String, name::Symbol, given::Module) = (args...; kw...) -> on_main() do
   from = sandbox(acting_window(key))
   Base.invokelatest(isdefined, from, name) || (from = given)
   Base.invokelatest(Base.invokelatest(getglobal, from, name), args...; kw...)
@@ -32044,26 +32056,50 @@ value that the code came to, the text that the code printed, and true when the
 code failed. Then the value is the error.
 """
 run_code(e, code::String) = begin
-  path = isempty(e.buf.path) ? joinpath(e.folder, "untitled.md") : e.buf.path
-  # Kip finds a path like "./widgets.jl" from the folder of the document, as it does for a live block
-  dir = isdir(docdir(e)) ? docdir(e) : pwd()
+  path, dir = run_place(e)
   # The code can load the drawing methods of a node, so the window draws one more frame soon after
   e.nodes[:ran] = true
+  out = with_printed(() -> cd(() -> running_code(m -> run_in(m, code, path), e), dir))
+  code_ran!(path)
+  out
+end
+
+"""
+The path that the page's code runs as, and the folder that it runs in. Kip
+finds a path like "./widgets.jl" from the folder of the document, as it does
+for a live block.
+"""
+run_place(e) = (isempty(e.buf.path) ? joinpath(e.folder, "untitled.md") : e.buf.path, isdir(docdir(e)) ? docdir(e) : pwd())
+
+"""
+Run `f`, and keep the text that it prints. It gives the value that `f` came
+to, that text, and true when `f` failed. Then the value is the error.
+"""
+with_printed(f) = begin
   screen = stdout
   rd, wr = redirect_stdout()
   printed = @async read(rd, String)
   value, failed = try
-    (cd(() -> running_code(m -> run_in(m, code, path), e), dir), false)
+    (f(), false)
   catch err
     (err isa LoadError ? err.error : err, true)
   finally
     redirect_stdout(screen)
     close(wr)
-    CODE_RUNS[] += 1   # the page's `check` blocks run again
   end
-  # Code that ran in a module of Ladder's own can give a thing a new way to draw itself: see "the code of a thing"
-  loaded_module(page_key(path)) === nothing || redraw_windows!()
   (value, fetch(printed), failed)
+end
+
+"""
+What happens after code of the page at `path` ran: the page's `check` blocks
+run again, and the windows draw again when the code ran in a module of
+Ladder's own, since it can give a thing a new way to draw itself (see "the
+code of a thing").
+"""
+code_ran!(path) = begin
+  CODE_RUNS[] += 1
+  loaded_module(page_key(path)) === nothing || redraw_windows!()
+  nothing
 end
 
 """
@@ -32222,49 +32258,195 @@ outcomes(e) = get!(() -> Outcome[], e.nodes, (:outcomes, e.buf.path))::Vector{Ou
 
 """
 Run the code on the lines `r` of the page, and show what it comes to after the
-last of them. `code` is the part of those lines that runs.
+last of them. `code` is the part of those lines that runs. It gives the
+outcome, which waits for the code when the code takes longer than `RUN_WAIT`.
 """
-outcome!(e, r::UnitRange{Int}, code::String=join(e.buf.lines[r], "\n")) = begin
+outcome!(e, r::UnitRange{Int}, code::String=join(e.buf.lines[r], "\n")) = only(run_pieces!(e, [r], [code]))
+
+"""
+How many seconds a window waits for what its code comes to, before it goes on
+drawing. A box whose code takes longer shows a spinner until the code comes
+back. Tests make it longer, so that every result is there when a key's handler
+ends.
+"""
+const RUN_WAIT = Ref(0.1)
+
+"How many seconds the ring of a spinner takes to go round once, and how often it moves"
+const SPIN_TURN = 0.9
+const SPIN_FRAME = 1 / 30
+
+"""
+Pieces of the code of a page that run one after another in a thread of their
+own: the window that runs them, the outcome and the code of each piece, and
+what the thread sends back for each piece as it ends.
+"""
+mutable struct CodeRun
+  e::Any
+  key::Any                 # the key in `e.nodes` of the list that the outcomes are in
+  path::String             # the path that the code runs as
+  outcomes::Vector{Outcome}
+  codes::Vector{String}
+  came::Channel{Any}       # what each piece came to, as it ends: see `run_piece`
+  task::Task               # the task that runs the pieces
+  failed::Int              # the first piece that failed, or 0
+  after::Any               # what to do when every piece has come back, or nothing
+end
+
+"The task of the code that started to run last, in any window. Each run waits for the one before it to end, so two pieces of code never run at once."
+const LAST_RUN = Ref{Any}(nothing)
+
+"""
+Run the code on the lines of each range in `rs` of the page, one piece after
+another, and show what each piece comes to after its last line. `codes` are the
+parts of those lines that run. With `stop`, a piece that fails stops the pieces
+after it, and their boxes go. `after(e, o)` runs when every piece has come
+back, with the outcome of the first piece that failed, or nothing. It gives
+the outcome of each piece.
+
+The code runs in a thread of its own, so the window goes on drawing while it
+runs, and the box of each piece shows at once. Code that comes back within
+`RUN_WAIT` seconds shows what it came to straight away, as if the window had
+waited for it. A box whose code takes longer shows a spinner until then.
+"""
+run_pieces!(e, rs::AbstractVector, codes::AbstractVector; stop=false, after=nothing) = begin
   b = e.buf
-  was = b.lines[r]
+  path, dir = run_place(e)
+  m = cd(() -> workspace(e), dir)
+  isempty(b.path) || (PAGE_WINDOWS[page_key(b.path)] = e)
+  # A UI node shows as itself on a page. In a file of code, it's a value like any other.
+  nodes = b.view != :code
+  list, asked = outcomes(e), time()
+  made = Outcome[]
+  for r in rs
+    o = own!(e, Outcome(first=first(r), last=last(r), code=b.lines[r], total=length(b.lines), since=asked))
+    # It takes the place of what any of those lines came to before
+    Base.filter!(p -> p.last < o.first || p.first > o.last, list)
+    push!(list, o)
+    push!(made, o)
+  end
+  came = Channel{Any}(Inf)
+  before = LAST_RUN[]
+  task = Threads.@spawn begin
+    before === nothing || try wait(before) catch end
+    for (k, code) in enumerate(codes)
+      piece = Base.invokelatest(run_piece, k, code, m, path, dir, nodes)
+      put!(came, piece)
+      piece.failed && stop && break
+    end
+  end
+  LAST_RUN[] = task
+  push!(get!(() -> CodeRun[], e.nodes, :runs), CodeRun(e, (:outcomes, b.path), path, made, String.(codes), came, task, 0, after))
+  while !istaskdone(task) && time() < asked + RUN_WAIT[]
+    sleep(0.002)
+  end
+  run_tick!(e)
+  made
+end
+
+"""
+Run `code`, piece `k` of a run, in the module `m`, as the file at `path` and in
+the folder `dir`. It gives what the outcome of the piece shows: the value, the
+text that the code printed, true when the code failed, the world that it ran
+in, and the value as text. With `nodes`, a UI node shows as itself, and its
+text is its type's name. The text is made here, straight after the code runs,
+so a piece after it that changes the value doesn't change what it shows.
+"""
+run_piece(k, code, m, path, dir, nodes) = begin
   world = Base.get_world_counter()
-  value, printed, failed = run_code(e, code)
-  # The levels under the value show the code of what ran
-  source = failed ? nothing : source_of(code, value, world)
+  value, printed, failed = with_printed(() -> cd(() -> Base.invokelatest(run_in, m, code, path), dir))
   # Code that ends with a semicolon shows no value, as it does at Julia's prompt
-  !failed && endswith(rstrip(code), ';') && (value = nothing)
-  node = whole = nothing
+  shows = !failed && endswith(rstrip(code), ';') ? nothing : value
+  node = whole = wrong = false
   text = try
     if failed
       Base.invokelatest(sprint, showerror, value)
-    elseif value isa Union{SemanticUI,GeometricUI} && b.view != :code
-      node = own!(e, Shown(value=value, inline=true))
-      string(nameof(typeof(value)))
+    elseif nodes && shows isa Union{SemanticUI,GeometricUI}
+      node = true
+      string(nameof(typeof(shows)))
     else
       # In a file of code a node is a value like any other, and its box lists its fields and its children
-      has_members(value) && (whole = value)
-      value === nothing ? "" : value_text(value, workspace(e))
+      whole = has_members(shows)
+      shows === nothing ? "" : value_text(shows, m)
     end
   catch err
     # A value whose own `show` fails
-    failed = true
+    wrong = true
     sprint(showerror, err)
   end
-  said = String(rstrip(printed))
-  full = clipped(join(filter(!isempty, [said, text]), "\n"))
-  subject = !failed && value isa Union{Function,Module} ? value : nothing
+  (k=k, value=value, shows=shows, printed=printed, failed=failed, wrong=failed || wrong, world=world, text=text, node=node, whole=whole)
+end
+
+"""
+What happens in each frame to the code that runs in a thread of its own: each
+piece that came back shows what it came to, and while a piece still runs, the
+window draws again soon, which turns the spinners.
+"""
+run_tick!(e) = begin
+  runs = get(e.nodes, :runs, nothing)
+  (runs === nothing || isempty(runs)) && return
+  for run in copy(runs)
+    # It's asked whether the task ended before what it sent is taken, so nothing comes after the last take
+    ended = istaskdone(run.task)
+    while isready(run.came)
+      came_back!(run, take!(run.came))
+    end
+    ended || continue
+    Base.istaskfailed(run.task) && @error "The code of the page couldn't run" exception=TaskFailedException(run.task)
+    # A piece that didn't run, after one that failed, has no box
+    list = get(e.nodes, run.key, nothing)
+    list === nothing || Base.filter!(o -> o.since == 0 || !any(p -> p === o, run.outcomes), list)
+    Base.filter!(r -> r !== run, runs)
+    run.after === nothing || run.after(e, run.failed == 0 ? nothing : run.outcomes[run.failed])
+  end
+  isempty(runs) || redraw_in!(e, SPIN_FRAME)
+  nothing
+end
+
+"Show what a piece of the code `run` came to, in its outcome. `piece` is what `run_piece` gave."
+came_back!(run::CodeRun, piece) = begin
+  e = run.e
+  o, code = run.outcomes[piece.k], run.codes[piece.k]
+  # The code can load the drawing methods of a node, so the window draws one more frame soon after
+  e.nodes[:ran] = true
+  code_ran!(run.path)
+  piece.wrong && run.failed == 0 && (run.failed = piece.k)
+  # The levels under the value show the code of what ran
+  source = piece.failed ? nothing : source_of(code, piece.value, piece.world)
+  said = String(rstrip(piece.printed))
+  full = clipped(join(filter(!isempty, [said, piece.text]), "\n"))
+  o.brief, o.full = String(first(split(full, '\n'))), full
+  o.printed = isempty(said) ? 0 : count('\n', said) + 1
+  o.failed = piece.wrong
+  o.node = piece.node ? own!(e, Shown(value=piece.shows, inline=true)) : nothing
+  o.whole = piece.whole ? piece.shows : nothing
+  o.subject = !piece.wrong && piece.shows isa Union{Function,Module} ? piece.shows : nothing
   # A node shows at once, because its name alone says little
-  o = own!(e, Outcome(first=first(r), last=last(r), code=was, total=length(b.lines), brief=String(first(split(full, '\n'))),
-                      full=full, printed=isempty(said) ? 0 : count('\n', said) + 1, failed=failed, node=node, subject=subject,
-                      whole=whole, open=node !== nothing || whole isa Union{SemanticUI,GeometricUI}))
+  o.open = o.node !== nothing || o.whole isa Union{SemanticUI,GeometricUI}
   o.source = source
   # Code that runs while its block is down a level has its box open, since the code under it is what the level is for
-  source !== nothing && code_depth(e, first(r)) > 0 && (o.open = true)
-  list = outcomes(e)
-  # It takes the place of what any of those lines came to before
-  Base.filter!(p -> p.last < o.first || p.first > o.last, list)
-  push!(list, o)
+  source !== nothing && code_depth(e, o.first) > 0 && (o.open = true)
+  o.since = 0.0
   o
+end
+
+"""
+Run `f` on the main thread, which draws the windows, and give what `f` gives.
+The code of a page runs in a thread of its own (see `run_pieces!`), and a name
+that acts on a window, like `page_theme!`, calls this, since AppKit and the
+state of a window are the main thread's alone. The main thread runs `f`
+between two frames.
+"""
+on_main(f) = begin
+  Threads.threadid() == 1 && return f()
+  t = Task(f)
+  t.sticky = true
+  ccall(:jl_set_task_tid, Cint, (Any, Cint), t, 0)
+  schedule(t)
+  try
+    fetch(t)
+  catch err
+    err isa TaskFailedException ? throw(err.task.exception) : rethrow()
+  end
 end
 
 """
@@ -32291,9 +32473,7 @@ run_here!(e; step=false) = begin
   i = b.caret[1]
   if i < from || i > to
     # The line that opens or closes the block runs all of it, as far as the first piece that fails
-    for r in runs
-      outcome!(e, r).failed && break
-    end
+    run_pieces!(e, runs, [join(b.lines[r], "\n") for r in runs], stop=true)
   else
     k = findfirst(r -> i in r, runs)
     # A blank line runs the piece above it
@@ -32316,20 +32496,24 @@ that failed comes in sight, when one did. The caret stays where it was.
 run_all!(e) = begin
   b = e.buf
   julia_file(b) || error("Run All runs the code of a Julia file.")
-  failed = 0
-  for r in statements(b.lines)
-    outcome!(e, r).failed && failed == 0 && (failed = first(r))
-  end
-  if failed > 0
-    r = line_rect(e, failed)
-    _, tall = window_size(e)
-    if r === nothing || r.top < TOPBAR_H || r.top + r.height > tall
-      note_place!(e)   # so ⌘⌥← goes back
-      e.nodes[:hold] = (max(failed - 3, 1), 24px - PAGE_TOP)
-    end
-  end
+  runs = statements(b.lines)
+  run_pieces!(e, runs, [join(b.lines[r], "\n") for r in runs], after=bring_failed!)
   redraw_in!(e, 0)
   nothing
+end
+
+"After Run All, bring the piece whose outcome is `o` in sight, when one failed. `o` is nothing when none did."
+bring_failed!(e, o) = begin
+  # The code of a piece that changed since it ran, or a file that's no longer shown, has no outcome on the page
+  (o === nothing || !any(p -> p === o, outcomes(e))) && return
+  failed = o.first
+  r = line_rect(e, failed)
+  _, tall = window_size(e)
+  if r === nothing || r.top < TOPBAR_H || r.top + r.height > tall
+    note_place!(e)   # so ⌘⌥← goes back
+    e.nodes[:hold] = (max(failed - 3, 1), 24px - PAGE_TOP)
+  end
+  redraw_in!(e, 0)
 end
 
 works_here(e, ::Val{:run_all}) = julia_file(e)
@@ -32472,7 +32656,9 @@ isvalue(o::Outcome, k::Int) = !o.failed && k > o.printed
 
 describe(o::Outcome) = begin
   arrow = o.more ? (Icon(o.open ? "chevron-down" : "chevron-right", size=o.size * 0.8, color=colours.dim),) : ()
-  what = o.low !== nothing ? value_row(o.shown, o) :
+  # While the code runs, the box has a spinner in it
+  what = o.since > 0 ? Spinner(size=o.size) :
+         o.low !== nothing ? value_row(o.shown, o) :
          isempty(o.full) && o.node === nothing ? Box(Icon("check", size=o.size, color=colours.dim)) :
          value_row(o.shown, o, code=isvalue(o, 1) && o.node === nothing)
   joined = o.open && o.more
@@ -32540,6 +32726,27 @@ onkey(m::Member, ::KeyPress{Keys.mouse_left}) = begin
   m.inside === nothing && (m.inside = member_lines(m.of, m.value, m.depth + 1))
   m.open = !m.open
   handled
+end
+
+"A ring that turns, `size` across, in the box of an outcome whose code still runs"
+@def mutable struct Spinner <: SemanticUI
+  size::px = 12px
+end
+
+describe(s::Spinner) = Box(fixed(s.size), height(s.size), name="Spinner")
+
+# A faint ring, with a quarter of it darker. The quarter goes round once in `SPIN_TURN` seconds.
+draw(ctx, size, ui::ConcreteRect, s::Spinner) = begin
+  wide = max(num(s.size) / 7, 1.5)
+  r = Float32((min(num(ui.width), num(ui.height)) - wide) / 2)
+  x, y = Float32(num(ui.left) + num(ui.width) / 2), Float32(num(ui.top) + num(ui.height) / 2)
+  ring = ink(RGBA(colours.dim, 0.3), wide)
+  Skia.sk_canvas_draw_circle(ctx, x, y, r, ring)
+  Skia.sk_paint_delete(ring)
+  oval = Ref(Skia.sk_rect_t(x - r, y - r, x + r, y + r))
+  arc = ink(colours.dim, wide)
+  Skia.sk_canvas_draw_arc(ctx, oval, Float32(360 * mod(time(), SPIN_TURN) / SPIN_TURN), 90f0, false, arc)
+  Skia.sk_paint_delete(arc)
 end
 
 # Where the rest under an open box goes on past a side of the box, the box and the rest meet in an inside
@@ -35004,6 +35211,7 @@ describe_window(e::Editor) = begin
   slide_tick!(e)
   screen_tick!(e)
   code_tick!(e)
+  run_tick!(e)
   ask_tick!(e)
   about_tick!(e)
   live_checks_tick!(e)

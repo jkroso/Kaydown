@@ -4,6 +4,7 @@
 
 @use Test: @test, @testset
 @use "../main" => K
+K.RUN_WAIT[] = Inf   # the code runs in a thread of its own, and each result is there when the key's handler ends
 @use "github.com/jkroso/MiniFB.jl" Window KeyPress MouseMove Keys onkey onmouse Typed ontype
 @use "github.com/jkroso/UI.jl/Interface/draw" frame rect
 @use "github.com/jkroso/UI.jl/Interface/save" save_png
@@ -513,4 +514,67 @@ end
   K.run_code(e4, "1")
   @test Base.invokelatest(theme) == "Night"
   e3.theme, e4.theme = was
+end
+
+"The pixels of the box of `o`, as the window draws it now"
+box_pixels(o) = begin
+  file = joinpath(dir, "box.png")
+  save_png(file, w)
+  p = pixels(file)
+  s = size(p, 2) / 1000   # the picture can have more than one pixel for each point
+  r = rect(o)
+  p[round(Int, K.num(r.top) * s) + 1:round(Int, K.num(r.top + r.height) * s), round(Int, K.num(r.left) * s) + 1:round(Int, K.num(r.left + r.width) * s)]
+end
+
+"Draw frames until the code that `o` waits for comes back, for no more than `most` seconds"
+come_back!(o, most=10) = (t = time(); while o.since > 0 && time() - t < most; sleep(0.02); frames(1) end; o)
+
+@testset "slow code shows a spinner in its box, and the window goes on drawing" begin
+  K.RUN_WAIT[] = 0.1
+  try
+    fresh!(4)
+    # The code runs in a thread of its own, so the window doesn't wait for it
+    t = @elapsed o = K.outcome!(e, 4:4, "let t = time(); while time() - t < 1.5; rand(8) end; 42 end")
+    @test t < 0.6
+    @test o.since > 0 && o.brief == "" && !o.more
+    frames()
+    @test rect(o) !== nothing   # the box shows at once
+    # The spinner in the box turns
+    before = box_pixels(o)
+    sleep(0.3); frames()
+    @test box_pixels(o) != before
+    shot("spinner")
+    come_back!(o)
+    @test o.since == 0 && o.brief == "42"
+    frames()
+    still = box_pixels(o)
+    sleep(0.3); frames()
+    @test box_pixels(o) == still   # no spinner once the result is there
+    # Code that comes back within a tenth of a second shows at once, with no spinner
+    o = K.outcome!(e, 5:5, "1 + 1")
+    @test o.since == 0 && o.brief == "2"
+    # A piece waits for the one before it, so it sees what that one made
+    a = K.outcome!(e, 4:4, "(sleep(0.5); made_slowly = 5)")
+    z = K.outcome!(e, 5:5, "made_slowly + 1")
+    @test a.since > 0 && z.since > 0
+    come_back!(z)
+    @test a.brief == "5" && z.brief == "6"
+    # A name that acts on the window gets there from the thread that runs the code
+    was = e.theme
+    e.theme = :night
+    @test come_back!(K.outcome!(e, 4:4, "(sleep(0.2); page_theme())")).brief == "\"Night\""
+    e.theme = was
+    if Threads.nthreads(:interactive) > 0
+      @test come_back!(K.outcome!(e, 4:4, "Threads.threadid()")).brief != string(Threads.threadid())
+    end
+    # Running a whole block stops at the first piece that fails, and the pieces after it have no box
+    fresh!(3)
+    K.run_pieces!(e, [4:4, 5:5, 6:6], ["sleep(0.3)", "error(\"no\")", "x = 99"], stop=true)
+    @test length(K.outcomes(e)) == 3
+    come_back!(K.outcomes(e)[2])
+    frames()
+    @test [o.first for o in K.outcomes(e)] == [4, 5] && K.outcomes(e)[2].failed
+  finally
+    K.RUN_WAIT[] = Inf
+  end
 end

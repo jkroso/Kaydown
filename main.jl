@@ -253,10 +253,10 @@
 #     defined. See "where a name is defined".
 #   - Click the number of a line, in a file that git keeps, to see the commit
 #     that last changed the line. See "when a line last changed".
-#   - Run the command Ask For Change, say what you want in words, and click
-#     a thing. An agent changes the function that draws it. Keep This Change
-#     keeps a function of Ladder's own for each start. See "ask for a change
-#     to a thing".
+#   - Run the command Ask For Change, choose a block of the file's code or a
+#     part of the window, and say what you want in words. An agent changes the
+#     code. Keep This Change keeps a function of Ladder's own for each start.
+#     See "ask for a change to a thing".
 #   - Write a code block in the language `check`, with a line of Julia for
 #     each thing that must be true. It shows a green or a red dot for each
 #     line, and a click on it shows each line with a tick or a cross. See
@@ -27003,6 +27003,24 @@ palette(e) = node!(CommandPalette, e, :palette)
 function choices_for end
 function typed_as end
 
+"""
+`chip_start(::Type{T}, e)` gives the thing of type `T` that a chip starts with
+when its command is taken: the one that the window means, like what the caret
+is on. A chip of a type with no method of it starts with nothing.
+"""
+function chip_start end
+
+"""
+`chip_click(::Type{T}, e, w)` gives the thing of type `T` under the mouse of
+the window `w`, or nothing. While the palette shows a chip of a type with a
+method of it, a click on the window outside the palette chooses that thing
+for the chip. See `palette_click!`.
+"""
+function chip_click end
+
+"Where the thing `x` that a chip has shows in the window of `e`, for a line round it, or nothing"
+shown_at(e, x) = x isa SemanticUI ? (try rect(x) catch; nothing end) : nothing
+
 choices_for(::Type{Bool}, e) = [true, false]
 choices_for(::Type{T}, e) where T<:Enum = collect(instances(T))
 # A method that takes a type itself, like `f(::Type{Page})`, takes that one type. Several such methods make a chip that chooses between them.
@@ -27598,7 +27616,131 @@ take_command!(e, w, p::CommandPalette, c::Command) = begin
   p.command, p.methods = c, sigs
   settle!(p)
   # A function that takes nothing but the editor runs at once
-  isempty(p.values) ? palette_run!(e, w, p) : go_chip!(e, p, 1)
+  isempty(p.values) && return palette_run!(e, w, p)
+  start_chips!(e, p)
+  # The keyboard goes to the first chip that has nothing yet, or to the Run button
+  go_chip!(e, p, something(findfirst(x -> x === UNSAID, p.values), length(palette_chips(p)) + 1))
+end
+
+"Give each chip that has nothing the thing that its type starts with: see `chip_start`"
+start_chips!(e, p::CommandPalette) = begin
+  k = 1
+  while k <= length(p.values)
+    if p.values[k] === UNSAID
+      chips = palette_chips(p.methods, p.values)
+      for T in askable_types(chips[k].types)
+        hasmethod(chip_start, Tuple{Type{T},Any}) || continue
+        x = Base.invokelatest(chip_start, T, e)
+        x === nothing || (say!(p, chips, k, x); break)
+      end
+    end
+    k += 1
+  end
+  p
+end
+
+"""
+The chip that a click on the window chooses a thing for: the one that the
+keyboard is in, or else the first, of a type with a method of `chip_click`.
+It's nothing while the palette shows no such chip.
+"""
+click_chip(e, p::CommandPalette) = begin
+  (e.popup == :commands && p.command !== nothing) || return nothing
+  chips = palette_chips(p)
+  takes(k) = !chips[k].keyword && any(T -> hasmethod(chip_click, Tuple{Type{T},Any,Any}), askable_types(chips[k].types))
+  p.at <= length(chips) && takes(p.at) && return p.at
+  findfirst(takes, eachindex(chips))
+end
+
+"True when the point `(x, y)` of the window is on the palette: the strip along the bottom, or the list over it"
+on_palette(p::CommandPalette, x, y) = begin
+  plan = p.plan
+  plan === nothing && return false
+  within(r) = r.x <= x <= r.x + r.w && r.y <= y <= r.y + r.h
+  within(plan.band) || (plan.list !== nothing && within(plan.list.frame))
+end
+
+"The part of the window that a concrete box `ui` of its layout is drawn for: the nearest that made it"
+drawn_for(ui) = begin
+  from = ui.from
+  while from !== nothing
+    from isa SemanticUI && return from
+    from = hasproperty(from, :from) ? from.from : nothing
+  end
+  nothing
+end
+
+"""
+The deepest part of the window `w` under its mouse, leaving out what the
+palette `p` draws. The palette's layers cover the window while it shows, so
+this is what a click outside the palette is on.
+"""
+under_palette(w, p::CommandPalette) = (s = scene(w); s === nothing ? nothing : hit_past(s, (w.mouse[1], w.mouse[2]), p))
+hit_past(ui, (x, y), p) = begin
+  ui isa ConcreteRect || return nothing
+  (ui.left <= x <= ui.left + ui.width && ui.top <= y <= ui.top + ui.height) || return nothing
+  made = drawn_for(ui)
+  made === p && return nothing
+  # Later children draw on top, so they're found first
+  for child in Iterators.reverse(ui.children)
+    found = hit_past(child, (x, y), p)
+    found === nothing || return found
+  end
+  made
+end
+
+"What a click at the mouse of the window `w` would choose for chip `k` of the palette, or nothing"
+clicked_thing(e, p::CommandPalette, w, k::Int) = begin
+  for T in askable_types(palette_chips(p)[k].types)
+    hasmethod(chip_click, Tuple{Type{T},Any,Any}) || continue
+    x = Base.invokelatest(chip_click, T, e, w)
+    x === nothing || return x
+  end
+  nothing
+end
+
+"""
+A click on the window while the palette shows a chip that a click chooses
+for: the chip gets the thing under the mouse, and the keyboard goes on from
+it. True when the palette took the click. It takes a click on nothing that
+the chip takes too, so the page under the palette doesn't change.
+"""
+palette_click!(e, w) = begin
+  p = get(e.nodes, :palette, nothing)
+  p isa CommandPalette || return false
+  k = click_chip(e, p)
+  (k === nothing || on_palette(p, num(w.mouse[1]), num(w.mouse[2]))) && return false
+  x = clicked_thing(e, p, w, k)
+  x === nothing && return true
+  say!(p, palette_chips(p), k, x)
+  k == p.at ? palette_next!(e, p) : palette_focus!(e, p)
+  redraw_in!(e, 0)
+  true
+end
+
+"""
+Draw a line round what the chip that a click chooses for has, with the chip's
+name and its words, and round the thing that a click would choose. The
+window's tool draws it, over the rest of the window.
+"""
+mark_chips(ctx, w, e) = begin
+  p = get(e.nodes, :palette, nothing)
+  p isa CommandPalette || return nothing
+  k = click_chip(e, p)
+  k === nothing && return nothing
+  redraw_in!(e, 1/30)   # the line follows the mouse
+  chips = palette_chips(p)
+  chosen = chip_value(p, chips, k)
+  if chosen !== UNSAID
+    r = shown_at(e, chosen)
+    r === nothing || pick_mark(ctx, w, r, "$(chip_name(chips[k])): $(worded(chosen))")
+  end
+  on_palette(p, num(w.mouse[1]), num(w.mouse[2])) && return nothing
+  x = clicked_thing(e, p, w, k)
+  (x === nothing || x == chosen) && return nothing
+  r = shown_at(e, x)
+  r === nothing || pick_mark(ctx, w, r, "Click to choose: $(worded(x))"; colour=PICK_HOVER)
+  nothing
 end
 
 """
@@ -28037,7 +28179,8 @@ describe(p::CommandPalette) = begin
                                                                   omni_label(p.fault, 13, OMNI_WRONG))))
   end
   Stack(width(grow=grow), height(grow=grow), Alignment.Start, name="Command palette",
-    (showing ? (node!(PaletteCatch, e, :palette_catch),) : ())..., layers...)
+    # While a click on the window chooses for a chip, the window's parts are there for the click to find
+    (showing && click_chip(e, p) === nothing ? (node!(PaletteCatch, e, :palette_catch),) : ())..., layers...)
 end
 
 describe(::PaletteCatch) = Box(width(grow=grow), height(grow=grow))
@@ -33980,15 +34123,14 @@ end
 """
 The tool of a window of the editor `editor` that shows the code of a thing.
 `picking` is true after Show Code, until a click or esc. `swallow` is true
-from a click that it took until the button comes up. `asking` has the words
-of Ask For Change until that click, and `asked` is the change that an
-agent is making, or made a moment ago: see "ask for a change to a thing".
+from a click that it took until the button comes up. `asked` is the change
+that an agent is making, or made a moment ago: see "ask for a change to a
+thing".
 """
 @def mutable struct CodePicker
   editor::Any = nothing
   picking::Bool = false
   swallow::Bool = false
-  asking::String = ""
   asked::Any = nothing
 end
 
@@ -34005,20 +34147,22 @@ code_tick!(e) = begin
 end
 
 tool_input(t::CodePicker, w, ::KeyPress{Keys.mouse_left}) = begin
+  # The palette's chip that a click chooses for takes the click first
+  palette_click!(t.editor, w) && (t.swallow = true; return true)
   picks(t, w) || return false
   found = code_under(w)
   t.picking = false
   t.swallow = true   # the window's parts see neither the press nor the release
-  asking, t.asking = t.asking, ""
-  found === nothing || (isempty(asking) ? show_code!(t.editor, found[2]) : ask_change!(t, found[1], found[2], asking))
+  found === nothing || show_code!(t.editor, found[2])
   true
 end
 tool_input(t::CodePicker, w, ::KeyRelease{Keys.mouse_left}) = (was = t.swallow; t.swallow = false; was)
-tool_input(t::CodePicker, w, ::KeyPress{Keys.escape}) = (was = t.picking; t.picking = false; t.asking = ""; was)
+tool_input(t::CodePicker, w, ::KeyPress{Keys.escape}) = (was = t.picking; t.picking = false; was)
 
 const PICK_LINE = colorant"rgb(48,128,236)"
 
 const PICK_FAILED = colorant"rgb(200,60,50)"
+const PICK_HOVER = colorant"rgb(120,165,235)"   # the line round what a click would choose for the palette
 
 "Draw a line round the place `r` of the window `w`, and a label with `words` over its top left corner. With no place, the label is under the top bar."
 pick_mark(ctx, w, r, words; colour=PICK_LINE) = begin
@@ -34038,11 +34182,12 @@ pick_mark(ctx, w, r, words; colour=PICK_LINE) = begin
 end
 
 # A line round the thing that a click would show the code of, and a label over its top left corner.
-# A thing that an agent is changing keeps its line, with what was asked, and then what the agent said.
+# A thing or a block of code that an agent is changing keeps its line, with what was asked, and then what the agent said.
 draw_tool(ctx, w, t::CodePicker, scene) = begin
+  mark_chips(ctx, w, t.editor)
   a = t.asked
   if a !== nothing
-    r = try rect(a.node) catch; nothing end
+    r = asked_rect(t.editor, a.place)
     words = a.ended == 0 ? "Asked: $(a.words) …" : a.said
     pick_mark(ctx, w, r, length(words) > 140 ? first(words, 139) * "…" : words; colour=a.failed ? PICK_FAILED : PICK_LINE)
   end
@@ -34053,7 +34198,7 @@ draw_tool(ctx, w, t::CodePicker, scene) = begin
   node, m = found
   r = try rect(node) catch; nothing end
   r === nothing && return nothing
-  pick_mark(ctx, w, r, isempty(t.asking) ? "$(nameof(typeof(node)))  ·  $(code_label(m))" : "$(nameof(typeof(node)))  ·  click to ask: $(t.asking)")
+  pick_mark(ctx, w, r, "$(nameof(typeof(node)))  ·  $(code_label(m))")
 end
 
 """
@@ -34256,16 +34401,28 @@ end
 
 # --- ask for a change to a thing ----------------------------------------------------------
 #
-# The command Ask For Change takes what you want in words, like "make this
-# bar thinner". The next click picks a thing, as it does after Show Code.
-# Ladder gives the words, with the file and the line of the function that
-# draws the thing, to an agent: the command `claude` of Claude Code, which it
-# starts in the folder of that file. The agent changes the file. When it has
-# ended, Ladder reads the file again and runs each part of its code that
-# changed, in the module that the file made, so the thing is drawn the new
-# way: see `reload_changed!`. Until then a line stays round the thing, with a
-# label that has your words. After, the label has what the agent said of its
-# change, for a few seconds.
+# The command Ask For Change takes two things: what to change, and what you
+# want in words, like "make this bar thinner". What to change is one of:
+#
+#   - A block of Julia code: in a file of Julia code, a piece of code that
+#     starts at the top of the file, like a function with its documentation,
+#     and on a page, a `julia` code block.
+#   - A part of the window, like the block of a page that shows a bar. The
+#     change is to the function that draws it.
+#
+# It starts as what the caret is on, and a blue line goes round that. A click
+# on the window chooses another: see `chip_click`. The palette's list has the
+# rest, from the nearest.
+#
+# Ladder gives the words, with the file and the lines of the code, to an
+# agent: the command `claude` of Claude Code, which it starts in the folder of
+# that file. The agent changes the file. When it has ended, Ladder reads the
+# file again and runs each part of its code that changed, in the module that
+# the file made, so what the code draws is drawn the new way: see
+# `reload_changed!`. A file that shows in a window shows its new lines, as it
+# does after any change on the disk. Until the agent ends, a line stays round
+# the block or the part, with a label that has your words. After, the label
+# has what the agent said of its change, for a few seconds.
 #
 # The app that's installed writes its own files again each time it starts, so
 # a change to one of them lasts until Ladder quits. The command Keep This
@@ -34287,18 +34444,202 @@ agent_command() = begin
   `$found --permission-mode acceptEdits --allowedTools Read,Edit,Grep,Glob -p`
 end
 
-"What an agent is told when a change is asked for: the function, where it is, and the user's words"
-change_prompt(file, line::Int, code, kind, words) = """
-  The user of the app Ladder pointed at a part of its window, a $kind, and asked for a change to it.
+"""
+Something that Ask For Change can change: a block of a file of Julia code,
+or a part of the window, by the function that draws it. `words` and `note`
+are what the palette's list says of it. The code is lines `first` to `last`
+of the file `file`. `node` is the part of the window, or nothing for a block.
+`mod` is the module that runs the code after a change, or nothing when
+Ladder hasn't run the file's code.
+"""
+struct ToChange
+  words::String
+  note::String
+  file::String
+  first::Int
+  last::Int
+  node::Any
+  mod::Any
+end
 
-  The function that draws that part is in the file $file, at line $line. It starts:
+worded(c::ToChange) = c.words
+sidenote(c::ToChange) = c.note
 
-      $code
+"The first line of code from line `i` of `lines` on, after blank lines, comments and documentation, or `i` when there's none"
+code_start(lines::Vector{String}, i::Int) = begin
+  k = i
+  while k <= length(lines)
+    line = strip(lines[k])
+    if startswith(line, "\"\"\"")
+      # Documentation of more than one line ends on a line of its own that ends with three quotes
+      k = something(findnext(l -> endswith(strip(l), "\"\"\""), lines, k + (line == "\"\"\"" || !endswith(line[4:end], "\"\"\"") ? 1 : 0)), length(lines)) + 1
+    elseif isempty(line) || startswith(line, '#') || startswith(line, '"')
+      k += 1
+    else
+      return k
+    end
+  end
+  i
+end
+
+"""
+The blocks of Julia code in the window of `e`, in the order of its lines. In a
+file of Julia code, each is a piece of code that starts at the top of the
+file, like a function with its documentation: see `read_parts`. It's named as
+Go To names it: a function with the values that it takes, or the first line
+of its code. On a page, each is a `julia` code block.
+"""
+code_blocks(e) = begin
+  b = e.buf
+  isempty(b.path) && return ToChange[]
+  file = page_key(b.path)
+  b.view == :markdown && return page_blocks(b, file)
+  julia_file(b) || return ToChange[]
+  made = page_bounds(e)   # it reads the file's parts again after a change
+  kept = get(e.nodes, :file_names, nothing)
+  kept isa FileNames || return ToChange[]
+  mod = something(loaded_module(file), Some(get(PAGE_MODULES, file, nothing)))
+  out = ToChange[]
+  starts = [p.first for p in kept.parts]
+  for (k, from) in enumerate(starts)
+    to = k == length(starts) ? length(b.lines) : starts[k+1] - 1
+    while to > from && isempty(strip(b.lines[to])); to -= 1 end
+    at = code_start(b.lines, from)
+    # A block of only comments has nothing to change, and a line like `@use "./walls" Wall` only brings names in
+    (at <= to && !occursin(r"^\s*(@use|using|import)\b", b.lines[at])) || continue
+    j = findfirst(x -> x.span === nothing && x.at[1] == at, made)
+    words = j === nothing ? String(strip(b.lines[at])) : signature(b.lines[at], made[j])
+    length(words) > 70 && (words = first(words, 69) * "…")
+    what = j === nothing || made[j].call ? "" : made[j].words
+    push!(out, ToChange(words, isempty(what) ? "line $at" : "$what · line $at", file, from, to, nothing, mod))
+  end
+  out
+end
+
+"""
+The `julia` code blocks of the page in `b`, whose file is `file`, as Ask For
+Change offers them: the lines between the lines that open and close each. The
+page's code runs when you run it, so a change runs nothing by itself.
+"""
+page_blocks(b::Buffer, file::AbstractString) = begin
+  ks = kinds(b)
+  out = ToChange[]
+  for i in eachindex(ks)
+    (ks[i].kind == Kind.fence && ks[i].level == 0 && lowercase(ks[i].lang) in JULIA) || continue
+    found = julia_code(b, i + 1 <= length(ks) ? i + 1 : i)
+    (found === nothing || found[1] > found[2]) && continue
+    from, to = found
+    at = code_start(b.lines, from)
+    at <= to || (at = from)
+    words = String(strip(b.lines[at]))
+    length(words) > 70 && (words = first(words, 69) * "…")
+    push!(out, ToChange(words, "julia block · line $from", file, from, to, nothing, nothing))
+  end
+  out
+end
+
+"The lines of the file at `file`, and the lines that the parts of its Julia code start on, read again only when the file changes: see `read_parts`"
+const FILE_PARTS = Dict{String,Tuple{Float64,Vector{String},Vector{Int}}}()
+
+file_parts(file::AbstractString) = begin
+  at = mtime(file)
+  kept = get(FILE_PARTS, file, nothing)
+  kept !== nothing && kept[1] == at && return kept
+  lines = text(file)
+  FILE_PARTS[file] = (at, lines, [p.first for p in read_parts(lines, 1)])
+end
+
+"""
+What Ask For Change offers for the part `x` of the window: the function that
+draws it, where that function is in a file on this Mac. It's nothing for a
+part that no such function draws.
+"""
+part_choice(x) = begin
+  x isa SemanticUI || return nothing
+  m = drawn_by(x)
+  place = m === nothing ? nothing : code_place(m)
+  place === nothing && return nothing
+  file, line = place
+  _, lines, starts = file_parts(file)
+  line = settled_line(m, lines, line)
+  k = max(1, searchsortedlast(starts, line))
+  from, to = starts[k], k == length(starts) ? length(lines) : starts[k+1] - 1
+  while to > from && isempty(strip(lines[to])); to -= 1 end
+  ToChange(worded(typeof(x)), "drawn at $(code_label(m))", file, from, to, x, m.module)
+end
+
+"A block of a kind that a file defines holds what the file's function made, which that file draws. It comes before the block."
+drawn_parts(x) = x isa FileBlock && x.value isa SemanticUI ? (x.value, x) : (x,)
+
+"""
+What Ask For Change offers to change in the window of `e`, from the nearest:
+the block of Julia code that the caret is in, each part of the window in
+focus that a function in a file on this Mac draws, and the other blocks of
+Julia code in the window.
+"""
+choices_for(::Type{ToChange}, e) = begin
+  blocks = code_blocks(e)
+  line = e.buf.caret[1]
+  k = findfirst(c -> c.first <= line <= c.last, blocks)
+  out = k === nothing ? ToChange[] : [popat!(blocks, k)]
+  # While the palette is open, its own field has the keyboard, so what's in focus is what was when it opened
+  p = get(e.nodes, :palette, nothing)
+  focus = e.popup == :commands && p isa CommandPalette && !isempty(p.focus) ? p.focus : in_focus(e)
+  for y in focus, x in drawn_parts(y)
+    c = part_choice(x)
+    c === nothing || any(o -> (o.file, o.first) == (c.file, c.first), out) || push!(out, c)
+  end
+  append!(out, blocks)
+end
+
+# What the caret was on when the command was taken is the one to change, unless you choose another
+chip_start(::Type{ToChange}, e) = (found = choices_for(ToChange, e); isempty(found) ? nothing : first(found))
+
+"""
+What a click at the mouse of the window `w` chooses for Ask For Change: the
+nearest part of the window that a function in a file on this Mac draws. On
+the page's text, it's the block of Julia code there, if there's one, unless
+the mouse is on something that a file other than Ladder's own draws, like the
+bar of a `progress` block.
+"""
+chip_click(::Type{ToChange}, e, w) = begin
+  chain = Any[]
+  node = under_palette(w, palette(e))
+  while node !== nothing
+    push!(chain, node)
+    node = node.parent
+  end
+  found = [c for x in chain for c in (part_choice(y) for y in drawn_parts(x)) if c !== nothing]
+  k = findfirst(x -> x isa Document, chain)
+  if k !== nothing && !any(c -> c.mod !== (@__MODULE__) && any(x -> c.node === x, chain[1:k-1]), found)
+    i = locate(e, w.mouse)[1]
+    blocks = code_blocks(e)
+    j = findfirst(c -> c.first <= i <= c.last, blocks)
+    j === nothing || return blocks[j]
+  end
+  isempty(found) ? nothing : first(found)
+end
+
+shown_at(e, c::ToChange) = asked_rect(e, c)
+
+"What an agent is told when a change to `c` is asked for: what it is, where its code is, and the user's words"
+change_prompt(c::ToChange, words) = begin
+  lines = text(c.file)
+  start = 1 <= c.first <= length(lines) ? lines[code_start(lines, c.first)] : ""
+  what = c.node !== nothing ? "a part of its window, a $(nameof(typeof(c.node))). The function that draws that part" :
+         endswith(c.file, ".jl") ? "a block of the file's Julia code" : "a block of Julia code on a page of Markdown"
+  """
+  The user of the app Ladder asked for a change to $what.
+
+  It's in the file $(c.file), lines $(c.first) to $(c.last). It starts:
+
+      $start
 
   The user's words: $words
 
-  Change that function, or the code that it uses, so the part is as the user asks. Change only files in $(dirname(file)). Keep the change small, and write code that looks like the code around it. Ladder runs the changed code as soon as you end, so leave the file in a state that runs. Then say what you changed, in one short sentence.
+  Change that code, or the code that it uses, as the user asks. Change only files in $(dirname(c.file)). Keep the change small, and write code that looks like the code around it. Ladder runs the changed code as soon as you end, so leave the file in a state that runs. Then say what you changed, in one short sentence.
   """
+end
 
 "The text of each part of the Julia code of `lines`, with the line that the part starts on: see `read_parts`"
 part_texts(lines::Vector{String}) = begin
@@ -34329,13 +34670,13 @@ reload_changed!(mod::Module, file::AbstractString, before::Vector{String}) = beg
   ran > 0 && redraw_windows!()
   (ran, failed)
 end
+# Code that Ladder never ran has no module to run in. The file changes, and that's all.
+reload_changed!(::Nothing, file::AbstractString, before::Vector{String}) = (0, "")
 
-"A change that an agent was asked to make, for the thing `node` that the method `method` draws. `said` is what there is to say when it has ended, at the time `ended`."
+"A change that an agent was asked to make to `place`, a `ToChange`. `said` is what there is to say when it has ended, at the time `ended`."
 @def mutable struct AskedChange
   words::String = ""
-  node::Any = nothing
-  mod::Any = nothing
-  file::String = ""
+  place::Any = nothing
   before::Vector{String} = String[]
   process::Any = nothing
   out::Any = nothing         # a task that reads what the agent prints
@@ -34345,22 +34686,42 @@ end
   ended::Float64 = 0.0
 end
 
-"Ask an agent to change the thing `node`, which the method `m` draws, as `words` say. The picker `t` shows how it goes."
-ask_change!(t::CodePicker, node, m::Method, words::AbstractString) = begin
-  file, line = code_place(m)
-  lines = text(file)
-  line = settled_line(m, lines, line)
-  prompt = change_prompt(file, line, lines[line], nameof(typeof(node)), words)
+"""
+Where the window of `e` shows what an agent is changing, `c`: the part of the
+window, or the lines of the block while the window shows its file. It's
+nothing when the window shows neither.
+"""
+asked_rect(e, c::ToChange) = begin
+  if c.node !== nothing
+    return try rect(c.node) catch; nothing end
+  end
+  b = e.buf
+  (!isempty(b.path) && page_key(b.path) == c.file && !isempty(e.layout) && c.first <= c.last <= length(b.lines)) || return nothing
+  top, bottom = item(e, c.first), item(e, c.last)
+  y = e.origin[2] + top.top
+  (left=e.origin[1] - 8px, top=y, width=e.width + 16px, height=e.origin[2] + bottom.top + bottom.tall - y)
+end
+asked_rect(e, ::Nothing) = nothing
+
+"Ask an agent to make the change to `c` that `words` say. The picker of the window of `e` shows how it goes."
+ask_change!(e, c::ToChange, words::AbstractString) = begin
+  t = code_picker(e)
+  # The agent reads the file, so what a window shows of it and didn't write goes to the file first
+  for o in editors
+    !isempty(o.buf.path) && page_key(o.buf.path) == c.file && dirty(o.buf) && writes(o.buf) && save!(o.buf)
+  end
+  before = text(c.file)
+  prompt = change_prompt(c, words)
   out = Pipe()
   process = try
-    run(pipeline(Cmd(`$(agent_command()) $prompt`, dir=dirname(file)), stdin=devnull, stdout=out, stderr=out), wait=false)
+    run(pipeline(Cmd(`$(agent_command()) $prompt`, dir=dirname(c.file)), stdin=devnull, stdout=out, stderr=out), wait=false)
   catch err
-    t.asked = AskedChange(words=words, node=node, said="The agent didn't start. " * trouble(err), failed=true, ended=time())
+    t.asked = AskedChange(words=words, place=c, said="The agent didn't start. " * trouble(err), failed=true, ended=time())
     return nothing
   end
   close(out.in)   # only the agent writes to it now, so reading ends when the agent does
-  t.asked = AskedChange(words=words, node=node, mod=m.module, file=file, before=lines, process=process, out=(@async read(out, String)))
-  redraw_in!(t.editor, 0)
+  t.asked = AskedChange(words=words, place=c, before=before, process=process, out=(@async read(out, String)))
+  redraw_in!(e, 0)
   nothing
 end
 
@@ -34381,11 +34742,13 @@ ask_tick!(e) = begin
     # What it printed is all read a moment after it ends. A program that it left running can hold that up, so the wait has an end.
     if a.gone > 0 && (istaskdone(a.out) || time() - a.gone > 2)
       printed = istaskdone(a.out) && !istaskfailed(a.out) ? fetch(a.out) : ""
-      ran, failed = reload_changed!(a.mod, a.file, a.before)
+      c = a.place
+      ran, failed = reload_changed!(c.mod, c.file, a.before)
+      changed = ran > 0 || text(c.file) != a.before
       a.failed = !success(a.process) || !isempty(failed)
       a.said = !success(a.process) ? "The agent stopped. " * agent_said(printed) :
                !isempty(failed) ? "The new code doesn't run. " * failed :
-               ran == 0 ? "Nothing changed. " * agent_said(printed) : agent_said(printed)
+               !changed ? "Nothing changed. " * agent_said(printed) : agent_said(printed)
       a.ended = time()
     end
     redraw_in!(e, 0.1)
@@ -34399,19 +34762,17 @@ ask_tick!(e) = begin
 end
 
 """
-Ask for a change to the next thing that you click, in words, like "make this
-bar thinner". An agent changes the function that draws the thing, and the
-thing is drawn the new way. Esc leaves it.
+Ask an agent for a change to `node`, in the words of `request`, like "make
+this bar thinner". `node` is a block of the file's Julia code, or a part of
+the window, which the agent changes the function that draws. See "ask for a
+change to a thing".
 """
-ask_for_change!(e, words::String) = begin
-  isempty(strip(words)) && error("Say what should change, in a few words.")
+ask_for_change!(e, node::ToChange, request::String) = begin
+  isempty(strip(request)) && error("Say what should change, in a few words.")
   t = code_picker(e)
   t.asked !== nothing && t.asked.ended == 0 && error("The agent is still making the last change.")
   agent_command()   # it says so now if this Mac has no agent
-  t.asking = String(strip(words))
-  t.picking = true
-  redraw_in!(e, 0)
-  nothing
+  ask_change!(e, node, String(strip(request)))
 end
 
 "The module of the file of code that Ladder loaded whose path ends with `name`, like \"Ladder/main.jl\". The startup page uses it to keep a change: see `keep_change!`."
@@ -34479,7 +34840,7 @@ keep_change!(e) = begin
   nothing
 end
 
-add_command!(ask_for_change!, title="Ask an agent to change the next thing that you click, in your own words")
+add_command!(ask_for_change!, title="Ask an agent to change a block of code, or a part of the window, in your own words")
 add_command!(keep_change!, name=:keep_this_change, title="Keep the function at the caret for each time that Ladder starts: a change to Ladder's own code")
 
 # --- a folder's own page ----------------------------------------------------------------

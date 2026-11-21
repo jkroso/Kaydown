@@ -177,7 +177,7 @@ It works on Ladder's own parts too, like the count of words at the top right. Mo
 
 The command Show Code does the same for the next thing that you click. Press ⌘⇧P and type its name to run it. Esc gives the mouse back.
 
-You can ask for a change in words too. Run the command Ask For Change, type what you want, like `make this bar thinner`, and click the thing. Ladder gives your words, and the place of the function that draws the thing, to Claude Code. Claude Code changes the function, and the thing is drawn the new way. The label on the thing then says what changed. This needs Claude Code on your Mac.
+You can ask for a change in words too. Press ⌘⇧P and run Ask For Change. It changes what the caret was on, and a blue line goes round it. To change something else, click it. Type what you want, like `make this bar thinner`, and press Return. Ladder gives your words, and the place of the function that draws the thing, to Claude Code. Claude Code changes the function, and the thing is drawn the new way. A label on the thing then says what changed. This needs Claude Code on your Mac.
 
 ## A file of code
 
@@ -186,6 +186,8 @@ Ladder opens a Julia file as code that you change, however long the file is. Thr
 - Press ⌘⇧P and run Go To. It lists the file's functions, and each section that a comment like `# --- name ---` starts. Type a few letters and press Return.
 - Hold ⌘ and click a name. The caret goes to where the name is defined. A function with several methods goes to the first, and a click there goes to the next. A name from another file shows in a window beside this one. The command Go To Definition does the same for the name at the caret.
 - Click the number of a line, in a file that git keeps. Ladder shows the commit that last changed the line: its day, who made it, its first line, and what the file had there before.
+
+To change a block of the file's code in words, like one function, put the caret in it and run Ask For Change. Click another block to change that one instead. Type what you want and press Return. Claude Code changes the block, and the window shows the new lines.
 
 ## Sheets
 

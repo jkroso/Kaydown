@@ -62,10 +62,10 @@ end
     ["f" => :plain, "\"" => :string, "{" => :keyword, "(a + b)" => :plain, "}" => :keyword, "\"" => :string]
   @test parts("\"{n}\"", "python") == ["\"{n}\"" => :string]
   @test parts("echo \"\$HOME/\${dir} \$(ls) \$1\"", "sh") ==
-    ["echo " => :plain, "\"" => :string, "\$" => :keyword, "HOME" => :plain, "/" => :string, "\${" => :keyword,
-     "dir" => :plain, "}" => :keyword, " " => :string, "\$(" => :keyword, "ls" => :plain, ")" => :keyword,
+    ["echo" => :call, "\"" => :string, "\$" => :keyword, "HOME" => :plain, "/" => :string, "\${" => :keyword,
+     "dir" => :plain, "}" => :keyword, " " => :string, "\$(" => :keyword, "ls" => :call, ")" => :keyword,
      " " => :string, "\$" => :keyword, "1" => :plain, "\"" => :string]
-  @test parts("echo '\$HOME'", "sh") == ["echo " => :plain, "'\$HOME'" => :string]
+  @test parts("echo '\$HOME'", "sh") == ["echo" => :call, "'\$HOME'" => :string]
   @test parts("\"\$x\"", "rust") == ["\"\$x\"" => :string]
 end
 
@@ -256,7 +256,7 @@ end
      ["end" => :keyword], ["f (generic function with 1 method)" => :plain]]
   @test left_open("julia> 1 + 1", "julia-repl") == 'i' && left_open("2", "julia-repl", 'i') == 'o' && repl("2", 'i') == ["2" => :plain]
   # Other prompts
-  @test repl("shell> ls \"\$HOME\"") == ["shell>" => :keyword, "ls " => :plain, "\"" => :string, "\$" => :keyword, "HOME" => :plain, "\"" => :string]
+  @test repl("shell> ls \"\$HOME\"") == ["shell>" => :keyword, "ls" => :call, "\"" => :string, "\$" => :keyword, "HOME" => :plain, "\"" => :string]
   @test repl("(@v1.12) pkg> add DataFrames") == ["(@v1.12) pkg>" => :keyword, "add DataFrames" => :plain]
   @test repl("help?> sum") == ["help?>" => :keyword, "sum" => :plain] && repl("julia>") == ["julia>" => :keyword]
   # A docstring in the code goes on in the lines below
@@ -289,4 +289,34 @@ end
     ["{" => :plain, "\"a\"" => :string, ": " => :plain, "1" => :number, ", " => :plain, "\"b\"" => :string, ": " => :plain, "null" => :number, "}" => :plain]
   @test parts("{\"a\": 1} // see \"x\"", "jsonc") == ["{" => :plain, "\"a\"" => :string, ": " => :plain, "1" => :number, "} " => :plain, "// see \"x\"" => :comment]
   @test parts("{\"url\": \"http://a.com\"}", "json5") == ["{" => :plain, "\"url\"" => :string, ": " => :plain, "\"http://a.com\"" => :string, "}" => :plain]
+end
+
+@testset "shells" begin
+  sh(line, open='\0') = parts(line, "bash", open)
+  # The name of a command has the colour of a call, and a number only when it's a whole word
+  @test sh("cd suppliers/x && git add -A") == ["cd" => :call, " suppliers/x && " => :plain, "git" => :call, " add -A" => :plain]
+  @test sh("magick raw-05.png -resize 2000x 2>/dev/null") ==
+    ["magick" => :call, " raw-05.png -resize 2000x " => :plain, "2" => :number, ">/dev/null" => :plain]
+  @test sh("myapp --threads=2 src/JobDetail/Card.tsx") == ["myapp" => :call, " --threads=" => :plain, "2" => :number, " src/JobDetail/Card.tsx" => :plain]
+  # A variable has the same colours outside a string as in one
+  @test sh("tar -C \$dir \${#arr[@]} \$(ls)") ==
+    ["tar" => :call, " -C " => :plain, "\$" => :keyword, "dir " => :plain, "\${" => :keyword, "#arr[@]" => :plain, "}" => :keyword,
+     "\$(" => :keyword, "ls" => :call, ")" => :keyword]
+  # Keywords, a variable that's set for a command, and a # inside a word, which doesn't start a comment
+  @test sh("if [ -f x ]; then PORT=9101 julia a#b.jl; fi # done") ==
+    ["if" => :keyword, " [ -f x ]; " => :plain, "then" => :keyword, " PORT=" => :plain, "9101" => :number, "julia" => :call,
+     " a#b.jl; " => :plain, "fi" => :keyword, "# done" => :comment]
+  @test sh("sudo git pull | xargs -0 rm") == ["sudo" => :call, "git" => :call, " pull | " => :plain, "xargs" => :call, " -0 " => :plain, "rm" => :call]
+  # A here-document is a string, up to the line with the word that ends it
+  @test file(["cat > a.toml << 'EOF'", "name = \"x\"", "EOF", "ls"], "bash") ==
+    [["cat" => :call, " > a.toml << " => :plain, "'EOF'" => :string], ["name = \"x\"" => :string], ["EOF" => :string], ["ls" => :call]]
+  @test file(["git commit -m \"\$(cat <<'EOF'", "Fix it", "EOF", ")\""], "bash")[2:3] == [["Fix it" => :string], ["EOF" => :string]]
+  @test left_open("cat <<<\"x\"", "bash") == '\0' && left_open("echo '<<EOF'", "bash") == '\0' && left_open("x # <<EOF", "bash") == '\0'
+  # A line that ends with \ goes on below, where the first word isn't a command
+  @test file(["docker run \\", "  -p 80:80 nginx"], "bash")[2] == ["  -p " => :plain, "80:80" => :number, " nginx" => :plain]
+  # A prompt: in a bash block a $ at the start, and in a console block a line with no prompt is what a command printed
+  @test sh("\$ julia --project=. x.jl") == ["\$" => :keyword, "julia" => :call, " --project=. x.jl" => :plain]
+  @test file(["\$ ls -l", "a.txt", "% echo hi"], "console") ==
+    [["\$" => :keyword, "ls" => :call, " -l" => :plain], ["a.txt" => :plain], ["%" => :keyword, "echo" => :call, " hi" => :plain]]
+  @test whole("x=\$(echo \"a \$(b) c\") # d", "bash") && whole("❯ ls", "console") && whole("a \\", "zsh")
 end

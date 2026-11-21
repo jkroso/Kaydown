@@ -52,7 +52,7 @@ const C = Language("""auto break case catch class const continue default defer d
                       void volatile while""",
                    "true false null nil nullptr NULL this self", chars=true)
 
-const SHELL = Language("case do done elif else esac export fi for function if in local return then until while",
+const SHELL = Language("break case continue do done elif else esac export fi for function if in local return select then until while",
                        "true false", comment="#", code=:shell)
 
 const SQL = Language("""select from where and or not null insert into values update set delete create table drop alter
@@ -214,7 +214,7 @@ string!(marks, chars, lang, i, open=nothing) = begin
       text!(j)
       w = how == :python ? 1 : 2
       push!(marks, (j, j + w - 1, :keyword))
-      k = code!(marks, chars, lang, j + w, chars[j+w-1] == '(' ? ')' : '}')
+      k = how == :shell ? shell!(marks, chars, j + w, ')') : code!(marks, chars, lang, j + w, chars[j+w-1] == '(' ? ')' : '}')
       k <= n && push!(marks, (k, k, :keyword))
       from = j = k + 1
     elseif how == :shell && c == '$' && d == '{'
@@ -250,10 +250,11 @@ line `text`, or '\\0' when there's none. `open` is the quote of the one that's
 open at its start. A line with no three quotes leaves things as they were, so
 for most lines this is quick. For HTML, CSS, Less and SCSS it's what the line
 leaves open: see "HTML" and "CSS, Less and SCSS".
-So it is for a session of Julia's REPL: see "what Julia's REPL shows".
+So it is for a session of Julia's REPL and for a shell: see "what Julia's REPL
+shows" and "shells".
 """
 left_open(text::AbstractString, name::AbstractString, open::Char='\0') =
-  ishtml(name) || iscss(name) || isrepl(name) || occursin("\"\"\"", text) || occursin("'''", text) ? last(read_line(text, name, open)) : open
+  ishtml(name) || iscss(name) || isrepl(name) || isshell(name) || occursin("\"\"\"", text) || occursin("'''", text) ? last(read_line(text, name, open)) : open
 
 "The parts of the line `text`, and what `left_open` says of it"
 read_line(text, name, open) = begin
@@ -265,6 +266,7 @@ read_line(text, name, open) = begin
   end
   isrepl(name) && return repl_line(text, name, open)
   isdiff(name) && return (diff_line(text), '\0')
+  isshell(name) && return shell_line(text, name, open)
   if iscss(name)
     chars = collect(text)
     marks = Tuple{Int,Int,Symbol}[]
@@ -895,6 +897,174 @@ diff_line(text) = begin
   end
   [Token(0, s, occursin(DIFF_FILE, s) ? :keyword : s[1] == '+' ? :added : s[1] == '-' ? :removed :
                occursin(DIFF_NOTE, s) ? :comment : :plain)]
+end
+
+# --- shells ----------------------------------------------------------------------------------------
+#
+# The name of a command, like the git of `git add -A`, has the colour of a call,
+# and a keyword like if or done the colour of a keyword. A word that's a number,
+# like the 2 of 2>/dev/null, has the colour of a number, but a number inside a
+# word, like the 05 of photo-05.png, doesn't. A variable, like $HOME or ${dir},
+# and the code in $(...), have the colours they have in a string in double
+# quotes. A comment starts with a # at the start of a word.
+#
+# A here-document, the lines that a command like `cat <<EOF` reads up to a line
+# EOF, has the colour of a string. In a block of a session in a terminal, like
+# ```console, a line that starts with a prompt like $ is a command, and the other
+# lines are what the commands printed. In a bash block a $ and a space at the
+# start of a line are a prompt too. What a line leaves open:
+
+const SH_GOES_ON = '\\'   # the command of the line above, which ended with \, goes on
+# or a here-document: a character from U+E001 that stands for the word that ends it. See `heredoc`.
+
+"True when `name` is a language of a shell's commands"
+isshell(name) = lowercase(name) in ("bash", "sh", "zsh", "shell", "fish") || issession(name)
+
+"True when `name` is a language of a session in a terminal, whose lines with no prompt are what the commands printed"
+issession(name) = lowercase(name) in ("console", "shell-session", "sh-session", "terminal")
+
+"The words that end here-documents. The nth is the one that `Char(0xe000 + n)` stands for."
+const HEREDOC_ENDS = String[]
+
+"The character that a line leaves open when a here-document starts on it, which the word `word` ends"
+heredoc(word) = begin
+  k = something(findfirst(==(word), HEREDOC_ENDS), 0)
+  k == 0 && length(HEREDOC_ENDS) < 6000 && (push!(HEREDOC_ENDS, word); k = length(HEREDOC_ENDS))
+  Char(0xe000 + max(k, 1))
+end
+
+"The word that ends the here-document that `open` stands for, or nothing"
+heredoc_end(open) = (k = Int(UInt32(open)) - 0xe000; 1 <= k <= length(HEREDOC_ENDS) ? HEREDOC_ENDS[k] : nothing)
+
+"A word that's a number, like 2, 1.5, 127.0.0.1 or 9001:9001. An option like -1 isn't one."
+const SH_NUMBER = r"^\d[\d.:]*$"
+
+"The commands whose next word is the name of a command too, like the git of `sudo git pull`"
+const SH_BEFORE = ("sudo", "exec", "time", "nohup", "env", "command", "builtin", "xargs", "nice")
+
+"The parts of a line of a shell's commands, and what it leaves open. `name` is its language."
+shell_line(text, name, open) = begin
+  chars = collect(text)
+  n = length(chars)
+  ending = heredoc_end(open)
+  if ending !== nothing
+    # A line of a here-document, or the line with the word that ends it
+    return (n == 0 ? Token[] : [Token(0, String(text), :string)], strip(text) == ending ? '\0' : open)
+  end
+  marks = Tuple{Int,Int,Symbol}[]
+  goes_on = open == SH_GOES_ON
+  i = 1
+  m = goes_on ? nothing : match(issession(name) ? r"^(\s*)([$%❯>]) " : r"^(\s*)(\$) ", text)
+  if m !== nothing
+    s = length(m[1])
+    push!(marks, (s + 1, s + 1, :keyword))
+    i = length(m.match) + 1
+  elseif issession(name) && !goes_on
+    return ([Token(0, String(text), :plain)], '\0')   # what a command printed
+  end
+  shell!(marks, chars, i, nothing, !goes_on)
+  # A here-document starts at a << that isn't in a string or a comment, like the one of cat <<'EOF'.
+  # Three of <, as in <<<, give a command a word instead.
+  left = '\0'
+  for d in eachmatch(r"(?<!<)<<(?!<)-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1", text)
+    at = length(SubString(text, 1, d.offset))
+    any(((a, b, kind),) -> a <= at <= b && kind in (:string, :comment), marks) || (left = heredoc(d[2]))
+  end
+  if left == '\0' && n > 0 && chars[n] == '\\' && !any(((a, b, kind),) -> a <= n <= b && kind == :comment, marks)
+    left = SH_GOES_ON
+  end
+  (marked(chars, marks), left)
+end
+
+"""
+Marks the commands from `chars[i]`. `command` is true when the first word is
+the name of a command. It stops at the end of the line, or at a `close` that
+has no partner, like the ) at the end of \$(x), and gives the place it stopped.
+"""
+shell!(marks, chars, i, close=nothing, command=true) = begin
+  n = length(chars)
+  depth = 0
+  while i <= n
+    c = chars[i]
+    d = i < n ? chars[i+1] : '\0'
+    if c == close && depth == 0
+      return i
+    elseif c == '('
+      depth += 1
+      command = true
+      i += 1
+    elseif c == ')'
+      depth -= 1
+      i += 1
+    elseif isspace(c)
+      i += 1
+    elseif c == '#' && (i == 1 || isspace(chars[i-1]) || chars[i-1] in ";|&(")
+      push!(marks, (i, n, :comment))
+      return n + 1
+    elseif c == '"' || c == '\''
+      i = string!(marks, chars, SHELL, i) + 1
+      command = false
+    elseif c == '$'
+      if d == '('
+        push!(marks, (i, i + 1, :keyword))
+        k = shell!(marks, chars, i + 2, ')')
+        k <= n && push!(marks, (k, k, :keyword))
+        i = k + 1
+      elseif d == '{'
+        k = something(findnext(==('}'), chars, i + 2), n)
+        push!(marks, (i, i + 1, :keyword))
+        k > i + 1 && chars[k] == '}' && push!(marks, (k, k, :keyword))
+        i = k + 1
+      elseif isletter(d) || d == '_'
+        push!(marks, (i, i, :keyword))
+        i = namend(chars, SHELL, i + 1) + 1
+      else
+        isdigit(d) || d in "@*#?\$!-" ? (push!(marks, (i, i, :keyword)); i += 2) : (i += 1)
+      end
+      command = false
+    elseif c in "|&;"
+      command = true
+      i += 1
+    elseif c in "<>`"
+      i += 1
+    else
+      # A word, up to a space, a quote, a $ or a character like | or > that ends one
+      k = i
+      while k <= n && !isspace(chars[k]) && !(chars[k] in "|&;()<>\"'\$`")
+        k += chars[k] == '\\' ? 2 : 1
+      end
+      k = min(k, n + 1)
+      w = chars[i:k-1]
+      word = String(w)
+      e = findfirst(==('='), w)
+      if word in SHELL.keywords
+        push!(marks, (i, k - 1, :keyword))
+        command = word in ("if", "then", "do", "else", "elif", "while", "until", "function")
+      elseif word in SHELL.literals
+        push!(marks, (i, k - 1, :number))
+        command = false
+      elseif word in ("{", "!")
+        command = true
+      elseif word in ("[", "[[", "]", "]]", "}")
+        command = false
+      elseif occursin(SH_NUMBER, word)
+        push!(marks, (i, k - 1, :number))
+        command = false
+      elseif command && e !== nothing && e > 1 && all(isname, w[1:e-1])
+        # A variable that's set for the command that follows, like the PORT of PORT=9101 julia server.jl
+        e < length(w) && occursin(SH_NUMBER, String(w[e+1:end])) && push!(marks, (i + e, k - 1, :number))
+      elseif command && w[1] != '-'
+        push!(marks, (i, k - 1, :call))
+        command = word in SH_BEFORE
+      else
+        # An argument. The value of an option, like the 2 of --threads=2, can be a number.
+        e !== nothing && e < length(w) && occursin(SH_NUMBER, String(w[e+1:end])) && push!(marks, (i + e, k - 1, :number))
+        command = command && w[1] == '-'
+      end
+      i = k
+    end
+  end
+  n + 1
 end
 
 "The tokens of the characters `chars`, which have the marks `marks`"

@@ -103,7 +103,7 @@ area = width * 3.6
 grid = [row * column for row in 1:3, column in 1:4]
 ```
 
-A block in the language `check` holds a line of Julia for each thing that must be true. Each line shows a tick or a cross, and a line that fails says what it found. The last line under this fails on purpose.
+A block in the language `check` holds a line of Julia for each thing that must be true. It shows a dot for each line: green for a line that passes, and red for one that fails. Put the mouse on a dot to see its line. Click the dots to see each line with a tick or a cross, and what a line that fails found. The last line under this fails on purpose.
 
 ```check
 2 + 2 == 4
@@ -111,7 +111,7 @@ sqrt(16) ≈ 4
 length("ladder") < 6
 ```
 
-The lines can use the names that the page's code made. Run the three lines of the block above, then hold ⌥, click the checks, and add the line `area ≈ 8.64`. The checks run again each time the page's code runs, and when you click them.
+The lines can use the names that the page's code made. Run the three lines of the block above, then hold ⌥, click the checks, and add the line `area ≈ 8.64`. The checks run again each time the page's code runs, and when you open them. Click the top of the open block to see only the dots again.
 
 The page [julia.md](julia.md) has more code to run: an expression of several lines, what code prints, the names that a block offers as you type, and the box of a function.
 

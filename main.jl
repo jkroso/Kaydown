@@ -258,7 +258,8 @@
 #     keeps a function of Ladder's own for each start. See "ask for a change
 #     to a thing".
 #   - Write a code block in the language `check`, with a line of Julia for
-#     each thing that must be true. Each line shows a tick or a cross. See
+#     each thing that must be true. It shows a green or a red dot for each
+#     line, and a click on it shows each line with a tick or a cross. See
 #     "checks of the page's code".
 #   - Run the command Show As App to open the page in a window with only the
 #     page: no top bar, no sidebar and no caret. See "a page as an app".
@@ -12106,18 +12107,27 @@ BLOCKS[FILTER] = BlockKind("Filter", "funnel", FilterView, filter_html)
 # --- checks of the page's code ------------------------------------------------------------------
 #
 # A code block in the language `check` holds a line of Julia for each thing
-# that must be true, like `area(room) == 12` or `length(walls) > 3`. Each line
-# shows a tick or a cross. A line that compares two values and fails says what
-# each of them was, and a line that stops says why. A blank line and a comment
-# are no check.
+# that must be true, like `area(room) == 12` or `length(walls) > 3`. A blank
+# line and a comment are no check.
+#
+# The block has three levels. At the highest, it's a row of dots: a green dot
+# for each check that passes, and a red one for each that doesn't. The mouse
+# over a dot shows its line, and what it found. A click on the dots opens the
+# block, to the level under that: each line with a tick or a cross. A line that
+# compares two values and fails says what each of them was, and a line that
+# stops says why. A click on the top of the open block shows the dots again. At
+# the lowest level, the block shows as its lines of Julia, with the caret in
+# them, as ⌥-click shows it. With the caret on the block as a whole or in its
+# lines, the ladder in the top bar goes up and down these levels, and ⌘E too.
 #
 # The lines run in the module of the page's code, with the names that the
 # page's `julia` blocks made. They run again when a line of the block changes,
-# and each time the page's code runs, as it does with ⌘Return. A click on the
-# block runs them again too.
+# and each time the page's code runs, as it does with ⌘Return. A click that
+# opens the block, and the button at the top of the open block, run them again
+# too.
 
 const CHECK = "check"
-push!(BLOCK_ICONS, "check2-square", "check-circle-fill", "x-circle-fill", "exclamation-triangle-fill")
+push!(BLOCK_ICONS, "check2-square", "check-circle-fill", "x-circle-fill", "exclamation-triangle-fill", "arrow-clockwise")
 const CHECK_GOOD = colorant"rgb(52,150,86)"
 const CHECK_BAD = colorant"rgb(200,60,50)"
 
@@ -12166,6 +12176,8 @@ end
   lines::Vector{String} = String[]      # the block's lines
   results::Vector{Checked} = Checked[]
   ran::Any = nothing                    # the checks, the count of runs of the page's code and the page that `results` are of
+  open::Bool = false                    # it shows each check with what it found, and not a row of dots
+  parts::Dict{Any,Any} = Dict{Any,Any}()   # its dots, its top and its button, kept between frames
 end
 
 reread!(v::CheckView, lines) = (lines == v.lines || (v.lines = lines); v)
@@ -12191,10 +12203,77 @@ check_words(results) = begin
   n == 1 ? "The check passes" : "All $n checks pass"
 end
 
+"The colour of the dot of a check that went as `r` did"
+check_colour(r::Checked) = r.went == :pass ? CHECK_GOOD : CHECK_BAD
+
+"A dot of a `check` block at its highest level. The mouse over it shows the check's line, and what it found."
+@def mutable struct CheckDot <: SemanticUI
+  of::Any = nothing
+  i::Int = 0                                  # the check that it's for, in the results of `of`
+  rect::NTuple{4,px} = (0px, 0px, 0px, 0px)   # where it was last drawn, to put its tooltip under it
+end
+
+const CHECK_DOT = 10px   # across a dot of a closed `check` block
+
+describe(d::CheckDot) = begin
+  rs = d.of.results
+  colour = d.i <= length(rs) ? check_colour(rs[d.i]) : colours.faint
+  # The room round a dot is a part of it, so the mouse finds it easily
+  Box(padding(3px), Box(fixed(CHECK_DOT), height(CHECK_DOT), radius(CHECK_DOT / 2), background(colour)))
+end
+
+cursor(::CheckDot) = :hand
+draw(ctx, size, ui::ConcreteRect, d::CheckDot) = (d.rect = (ui.left, ui.top, ui.width, ui.height); nothing)
+
+"What the tooltip of a check's dot says: its line, and what it found when it didn't pass"
+check_tip(r::Checked) = begin
+  code(words) = Text(words, size=12px, family=codefont(), subfamily=codestyle(), color=TIP_INK, wrap=WrapMode.none)
+  isempty(r.said) && return Box(padding(10px, 7px), code(r.code))
+  Box(padding(10px, 7px), Column(Alignment.Start, child_gap=6px, code(r.code), code(r.said)))
+end
+
+onmouse(d::CheckDot, ev::MouseMove) = begin
+  rs = d.of.results
+  d.i <= length(rs) && show_tooltip!(ev.window, check_tip(rs[d.i]), d.rect..., placement=:bottom, gap=6px)
+end
+
+"The top of an open `check` block. A click on it closes the block, so that it shows its dots."
+@def mutable struct CheckTop <: SemanticUI
+  of::Any = nothing
+end
+
+describe(t::CheckTop) = begin
+  v = t.of
+  rs = v.results
+  good = all(r -> r.went == :pass, rs)
+  Row(width(grow=grow), height(34px), padding(0px, 6px, 0px, 12px), child_gap=8px, Alignment.Center, background(colours.block),
+      Box(fixed(16px), Alignment.Center, justify=Alignment.Center,
+          isempty(rs) ? Icon("check2-square", size=14px, color=colours.dim) : Icon(good ? "check-circle-fill" : "x-circle-fill", size=14px, color=good ? CHECK_GOOD : CHECK_BAD)),
+      Box(width(grow=grow), Alignment.Start, label(check_words(rs), 13px, weight="Medium")),
+      Box(label(ishovered(t) ? "Click to show only the dots" : "", 11px, color=colours.faint)),
+      block_button!(v, :again, :again, icon="arrow-clockwise", tip="Run the checks again"))
+end
+
+cursor(::CheckTop) = :hand
+onkey(t::CheckTop, ev::KeyPress{Keys.mouse_left}) = (hide_tooltip!(ev.window); open_checks!(t.of, false); handled)
+
+"Show each check of `v` with what it found, with `open`, or only a dot for each check. Opening runs the checks again."
+open_checks!(v::CheckView, open::Bool) = begin
+  open && (v.ran = nothing)
+  v.open = open
+  redraw_in!(editor(v), 0)
+  v
+end
+
+act!(v::CheckView, action, w) = begin
+  action == :again && (v.ran = nothing; redraw_in!(editor(v), 0))
+  handled
+end
+
 describe(v::CheckView) = begin
   checked!(v)
   rs = v.results
-  good = all(r -> r.went == :pass, rs)
+  v.open || return describe_dots(v)
   mark(r) = r.went == :pass ? Icon("check-circle-fill", size=14px, color=CHECK_GOOD) :
             Icon(r.went == :fail ? "x-circle-fill" : "exclamation-triangle-fill", size=14px, color=CHECK_BAD)
   # Each run of words is in a box as tall as its lines, so that the words under it don't come up into it
@@ -12204,17 +12283,76 @@ describe(v::CheckView) = begin
                Column(width(grow=grow), Alignment.Start,
                       words(r.code, 13px, colours.ink), (isempty(r.said) ? () : (words(r.said, 12px, CHECK_BAD),))...))
   Column(block_look()..., clip=true, name="Check",
-    Row(width(grow=grow), height(34px), padding(12px, 0px), child_gap=8px, Alignment.Center, background(colours.block),
-        Box(fixed(16px), Alignment.Center, justify=Alignment.Center,
-            isempty(rs) ? Icon("check2-square", size=14px, color=colours.dim) : Icon(good ? "check-circle-fill" : "x-circle-fill", size=14px, color=good ? CHECK_GOOD : CHECK_BAD)),
-        Box(width(grow=grow), Alignment.Start, label(check_words(rs), 13px, weight="Medium")),
-        Box(label(ishovered(v) ? "Click to run them again" : "", 11px, color=colours.faint))),
+    block_part!(() -> CheckTop(of=v), v, :top),
     (isempty(rs) ? () : (Column(width(grow=grow), Alignment.Start, padding(0px, 5px), map(row, rs)...),))...)
 end
 
+"A closed `check` block: a dot for each check, in rows as wide as the page leaves them. With the mouse over it, how many pass shows after the dots."
+describe_dots(v::CheckView) = begin
+  rs = v.results
+  dots = [block_part!(() -> CheckDot(of=v, i=i), v, (:dot, i)) for i in eachindex(rs)]
+  # The words after the dots need about 280px
+  across = max(1, floor(Int, num(editor(v).width - 280px) / num(CHECK_DOT + 6px)))
+  rows = [Row(Alignment.Center, dots[i:min(i + across - 1, end)]...) for i in 1:across:length(dots)]
+  words = isempty(rs) ? check_words(rs) : ishovered(v) ? check_words(rs) * ". Click to see each one." : ""
+  Row(width(grow=grow), Alignment.Center, padding(0px, 4px), child_gap=4px, name="Check",
+      (isempty(rows) ? () : (Column(Alignment.Start, rows...),))...,
+      Box(width(grow=grow), Alignment.Start, padding(0px, 0px, 0px, 6px), label(words, 12px, color=colours.faint)))
+end
+
 cursor(::CheckView) = :hand
-# A click runs the checks again
-onkey(v::CheckView, ::KeyPress{Keys.mouse_left}) = (v.ran = nothing; redraw_in!(editor(v), 0); handled)
+# A click on the dots opens the block. A click on an open block, out of its top, does nothing.
+onkey(v::CheckView, ev::KeyPress{Keys.mouse_left}) = (v.open || (hide_tooltip!(ev.window); open_checks!(v, true)); handled)
+
+# The levels of a `check` block, from the lowest: its lines, each check with what it found, and a dot for each check
+const CHECK_LEVELS = ("the checks as lines of Julia", "each check, with what it found", "a dot for each check")
+
+levels(::CheckView) = CHECK_LEVELS
+
+"True while the caret is in the lines of the block of `v`, so that the block shows as its lines"
+in_lines(v::CheckView) = begin
+  b = editor(v).buf
+  span = block_lines(b, CHECK, v.n)
+  span !== nothing && span[1] <= b.caret[1] <= span[2] && picked(b) != span
+end
+
+level(v::CheckView) = in_lines(v) ? 1 : v.open ? 2 : 3
+
+level!(v::CheckView, i::Int) = begin
+  e = editor(v)
+  b = e.buf
+  span = block_lines(b, CHECK, v.n)
+  span === nothing && return v
+  s, t = span
+  if i == 1
+    # The block shows its lines, with the caret at the start of the first, as a click with ⌥ held puts it
+    b.caret = b.anchor = (min(s + 1, t), 0)
+  else
+    i == 2 ? open_checks!(v, true) : open_checks!(v, false)
+    # The caret leaves the block's lines and goes onto the block as a whole, so the block shows as what it makes
+    s <= b.caret[1] <= t && (b.caret = b.anchor = (s, 0))
+  end
+  touch!(e)
+  v
+end
+
+"""
+The view of the `check` block that the caret is on as a whole, or in the lines
+of, in a page that shows rich text. It's nothing when the caret is elsewhere.
+The top bar asks this block for its levels.
+"""
+check_in_charge(e) = begin
+  b = e.buf
+  (rich(b) && !caretless(b) && !julia_file(b)) || return nothing
+  i = b.caret[1]
+  1 <= i <= length(b.lines) || return nothing
+  ks = kinds(b)
+  ks[i].kind in (Kind.fence, Kind.code) || return nothing
+  s, t = codeblock(b, i)
+  (t > s && ks[s].kind == Kind.fence && ks[s].level == 0 && ks[s].lang == CHECK && ks[t].kind == Kind.fence && ks[t].level == 1) || return nothing
+  s <= b.anchor[1] <= t || return nothing
+  block_view(e, CHECK, block_place(b, CHECK, s))
+end
 
 check_html(e, v::CheckView) = begin
   checked!(v)
@@ -24734,14 +24872,16 @@ const OPENS_IN = 0.14    # seconds for the slider to open out from the picture
 """
 The part of the window that the top bar asks for its levels: what shows the
 front matter, like the top of an email, while it or a part of it has the
-keyboard or the caret is on it, the block of Julia code that the caret is in,
-or the document when the caret is in no such block.
+keyboard or the caret is on it, the `check` block that the caret is on or in,
+the block of Julia code that the caret is in, or the document when the caret
+is in no such block.
 While a block fills the window, the caret is out of sight, and the document
 answers for that block.
 """
 level_part(e) = begin
   b = e.buf
   full_block(e) === nothing && (h = head_in_charge(e)) !== nothing && return h
+  full_block(e) === nothing && (v = check_in_charge(e)) !== nothing && return v
   c = full_block(e) !== nothing ? nothing : julia_file(b) || !caretless(b) ? julia_part(e, b.caret[1]) : nothing
   c === nothing ? node!(Document, e, :document) : c
 end

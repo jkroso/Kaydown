@@ -27,6 +27,13 @@ double(n) = 2n
 Base.Iterators
 @use "./paint.jl"
 x -> x + 1
+abstract type Gauge end
+"A bar that shows how much is done"
+struct Meter <: Gauge
+  done::Float64
+  label::String
+end
+Meter
 ```
 
 Some words.
@@ -263,6 +270,45 @@ end
   @test b.lines[4] == "length"
 end
 
+@testset "the box of a type says what it's a kind of, and opens to its fields" begin
+  # The types that line 16 names
+  for line in (10, 15)
+    caret!(line)
+    key(Keys.enter, Keys.cmd)
+  end
+  caret!(16)
+  key(Keys.enter, Keys.cmd)
+  o = outcome(16)
+  @test o.brief == "Meter <: Gauge" && !o.failed
+  @test o.more && !o.open && o.subject isa Type
+  t = opened!(16)
+  o = outcome(16)
+  @test o.open && t !== nothing
+  @test t.lines[1:6] == ["```julia", "struct Meter <: Gauge", "  done::Float64", "  label::String", "end", "```"]
+  @test "A bar that shows how much is done" in t.lines
+  @test isempty(t.rows) && t.what == ""
+  r = rect(o.body)
+  @test r !== nothing && K.num(r.left) + K.num(r.width) <= 1000
+  words = texts(K.describe(o.body))
+  @test !any(startswith("0 "), words)   # no table, so no words over one
+  shot("type")
+  click(middle(rect(o)))
+  @test !o.open
+  key(Keys.escape)
+end
+
+@testset "a type's box and declaration" begin
+  # A UI node's type has no fields that join it to the nodes around it, and its kind is written as the code names it
+  decl = K.declaration(K.Member; home=K)
+  @test decl[1] == "mutable struct Member <: SemanticUI"
+  @test "  name::String" in decl && "  depth::Int64" in decl
+  @test !any(l -> occursin(r"^  (parent|firstchild|nextsibling|state)::", l), decl)
+  @test K.declared(Int) && K.declared(Vector) && !K.declared(Union{Int,String}) && !K.declared(1)
+  @test K.type_brief(Int) == "Int64 <: Signed"
+  @test K.type_brief(Vector) == "Vector <: DenseVector"
+  @test K.type_brief(Any) == "Any"
+end
+
 @testset "a module whose documentation can't be read doesn't stop a box" begin
   # The built app leaves out the documentation of the code built into it, like Base's, and Julia
   # throws when it's asked for that. A module whose table of documentation isn't a table throws here.
@@ -293,4 +339,7 @@ end
   rows = Dict(r[1] => r for r in K.name_rows(odd))
   @test rows["Plain"][3] == "a kind of Kind"
   @test only(K.method_rows(Base.invokelatest(getglobal, odd, :take)))[1] == "take(x)"
+  Plain = Base.invokelatest(getglobal, odd, :Plain)
+  @test K.type_brief(Plain, odd) == "Plain <: Kind"
+  @test K.declaration(Plain; home=odd) == ["struct Plain <: Kind", "end"]
 end

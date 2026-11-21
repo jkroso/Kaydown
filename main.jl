@@ -31916,7 +31916,7 @@ outcome_face(size, ink=colours.ink) = Face(codefont(), codestyle(), size, ink, f
   printed::Int = 0                  # how many lines of it, from the first, are text that the code printed
   failed::Bool = false
   node::Any = nothing               # a Shown, when the value is a UI node
-  subject::Any = nothing            # the value itself, when it's a function or a module, which has more to show than its text
+  subject::Any = nothing            # the value itself, when it's a function, a module or a type, which has more to show than its text
   whole::Any = nothing              # the value itself, when the open box lists its parts: a struct, or a UI node in a file of code
   open::Bool = false                # the rest shows under the box
   body::Any = nothing               # the OutcomeBody that shows the rest
@@ -32449,7 +32449,7 @@ run_piece(k, code, m, path, dir, nodes) = begin
     else
       # In a file of code a node is a value like any other, and its box lists its fields and its children
       whole = has_members(shows)
-      shows === nothing ? "" : value_text(shows, m)
+      shows === nothing ? "" : declared(shows) ? type_brief(shows, m) : value_text(shows, m)
     end
   catch err
     # A value whose own `show` fails
@@ -32502,7 +32502,7 @@ came_back!(run::CodeRun, piece) = begin
   o.failed = piece.wrong
   o.node = piece.node ? own!(e, Shown(value=piece.shows, inline=true)) : nothing
   o.whole = piece.whole ? piece.shows : nothing
-  o.subject = !piece.wrong && piece.shows isa Union{Function,Module} ? piece.shows : nothing
+  o.subject = !piece.wrong && (piece.shows isa Union{Function,Module} || declared(piece.shows)) ? piece.shows : nothing
   # A node shows at once, because its name alone says little
   o.open = o.node !== nothing || o.whole isa Union{SemanticUI,GeometricUI}
   o.source = source
@@ -32901,6 +32901,11 @@ end
 # and under it a table of the function's methods: what each one takes, and the
 # module, the file and the line that it's in.
 #
+# The box of a type says what the type is a kind of, as in `Meter <:
+# SemanticUI`. Open, it shows the type as code declares it, with its fields,
+# and under that its documentation. A UI node's type has no fields there that
+# join it to the nodes around it, as a node's list of parts has none.
+#
 # The open box of a module shows the module's readme, from the folder of its
 # code or a folder above that. A module with no readme shows its documentation.
 # Under that is a table of the names that the module defines, with what kind of
@@ -33149,30 +33154,65 @@ Detail(m::Module) = begin
   Detail(m, lines, name_rows(m), "name"; search)
 end
 
+"True when the box of the value `v` opens to show the type that `v` is: a struct, an abstract type or a primitive type, with or without its parameters"
+declared(v) = v isa Type && Base.unwrap_unionall(v) isa DataType
+
+"""
+`T`, a type or a parameter of one, as Julia writes it. With the module `home`,
+a type that code in `home` can name has no module's name in front of its own. A
+type that its package can't write, like Prospects.jl's ScopedEnum{UInt8}, is
+its name.
+"""
+type_text(T, home=nothing) = try
+  io = IOBuffer()
+  Base.invokelatest(show, home === nothing ? io : IOContext(io, :module => home), T)
+  String(take!(io))
+catch
+  T isa Union{DataType,UnionAll} ? string(nameof(T)) : string(typeof(T))
+end
+
+"What the box of the type `T` says: the type, and what it's a kind of when that isn't `Any`, as in `Meter <: SemanticUI`. `home` is as it is for `type_text`."
+type_brief(T::Type, home=nothing) = begin
+  up = supertype(Base.unwrap_unionall(T)) === Any ? nothing : try supertype(T) catch; nothing end
+  up === nothing ? type_text(T, home) : type_text(T, home) * " <: " * type_text(up, home)
+end
+
 """
 The type `T` as Julia code declares it: `struct`, `mutable struct`, `abstract
 type` or `primitive type`, its name with its parameters, what it's a kind of
-when that isn't `Any`, and a line for each field with the field's type.
+when that isn't `Any`, and a line for each field with the field's type. The
+fields that join a UI node to the nodes around it aren't the node's own, so
+they're left out. `home` is as it is for `type_text`.
 """
-declaration(T::Type) = begin
+declaration(T::Type; home=nothing) = begin
   inside = Base.unwrap_unionall(T)
-  inside isa DataType || return [string(T)]
-  name = string(nameof(inside)) * (isempty(inside.parameters) ? "" : "{" * join(inside.parameters, ", ") * "}")
-  supertype(inside) === Any || (name *= " <: $(supertype(inside))")
+  inside isa DataType || return [type_text(T, home)]
+  words(x) = type_text(x, home)
+  name = string(nameof(inside)) * (isempty(inside.parameters) ? "" : "{" * join(map(words, inside.parameters), ", ") * "}")
+  supertype(inside) === Any || (name *= " <: " * words(supertype(inside)))
   isabstracttype(inside) && return ["abstract type $name end"]
   isprimitivetype(inside) && return ["primitive type $name $(8sizeof(inside)) end"]
-  fields = ["  " * (isconst(inside, i) && ismutabletype(inside) ? "const " : "") * "$(fieldname(inside, i))::$(fieldtype(inside, i))"
-            for i in 1:fieldcount(inside)]
+  node = inside <: Union{SemanticUI,GeometricUI}
+  fields = ["  " * (isconst(inside, i) && ismutabletype(inside) ? "const " : "") * "$(fieldname(inside, i))::" * words(fieldtype(inside, i))
+            for i in 1:fieldcount(inside) if !(node && fieldname(inside, i) in NODE_LINKS)]
   [(ismutabletype(inside) ? "mutable struct " : "struct ") * name, fields..., "end"]
 end
 
-"What shows of the type `T` under its name in a module's table: the type as code declares it, with its fields, and its documentation"
-Detail(T::Type) = begin
-  lines = ["```julia", declaration(T)..., "```"]
+"""
+What shows of the type `T` in the open box of an outcome, and under its name
+in a module's table: the type as code declares it, with its fields, and its
+documentation. `home` is the module of the code that has the type, as it is
+for `type_text`.
+"""
+Detail(T::Type; home=(try parentmodule(T) catch; nothing end)) = begin
+  lines = ["```julia", declaration(T; home)..., "```"]
   doc = try doc_lines(parentmodule(T), nameof(T)) catch; String[] end
   isempty(doc) || append!(lines, ["", doc...])
   Detail(T, lines, NTuple{3,String}[], "")
 end
+
+"What the open box of `v` shows, or what shows under its row in a module's table. `home` is the module that the value is in, which a type is written for."
+detail_of(v, home) = v isa Type ? Detail(v; home) : Detail(v)
 
 "What shows of any other value under its name in a module's table: its type, and the value as Julia writes it"
 Detail(v) = begin
@@ -33188,7 +33228,7 @@ open_row!(d::OutcomeBody, i::Int) = begin
     return
   end
   inner = try
-    Base.invokelatest(Detail, Base.invokelatest(getglobal, t.of, Symbol(t.rows[i][1])))
+    Base.invokelatest(detail_of, Base.invokelatest(getglobal, t.of, Symbol(t.rows[i][1])), t.of)
   catch err
     Detail(nothing, [sprint(showerror, err)], NTuple{3,String}[], "")
   end
@@ -33502,8 +33542,11 @@ module, and under it the documentation and the table, which the wheel moves
 through. Only the lines and the rows in view are made.
 """
 detail_view(e, d::OutcomeBody) = begin
-  d.detail === nothing && (d.detail = Detail(d.of.subject))
+  d.detail === nothing && (d.detail = detail_of(d.of.subject, workspace(e)))
   t = d.detail
+  # A type has no table, so it has no words over one
+  table = !isempty(t.what)
+  head_h = table ? DETAIL_HEAD : 0px
   t.search === nothing || own!(d, t.search)
   wide = t.wide = detail_wide(e) - 2DETAIL_PAD
   page!(e, t, wide)
@@ -33520,22 +33563,22 @@ detail_view(e, d::OutcomeBody) = begin
   inner === nothing || page!(e, inner, wide - INNER_X)
   under = inner === nothing ? 0px : inner_tall(inner)
   k = something(k, n)
-  total = TEXT_PAD + above + DETAIL_HEAD + DETAIL_ROW * n + under + TEXT_PAD
+  total = TEXT_PAD + above + head_h + DETAIL_ROW * n + under + TEXT_PAD
   high = min(total, DETAIL_H)
   from, to = t.scroll.offset, t.scroll.offset + high
   # Each part starts `y` under the top of all that the wheel moves through
   y = TEXT_PAD
   doc = page === nothing ? () : (page_part(e, page, from - y, to - y)..., spacer(TEXT_PAD))
-  y += above + DETAIL_HEAD
+  y += above + head_h
   row(j) = t.what == "name" ? name_row!(d, found[j]) : detail_row(e, t, t.rows[found[j]], wide)
   before = rows_part(row, k, from - y, to - y)
   y += DETAIL_ROW * k
   section = inner === nothing ? () : (inner_view(e, inner, wide - INNER_X, from - y, to - y),)
   y += under
   after = rows_part(j -> row(k + j), n - k, from - y, to - y)
-  head = t.what == "name" ? names_head(d, wide, count_words(t, n)) : table_head(count_words(t, n))
+  head = !table ? () : t.what == "name" ? (names_head(d, wide, count_words(t, n)),) : (table_head(count_words(t, n)),)
   inside = Column(width(grow=grow), Alignment.Start, padding(DETAIL_PAD, 0px),
-    spacer(TEXT_PAD), doc..., head, before..., section..., after..., spacer(TEXT_PAD))
+    spacer(TEXT_PAD), doc..., head..., before..., section..., after..., spacer(TEXT_PAD))
   field = t.search === nothing ? () :
     (Row(width(grow=grow), height(SEARCH_H), Alignment.Center, padding(DETAIL_PAD, 0px), child_gap=8px,
          border(1px, :solid, colours.line)[:bottom],

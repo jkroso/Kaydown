@@ -8,7 +8,7 @@
 
 @use Test: @test, @testset
 @use "../main" => K
-@use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse
+@use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse Typed ontype
 @use "github.com/jkroso/UI.jl/Interface/draw" frame rect
 @use "github.com/jkroso/UI.jl/Interface/save" save_png
 @use GeometryBasics: Vec2
@@ -174,6 +174,124 @@ end
   @test occursin("<strong>4 of 5 checks pass</strong>", html) && occursin("<li>✓ <code>length(walls) == 4</code></li>", html)
   @test occursin("<li>✗ <code>no_such_name &gt; 1</code>: ", html)
   @test any(x -> x isa Tuple && x[1] == "Check", K.INSERTS) && K.known_lang("check")
+end
+
+typed(s) = (foreach(c -> ontype(w, Typed(c, w)), s); frames())
+key(k) = (onkey(w, KeyPress{k}(0, w)); onkey(w, KeyRelease{k}(0, w)); frames())
+"Select all that the field holds, as ⌘A does"
+select_all() = (w.keys |= Keys.cmd; key(Keys.a); w.keys ⊻= Keys.cmd)
+block() = (span = K.block_lines(e.buf, K.CHECK, 1); e.buf.lines[span[1]+1:span[2]-1])
+line(k) = view().parts[(:line, k)]
+"Click the line of check `k`, `col` characters into its code"
+click_line(k, col=0) = (r = rect(line(k)); click(Vec2{px}(r.left + K.CHECK_INSET + K.measure(K.check_face(), "0") * (col + 0.4), r.top + r.height / 2)))
+field() = K.check_input(view())
+"Every piece of text that a node shows"
+texts(node, out=String[]) = begin
+  node isa K.Text ? push!(out, node.content) : node isa K.SemanticUI ? texts(K.describe(node), out) :
+  node isa K.GeometricUI && foreach(n -> texts(n, out), node.children)
+  out
+end
+
+@testset "each check of the open block is changed where it is, as a line of Julia" begin
+  e.buf.caret = e.buf.anchor = (1, 0)
+  K.open_checks!(view(), true)
+  frames()
+  @test block()[3] == "area() ≈ 28" && went()[2] == :pass
+  # A click on a check's line puts a field there, with the line in it and the caret where the click was
+  click_line(2, 4)
+  v = view()
+  @test v.editing == 2 && w.focus === field() && field().text == "area() ≈ 28" && field().cursor == 4
+  # The field shows the line as Julia code: the parts have their colours, over the field's own text
+  look = K.julia_look(field(), nothing)
+  @test look isa K.Row
+  haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], "check-field.png"), w)
+  # Return writes it into the block's line, and the check runs again
+  select_all(); typed("area() ≈ 30"); key(Keys.enter)
+  @test block()[3] == "area() ≈ 30" && v.editing == 0 && w.focus === e
+  @test went()[2] == :fail && v.results[2].said == "28.0 ≈ 30"
+  @test block()[1] == "# The room as it was measured"   # a comment isn't a check, and stays
+  # ⌘Z takes the change back
+  K.undo!(e.buf); frames()
+  @test block()[3] == "area() ≈ 28" && went()[2] == :pass
+  # Esc leaves the line as it was
+  click_line(1)
+  typed(" + 1"); key(Keys.escape)
+  @test block()[2] == "length(walls) == 4" && v.editing == 0 && w.focus === e
+  # A click somewhere else writes what the field holds
+  click_line(3)
+  select_all(); typed("area() < 40")
+  r = rect(v)
+  click(Vec2{px}(r.left + 20px, r.top + r.height + 30px))
+  @test block()[4] == "area() < 40" && v.editing == 0 && went()[3] == :pass
+  # A check that's left empty is taken away
+  click_line(4)
+  select_all(); key(Keys.backspace); key(Keys.enter)
+  @test !("counted()" in block()) && length(v.results) == 4 && went() == [:pass, :pass, :pass, :stop]
+  # The last line of the list adds a check, and stays open for another
+  @test "Add a check" in texts(v)
+  click_line(5)
+  @test v.editing == 5 && field().text == ""
+  typed("length(walls) > 3"); key(Keys.enter)
+  @test block()[end] == "length(walls) > 3" && went() == [:pass, :pass, :pass, :stop, :pass]
+  @test v.editing == 6 && w.focus === field() && field().text == ""
+  # Return in it while it's empty, and the field goes
+  key(Keys.enter)
+  @test v.editing == 0 && w.focus === e && length(v.results) == 5
+  # A click on another check while one is being changed writes the first, then opens the second
+  click_line(1); select_all(); typed("length(walls) ≥ 4")
+  click_line(2)
+  @test block()[2] == "length(walls) ≥ 4" && v.editing == 2 && field().text == "area() ≈ 28"
+  # Closing the block writes the check too
+  select_all(); typed("area() ≈ 28.0")
+  K.open_checks!(v, false); frames()
+  @test block()[3] == "area() ≈ 28.0" && v.editing == 0 && !v.open
+  # A click with ⌥ held on a check of the open block shows the block's lines, and puts no field there
+  K.open_checks!(v, true); frames()
+  w.keys |= Keys.opt
+  click_line(2)
+  w.keys ⊻= Keys.opt
+  @test v.editing == 0 && K.in_lines(v)
+  e.buf.caret = e.buf.anchor = (1, 0); frames()
+  # So does a click with ⌥ held on the dots, and the block stays closed
+  K.open_checks!(v, false); frames()
+  r = rect(v)
+  w.keys |= Keys.opt
+  click(Vec2{px}(r.left + 20px, r.top + r.height / 2))
+  w.keys ⊻= Keys.opt
+  @test K.in_lines(v) && !v.open
+  e.buf.caret = e.buf.anchor = (1, 0); frames()
+end
+
+@testset "the lines of a check block are Julia, as a julia block's are" begin
+  @test K.shared_lang(K.CHECK) == "julia" && !(K.CHECK in K.NO_NAMES)
+  s, _ = K.block_lines(e.buf, K.CHECK, 1)
+  ps = K.pieces(e, "area() ≈ 28", K.kinds(e.buf)[s+2], false)
+  @test any(p -> p.face.color == K.colours.number, ps) && any(p -> p.face.color == K.colours.call, ps)
+  # A name that the page's code made is offered as it's typed in a new line of the block
+  _, t = K.block_lines(e.buf, K.CHECK, 1)
+  e.buf.caret = e.buf.anchor = (t - 1, length(e.buf.lines[t-1]))
+  K.focus(e)
+  frames()
+  key(Keys.enter); typed("are")
+  found = K.code_offered(e)
+  @test found !== nothing && "area" in found[3]
+  foreach(_ -> K.undo!(e.buf), 1:2); e.buf.caret = e.buf.anchor = (1, 0); frames()
+  @test !("are" in block())
+end
+
+@testset "a check of a page that can't be changed has no field" begin
+  # A file that can't be written makes the page fixed
+  K.save!(e.buf)
+  chmod(page, 0o444)
+  frames()
+  @test e.buf.fixed
+  K.open_checks!(view(), true)
+  frames()
+  @test !("Add a check" in texts(view()))   # no line adds a check
+  click_line(1)
+  @test view().editing == 0
+  chmod(page, 0o644)
+  frames()
 end
 
 close(w)

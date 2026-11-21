@@ -291,6 +291,7 @@
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Icon" Icon icon_cache
 @use "github.com/jkroso/UI.jl/Interface/Semantic/SVG" SVGPath
 @use "github.com/jkroso/UI.jl/Interface/Semantic/TextInput" TextInput
+@use "github.com/jkroso/UI.jl/Interface/Semantic/TextInput" => TextInputs
 @use "github.com/jkroso/UI.jl/Interface/Semantic/Link" Link
 @use "github.com/jkroso/UI.jl/Interface/Semantic/ListTree" => Tree
 @use "github.com/jkroso/UI.jl/Interface/Semantic/STLViewer" STLViewer Mesh load!
@@ -1877,8 +1878,8 @@ pieces(e, text::String, line::Line, raw::Bool, i::Int=0) = begin
     end
     return out
   elseif k == Kind.code
-    # Each part of a line of code has its own colour, and comments slant
-    for t in tokens(text, line.lang)
+    # Each part of a line of code has its own colour, and comments slant. A `check` block's lines are Julia.
+    for t in tokens(text, shared_lang(line.lang))
       colour = t.kind == :plain ? base.color : getfield(colours, t.kind)
       push!(out, piece(t.text, t.col, Face(base, color=colour, style=t.kind == :comment ? codeslant() : base.style)))
     end
@@ -12143,6 +12144,14 @@ BLOCKS[FILTER] = BlockKind("Filter", "funnel", FilterView, filter_html)
 # them, as ⌥-click shows it. With the caret on the block as a whole or in its
 # lines, the ladder in the top bar goes up and down these levels, and ⌘E too.
 #
+# Each check of the open block can be changed where it is: a click on its line
+# puts a field there, which shows the line as Julia code. Return or a click
+# somewhere else writes it into the block, and the check runs again. A line
+# that's left empty takes the check away, and Esc leaves it as it was. The
+# last line of the list adds a check, and stays open for another one. The
+# lines of the block are Julia too, with the colours and the names that a
+# `julia` block has.
+#
 # The lines run in the module of the page's code, with the names that the
 # page's `julia` blocks made. They run again when a line of the block changes,
 # and each time the page's code runs, as it does with ⌘Return. A click that
@@ -12200,13 +12209,20 @@ end
   results::Vector{Checked} = Checked[]
   ran::Any = nothing                    # the checks, the count of runs of the page's code and the page that `results` are of
   open::Bool = false                    # it shows each check with what it found, and not a row of dots
-  parts::Dict{Any,Any} = Dict{Any,Any}()   # its dots, its top and its button, kept between frames
+  editing::Int = 0                      # the check whose line is being changed, or one more than there are for a new check. 0 is none.
+  parts::Dict{Any,Any} = Dict{Any,Any}()   # its dots, its top, its button, its lines and its field, kept between frames
 end
 
 reread!(v::CheckView, lines) = (lines == v.lines || (v.lines = lines); v)
 
+"True when a line of a block is a check: it isn't blank and isn't a comment"
+ischeck(line) = !isempty(strip(line)) && !startswith(strip(line), '#')
+
 "The lines of a `check` block that are checks: each line that isn't blank and isn't a comment"
-checks(lines) = [String(strip(l)) for l in lines if !isempty(strip(l)) && !startswith(strip(l), '#')]
+checks(lines) = [String(strip(l)) for l in lines if ischeck(l)]
+
+"Where each check is in the lines of a `check` block"
+check_places(lines) = findall(ischeck, lines)
 
 "Run the checks of `v`, unless they ran since they last changed and since the page's code last ran"
 checked!(v::CheckView) = begin
@@ -12278,11 +12294,13 @@ describe(t::CheckTop) = begin
 end
 
 cursor(::CheckTop) = :hand
-onkey(t::CheckTop, ev::KeyPress{Keys.mouse_left}) = (hide_tooltip!(ev.window); open_checks!(t.of, false); handled)
+onkey(t::CheckTop, ev::KeyPress{Keys.mouse_left}) = unmodified(ev) ? (hide_tooltip!(ev.window); open_checks!(t.of, false); handled) : nothing
 
 "Show each check of `v` with what it found, with `open`, or only a dot for each check. Opening runs the checks again."
 open_checks!(v::CheckView, open::Bool) = begin
   open && (v.ran = nothing)
+  # A check that's being changed is written as the block closes
+  open || v.editing == 0 || (settle_check!(v); focus(editor(v)))
   v.open = open
   redraw_in!(editor(v), 0)
   v
@@ -12299,15 +12317,147 @@ describe(v::CheckView) = begin
   v.open || return describe_dots(v)
   mark(r) = r.went == :pass ? Icon("check-circle-fill", size=14px, color=CHECK_GOOD) :
             Icon(r.went == :fail ? "x-circle-fill" : "exclamation-triangle-fill", size=14px, color=CHECK_BAD)
-  # Each run of words is in a box as tall as its lines, so that the words under it don't come up into it
-  words(text, size, colour) = Box(width(grow=grow), Alignment.Start, padding(0px, 3px), Text(text, size=size, family=codefont(), subfamily=codestyle(), color=colour, wrap=WrapMode.words))
-  row(r) = Row(width(grow=grow), padding(12px, 3px), child_gap=8px, Alignment.Start,
-               Box(fixed(16px), height(25px), Alignment.Center, justify=Alignment.Center, mark(r)),
-               Column(width(grow=grow), Alignment.Start,
-                      words(r.code, 13px, colours.ink), (isempty(r.said) ? () : (words(r.said, 12px, CHECK_BAD),))...))
+  # What a check found is in a box as tall as its lines, so that the words under it don't come up into it
+  words(text, size, colour) = Box(width(grow=grow), Alignment.Start, padding(CHECK_INSET, 3px), Text(text, size=size, family=codefont(), subfamily=codestyle(), color=colour, wrap=WrapMode.words))
+  row(k, sign) = Row(width(grow=grow), padding(12px, 3px), child_gap=5px, Alignment.Start,
+                     Box(fixed(16px), height(25px), Alignment.Center, justify=Alignment.Center, sign),
+                     Column(width(grow=grow), Alignment.Start, check_line!(v, k),
+                            (k > length(rs) || isempty(rs[k].said) ? () : (words(rs[k].said, 12px, CHECK_BAD),))...))
+  # The last row adds a check, unless the page can't be changed
+  adds = check_fixed(v) ? () : (row(length(rs) + 1, Icon("plus", size=14px, color=colours.faint)),)
   Column(block_look()..., clip=true, name="Check",
     block_part!(() -> CheckTop(of=v), v, :top),
-    (isempty(rs) ? () : (Column(width(grow=grow), Alignment.Start, padding(0px, 5px), map(row, rs)...),))...)
+    (isempty(rs) && isempty(adds) ? () : (Column(width(grow=grow), Alignment.Start, padding(0px, 5px), (row(k, mark(r)) for (k, r) in enumerate(rs))..., adds...),))...)
+end
+
+# --- a check that's changed where it is
+
+"True when the page can't be changed, so its checks can't be"
+check_fixed(v::CheckView) = (b = editor(v).buf; readonly(b) || b.fixed)
+
+const CHECK_INSET = 4px   # between the left of a check's line and its code, so that a line under the mouse has room round its words
+
+"The font of a check's code, in the open block"
+check_face() = Face(codefont(), codestyle(), 13px, colours.ink, false)
+
+"The line of a check in an open `check` block. A click on it puts a field in its place, to change it."
+@def mutable struct CheckLine <: SemanticUI
+  of::Any = nothing
+  k::Int = 0   # the check that it's for, in the order of the block's checks. One more than there are is the line that adds a check.
+end
+
+"The line of the check `k` of `v`, kept between frames"
+check_line!(v::CheckView, k::Int) = block_part!(() -> CheckLine(of=v, k=k), v, (:line, k))
+
+"""
+The field that takes the place of a check's line while you change it. It
+shows its text as Julia code, each part in its colour, with no box round it.
+"""
+check_input(v::CheckView) = block_part!(v, :edit) do
+  TextInput(placeholder="A check, like total == 12", font_family=codefont(), font_size=13px, look=julia_look)
+end
+
+"""
+How a field of one line of Julia looks: no box, and each part of the code in
+its colour. The field's own text is under the colours, and can't be seen. It's
+the first text in the field, so the caret and the selection go by it.
+"""
+julia_look(input, text) = begin
+  isempty(input.text) && return Row(width(grow=grow), height(grow=grow), clip=true, text)
+  size = TextInputs.text_size(input)
+  under = Text(input.text, size=size, family=TextInputs.family(input), color=clear, wrap=WrapMode.none)
+  parts = value_parts(input.text, Face(TextInputs.family(input), codestyle(), size, TextInputs.ink(input), false))
+  Row(width(grow=grow), height(grow=grow), clip=true,
+      Row(width(grow=grow), clip_x=true, Stack(Alignment.Start, offset_x=-input.scroll, under, Row(Alignment.Center, parts...))))
+end
+
+describe(l::CheckLine) = begin
+  v = l.of
+  rs = v.results
+  v.editing == l.k && return Row(width(grow=grow), height(25px), padding(CHECK_INSET, 0px), Alignment.Center,
+                                 Box(width(grow=grow), height(grow=grow), check_input(v)))
+  shown = l.k <= length(rs) ? Row(Alignment.Center, value_parts(rs[l.k].code, check_face())...) :
+          Text("Add a check", size=13px, family=codefont(), subfamily=codestyle(), color=colours.faint, wrap=WrapMode.none)
+  Row(width(grow=grow), height(25px), padding(CHECK_INSET, 0px), radius(5px), Alignment.Center, clip=true,
+      background(ishovered(l) && !check_fixed(v) ? colours.hover : clear), shown)
+end
+
+cursor(l::CheckLine) = check_fixed(l.of) ? :arrow : :ibeam
+
+# A click puts the caret in the field where it was in the line. A click with a modifier key down is the page's.
+onkey(l::CheckLine, ev::KeyPress{Keys.mouse_left}) = begin
+  v = l.of
+  (unmodified(ev) && !check_fixed(v) && v.editing != l.k) || return nothing
+  hide_tooltip!(ev.window)
+  r = rect(l)
+  col = r === nothing ? 0 : round(Int, num(ev.window.mouse[1] - r.left - CHECK_INSET) / num(measure(check_face(), "0")))
+  open_check!(v, l.k, col)
+end
+
+"""
+Put a field in the place of the check `k` of `v`, with the caret at `col` in
+its line. A check that was being changed is written first.
+"""
+open_check!(v::CheckView, k::Int, col::Int=typemax(Int)) = begin
+  was, n = v.editing, length(check_places(v.lines))
+  settle_check!(v)
+  # A check that was taken away or added before this one moves it
+  0 < was < k && (k += length(check_places(v.lines)) - n)
+  places = check_places(v.lines)
+  input = check_input(v)
+  input.font_family = codefont()
+  input.text = k <= length(places) ? String(strip(v.lines[places[k]])) : ""
+  input.anchor = input.cursor = clamp(col, 0, length(input.text))
+  input.scroll = 0px
+  v.editing = k
+  focus(input)
+  handled
+end
+
+"""
+Write what the field of `v` holds into the line of its check, and take the
+field away. An empty field takes the check away, and the field of a new check
+adds one at the end of the block.
+"""
+settle_check!(v::CheckView) = begin
+  k, v.editing = v.editing, 0
+  (k == 0 || check_fixed(v)) && return v
+  text = String(strip(check_input(v).text))
+  lines, places = copy(v.lines), check_places(v.lines)
+  if k <= length(places)
+    i = places[k]
+    text == strip(lines[i]) && return v
+    # The line keeps the space before it
+    isempty(text) ? deleteat!(lines, i) : (lines[i] = match(r"^\s*", lines[i]).match * text)
+  else
+    isempty(text) && return v
+    push!(lines, text)
+  end
+  write_block!(v, CHECK, lines)
+end
+
+# Return writes the check. After a new check, the field stays at the end of the list for another one.
+onkey(v::CheckView, ev::KeyPress{Keys.enter}) = begin
+  (unmodified(ev) && v.editing != 0 && ev.window.focus === check_input(v)) || return nothing
+  adding = v.editing > length(check_places(v.lines)) && !isempty(strip(check_input(v).text))
+  settle_check!(v)
+  adding ? open_check!(v, length(check_places(v.lines)) + 1) : focus(editor(v))
+  handled
+end
+# Esc leaves the check as it was
+onkey(v::CheckView, ev::KeyPress{Keys.escape}) = begin
+  (unmodified(ev) && v.editing != 0 && ev.window.focus === check_input(v)) || return nothing
+  v.editing = 0
+  focus(editor(v))
+  handled
+end
+
+"A click somewhere else writes what the field of a check holds"
+block_tick!(v::CheckView) = begin
+  v.editing == 0 && return v
+  w = window_of(v)
+  (w === nothing || w.focus !== check_input(v)) && settle_check!(v)
+  v
 end
 
 "A closed `check` block: a dot for each check, in rows as wide as the page leaves them. With the mouse over it, how many pass shows after the dots."
@@ -12324,8 +12474,9 @@ describe_dots(v::CheckView) = begin
 end
 
 cursor(::CheckView) = :hand
-# A click on the dots opens the block. A click on an open block, out of its top, does nothing.
-onkey(v::CheckView, ev::KeyPress{Keys.mouse_left}) = (v.open || (hide_tooltip!(ev.window); open_checks!(v, true)); handled)
+# A click on the dots opens the block. A click on an open block, out of its top and its lines, does nothing.
+# With ⌥ held, the click is the page's, and it shows the block's lines.
+onkey(v::CheckView, ev::KeyPress{Keys.mouse_left}) = unmodified(ev) ? (v.open || (hide_tooltip!(ev.window); open_checks!(v, true)); handled) : nothing
 
 # The levels of a `check` block, from the lowest: its lines, each check with what it found, and a dot for each check
 const CHECK_LEVELS = ("the checks as lines of Julia", "each check, with what it found", "a dot for each check")
@@ -31791,11 +31942,11 @@ end
 
 const NAMES_SHOWN = 8                         # the most names in the list
 const NAME = r"[\p{L}_][\p{L}\p{N}_!]*"       # a name in code
-# The blocks that aren't code, and a block with no language
-const NO_NAMES = (MATTER, TOML_MATTER, HEX, BITS, SHEET, SPREADSHEET, DIAGRAM, MATH, TAKEOFF, SCHEDULE, keys(BLOCKS)..., "")
+# The blocks that aren't code, and a block with no language. A `check` block's lines are Julia.
+const NO_NAMES = (MATTER, TOML_MATTER, HEX, BITS, SHEET, SPREADSHEET, DIAGRAM, MATH, TAKEOFF, SCHEDULE, filter(!=(CHECK), collect(keys(BLOCKS)))..., "")
 
-"The language that code in `lang` shares its names with. `jl` and a live block are Julia."
-shared_lang(lang) = (l = lowercase(lang); l in JULIA || l == LIVE ? "julia" : l)
+"The language that code in `lang` shares its names with. `jl`, a live block and a `check` block are Julia."
+shared_lang(lang) = (l = lowercase(lang); l in JULIA || l == LIVE || l == CHECK ? "julia" : l)
 
 "Each name in the page's code of the language `lang`, with the places it's written: a line and a column"
 page_names(e, lang) = get!(e.flows, (:names, e.buf.path, e.buf.version, lang)) do

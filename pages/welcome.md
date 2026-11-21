@@ -111,7 +111,7 @@ sqrt(16) ≈ 4
 length("ladder") < 6
 ```
 
-The lines can use the names that the page's code made. Run the three lines of the block above, then hold ⌥, click the checks, and add the line `area ≈ 8.64`. The checks run again each time the page's code runs, and when you open them. Click the top of the open block to see only the dots again.
+The lines can use the names that the page's code made. Run the three lines of the block above, then click the dots. Click "Add a check" at the end of the list, type `area ≈ 8.64`, and press Return. Click a check to change it where it is: Return runs it again, and Esc leaves it as it was. A check that you leave empty goes. The checks run again each time the page's code runs, and when you open them. Click the top of the open block to see only the dots again. Hold ⌥ and click the checks to see all their lines as Julia code.
 
 The page [julia.md](julia.md) has more code to run: an expression of several lines, what code prints, the names that a block offers as you type, and the box of a function.
 

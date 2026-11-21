@@ -177,7 +177,7 @@ It works on Ladder's own parts too, like the count of words at the top right. Mo
 
 The command Show Code does the same for the next thing that you click. Press ⌘⇧P and type its name to run it. Esc gives the mouse back.
 
-You can ask for a change in words too. Press ⌘⇧P and run Ask For Change. It changes what the caret was on, and a blue line goes round it. To change something else, click it. Type what you want, like `make this bar thinner`, and press Return. Ladder gives your words, and the place of the function that draws the thing, to Claude Code. Claude Code changes the function, and the thing is drawn the new way. A label on the thing then says what changed. This needs Claude Code on your Mac.
+You can ask for a change in words too. Press ⌘⇧P and run Ask For Change. It changes what the caret was on. A blue line with the letter A goes round that, and the command shows the same blue A. To change something else, click it. Type what you want, like `make this bar thinner`, and press Return. Ladder gives your words, and the place of the function that draws the thing, to Claude Code. Claude Code changes the function, and the thing is drawn the new way. A label on the thing then says what changed. This needs Claude Code on your Mac.
 
 ## A file of code
 

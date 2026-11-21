@@ -27760,17 +27760,37 @@ start_chips!(e, p::CommandPalette) = begin
   p
 end
 
+"True when the chip `c` is for a thing that shows in the window, which a click there chooses: its type has a method of `chip_click`"
+chip_points(c::Wanted) = !c.keyword && any(T -> hasmethod(chip_click, Tuple{Type{T},Any,Any}), askable_types(c.types))
+
+"The colours of the chips for things that show in the window, in their order. A chip and the line round its thing have the same colour."
+const CHIP_MARKS = [colorant"rgb(48,128,236)", colorant"rgb(226,112,28)", colorant"rgb(36,150,84)", colorant"rgb(148,76,206)"]
+
+"""
+The letter and the colour of chip `k` of `chips`, when it's for a thing that
+shows in the window: A in blue for the first such chip, B in orange for the
+next. The chip shows them in place of the thing's words, and the line round
+the thing in the window has them too. It's nothing for any other chip.
+"""
+chip_mark(chips, k::Int) = begin
+  chip_points(chips[k]) || return nothing
+  n = count(j -> chip_points(chips[j]), 1:k)
+  (string('A' + n - 1), CHIP_MARKS[mod1(n, length(CHIP_MARKS))])
+end
+
+"The colour `c` made paler, for the line round what a click would choose"
+paler(c) = RGBA(0.6c.r + 0.4, 0.6c.g + 0.4, 0.6c.b + 0.4, 1.0)
+
 """
 The chip that a click on the window chooses a thing for: the one that the
-keyboard is in, or else the first, of a type with a method of `chip_click`.
-It's nothing while the palette shows no such chip.
+keyboard is in, or else the first that's for a thing in the window. It's
+nothing while the palette shows no such chip.
 """
 click_chip(e, p::CommandPalette) = begin
   (e.popup == :commands && p.command !== nothing) || return nothing
   chips = palette_chips(p)
-  takes(k) = !chips[k].keyword && any(T -> hasmethod(chip_click, Tuple{Type{T},Any,Any}), askable_types(chips[k].types))
-  p.at <= length(chips) && takes(p.at) && return p.at
-  findfirst(takes, eachindex(chips))
+  p.at <= length(chips) && chip_points(chips[p.at]) && return p.at
+  findfirst(k -> chip_points(chips[k]), eachindex(chips))
 end
 
 "True when the point `(x, y)` of the window is on the palette: the strip along the bottom, or the list over it"
@@ -27840,9 +27860,10 @@ palette_click!(e, w) = begin
 end
 
 """
-Draw a line round what the chip that a click chooses for has, with the chip's
-name and its words, and round the thing that a click would choose. The
-window's tool draws it, over the rest of the window.
+Draw a line round the thing of each chip that's for a thing in the window, in
+the chip's colour, with the chip's letter. A paler line goes round what a
+click would choose, with its words. The window's tool draws them, over the
+rest of the window.
 """
 mark_chips(ctx, w, e) = begin
   p = get(e.nodes, :palette, nothing)
@@ -27851,16 +27872,18 @@ mark_chips(ctx, w, e) = begin
   k === nothing && return nothing
   redraw_in!(e, 1/30)   # the line follows the mouse
   chips = palette_chips(p)
-  chosen = chip_value(p, chips, k)
-  if chosen !== UNSAID
-    r = shown_at(e, chosen)
-    r === nothing || pick_mark(ctx, w, r, "$(chip_name(chips[k])): $(worded(chosen))")
+  for j in eachindex(chips)
+    mark = chip_mark(chips, j)
+    x = chip_value(p, chips, j)
+    (mark === nothing || x === UNSAID) && continue
+    r = shown_at(e, x)
+    r === nothing || pick_mark(ctx, w, r, mark[1]; colour=mark[2])
   end
   on_palette(p, num(w.mouse[1]), num(w.mouse[2])) && return nothing
   x = clicked_thing(e, p, w, k)
-  (x === nothing || x == chosen) && return nothing
+  (x === nothing || x == chip_value(p, chips, k)) && return nothing
   r = shown_at(e, x)
-  r === nothing || pick_mark(ctx, w, r, "Click to choose: $(worded(x))"; colour=PICK_HOVER)
+  r === nothing || pick_mark(ctx, w, r, "Click to choose: $(worded(x))"; colour=paler(chip_mark(chips, k)[2]))
   nothing
 end
 
@@ -28131,9 +28154,13 @@ chip_wide(e, p::CommandPalette, chips, k::Int) = begin
   end
   words, _ = chip_words(p, chips, k)
   on = p.at == k
+  # A chip for a thing in the window shows only its letter, once it has the thing
+  mark = chip_mark(chips, k)
+  mark === nothing || on || chip_value(p, chips, k) === UNSAID || return frame + ceil(omni_wide(mark[1], 13, "Semibold")) + 6
   wide = omni_wide(on && kind != :pick && !isempty(input(e).text) ? input(e).text : on && kind == :search ? chip_name(chip) : words, 13)
   on && kind == :search && (wide = max(wide, min(320.0, maximum(o -> omni_wide(worded(o), 13), chip_choices(e, chip), init=0.0))))
-  frame + max(kind == :number ? 60.0 : 40.0, ceil(wide) + 6)
+  # A chip that's typed in has room for one more letter and the caret, so the field holds a letter before the chip grows for it
+  frame + max(kind == :number ? 60.0 : 40.0, ceil(wide) + (on && kind != :pick ? 20 : 6))
 end
 
 "The tag, the chips and the Run button, each with how wide it is, in their order"
@@ -28271,7 +28298,10 @@ describe(p::CommandPalette) = begin
   p.pick = clamp(p.pick, 1, max(1, length(p.rows)))
   i.color, i.placeholder_color = c.ink, p.command === nothing ? c.muted : c.placeholder
   i.font_size = p.command === nothing ? 15px : 13px
+  was = p.plan
   plan = p.plan = palette_plan(e, p)
+  # A text field scrolls by how wide it was in the frame before. When a chip grew or shrank, the next frame shows the field at its new width at once.
+  was === nothing || was.places == plan.places || redraw_in!(e, 0)
   i.placeholder = p.command === nothing ? "Type a command" : p.at <= length(plan.chips) ? chip_name(plan.chips[p.at]) : ""
   palette_moving(e) && redraw_in!(p, 0.0)
   band, bar, list = plan.band, plan.bar, plan.list
@@ -28568,6 +28598,15 @@ describe(chip::PaletteChip) = begin
   end
   if on && kind != :pick
     return Box(look..., name="Chip", omni_field(e, p, 13))
+  end
+  # A chip for a thing in the window has the thing's colour and letter, which the line round the thing has too
+  mark = chip_mark(plan.chips, chip.k)
+  if mark !== nothing && x !== UNSAID
+    letter, colour = mark
+    # The letter is in a box of its own, as wide as it is, so the chip can centre it
+    return Box(fixed(px(pl.w)), height(px(pl.h)), Alignment.Center, justify=Alignment.Center, radius(4px),
+               background(hovered ? paler(colour) : colour), border(1px, :solid, colour), name="Chip",
+               Box(omni_label(letter, 13, colorant"white", weight="Semibold")))
   end
   words, unsaid = chip_words(p, plan.chips, chip.k)
   Box(look..., clip_x=true, name="Chip", omni_label(words, 13, unsaid ? c.placeholder : c.ink))
@@ -34293,7 +34332,6 @@ tool_input(t::CodePicker, w, ::KeyPress{Keys.escape}) = (was = t.picking; t.pick
 const PICK_LINE = colorant"rgb(48,128,236)"
 
 const PICK_FAILED = colorant"rgb(200,60,50)"
-const PICK_HOVER = colorant"rgb(120,165,235)"   # the line round what a click would choose for the palette
 
 "Draw a line round the place `r` of the window `w`, and a label with `words` over its top left corner. With no place, the label is under the top bar."
 pick_mark(ctx, w, r, words; colour=PICK_LINE) = begin
@@ -34541,9 +34579,10 @@ end
 #   - A part of the window, like the block of a page that shows a bar. The
 #     change is to the function that draws it.
 #
-# It starts as what the caret is on, and a blue line goes round that. A click
-# on the window chooses another: see `chip_click`. The palette's list has the
-# rest, from the nearest.
+# It starts as what the caret is on. The chip shows only a letter in a colour,
+# A in blue, and a line of that colour with that letter goes round the thing
+# in the window: see `chip_mark`. A click on the window chooses another: see
+# `chip_click`. The palette's list has the rest, from the nearest.
 #
 # Ladder gives the words, with the file and the lines of the code, to an
 # agent: the command `claude` of Claude Code, which it starts in the folder of

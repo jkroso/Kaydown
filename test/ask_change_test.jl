@@ -170,6 +170,9 @@ end
   said() = K.chip_value(p, K.palette_chips(p), 1)
   # What the caret was on is the node, so the keyboard is in the words
   @test said().node === node() && p.at == 2 && K.click_chip(e, p) == 1
+  # The node's chip shows only a letter in a colour, which the line round the node has too
+  @test K.chip_mark(K.palette_chips(p), 1) == ("A", K.CHIP_MARKS[1]) && K.chip_mark(K.palette_chips(p), 2) === nothing
+  @test K.chip_wide(e, p, K.palette_chips(p), 1) < 40
   # A click on the page's `julia` block chooses it, and the keyboard stays in the words
   click(w, on_line(e, 10)...)
   @test said().words == "x = 1" && p.at == 2 && e.popup == :commands && e.buf.caret == (3, 0)

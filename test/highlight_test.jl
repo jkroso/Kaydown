@@ -182,3 +182,43 @@ end
     ["@url" => :type, ": " => :plain, "\"http://a.com\"" => :string, "; " => :plain, "// see { here }" => :comment]
   @test left_open("@a: 1; // see {", "less") == '\0' && whole(".a { .m(); } // b", "less")
 end
+
+@testset "SCSS" begin
+  scss(line, open='\0') = parts(line, "scss", open)
+  # A variable that's set has the colour of a property, a flag like !default of a keyword, and // starts a comment
+  @test scss("\$primary: #4a90e2 !default; // the blue") ==
+    ["\$primary" => :type, ": " => :plain, "#4a90e2" => :number, "!default" => :keyword, "; " => :plain, "// the blue" => :comment]
+  @test scss("  border: \$width solid darken(\$primary, 10%);") ==
+    ["border" => :type, ": \$width solid " => :plain, "darken" => :call, "(\$primary, " => :plain, "10%" => :number, ");" => :plain]
+  # The name of a mixin or a function that's made or used has the colour of a call
+  @test scss("@mixin rounded(\$r: 4px) {") ==
+    ["@mixin" => :keyword, "rounded" => :call, "(" => :plain, "\$r" => :type, ": " => :plain, "4px" => :number, ") {" => :plain]
+  @test scss("  @include rounded;") == ["@include" => :keyword, "rounded" => :call, ";" => :plain]
+  @test scss("  @include mixins.card(2px);") == ["@include" => :keyword, "mixins.card" => :call, "(" => :plain, "2px" => :number, ");" => :plain]
+  # A selector like %name, which only @extend uses
+  @test scss("%notice { color: red }") == ["%notice" => :keyword, " { " => :plain, "color" => :type, ": red }" => :plain]
+  @test scss("  @extend %notice;") == ["@extend" => :keyword, "%notice" => :keyword, ";" => :plain]
+  # #{...} puts a value in a selector or a string, and its code has the colours of a value
+  @test scss(".icon-#{\$name} { content: \"#{\$i + 1}x\" }") ==
+    [".icon-" => :keyword, "#{" => :keyword, "\$name" => :plain, "}" => :keyword, " { " => :plain, "content" => :type, ": " => :plain,
+     "\"" => :string, "#{" => :keyword, "\$i + " => :plain, "1" => :number, "}" => :keyword, "x\"" => :string, " }" => :plain]
+  @test scss("  background: url(#{\$base}/a.png);") ==
+    ["background" => :type, ": " => :plain, "url" => :call, "(" => :plain, "#{" => :keyword, "\$base" => :plain, "}" => :keyword, "/a.png);" => :plain]
+  # The words of rules that repeat or choose
+  @test scss("@each \$name, \$glyph in \$icons {") == ["@each" => :keyword, " \$name, \$glyph " => :plain, "in" => :keyword, " \$icons {" => :plain]
+  @test scss("@for \$i from 1 through 3 {") ==
+    ["@for" => :keyword, " \$i " => :plain, "from" => :keyword, "1" => :number, "through" => :keyword, "3" => :number, " {" => :plain]
+  @test scss("} @else if \$a == 2 {") == ["} " => :plain, "@else" => :keyword, "if" => :keyword, " \$a == " => :plain, "2" => :number, " {" => :plain]
+  @test scss("\$x: if(\$a and \$b, 1, 2);") ==
+    ["\$x" => :type, ": " => :plain, "if" => :call, "(\$a " => :plain, "and" => :keyword, " \$b, " => :plain, "1" => :number, ", " => :plain,
+     "2" => :number, ");" => :plain]
+  @test scss("@use \"sass:math\" as m;") == ["@use" => :keyword, "\"sass:math\"" => :string, "as" => :keyword, " m;" => :plain]
+  # A map over several lines: its keys have the colour of a property
+  @test file(["\$sizes: (", "  small: 576px,", "  large: 992px", ");"], "scss") ==
+    [["\$sizes" => :type, ": (" => :plain], ["small" => :type, ": " => :plain, "576px" => :number, "," => :plain],
+     ["large" => :type, ": " => :plain, "992px" => :number], [");" => :plain]]
+  @test left_open("\$sizes: (", "scss") == 'v' && left_open(");", "scss", 'v') == '\0'
+  @test whole("@use \"sass:math\" as m; .a-#{\$b} { c: m.div(1, 2) \"#{d}\" } // e", "scss")
+  # In CSS, a $ is nothing special
+  @test parts("a: \$b;", "css") == ["a" => :type, ": \$b;" => :plain]
+end

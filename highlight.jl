@@ -8,9 +8,9 @@
 # Code in a string, like the $(c.count) in "Clicked $(c.count) times", has the
 # colours of code. Its $( and ) have the colour of a keyword.
 #
-# CSS and Less are read a line at a time too: see "CSS and Less" below. What a
-# line of them leaves open, like a comment, is a character, as the quote of a
-# string in three quotes is for the other languages.
+# CSS, Less and SCSS are read a line at a time too: see "CSS, Less and SCSS"
+# below. What a line of them leaves open, like a comment, is a character, as the
+# quote of a string in three quotes is for the other languages.
 
 "What a language's code looks like"
 struct Language
@@ -244,8 +244,8 @@ tokens(text::AbstractString, name::AbstractString, open::Char='\0') = first(read
 The quote of the string in three quotes that's still open at the end of the
 line `text`, or '\\0' when there's none. `open` is the quote of the one that's
 open at its start. A line with no three quotes leaves things as they were, so
-for most lines this is quick. For CSS and Less it's what the line leaves open:
-see "CSS and Less".
+for most lines this is quick. For CSS, Less and SCSS it's what the line leaves
+open: see "CSS, Less and SCSS".
 """
 left_open(text::AbstractString, name::AbstractString, open::Char='\0') =
   iscss(name) || occursin("\"\"\"", text) || occursin("'''", text) ? last(read_line(text, name, open)) : open
@@ -256,7 +256,7 @@ read_line(text, name, open) = begin
     chars = collect(text)
     marks = Tuple{Int,Int,Symbol}[]
     # Nothing open, '\0', is the same as being among the rules
-    left = css!(marks, chars, 1, length(chars), open in CSS_OPENS ? open : IN_STYLE, lowercase(name) == "less")
+    left = css!(marks, chars, 1, length(chars), open in CSS_OPENS ? open : IN_STYLE, Symbol(lowercase(name)))
     return (marked(chars, marks), left == IN_STYLE ? '\0' : left)
   end
   lang = get(LANGUAGES, lowercase(name), nothing)
@@ -283,7 +283,7 @@ found(chars, s, i, upto=length(chars); anycase=false) = begin
   nothing
 end
 
-# --- CSS and Less -----------------------------------------------------------------------------
+# --- CSS, Less and SCSS -----------------------------------------------------------------------
 #
 # A selector, like `.note p` or `a:hover`, has the colour of a keyword, and so
 # has the name of a rule like @media. A property, like the color of `color: red`,
@@ -296,6 +296,12 @@ end
 # and } of @{name}, which puts a variable's value in a selector or a string,
 # have the colour of a keyword.
 #
+# SCSS, the main form of Sass, has comments that start with // too. A variable,
+# like $gap, is set as a property is, and the name of a mixin or a function
+# after @mixin, @include or @function has the colour of a call. A selector like
+# %name, which only @extend uses, has the colour of a selector, and the #{ and }
+# of #{...} have the colour of a keyword.
+#
 # What a line leaves open:
 
 const IN_STYLE = 'c'               # nothing: the line starts among the rules
@@ -304,11 +310,14 @@ const IN_STYLE_VALUE = 'v'         # a property's value, which ; ends, as in a l
 const IN_STYLE_VALUE_COMMENT = 'V' # a comment in a value
 const CSS_OPENS = (IN_STYLE, IN_STYLE_COMMENT, IN_STYLE_VALUE, IN_STYLE_VALUE_COMMENT)
 
-"The rules of CSS and Less that a ( can follow, like @media(min-width: 600px)"
+"The rules of CSS, Less and SCSS that a ( can follow, like @media(min-width: 600px)"
 const AT_RULES = Set(["media", "import", "supports", "container", "layer", "document", "plugin", "scope"])
 
+"The words that have the colour of a keyword after the name of a rule of SCSS, like the in of @each \$x in \$list"
+const SCSS_WORDS = ("in", "from", "through", "to", "as", "with", "if", "hide", "show")
+
 "True when `name` is a language that's read as CSS"
-iscss(name) = lowercase(name) in ("css", "less")
+iscss(name) = lowercase(name) in ("css", "less", "scss")
 
 "The place of the first character from `chars[i]` that isn't a space, or `upto + 1`"
 unspaced(chars, i, upto) = begin
@@ -336,9 +345,10 @@ end
 
 """
 Marks the CSS from `chars[i]` to `chars[upto]`, which starts in `state`: one of
-the characters above. `less` is true for Less. Gives what's open at `upto`.
+the characters above. `dialect` is :css, :less or :scss. Gives what's open at
+`upto`.
 """
-css!(marks, chars, i, upto, state, less=false) = begin
+css!(marks, chars, i, upto, state, dialect=:css) = begin
   # A line that starts a rule or sets a property isn't more of the value above it, which lacked its ;
   state == IN_STYLE_VALUE && fresh(chars, i, upto) && (state = IN_STYLE)
   while i <= upto
@@ -348,18 +358,18 @@ css!(marks, chars, i, upto, state, less=false) = begin
       k === nothing && return state
       i, state = k, state == IN_STYLE_COMMENT ? IN_STYLE : IN_STYLE_VALUE
     elseif state == IN_STYLE_VALUE
-      i, state = part!(marks, chars, i, upto, :value, less)
+      i, state = part!(marks, chars, i, upto, :value, dialect)
     elseif isspace(c) || c in ";{}"
       i += 1
     elseif c == '/' && i < upto && chars[i+1] == '*'
       k = comment!(marks, chars, i, upto)
       k === nothing && return IN_STYLE_COMMENT
       i = k
-    elseif less && c == '/' && i < upto && chars[i+1] == '/'
+    elseif dialect != :css && c == '/' && i < upto && chars[i+1] == '/'
       push!(marks, (i, upto, :comment))
       return state
     else
-      i, state = statement!(marks, chars, i, upto, less)
+      i, state = statement!(marks, chars, i, upto, dialect)
     end
   end
   state
@@ -378,8 +388,8 @@ css_end(chars, i, upto) = begin
       c == '\\' ? (i += 1) : c == q && (q = '\0')
     elseif c == '"' || c == '\''
       q = c
-    elseif c == '@' && i < upto && chars[i+1] == '{'
-      i = something(findnext(==('}'), view(chars, 1:upto), i), upto)   # the @{name} of Less
+    elseif c in "@#" && i < upto && chars[i+1] == '{'
+      i = something(findnext(==('}'), view(chars, 1:upto), i), upto)   # the @{name} of Less, or the #{...} of SCSS
     elseif c == '(' || c == '['
       depth += 1
     elseif c == ')' || c == ']'
@@ -426,33 +436,45 @@ end
 """
 Marks the rule or the property that starts at `chars[i]`: a selector, like
 `.note p {`, a rule like `@media print {`, or a property and its value, like
-`color: red;`. In Less it can be a variable that's set, like `@gap: 4px;`, or a
-mixin that's used, like `.rounded(4px);`. Gives where it stopped, and what's
-open there.
+`color: red;`. It can be a variable that's set, like `@gap: 4px;` in Less or
+`\$gap: 4px;` in SCSS, or in Less a mixin that's used, like `.rounded(4px);`.
+`dialect` is :css, :less or :scss. Gives where it stopped, and what's open
+there.
 """
-statement!(marks, chars, i, upto, less) = begin
+statement!(marks, chars, i, upto, dialect) = begin
   k = css_end(chars, i, upto)
   stop = k <= upto ? chars[k] : '\0'
-  if chars[i] == '@' && i < upto && chars[i+1] != '{'
+  less, scss = dialect == :less, dialect == :scss
+  if (chars[i] == '@' && i < upto && chars[i+1] != '{') || (scss && chars[i] == '$')
     j = i + 1
     while j <= upto && (isname(chars[j]) || chars[j] in "-@") j += 1 end
     after = unspaced(chars, j, upto)
     next = after <= upto ? chars[after] : '\0'
-    if less && next == ':'
+    if (less || chars[i] == '$') && next == ':'
       push!(marks, (i, j - 1, :type))          # a variable that's set
-      return part!(marks, chars, after + 1, upto, :value, less)
+      return part!(marks, chars, after + 1, upto, :value, dialect)
     end
+    chars[i] == '$' && return part!(marks, chars, i, upto, :value, dialect)
+    word = String(chars[i+1:j-1])
     # A rule, like @media, or in Less a set of rules that a variable holds, which is used, like @rules();
-    called = less && j <= upto && chars[j] == '(' && !(String(chars[i+1:j-1]) in AT_RULES)
+    called = less && j <= upto && chars[j] == '(' && !(word in AT_RULES)
     push!(marks, (i, j - 1, called ? :call : :keyword))
-    return part!(marks, chars, j, upto, :prelude, less)
+    scss && word == "extend" && return part!(marks, chars, j, upto, :selector, dialect)
+    if scss && word in ("mixin", "include", "function")
+      # The name of the mixin or the function that's made or used, like the rounded of @include rounded(4px)
+      from = unspaced(chars, j, upto)
+      j = from
+      while j <= upto && (isname(chars[j]) || chars[j] in "-.") j += 1 end
+      j > from && push!(marks, (from, j - 1, :call))
+    end
+    return part!(marks, chars, j, upto, :prelude, dialect)
   end
   property = declared(chars, i, k, upto, stop)
   if property !== nothing
     push!(marks, (i, property[1], :type))
-    return part!(marks, chars, property[2] + 1, upto, :value, less)
+    return part!(marks, chars, property[2] + 1, upto, :value, dialect)
   end
-  part!(marks, chars, i, upto, less && stop in (';', '}') && chars[i] in ".#" ? :mixin : :selector, less)
+  part!(marks, chars, i, upto, less && stop in (';', '}') && chars[i] in ".#" ? :mixin : :selector, dialect)
 end
 
 "True when the ( at `chars[i]` follows a pseudo-class, like :not( or :nth-child("
@@ -467,10 +489,11 @@ Marks a part of a rule, from `chars[i]`. `how` says what it is: :selector, like
 `a:hover > .note`; :mixin, a mixin of Less that's used, like `.rounded(4px)`;
 :value, the value of a property, like `0 2px var(--gap)`; or :prelude, what
 follows the name of a rule, like the `screen and (min-width: 600px)` of @media.
-It stops at the ;, { or } that ends the part, or at `upto`. Gives where it
-stopped, and what's open there.
+`dialect` is :css, :less or :scss. It stops at the ;, { or } that ends the
+part, or at `upto`. Gives where it stopped, and what's open there.
 """
-part!(marks, chars, i, upto, how, less) = begin
+part!(marks, chars, i, upto, how, dialect) = begin
+  less, scss = dialect == :less, dialect == :scss
   start = how
   inside = Symbol[]          # for each ( or [ that's open, what the part is outside it
   while i <= upto
@@ -480,13 +503,13 @@ part!(marks, chars, i, upto, how, less) = begin
       k = comment!(marks, chars, i, upto)
       k === nothing && return upto + 1, start in (:value, :prelude) ? IN_STYLE_VALUE_COMMENT : IN_STYLE_COMMENT
       i = k
-    elseif less && c == '/' && d == '/'
+    elseif dialect != :css && c == '/' && d == '/'
       push!(marks, (i, upto, :comment))
       return upto + 1, start in (:value, :prelude) ? IN_STYLE_VALUE : IN_STYLE
     elseif c == '"' || c == '\'' || (less && c == '~' && (d == '"' || d == '\''))
-      i = quoted!(marks, chars, i, upto, less) + 1
-    elseif less && c == '@' && d == '{'
-      i = interpolated!(marks, chars, i, upto) + 1
+      i = quoted!(marks, chars, i, upto, dialect) + 1
+    elseif ((less && c == '@') || (scss && c == '#')) && d == '{'
+      i = interpolated!(marks, chars, i, upto, dialect) + 1
     elseif isempty(inside) && c in ";{}"
       return i, IN_STYLE
     elseif c == '(' || (c == '[' && how == :selector)
@@ -498,11 +521,12 @@ part!(marks, chars, i, upto, how, less) = begin
     elseif !isempty(inside) && (c == ']') == (how == :attribute) && c in ")]"
       how = pop!(inside)
       i += 1
-    elseif c == '!' && found(chars, "important", i + 1, min(upto, i + 9); anycase=true) == i + 1
-      push!(marks, (i, i + 9, :keyword))
-      i += 10
-    elseif c == '@' && (isletter(d) || d in "@-_")
-      # A variable of Less, like @gap, which is set when a : follows it, as a mixin's parameter is
+    elseif c == '!' && isletter(d)
+      k = cssname(chars, i + 1, upto)
+      push!(marks, (i, k - 1, :keyword))       # !important, or in SCSS a flag like !default
+      i = k
+    elseif (c == '@' || (scss && c == '$')) && (isletter(d) || d in "@-_")
+      # A variable, like @gap in Less or $gap in SCSS, which is set when a : follows it, as a mixin's parameter is
       k = cssname(chars, i + 1, upto)
       after = unspaced(chars, k, upto)
       next = after <= upto ? chars[after] : '\0'
@@ -512,9 +536,10 @@ part!(marks, chars, i, upto, how, less) = begin
       k = cssname(chars, i + 1, upto)
       push!(marks, (i, k - 1, :number))        # a colour, like #a6c8e8
       i = k
-    elseif c in ".#" && how in (:selector, :mixin) && (isname(d) || d == '-')
+    elseif ((c in ".#" && how in (:selector, :mixin)) || (scss && c == '%' && how == :selector)) && (isname(d) || d == '-')
+      # A class, an id, or in SCSS a selector like %name, which only @extend uses
       k = cssname(chars, i + 1, upto)
-      push!(marks, (i, k - 1, how == :mixin ? :call : :keyword))   # a class or an id
+      push!(marks, (i, k - 1, how == :mixin ? :call : :keyword))
       i = k
     elseif c == ':' && how == :selector && (isletter(d) || d in ":-")
       k = cssname(chars, d == ':' ? i + 2 : i + 1, upto)
@@ -543,15 +568,18 @@ part!(marks, chars, i, upto, how, less) = begin
         push!(marks, (i, k - 1, :call))
         j = unspaced(chars, k + 1, upto)
         if word == "url" && j <= upto && !(chars[j] in "\"'@")
-          # The address in url(...) is a string, though it has no quotes, unless it's a variable of Less
+          # The address in url(...) is a string, though it has no quotes, unless it's a variable of Less or holds #{...}
           close = something(findnext(==(')'), view(chars, 1:upto), j), upto + 1)
-          close > j && push!(marks, (j, close - 1, :string))
-          i = close + 1
-          continue
+          if !(scss && found(chars, "#{", j, close - 1) !== nothing)
+            close > j && push!(marks, (j, close - 1, :string))
+            i = close + 1
+            continue
+          end
         end
       elseif (j = unspaced(chars, k, upto)) <= upto && chars[j] == ':'
         push!(marks, (i, k - 1, :type))        # a feature, like the min-width of (min-width: 600px)
-      elseif how == :prelude && word in ("and", "or", "not", "only", "when")
+      elseif (how == :prelude && (word in ("and", "or", "not", "only", "when") || (scss && word in SCSS_WORDS))) ||
+             (scss && word in ("and", "or", "not"))   # in SCSS, as in if($a and $b, 1, 2)
         push!(marks, (i, k - 1, :keyword))
       end
       i = k
@@ -565,9 +593,10 @@ end
 """
 Marks the string that opens at `chars[i]` and gives the place of the quote that
 closes it, or `upto`. In Less a ~ can come before it, and @{name} in it puts a
-variable's value there.
+variable's value there, as #{...} does in SCSS.
 """
-quoted!(marks, chars, i, upto, less) = begin
+quoted!(marks, chars, i, upto, dialect) = begin
+  opener = dialect == :less ? '@' : dialect == :scss ? '#' : '\0'   # the @ of @{name}, or the # of #{...}
   from = i
   i += chars[i] == '~'
   q = chars[i]
@@ -575,9 +604,9 @@ quoted!(marks, chars, i, upto, less) = begin
   while j <= upto && chars[j] != q
     if chars[j] == '\\'
       j += 2
-    elseif less && chars[j] == '@' && j < upto && chars[j+1] == '{'
+    elseif chars[j] == opener && j < upto && chars[j+1] == '{'
       from < j && push!(marks, (from, j - 1, :string))
-      j = interpolated!(marks, chars, j, upto) + 1
+      j = interpolated!(marks, chars, j, upto, dialect) + 1
       from = j
     else
       j += 1
@@ -588,12 +617,20 @@ quoted!(marks, chars, i, upto, less) = begin
   j
 end
 
-"Marks the @{name} of Less that opens at `chars[i]`: its @{ and its } have the colour of a keyword. Gives the place of its }, or `upto`."
-interpolated!(marks, chars, i, upto) = begin
+"""
+Marks the @{name} of Less or the #{...} of SCSS that opens at `chars[i]`. Its @{
+or #{ and its } have the colour of a keyword, and the code of SCSS between them
+has the colours of a value. Gives the place of its }, or `upto`.
+"""
+interpolated!(marks, chars, i, upto, dialect) = begin
   push!(marks, (i, i + 1, :keyword))
-  k = i + 2
-  while k <= upto && chars[k] != '}' k += 1 end
-  k <= upto && push!(marks, (k, k, :keyword))
+  if dialect == :scss
+    k = first(part!(marks, chars, i + 2, upto, :value, dialect))
+  else
+    k = i + 2
+    while k <= upto && chars[k] != '}' k += 1 end
+  end
+  k <= upto && chars[k] == '}' && push!(marks, (k, k, :keyword))
   min(k, upto)
 end
 

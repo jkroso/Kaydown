@@ -4586,7 +4586,7 @@ const MAC_PICTURES = (".heic", ".heif", ".tif", ".tiff", ".svg", ".ico", ".icns"
 const DOCUMENTS = (".rtf", ".rtfd", ".doc", ".docx", ".pages", ".key", ".numbers", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".epub")
 const FONTS = (".ttf", ".otf", ".ttc", ".woff", ".woff2")
 const CODE = (".jl", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rb", ".rs", ".go", ".c", ".h", ".cc", ".cpp", ".hpp", ".swift",
-              ".kt", ".java", ".sh", ".zsh", ".css", ".less", ".html", ".json", ".toml", ".yml", ".yaml", ".xml", ".sql", ".lua")
+              ".kt", ".java", ".sh", ".zsh", ".css", ".less", ".scss", ".html", ".json", ".toml", ".yml", ".yaml", ".xml", ".sql", ".lua")
 
 "The icon for the file at `path`. It says what kind of file it is, from the end of the file's name."
 file_icon(path) = begin

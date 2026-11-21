@@ -320,3 +320,39 @@ end
     [["\$" => :keyword, "ls" => :call, " -l" => :plain], ["a.txt" => :plain], ["%" => :keyword, "echo" => :call, " hi" => :plain]]
   @test whole("x=\$(echo \"a \$(b) c\") # d", "bash") && whole("❯ ls", "console") && whole("a \\", "zsh")
 end
+
+@testset "Kate's definitions" begin
+  # Ruby, Lua and Makefile get their colours from the XML files in syntax/, by their names or their files' ends
+  @test parts("class Greeter < Base", "ruby") == ["class" => :keyword, "Greeter" => :type, " < " => :plain, "Base" => :type]
+  @test parts("  attr_reader :name", "rb") == ["attr_reader" => :type, ":name" => :number]
+  @test parts("@x.map { |v| v.upcase } # done", "ruby") ==
+    ["@x" => :type, "." => :plain, "map" => :call, " { |v| v." => :plain, "upcase" => :call, " } " => :plain, "# done" => :comment]
+  @test parts("local t = { x = 1, [\"y\"] = 2.5 } -- note", "lua") ==
+    ["local" => :keyword, " t = { x = " => :plain, "1" => :number, ", [" => :plain, "\"y\"" => :string, "] = " => :plain, "2.5" => :number,
+     " } " => :plain, "-- note" => :comment]
+  @test parts("CC ?= clang", "makefile") == ["CC" => :type, "?= clang" => :string]
+  @test parts("\t\$(CC) -o \$@ \$^", "mk") == ["\$(" => :string, "CC" => :type, ")" => :string, " -o " => :plain, "\$@" => :string, "\$^" => :string]
+  # What runs over several lines: a here-document of Ruby, a long comment of Lua, a Makefile's rule
+  @test file(["text = <<~EOS", "  Dear you", "EOS", "x = 1"], "ruby") ==
+    [["text = <<~" => :plain, "EOS" => :keyword], ["  Dear you" => :string], ["EOS" => :keyword], ["x = " => :plain, "1" => :number]]
+  @test file(["--[[ a long", "comment ]] x = 1"], "lua") == [["--[[ a long" => :comment], ["comment ]]" => :comment, " x = " => :plain, "1" => :number]]
+  @test file(["all: app", "\tcc -o app main.c", "clean:"], "Makefile") ==
+    [["all:" => :number, " " => :type, "app" => :string], ["\tcc -o app main.c" => :plain], ["clean:" => :number]]
+  @test left_open("--[[ a", "lua") != '\0' && left_open("]]", "lua", left_open("--[[ a", "lua")) == '\0'
+  @test whole("def f(x) = \"#{x}\" # é", "ruby") && whole("print('ü') --[[ x", "lua")
+  # More of Kate's languages. A block of PHP needs no <?php, a .m file is Objective-C, and Nim's operators are plain.
+  @test parts("\$x = array(1, 2); return \$x; // note", "php") ==
+    ["\$x = " => :plain, "array" => :type, "(" => :plain, "1" => :number, ", " => :plain, "2" => :number, "); " => :plain, "return" => :keyword,
+     " \$x; " => :plain, "// note" => :comment]
+  @test parts("@interface Foo : NSObject // a class", "m") == ["@interface" => :keyword, " Foo : NSObject " => :plain, "// a class" => :comment]
+  @test parts("[core]", "ini") == ["[core]" => :keyword] && parts("editor = vim", "ini") == ["editor =" => :type, " vim" => :string]
+  @test parts("FROM julia:1.12 AS build # base", "dockerfile") ==
+    ["FROM" => :keyword, " julia:1.12 " => :plain, "AS" => :keyword, " build " => :plain, "# base" => :comment]
+  @test parts("let rec f n = n (* f *)", "ocaml") == ["let" => :keyword, "rec" => :keyword, " f n = n " => :plain, "(* f *)" => :comment]
+  @test parts("proc greet(name: string): string = name", "nim") ==
+    ["proc" => :keyword, "greet" => :call, "(name: " => :plain, "string" => :type, "): " => :plain, "string" => :type, " = name" => :plain]
+  @test parts("msgid \"Hello\"", "po") == ["msgid" => :keyword, "\"Hello\"" => :string]
+  @test parts("my \$x = shift; # note", "perl") == ["my" => :keyword, "\$x" => :type, " = " => :plain, "shift" => :call, "; " => :plain, "# note" => :comment]
+  # A language that's neither here nor in syntax/ is one colour
+  @test parts("anything at all", "cobol") == ["anything at all" => :plain]
+end

@@ -12,6 +12,22 @@
 # "CSS, Less and SCSS" below. What a line of them leaves open, like a <script>
 # or a comment, is a character, as the quote of a string in three quotes is for
 # the other languages.
+#
+# A language that has no reader here, like Ruby, Lua or a Makefile, gets the
+# colours that the syntax definitions of KDE's editor Kate give it: see kate.jl.
+
+@use "./kate" kate_line iskate
+
+"True when kate.jl colours the language `name`: when it has a definition there and no reader here"
+bykate(name) = !haskey(LANGUAGES, lowercase(name)) && iskate(name)
+
+"""
+True when a line of the language `name` can leave something open whatever its
+text, so `left_open` reads each line. It's worked out once for each name, since
+`left_open` is asked about each line of a file.
+"""
+stateful(name) = get!(() -> ishtml(name) || iscss(name) || isrepl(name) || isshell(name) || bykate(name), STATEFUL, name)
+const STATEFUL = Dict{String,Bool}()
 
 "What a language's code looks like"
 struct Language
@@ -254,7 +270,7 @@ So it is for a session of Julia's REPL and for a shell: see "what Julia's REPL
 shows" and "shells".
 """
 left_open(text::AbstractString, name::AbstractString, open::Char='\0') =
-  ishtml(name) || iscss(name) || isrepl(name) || isshell(name) || occursin("\"\"\"", text) || occursin("'''", text) ? last(read_line(text, name, open)) : open
+  stateful(name) || occursin("\"\"\"", text) || occursin("'''", text) ? last(read_line(text, name, open)) : open
 
 "The parts of the line `text`, and what `left_open` says of it"
 read_line(text, name, open) = begin
@@ -273,6 +289,10 @@ read_line(text, name, open) = begin
     # Nothing open, '\0', is the same as being among the rules
     left = css!(marks, chars, 1, length(chars), open in CSS_OPENS ? open : IN_STYLE, Symbol(lowercase(name)))
     return (marked(chars, marks), left == IN_STYLE ? '\0' : left)
+  end
+  if bykate(name)
+    marks, left = kate_line(text, name, open)
+    return (marked(collect(text), marks), left)
   end
   lang = get(LANGUAGES, lowercase(name), nothing)
   lang === nothing && return ([Token(0, String(text), :plain)], '\0')

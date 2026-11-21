@@ -922,10 +922,13 @@ refresh!(b::Buffer) = begin
   isempty(moved) ? nothing : moved
 end
 
+"The language of the file at `path`: the end of its name, like jl, or its whole name when it has no end, like makefile"
+file_lang(path) = (ext = lowercase(splitext(path)[2]); isempty(ext) ? lowercase(basename(path)) : String(lstrip(ext, '.')))
+
 kinds(b::Buffer) = begin
   if b.kinds_at != b.version && b.view != :markdown
-    # Each line of a file that isn't Markdown is a line of code, in the language that the end of the file's name gives
-    lang = b.view == :hex ? HEX : b.view == :bits ? BITS : String(lstrip(lowercase(splitext(b.path)[2]), '.'))
+    # Each line of a file that isn't Markdown is a line of code, in the language that the file's name gives
+    lang = b.view == :hex ? HEX : b.view == :bits ? BITS : file_lang(b.path)
     b.kinds = fill(Line(Kind.code, 0, 0, lang), length(b.lines))
     # A file that's only shown has no words to count
     b.view == :code ? count_lines!(b) : ((b.words, b.chars) = (0, 0); b.counted = String[]; b.counts = (0, 0))
@@ -4635,7 +4638,7 @@ const MAC_PICTURES = (".heic", ".heif", ".tif", ".tiff", ".svg", ".ico", ".icns"
 const DOCUMENTS = (".rtf", ".rtfd", ".doc", ".docx", ".pages", ".key", ".numbers", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".epub")
 const FONTS = (".ttf", ".otf", ".ttc", ".woff", ".woff2")
 const CODE = (".jl", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rb", ".rs", ".go", ".c", ".h", ".cc", ".cpp", ".hpp", ".swift",
-              ".kt", ".java", ".sh", ".zsh", ".css", ".less", ".scss", ".html", ".json", ".jsonl", ".toml", ".yml", ".yaml", ".xml", ".sql", ".lua")
+              ".kt", ".java", ".sh", ".zsh", ".css", ".less", ".scss", ".mk", ".html", ".json", ".jsonl", ".toml", ".yml", ".yaml", ".xml", ".sql", ".lua")
 
 "The icon for the file at `path`. It says what kind of file it is, from the end of the file's name."
 file_icon(path) = begin
@@ -4713,7 +4716,7 @@ peek(l::Breadcrumb, path, ext, note) = begin
   text = text!(l, path)
   if text !== nothing
     text.more && note("the first $(bytes(MOST_TEXT)) of $(bytes(filesize(path)))")
-    return textview(text, lstrip(ext, '.'))
+    return textview(text, file_lang(path))
   end
   # The Finder has a picture for many kinds of file that have none here
   key = thumbnail(path)

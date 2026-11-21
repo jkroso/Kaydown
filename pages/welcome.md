@@ -181,15 +181,34 @@ In a line of text, the blue line goes round a link, **bold words** or `inline co
 
 The command Show Code does the same. Press ⌘⇧P and run it: a blue A goes round what the caret is on, and Return shows its code. To see the code of something else, click it.
 
-You can ask for a change in words too. Press ⌘⇧P and run Ask For Change. It changes what the caret was on. A blue line with the letter A goes round that, and the command shows the same blue A. To change something else, click it. Type what you want, like `make this bar thinner`, and press Return. Ladder gives your words, and the place of the function that draws the thing, to Claude Code. Claude Code changes the function, and the thing is drawn the new way. While it works, a label on the thing says what it's doing, like `Reading progress.jl`. The label then says what changed. This needs Claude Code on your Mac.
+## Ask an agent about one thing
 
-To stop Claude Code while it works, press Esc or click the label. You can also run Stop Agent. What it changed before it stopped stays in the file, but Ladder doesn't run it, because it can be half done. Undo Change puts it back.
+You can ask Claude Code to change one thing of the window, or ask it a question about the thing. The thing can be a block, a part of a block like the bar of the `progress` block above, a part of Ladder like the count of words, or a block of Julia code. Ladder starts Claude Code, and gives it your words and the place of the function that draws the thing. This needs Claude Code on your Mac.
 
-- To make A bigger, press ⌥↑: it's then the part that holds it. ⌥↓ goes back.
-- To change more than one thing, hold ⇧ and click another. It's B, in orange, so your words can say `make A look like B`. ⇧ and a click on it again takes it out.
-- Click the label after the change to see what Claude Code changed. The page lists each change since Ladder started, the newest first. Each part has a Reject button that takes it out again, and Reject all takes out the whole change. The command Undo Change puts back all of the newest change. Run it again to put back the one before.
+To ask for a change:
 
-To ask a question in place of a change, run Ask About. It takes a thing in the same way, and a question like `why is this bar red?`. Claude Code reads the code and changes nothing. Its answer shows in a card beside the thing. Click Ask More on the card for another question about the same thing, or Change It to ask for a change to it. Claude Code gets your earlier questions and its answers with your new words. Click anywhere else, or press Esc, to close the card.
+1. If the caret can go on the thing, put it there.
+2. Press ⌘⇧P, type Ask For Change, and press Return.
+3. Look for the blue line with the letter A. It goes round the thing that Claude Code gets.
+4. If the A is round the wrong thing, click the thing that you mean. The A moves to it.
+5. Type what you want, like `make this bar thinner`, and press Return.
+
+Claude Code changes the function, and the thing is drawn the new way. While it works, a label on the thing says what it's doing, like `Reading progress.jl`. The label then says what changed.
+
+Before you press Return, you can choose more:
+
+- To give Claude Code the part that holds the thing, press ⌥↑. ⌥↓ goes back. In a file of code, ⌥↑ on a block gives the whole file.
+- To give it more than one thing, hold ⇧ and click another. It's B, in orange, so your words can say `make A look like B`. Hold ⇧ and click it again to take it out.
+
+After you press Return:
+
+- To stop Claude Code while it works, press Esc or click the label. You can also run Stop Agent. What it changed before it stopped stays in the file, but Ladder doesn't run it, because it can be half done.
+- Click the label after the change to see what Claude Code changed. The page lists each change since Ladder started, the newest first. Each part has a Reject button that takes it out again, and Reject all takes out the whole change.
+- The command Undo Change puts back all of the newest change. Run it again to put back the one before.
+
+To ask a question in place of a change, run Ask About, and choose the thing in the same way. Type a question like `why is this bar red?` and press Return. Claude Code reads the code and changes nothing. Its answer shows in a card beside the thing. Click Ask More on the card for another question about the same thing, or Change It to ask for a change to it. Claude Code gets your earlier questions and its answers with your new words. Click anywhere else, or press Esc, to close the card.
+
+In a file of code, Fix It and Ask For Checks give Claude Code one check or one function. The next section says how.
 
 ## A file of code
 
@@ -782,6 +801,8 @@ A line that holds only a sound file shows a player for it. The line is written a
 ## Work with an agent
 
 An agent like Claude Code can write a page and show it to you here: a plan with a diagram, a table of options, a list of boxes to tick. While the agent waits for you, a bell shows at the top right. It's a button called "Nudge Claude". Change the page any way you like: tick a box, change a number, type a question on a new line. Then click the button, or press ⌘Return. Ladder saves the page and gives the agent the lines that you changed.
+
+To ask an agent about one part of the window, no agent has to wait. Run Ask For Change or Ask About, and Ladder starts Claude Code with that part and your words. [Ask an agent about one thing](#ask-an-agent-about-one-thing) says how.
 
 An agent can ask a question in a block of its own. Click an answer, or type one in the field, and then send the page. A round mark means that you choose one answer, and a square box means that you choose as many as you like.
 

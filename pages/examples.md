@@ -57,7 +57,7 @@ The block at the top of this page is front matter: lines at the very top of a fi
 - [Every component that a live block can show](components.md)
 - [A kind of block of your own, which a file defines](welcome.md#blocks-of-your-own)
 - [The function that draws a thing, which a click shows and you can change](welcome.md#the-code-of-a-thing)
-- [A change that you ask for in words, which Claude Code makes to the function that draws a thing](welcome.md#the-code-of-a-thing)
+- [A change that you ask for in words, which Claude Code makes to the function that draws a thing](welcome.md#ask-an-agent-about-one-thing)
 - [A file of code: go to a function, to where a name is defined, and to the commit that last changed a line](welcome.md#a-file-of-code)
 - [Checks: lines of Julia that must be true, each with a tick or a cross](welcome.md#code)
 - [A page as an app, in a window with only its blocks](welcome.md#a-page-as-an-app)
@@ -93,6 +93,7 @@ The block at the top of this page is front matter: lines at the very top of a fi
 - [A page that an agent shows you, and what you send back](welcome.md#work-with-an-agent)
 - [A question from an agent, with answers to click](welcome.md#work-with-an-agent)
 - [Changes from an agent, to accept or reject](welcome.md#work-with-an-agent)
+- [One thing of the window that you ask Claude Code to change, or ask it a question about](welcome.md#ask-an-agent-about-one-thing)
 
 
 ## The window and its settings

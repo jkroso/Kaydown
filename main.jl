@@ -3930,6 +3930,7 @@ end
   folders::Bool = false  # only a folder can be the path, as when you choose where something is kept. The folder needn't be made yet.
   room::Union{Nothing,px} = nothing   # how wide it can be, when it has less room than the page is wide
   button::Any = nothing  # its OpenButton, once it has shown
+  files::Any = nothing   # a function of a file's name that's true for the files the list shows, when it picks a file of some kinds. Folders always show.
 end
 
 "The button at the right end of a breadcrumb's names that shows its file in the window, or its folder in the sidebar"
@@ -3991,7 +3992,7 @@ describe(l::Breadcrumb) = begin
   panel = l.open && !l.inline
   # A path to a file or a folder has a button at the right end of its names that shows it in the window.
   # A breadcrumb in a line of text has no room for it: a click with ⌘ held does the same.
-  opens = !l.inline && !l.folders && ispath(l.at)
+  opens = !l.inline && !l.folders && l.files === nothing && ispath(l.at)
   opens && l.button === nothing && (l.button = own!(l, OpenButton()))
   n = fitting(map(wide, names), something(l.room, editor(l).width) - (panel ? 2PANEL_PAD : 0px) - (opens ? FILL_SIDE + 2CRUMB_GAP : 0px))
   kept = n < length(names) - 1 ? Any[names[1], Box(width(DOTS_W), label("…", color=colours.dim)), names[end-n+1:end]...] : names
@@ -4016,8 +4017,10 @@ contents(l::Breadcrumb) = begin
   l.viewer = l.text = nothing
   names = listing(l.at)
   l.folders && filter!(n -> isdir(joinpath(l.at, n)), names)
+  l.files === nothing || filter!(n -> isdir(joinpath(l.at, n)) || l.files(n), names)
   shown = first(names, MOST_FILES)
-  isempty(names) && return (Row(width(grow=grow), height(26px), padding(10px, 0px), label("This folder is empty", 12px, color=colours.dim)),)
+  isempty(names) && return (Row(width(grow=grow), height(26px), padding(10px, 0px),
+                                label(l.files === nothing ? "This folder is empty" : "This folder has no file of the kind to choose", 12px, color=colours.dim)),)
   ((entry(l, joinpath(l.at, n)) for n in shown)...,
    (length(names) > length(shown) ? (Row(width(grow=grow), height(26px), padding(10px, 0px),
       label("and $(length(names) - length(shown)) more", 12px, color=colours.dim)),) : ())...)
@@ -11548,6 +11551,7 @@ end
   said::String = ""                        # what came of the last load, in words
   failed::Bool = false                     # true when that went wrong
   nokey::Bool = false                      # the Keychain had no key with the name that `key` gives
+  choosing::Bool = false                   # the file picker of a load block is open, after a click on Choose
   parts::Dict{Any,Any} = Dict{Any,Any}()   # its chips, headings and buttons, kept between frames
 end
 
@@ -11652,7 +11656,7 @@ menu is open, the words in its field go into the block's lines as they're typed.
 A load block looks for the rows that it asked its server for.
 """
 block_tick!(v::FilterView) = begin
-  v.lang == LOAD && load_tick!(v)
+  v.lang == LOAD && (load_tick!(v); pick_tick!(v))
   from = String(strip(v.spec.from))
   isfilterable(from) && filter_file(abspath(docdir(editor(v)), expanduser(from)), v.spec.at)
   v.asking > 0 || return v
@@ -11705,23 +11709,29 @@ describe(v::FilterView) = begin
     icon = !load ? "funnel" : isempty(url) ? "file-earmark-arrow-down" : "cloud-arrow-down"
     refresh = isempty(url) ? () : (block_button!(v, :refresh, :refresh, icon="arrow-clockwise", words=v.job === nothing ? "Refresh" : "Loading…",
                                                  tip="Ask $(Saves.host(url)) for the rows again", off=v.job !== nothing || !isempty(load_problem(v))),)
+    # A load block with a `from` has a button that picks another file. One without shows the picker anyway.
+    choose = load && !isempty(strip(v.spec.from)) ?
+      (block_button!(v, :choose, :choose, icon="folder2-open", words="Choose", tip=v.choosing ? "Close the list of files" : "Choose another file to load", on=v.choosing),) : ()
     bar = block_bar(Box(width(6px)), Icon(icon, size=14px, color=colours.dim), Box(width(4px)),
       Box(label(isempty(d.name) ? (load ? "Load" : "Filter") : d.name, 13px, weight="Semibold")),
       (isempty(count) ? () : (rule(), Box(label(count, 12px, color=colours.dim))))...,
       Box(width(grow=grow)),
       (isempty(v.saved) ? () : (Box(label(v.saved, 12px, color=colours.dim)), Box(width(6px))))...,
-      refresh...,
+      choose..., refresh...,
       block_button!(v, :save, :save, icon="download", words="Save", tip="Save the rows that show as a new file", off=s === nothing || isempty(s.rows)))
+    picker = picks_file(v) ? picker_section(v) : ()
+    # With no `from`, the picker says what to do, so there's nothing else to say
+    load && isempty(strip(v.spec.from)) && return Column(block_look()..., clip=true, name="Filter", bar, picker...)
     said = load ? load_line(v) : ()
     # A load block shows no field for conditions until it has one
     chips = load && isempty(v.spec.conditions) && isempty(v.spec.show) ? () : filter_chips(v, d, s)
     # While the first rows from a server are on their way, or when it can't be asked, the line under the top says why
-    s === nothing && return Column(block_look()..., clip=true, name="Filter", bar, said..., chips...,
+    s === nothing && return Column(block_look()..., clip=true, name="Filter", bar, picker..., said..., chips...,
                                    (v.job !== nothing && isempty(load_copy(url)) || !isempty(url) && !isempty(load_problem(v)) ? () :
                                     (block_note(d.problem),))...)
     problems = isempty(s.problems) ? () : (Row(width(grow=grow), padding(0px, 12px, 8px, 12px), Alignment.Start,
       Box(width(grow=grow), Text(join(s.problems, " "), size=12px, family=SANS, color=colours.accent, wrap=WrapMode.words))),)
-    Column(block_look()..., clip=true, name="Filter", bar, said..., chips..., problems..., filter_grid(v, d, s)...)
+    Column(block_look()..., clip=true, name="Filter", bar, picker..., said..., chips..., problems..., filter_grid(v, d, s)...)
   end
 end
 
@@ -12070,6 +12080,7 @@ end
 
 act!(v::FilterView, action, w) = begin
   action == :refresh && return (load_rows!(v); handled)
+  action == :choose && return (toggle_picker!(v); handled)
   action == :key && return (ask_load_key!(v, w); handled)
   action == :save || return handled
   # A window that isn't on the screen, like one a test makes, has no panel to ask with
@@ -12959,6 +12970,71 @@ key_given!(v::FilterView, key) = begin
   kept = KEY_KEEPER[](name, key)
   v.said, v.failed, v.nokey = kept ? "Ladder put the key “$(name)” in your Keychain." : "Ladder couldn't put the key “$(name)” in your Keychain.", !kept, !kept
   kept && load_rows!(v)
+  v
+end
+
+# A load block with no `from` shows a breadcrumb of the page's folder, open, as
+# a file in a live block does. Its list has folders, and CSV, TSV and JSON
+# files. A click on a folder goes into it, and a click on a file makes that
+# file the block's `from`. The Choose button at the top of a load block opens
+# the picker again, in the folder of the block's file.
+
+"True when the load block `v` shows its file picker: it has no `from` yet, or Choose was clicked"
+picks_file(v::FilterView) = v.lang == LOAD && (v.choosing || isempty(strip(v.spec.from)))
+
+"The folder that the picker of the load block `v` starts in: the folder of its file, or the page's folder"
+load_start(v::FilterView) = begin
+  e = editor(v)
+  from = String(strip(v.spec.from))
+  path = isempty(from) || Saves.isurl(from) ? "" : abspath(docdir(e), expanduser(from))
+  isfile(path) ? dirname(path) : isdir(docdir(e)) ? docdir(e) : homedir()
+end
+
+"The breadcrumb that picks the file of the load block `v`"
+load_picker(v::FilterView) = block_part!(() -> Breadcrumb(at=load_start(v), open=true, files=isfilterable), v, :picker)
+
+"What the line over the picker of the load block `v` says"
+picker_words(v::FilterView) = begin
+  from = String(strip(v.spec.from))
+  isempty(from) ? "Choose a CSV, TSV or JSON file, or write a web address in a line like “from: https://example.com/orders”." :
+                  "Choose a CSV, TSV or JSON file to load in place of $(Saves.isurl(from) ? Saves.host(from) : basename(from))."
+end
+
+"What a load block shows while it picks a file: a line that says what to do, and the breadcrumb"
+picker_section(v::FilterView) = begin
+  p = load_picker(v)
+  p.room = editor(v).width - 24px
+  (Column(width(grow=grow), Alignment.Start, padding(10px, 12px, 10px, 12px), child_gap=8px, name="Picker",
+     Box(width(grow=grow), Text(picker_words(v), size=12px, family=SANS, color=colours.dim, wrap=WrapMode.words)), p),)
+end
+
+"Open the picker of the load block `v`, in the folder of its file, or close it"
+toggle_picker!(v::FilterView) = begin
+  v.choosing = !v.choosing
+  v.choosing || return v
+  p = load_picker(v)
+  p.at, p.open = load_start(v), true
+  v
+end
+
+"""
+What a load block's picker does in each frame: when a file has been clicked in
+its list, that file becomes the block's `from`, and the picker closes. The
+path goes in as the page's links have it: from the page's folder when the
+file is in it.
+"""
+pick_tick!(v::FilterView) = begin
+  picks_file(v) || return v
+  p = load_picker(v)
+  isfile(p.at) && isfilterable(p.at) || return v
+  path = p.at
+  # The next time the picker opens, it starts in a folder, not on this file
+  p.at = dirname(path)
+  v.choosing = false
+  f = Filters.query(v.lines)
+  f.from = tilde(named(editor(v), path))
+  lowercase(splitext(path)[2]) in JSONS || (f.at = "")
+  filter_write!(v, f)
   v
 end
 
@@ -26552,8 +26628,8 @@ const INSERTS = [
   ("Filter",        ["```$FILTER", "from: ", "```", "", ""], (2, 6)),
   # The caret goes after to:, for the name of the file or the address of the server
   ("Save",          ["```$SAVE", "to: ", "```", "", ""], (2, 4)),
-  # The caret goes after from:, for the name of the file or the address of the server
-  ("Load",          ["```$LOAD", "from: ", "```", "", ""], (2, 6)),
+  # The block shows a list of files to choose from, so the caret goes under it
+  ("Load",          ["```$LOAD", "```", "", ""], (4, 0)),
   ("Sketch",        ["```$SKETCH", "```", "", ""],  (4, 0)),
   ("Web Page",      ["```$WEBVIEW", "https://", "```", "", ""], (2, 8)),
   ("Signature",     ["```$SIGNATURE", "```", "", ""], (4, 0)),

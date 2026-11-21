@@ -730,6 +730,8 @@ Ladder keeps a copy of the last rows that each server sent. The block shows that
 
 Click a heading of the table to sort the rows, hide a column, or show only some values, as in a filter.
 
+To choose a file, use Insert > Load. The block that it adds lists the folders and the CSV, TSV and JSON files beside the page. Click a folder to go into it, or a name at the top to go back up. Click a file, and the block loads it. Later, the Choose button at the top of the block opens the list again.
+
 ## Time logs
 
 A code block in the language `timelog` keeps the hours that you work on each task. Type a task in the field at its top and click Start. The block adds a line for now, and the row counts up. Click Stop when you stop. With an empty field, Start goes on with the task of the last line.

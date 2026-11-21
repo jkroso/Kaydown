@@ -4,7 +4,7 @@
 # `julia -O0 --project=. test/file_checks_test.jl`. They draw a window that
 # isn't on the screen.
 
-@use Test: @test, @testset
+@use Test: @test, @testset, @test_throws
 @use "../main" => K
 @use "github.com/jkroso/MiniFB.jl" Window
 @use "github.com/jkroso/UI.jl/Interface/draw" frame
@@ -27,6 +27,8 @@ share(s) = parse(Float64, rstrip(s, '%')) / 100
 
 #check:twice(2) == 4
 twice(x) = 2x
+
+quarter() = share("25%")
 """)
 
 const e = K.build_editor(source)
@@ -70,6 +72,45 @@ end
   K.edit!(b, (5, 0), (5, 0), " ")
   frames()
   @test e.nodes[:file_checks].ran === ran
+end
+
+@testset "the top bar says how many checks pass, and a click goes to the next that fails" begin
+  @test K.check_words(last.(K.file_results(e))) == "3 of 4 checks pass"
+  @test !isempty(K.check_part(e)) && haskey(e.nodes, :check_count)
+  @test K.tip(e.nodes[:check_count]) == "Go to the next check that fails"
+  b.caret = b.anchor = (1, 0)
+  K.next_check!(e)
+  @test b.caret[1] == 4
+  K.next_check!(e)
+  @test b.caret[1] == 4   # the only one that fails now, round to the top again
+  b.caret = b.anchor = (5, 0)
+  K.next_check!(e)
+  @test b.caret[1] == 4
+end
+
+@testset "Add Check writes a check of the call at the caret, with the value that it has now" begin
+  i = findfirst(startswith("quarter()"), b.lines)
+  b.caret = b.anchor = (i, 14)
+  @test K.expression_at(e) == (i, "share(\"25%\")")
+  K.add_check!(e)
+  @test b.lines[i] == "# check: share(\"25%\") == 0.25" && b.lines[i+1] == "quarter() = share(\"25%\")" && b.caret == (i + 1, 14)
+  frames()
+  @test went("share(\"25%\") == 0.25") == :pass && K.check_words(last.(K.file_results(e))) == "4 of 5 checks pass"
+  K.undo!(b)
+  @test b.lines[i] == "quarter() = share(\"25%\")"
+  # What's selected is the expression
+  b.anchor, b.caret = (i, 18), (i, 23)
+  K.add_check!(e)
+  @test b.lines[i] == "# check: \"25%\" == \"25%\""
+  K.undo!(b)
+  # A value too long to write, and a call whose values the file doesn't have, write nothing
+  @test K.check_value("x", 0.7) == "0.7" && K.check_value("x", "a") == "\"a\""
+  @test_throws ErrorException K.check_value("x", collect(1:100))
+  j = findfirst(startswith("twice(x)"), b.lines)
+  b.caret = b.anchor = (j, 2)
+  n = length(b.lines)
+  @test_throws ErrorException K.add_check!(e)
+  @test length(b.lines) == n
 end
 
 @testset "a page of Markdown has no checks of this kind" begin

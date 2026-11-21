@@ -256,12 +256,14 @@
 #     is defined" and "a card of what a name is". Rename In Code gives a name
 #     another name: see "give a name another name". ⌘-click a name where the
 #     code makes it, or run Find Uses, to list each place that uses it: see
-#     "where a name is used".
+#     "where a name is used". In a git folder, Rename In Code changes a name
+#     of the whole file in the folder's other Julia files too.
 #   - Write `# check: share("70%") == 0.7` above a function in a file of
-#     Julia code. A dot at the end of the line says whether it's true. See
-#     "checks in a file of Julia code".
-#   - Press ⌘⇧P, run Theme or Text Size, and press ↓: the page shows each
-#     choice at once, and Esc puts it back. See "a look before you choose".
+#     Julia code. A dot at the end of the line says whether it's true, and the
+#     top bar says how many pass. Add Check writes one for the call at the
+#     caret. See "checks in a file of Julia code".
+#   - Press ⌘⇧P, run Theme, Text Size or Go To, and press ↓: the window shows
+#     each choice at once, and Esc puts it back. See "a look before you choose".
 #   - Click the number of a line, in a file that git keeps, to see the commit
 #     that last changed the line. See "when a line last changed".
 #   - Run the command Ask For Change, choose a block of the file's code or a
@@ -270,8 +272,10 @@
 #     Change lists each change that an agent made, and Undo Change takes back
 #     the newest. Keep This Change keeps a function of Ladder's own for each
 #     start. Ask About takes a question in place of a change, and the agent's
-#     answer shows beside the thing. See "ask for a change to a thing", "ask
-#     about a thing" and "what the agents changed".
+#     answer shows beside the thing, with buttons to ask more or ask for a
+#     change. While an agent works, the label says what it's doing. See "ask
+#     for a change to a thing", "ask about a thing" and "what the agents
+#     changed".
 #   - A function that a page's code makes is a command of the palette. See "a
 #     page's own commands".
 #   - Write a code block in the language `check`, with a line of Julia for
@@ -1184,6 +1188,11 @@ end
 "The file's name in the middle of the top bar. A right-click on it shows the file's menu."
 @def mutable struct Title <: SemanticUI end
 @def mutable struct Count <: SemanticUI       # the word count in the top bar
+  rect::NTuple{4,px} = (0px, 0px, 0px, 0px)
+  quiet::Bool = false
+end
+"How many of the checks of a file of Julia code pass, in the top bar. A click goes to the next check that fails."
+@def mutable struct CheckCount <: SemanticUI
   rect::NTuple{4,px} = (0px, 0px, 0px, 0px)
   quiet::Bool = false
 end
@@ -12568,7 +12577,10 @@ BLOCKS[CHECK] = BlockKind("Check", "check2-square", CheckView, check_html)
 # with why it stopped. The checks run when the window opens the file, when a
 # check changes, and each time code runs, as it does with ⌘Return. A name that
 # the file's code makes is there once that code ran: in a file that Ladder
-# loaded, at once, and in any other file after ⌘Return in its function.
+# loaded, at once, and in any other file after ⌘Return in its function. The
+# top bar says how many pass, and a click there goes to the next that fails.
+# The command Add Check writes a check of the call at the caret, with the
+# value that it has now.
 
 const FILE_CHECK = r"^\s*#\s*check:\s*(.*\S)\s*$"
 
@@ -12640,6 +12652,109 @@ mark_checks(ctx, e, ui) = begin
   end
   nothing
 end
+
+"The checks of the file of `e` that ran, each with its line and how it went, from the top"
+file_results(e) = begin
+  s = get(e.nodes, :file_checks, nothing)
+  s === nothing && return Tuple{Int,Checked}[]
+  [(i, s.results[code]) for (i, code) in s.found if haskey(s.results, code)]
+end
+
+"The count of the checks in the top bar, for a file of Julia code that has checks"
+check_part(e) = julia_file(e) && !isempty(file_results(e)) ? (node!(CheckCount, e, :check_count),) : ()
+
+describe(c::CheckCount) = begin
+  e = editor(c)
+  results = last.(file_results(e))
+  ishovered(c) || (c.quiet = false)
+  Box(height(28px), padding(8px, 0px), radius(6px), background(ishovered(c) ? colours.hover : clear),
+    label(check_words(results), 12px, color=all(r -> r.went == :pass, results) ? CHECK_GOOD : CHECK_BAD))
+end
+cursor(::CheckCount) = :hand
+tip(c::CheckCount) = all(((_, r),) -> r.went == :pass, file_results(editor(c))) ? "Go to the next check" : "Go to the next check that fails"
+onkey(c::CheckCount, ::KeyPress{Keys.mouse_left}) = (next_check!(editor(c)); hush!(c))
+
+"Put the caret on the next check of the file after the caret's line that fails, round to the top again. When none fails, the next check."
+next_check!(e) = begin
+  found = file_results(e)
+  failing = filter(((_, r),) -> r.went != :pass, found)
+  lines = first.(isempty(failing) ? found : failing)
+  isempty(lines) && return nothing
+  i = something(findfirst(>(e.buf.caret[1]), lines), 1)
+  show_line!(e, lines[i])
+  e.nodes[:hold] = (max(lines[i] - 3, 1), 24px - PAGE_TOP)
+  nothing
+end
+
+"""
+The Julia expression at the caret of the window of `e`, for Add Check, with
+its line: what's selected, or else the name at the caret with the names that
+dots join it to and what's in the brackets after it, like `share("70%")`.
+"""
+expression_at(e) = begin
+  b = e.buf
+  lo, hi = selection(b)
+  if lo != hi
+    lo[1] == hi[1] || error("Select an expression on one line.")
+    return (lo[1], String(strip(excerpt(b, lo, hi))))
+  end
+  found = name_at(b, b.caret)
+  found === nothing && error("Put the caret on a call, like share(\"70%\"), or select an expression.")
+  i = b.caret[1]
+  chars = collect(b.lines[i])
+  from = found.col - sum(o -> length(o) + 1, found.owners, init=0)   # where the names before it start
+  stop = found.col + length(found.name)                             # its last character
+  if stop < length(chars) && chars[stop+1] == '('
+    depth = 0
+    for k in stop+1:length(chars)
+      chars[k] == '(' && (depth += 1)
+      chars[k] == ')' && (depth -= 1)
+      if depth == 0
+        stop = k
+        break
+      end
+    end
+    depth == 0 || error("The brackets after $(found.name) don't close on this line.")
+  end
+  (i, String(chars[from+1:stop]))
+end
+
+"`value` as Julia writes it, for a check to compare with. It's an error when that's too long, or isn't Julia that reads back."
+check_value(code, value) = begin
+  s = Base.invokelatest(repr, value)
+  ex = Meta.parse(s; raise=false)
+  (length(s) > 80 || Meta.isexpr(ex, (:error, :incomplete))) && error("$code comes to $(value_brief(value)), which is too long to write in a check.")
+  s
+end
+
+"""
+Write a check of the expression at the caret over its function, with the value
+that the expression has now, like `# check: share("70%") == 0.7`. Ladder runs
+the expression in the module of the file's code. Later, a change that gives
+another value turns the check's dot red. See "checks in a file of Julia code".
+"""
+add_check!(e) = begin
+  julia_file(e) || error("A check of this kind goes in a file of Julia code.")
+  b = e.buf
+  i, code = expression_at(e)
+  value = try
+    cd(() -> running_code(m -> run_in(m, code, b.path), e), isdir(docdir(e)) ? docdir(e) : pwd())
+  catch err
+    why = String(first(split(trouble(err), '\n')))
+    error("Ladder couldn't work out $code. $why" * (loaded_module(page_key(b.path)) === nothing ? " Press ⌘Return in its function first." : ""))
+  end
+  check = value === true ? code : value === false ? "!($code)" : "$code == $(check_value(code, value))"
+  # The check goes over the function that the caret is in, after its documentation and the checks that it has
+  at = min(code_start(b.lines, first(part_lines(b.lines, i))), i)
+  indent = match(r"^\s*", b.lines[at]).match
+  caret, anchor = b.caret, b.anchor
+  edit!(b, (at, 0), (at, 0), "$(indent)# check: $check\n")
+  moved(p) = p[1] >= at ? (p[1] + 1, p[2]) : p
+  b.caret, b.anchor = moved(caret), moved(anchor)
+  nothing
+end
+
+works_here(e, ::Val{:add_check}) = julia_file(e)
 
 # --- a save of a table's rows ------------------------------------------------------------------
 #
@@ -25250,7 +25365,7 @@ end
 # Each button in the top bar says what it does while the mouse is over it. A
 # click hides what it says until the mouse leaves the button.
 
-const Tipped = Union{ToolButton,Count,SendButton,Mode}
+const Tipped = Union{ToolButton,Count,SendButton,Mode,CheckCount}
 const TIP_INK = colorant"rgb(240,240,240)"   # on the dark grey that every tooltip has
 
 "What a tooltip shows: `words`, with room around them"
@@ -25626,12 +25741,13 @@ describe(t::TopBar) = begin
   b = e.buf
   # The buttons that code from the startup page adds for the page that shows, like the ones that answer an email
   more = bar_parts(e)
+  checks = check_part(e)
   mode = mode_part(e)
   # What a file that's only shown says of itself, like how many rows a CSV file has, can need more room than that.
   # The words move aside as the slider of the levels opens, so then they need its room too.
   grown = isempty(mode) ? 0px : slider_grown(e)
   said = readonly(b) && !isempty(b.about) ? measure(Face(SANS, "", 12px, colours.dim, false), b.about * "  ·  Read only") + 70px + grown : 0px
-  side = max(isempty(more) ? 250px : 330px, said) + (isempty(mode) ? 0px : MODE_W)
+  side = max(isempty(more) && isempty(checks) ? 250px : 330px, said) + (isempty(mode) ? 0px : MODE_W)
   ended_rename!(e)
   # The two ends of the bar are as wide as each other, so the file's name is in the middle of the space beside
   # the sidebar. A window can be too narrow for that, with a wide sidebar or more buttons at its right end. Then the
@@ -25677,7 +25793,7 @@ describe(t::TopBar) = begin
                       mode...,
                       # The app that the Mac uses for the file can change it, so a button opens the file there
                       button(e, :outside, "box-arrow-up-right")) :
-                     (more..., job_part(e)..., agent_part(e)..., mode...,
+                     (more..., job_part(e)..., agent_part(e)..., checks..., mode...,
                       # A page that's never changed says so where the count of its words would be
                       b.fixed ? Box(height(28px), padding(8px, 0px), label("Read only", 12px, color=colours.dim)) :
                                 node!(Count, e, :count)))...))
@@ -28853,7 +28969,7 @@ palette_next!(e, p::CommandPalette) = run_when_ready!(e, p) || go_chip!(e, p, p.
 # --- a look before you choose ---
 #
 # As the arrows go through the list of Theme, the window shows each colours,
-# and Text Size shows each size. Find Uses shows each place in the window. Esc,
+# and Text Size shows each size. Go To and Find Uses show each place in the window. Esc,
 # or a click outside the palette, puts the window back as it was. Return keeps
 # the one that's chosen.
 
@@ -34455,6 +34571,7 @@ describe_window(e::Editor) = begin
   ask_tick!(e)
   about_tick!(e)
   file_checks_tick!(e)
+  rename_tick!(e)
   line_tick!(e)
   app_tick!(e)
   publish_tick!(e)
@@ -35243,7 +35360,56 @@ rename_in_code!(e, name::NameAt, new_name::String) = begin
     lines[i] = String([chars[1:col]; collect(new_name); chars[col+length(name.name)+1:end]])
   end
   lo, hi = extrema(first.(uses))
+  v = b.version
+  whole = whole_name(e, name)
   edit!(b, (lo, 0), (hi, length(b.lines[hi])), join(lines[lo:hi], "\n"))
+  # A name of a whole file of Julia code changes in the other Julia files of its git folder too. ⌘Z takes those back as well.
+  was = whole ? rename_elsewhere!(e, name, new_name) : Dict{String,String}()
+  isempty(was) || (e.nodes[:renamed] = (before=v, after=b.version, was=was, now=Dict(f => read(f, String) for f in keys(was)), seen=b.version))
+  nothing
+end
+
+"""
+Give the name `n` the name `new_name` in the other Julia files of the git
+folder of the window's file, a name of the whole file, at each place that
+`uses_elsewhere` finds. It gives the text that each file that changed had
+before.
+"""
+rename_elsewhere!(e, n::NameAt, new_name::AbstractString) = begin
+  was = Dict{String,String}()
+  file = isempty(e.buf.path) ? "" : page_key(e.buf.path)
+  endswith(file, ".jl") || return was
+  found = uses_elsewhere(n.name, file; most=typemax(Int))
+  for path in unique(u.file for u in found)
+    text = read(path, String)
+    lines = text_lines(text)
+    for u in sort(filter(u -> u.file == path, found), by=u -> (u.line, u.col), rev=true)
+      chars = collect(lines[u.line])
+      lines[u.line] = String([chars[1:u.col]; collect(new_name); chars[u.col+length(n.name)+1:end]])
+    end
+    new = join(lines, "\n")
+    new == text && continue
+    was[path] = text
+    write(path, new)
+  end
+  was
+end
+
+"""
+In each frame: when ⌘Z took back a rename that changed other files too, put
+those files back as they were, and when ⌘⇧Z made it again, change them again.
+A file that changed since stays as it is.
+"""
+rename_tick!(e) = begin
+  r = get(e.nodes, :renamed, nothing)
+  (r === nothing || r.seen == e.buf.version) && return nothing
+  v = e.buf.version
+  e.nodes[:renamed] = (; r..., seen=v)
+  from, to = v == r.before ? (r.now, r.was) : v == r.after ? (r.was, r.now) : (nothing, nothing)
+  from === nothing && return nothing
+  for (f, t) in to
+    isfile(f) && read(f, String) == from[f] && write(f, t)
+  end
   nothing
 end
 
@@ -35275,13 +35441,25 @@ sidenote(u::Use) = u.note
 "A line of code as a row of a list shows it: without the spaces at its ends, and at most 90 characters"
 row_words(line) = (s = strip(line); length(s) > 90 ? first(s, 89) * "…" : String(s))
 
-"The columns where the name `name` starts in the line of Julia `line`, by itself or after a dot, and not in a string or a comment"
+"""
+The columns where the name `name` starts in the line of Julia `line`, and not
+in a string or a comment: by itself, or after the name of a module and a dot,
+like `K.share`. After a name that starts with a small letter, like `t.share`,
+it's a part of a value, and doesn't count.
+"""
 name_columns(line::AbstractString, name::AbstractString) = begin
   cols = Int[]
+  chars = collect(line)
   skip = [(t.col, t.col + length(t.text)) for t in tokens(line, "julia") if t.kind in (:string, :comment)]
   for m in eachmatch(Regex("(?<![\\w!@])\\Q$name\\E(?![\\w!])"), line)
     col = length(line, 1, prevind(line, m.offset))
-    any(((a, z),) -> a <= col < z, skip) || push!(cols, col)
+    any(((a, z),) -> a <= col < z, skip) && continue
+    if col > 0 && chars[col] == '.'
+      j = col - 1
+      while j > 0 && isnamechar(chars[j]); j -= 1 end
+      (j < col - 1 && isuppercase(chars[j+1])) || continue
+    end
+    push!(cols, col)
   end
   cols
 end
@@ -35324,11 +35502,12 @@ uses_of(e, n::NameAt) = begin
   b = e.buf
   file = isempty(b.path) ? "" : page_key(b.path)
   out = [Use(n.name, file, i, col, row_words(b.lines[i]), "line $i") for (i, col) in name_uses(e, n)]
-  place = Base.invokelatest(definition, e, (n.line, n.col))
-  whole = place isa Tuple && !any(m -> m.at == place && m.span !== nothing, page_bounds(e))
-  whole && endswith(file, ".jl") && append!(out, uses_elsewhere(n.name, file))
+  whole_name(e, n) && endswith(file, ".jl") && append!(out, uses_elsewhere(n.name, file))
   out
 end
+
+"True when the name `n` is a name of the whole page or file, and not one that a function makes"
+whole_name(e, n::NameAt) = (place = Base.invokelatest(definition, e, (n.line, n.col)); place isa Tuple && !any(m -> m.at == place && m.span !== nothing, page_bounds(e)))
 
 "The places that use the name at the caret, for the palette's list. They're found again only when the page or the name changed."
 choices_for(::Type{Use}, e) = begin
@@ -35397,10 +35576,25 @@ go_to!(e, line::Integer) = begin
   nothing
 end
 
+# As the arrows go down Go To's list, the window scrolls to each place, with a line round it. The caret stays where it is.
+look_of(e, ::Val{:go_to}) = e.scroll.offset
+put_look!(e, ::Val{:go_to}, was) = (e.scroll.offset = was; delete!(e.nodes, :hold); nothing)
+look!(e, ::Val{:go_to}, f, _, h::HeadingLine) = (e.nodes[:hold] = (max(h.line - 3, 1), 24px - PAGE_TOP); nothing)
+look!(e, ::Val{:go_to}, f, _, n::Integer) = nothing
+
+"Where line `i` of the page is in the window of `e`, across the whole page"
+line_rect(e, i::Int) = begin
+  (isempty(e.layout) || !(1 <= i <= length(e.buf.lines))) && return nothing
+  it = item(e, i)
+  (left=e.origin[1] - 8px, top=e.origin[2] + it.top, width=e.width + 16px, height=it.tall)
+end
+shown_at(e, h::HeadingLine) = line_rect(e, h.line)
+
 add_command!(go_to!, title="Go to a heading of the page, to a function or a section of a file of code, or to a line by its number", kind=:look)
 add_command!(go_to_definition!, title="Go to where the name at the caret is defined", kind=:look)
 add_command!(rename_in_code!, title="Give a name of the page's Julia code another name, wherever it means the same thing", kind=:edit)
 add_command!(find_uses!, title="List each place that uses the name at the caret, and go to one", kind=:look)
+add_command!(add_check!, title="Write a check of the call at the caret over its function, with the value that the call has now", kind=:edit)
 add_command!(insert_block!, name=:insert, title="Add a block to the page: a table, a sheet, a chart and so on", kind=:edit)
 add_command!(theme!, title="Use other colours for the page")
 add_command!(text_size!, title="Make the page's text a number of pixels tall")
@@ -35584,6 +35778,10 @@ tool_input(t::CodePicker, w, ::KeyPress{Keys.mouse_left}) = begin
     t.about = nothing
     redraw_in!(t.editor, 0)
     x, y = num(w.mouse[1]), num(w.mouse[2])
+    # A button on the card asks again, or asks for a change, about the same things
+    for (action, (left, top, wide, tall)) in q.buttons
+      left <= x <= left + wide && top <= y <= top + tall && (t.swallow = true; follow_up_on!(t.editor, q, action); return true)
+    end
     if q.card !== nothing
       left, top, wide, tall = q.card
       left <= x <= left + wide && top <= y <= top + tall && (t.swallow = true; return true)
@@ -35652,7 +35850,7 @@ draw_tool(ctx, w, t::CodePicker, scene) = begin
       r = asked_rect(t.editor, c)
       r === nothing || pick_mark(ctx, w, r, string('A' + n - 1); colour=CHIP_MARKS[mod1(n, length(CHIP_MARKS))])
     end
-    words = a.ended == 0 ? "Asked: $(a.words) …" : a.changed ? "$(a.said)  ·  Show Change" : a.said
+    words = a.ended == 0 ? asking_words(a.words, a.step) : a.changed ? "$(a.said)  ·  Show Change" : a.said
     words = length(words) > 140 ? first(words, 139) * "…" : words
     a.label = pick_mark(ctx, w, asked_rect(t.editor, isempty(a.places) ? nothing : first(a.places)), words; colour=a.failed ? PICK_FAILED : PICK_LINE)
   end
@@ -35916,15 +36114,82 @@ agent_command(; changes=true) = begin
   found = something(Sys.which("claude"), Some(get(filter(isfile, collect(places)), 1, nothing)))
   found === nothing && error("Ladder can't find the command `claude`. Install Claude Code, and ask again.")
   # The words go straight after -p. An option that takes a list, like --allowedTools, would take them as part of its list.
-  changes ? `$found --permission-mode acceptEdits --allowedTools Read,Edit,Grep,Glob -p` : `$found --allowedTools Read,Grep,Glob -p`
+  # The agent prints each step as a line of JSON, so the window can say what it's doing: see `agent_step`.
+  steps = `--output-format stream-json --verbose`
+  changes ? `$found $steps --permission-mode acceptEdits --allowedTools Read,Edit,Grep,Glob -p` : `$found $steps --allowedTools Read,Grep,Glob -p`
 end
 
-"Start an agent with the command `command` and the words `prompt`, in the folder `dir`. It gives the agent's process, and a task that reads what the agent prints."
-start_agent(command, prompt, dir) = begin
+"""
+Start an agent with the command `command` and the words `prompt`, in the
+folder `dir`. It gives the agent's process, and a task that reads what the
+agent prints. Each step that the agent prints goes into the field `step` of
+`into`, as words like "Reading main.jl", for the window to show.
+"""
+start_agent(command, prompt, dir, into) = begin
   out = Pipe()
   process = run(pipeline(Cmd(`$command $prompt`, dir=dir), stdin=devnull, stdout=out, stderr=out), wait=false)
   close(out.in)   # only the agent writes to it now, so reading ends when the agent does
-  (process, @async read(out, String))
+  reading = @async begin
+    printed = IOBuffer()
+    for line in eachline(out)
+      println(printed, line)
+      step = agent_step(line)
+      step === nothing || (into.step = step)
+    end
+    String(take!(printed))
+  end
+  (process, reading)
+end
+
+"The value of `key` in the JSON object `o`, or nothing"
+json_field(o, key) = o isa JSONObject && (k = findfirst(==(key), o.keys); k !== nothing) ? o.values[k] : nothing
+
+"What the label of a thing says while an agent works on it: what was asked, and what the agent is doing"
+asking_words(words, step) = isempty(step) ? "Asked: $words …" : "Asked: $words  ·  $step …"
+
+"A line that an agent printed, read as JSON, or nothing for a line that isn't JSON"
+agent_json(line::AbstractString) = startswith(line, '{') ? (try json_value(Vector{UInt8}(line)) catch; nothing end) : nothing
+
+"""
+What an agent is doing, from a line that it printed as JSON, in a few words:
+"Reading main.jl", "Changing main.jl", "Looking for wide(", or the start of
+what it says. It's nothing for a line that doesn't say.
+"""
+agent_step(line::AbstractString) = begin
+  o = agent_json(line)
+  json_field(o, "type") == "assistant" || return nothing
+  parts = json_field(json_field(o, "message"), "content")
+  parts isa AbstractVector || return nothing
+  step = nothing
+  for p in parts
+    kind = json_field(p, "type")
+    if kind == "tool_use"
+      name, input = json_field(p, "name"), json_field(p, "input")
+      file = json_field(input, "file_path")
+      look = something(json_field(input, "pattern"), "")
+      step = name == "Read" && file isa String ? "Reading $(basename(file))" :
+             name in ("Edit", "Write", "MultiEdit") && file isa String ? "Changing $(basename(file))" :
+             name == "Grep" ? "Looking for $look" : name == "Glob" ? "Looking for files like $look" : "Using $name"
+    elseif kind == "text" && json_field(p, "text") isa String
+      said = strip(replace(json_field(p, "text"), r"\s+" => " "))
+      isempty(said) || (step = said)
+    end
+  end
+  step === nothing ? nothing : length(step) > 70 ? first(step, 69) * "…" : step
+end
+
+"""
+What an agent said at its end, from all that it printed: the words of its
+`result` line, when it printed JSON, or else the lines that it printed that
+aren't JSON, like an error.
+"""
+agent_text(printed::AbstractString) = begin
+  lines = split(printed, '\n')
+  for line in Iterators.reverse(lines)
+    o = agent_json(line)
+    json_field(o, "type") == "result" && json_field(o, "result") isa String && return String(json_field(o, "result"))
+  end
+  join((l for l in lines if agent_json(l) === nothing), "\n")
 end
 
 """
@@ -36218,7 +36483,8 @@ Change. `before` and `after` have the text of each file that the things are
 in, before the agent started and after it ended. `said` is what there is to
 say when it has ended, at the time `ended`. `label` is where the label with
 those words was drawn last, for a click on it. `undone` is true once Undo
-Change put its files back.
+Change put its files back. `step` is what the agent is doing now, in a few
+words.
 """
 @def mutable struct AskedChange
   words::String = ""
@@ -36228,6 +36494,7 @@ Change put its files back.
   process::Any = nothing
   out::Any = nothing         # a task that reads what the agent prints
   gone::Float64 = 0.0        # when the agent's process was first seen to have ended
+  step::String = ""
   said::String = ""
   failed::Bool = false
   changed::Bool = false
@@ -36268,13 +36535,15 @@ ask_change!(e, places::AbstractVector, words::AbstractString) = begin
     !isempty(o.buf.path) && page_key(o.buf.path) in files && dirty(o.buf) && writes(o.buf) && save!(o.buf)
   end
   before = Dict(f => read(f, String) for f in files)
-  process, out = try
-    start_agent(agent_command(), change_prompt(places, words), dirname(first(files)))
+  a = AskedChange(words=words, places=collect(places), before=before)
+  # What you asked about the things before, from the card of an answer, goes with your words
+  prompt = change_prompt(places, words) * talk_words(follow_up!(e, places))
+  try
+    a.process, a.out = start_agent(agent_command(), prompt, dirname(first(files)), a)
   catch err
-    t.asked = AskedChange(words=words, places=collect(places), said="The agent didn't start. " * trouble(err), failed=true, ended=time())
-    return nothing
+    a.said, a.failed, a.ended = "The agent didn't start. " * trouble(err), true, time()
   end
-  t.asked = AskedChange(words=words, places=collect(places), before=before, process=process, out=out)
+  t.asked = a
   redraw_in!(e, 0)
   nothing
 end
@@ -36313,7 +36582,7 @@ ask_tick!(e) = begin
     process_exited(a.process) && a.gone == 0 && (a.gone = time())
     # What it printed is all read a moment after it ends. A program that it left running can hold that up, so the wait has an end.
     if a.gone > 0 && (istaskdone(a.out) || time() - a.gone > 2)
-      printed = istaskdone(a.out) && !istaskfailed(a.out) ? fetch(a.out) : ""
+      printed = agent_text(istaskdone(a.out) && !istaskfailed(a.out) ? fetch(a.out) : "")
       ran, failed = reload_files!(a.places, a.before)
       a.after = Dict(f => read(f, String) for f in keys(a.before))
       a.changed = a.after != a.before
@@ -36355,27 +36624,54 @@ end
 # or the part of the window that the caret is on, or one that a click chooses,
 # and a question in your own words, like "why is this bar red?". An agent reads
 # the code and answers, and changes no file. The answer shows in a card beside
-# the thing. A click anywhere, or Esc, takes the card away.
+# the thing. Ask More on the card asks another question about the same
+# thing, and Change It asks for a change to it: the agent gets the questions
+# and answers so far with the new words. A click anywhere else, or Esc, takes
+# the card away. While an agent works, the label on the thing says what it's
+# doing, like "Reading main.jl": see `agent_step`.
 
 """
 A question that an agent was asked about `places`, the things of Ask About.
-`answer` is what it said, once it has ended, at the time `ended`. `card` is
-where the card with the answer was drawn last, for a click on it.
+`answer` is what it said, once it has ended, at the time `ended`. `step` is
+what the agent is doing until then. `talk` has the questions that were asked
+about the things before, each with its answer. `card` is where the card with
+the answer was drawn last, and `buttons` where each of its buttons was, for a
+click on them.
 """
 @def mutable struct AskedAbout
   words::String = ""
   places::Vector{Any} = Any[]
+  talk::Vector{Tuple{String,String}} = Tuple{String,String}[]
   process::Any = nothing
   out::Any = nothing         # a task that reads what the agent prints
   gone::Float64 = 0.0        # when the agent's process was first seen to have ended
+  step::String = ""
   answer::String = ""
   failed::Bool = false
   ended::Float64 = 0.0
   card::Any = nothing
+  buttons::Vector{Any} = Any[]
 end
 
+"True when `as` and `bs` are the same things of Ask About, in the same order"
+same_things(as, bs) = length(as) == length(bs) && all(((a, b),) -> (a.file, a.first, a.last, a.node) == (b.file, b.first, b.last, b.node), zip(as, bs))
+
+"""
+The questions and answers about the things `places` that the card of an answer
+handed on, when you clicked Ask More or Change It on it. They go once. Other
+things have none.
+"""
+follow_up!(e, places) = begin
+  f = pop!(e.nodes, :follow_up, nothing)
+  f !== nothing && same_things(f.places, places) ? f.talk : Tuple{String,String}[]
+end
+
+"What an agent is told of the questions and answers `talk` that came before, or \"\" when there were none"
+talk_words(talk) = isempty(talk) ? "" :
+  "\nBefore this, the user asked about it, and an agent answered:\n\n" * join(("Question: $q\nAnswer: $a\n" for (q, a) in talk), "\n")
+
 "What an agent is told when the user asks the question `words` about the things `cs`: what each is, where its code is, and the question"
-about_prompt(cs::AbstractVector, words) = begin
+about_prompt(cs::AbstractVector, words, talk=Tuple{String,String}[]) = begin
   told = if length(cs) == 1
     c = only(cs)
     what, start = thing_words(c)
@@ -36393,7 +36689,7 @@ about_prompt(cs::AbstractVector, words) = begin
     end
     "The user of the app Ladder has a question about some things. The user marked them in the window with letters, and the question can name them by their letters:\n\n$(join(parts, "\n"))"
   end
-  told * """
+  told * talk_words(talk) * """
 
   The user's question: $words
 
@@ -36414,12 +36710,13 @@ ask_about!(e, node::Union{ToChange,Things}, question::String) = begin
   t.about !== nothing && t.about.ended == 0 && error("The agent is still answering the last question.")
   command = agent_command(changes=false)   # it says so now if this Mac has no agent
   places = collect(each_thing(node))
-  t.about = try
-    process, out = start_agent(command, about_prompt(places, question), dirname(first(places).file))
-    AskedAbout(words=question, places=places, process=process, out=out)
+  q = AskedAbout(words=question, places=places, talk=follow_up!(e, places))
+  try
+    q.process, q.out = start_agent(command, about_prompt(places, question, q.talk), dirname(first(places).file), q)
   catch err
-    AskedAbout(words=question, places=places, answer="The agent didn't start. " * trouble(err), failed=true, ended=time())
+    q.answer, q.failed, q.ended = "The agent didn't start. " * trouble(err), true, time()
   end
+  t.about = q
   redraw_in!(e, 0)
   nothing
 end
@@ -36432,7 +36729,7 @@ about_tick!(e) = begin
   yield()   # the agent's end is noticed by a task, which gets its turn here
   process_exited(a.process) && a.gone == 0 && (a.gone = time())
   if a.gone > 0 && (istaskdone(a.out) || time() - a.gone > 2)
-    printed = istaskdone(a.out) && !istaskfailed(a.out) ? fetch(a.out) : ""
+    printed = agent_text(istaskdone(a.out) && !istaskfailed(a.out) ? fetch(a.out) : "")
     a.failed = !success(a.process)
     said = strip(replace(printed, "**" => ""))
     a.answer = a.failed ? "The agent stopped. " * agent_said(printed) : isempty(said) ? "The agent said nothing." : String(said)
@@ -36445,6 +36742,8 @@ end
 const ANSWER_WIDE = 380.0   # how wide the card of an answer is, at most
 const ANSWER_LINE = 17.0    # how tall each line of it is
 const ANSWER_BACK = colorant"rgb(50,50,50)"   # the dark grey of a tooltip
+const ANSWER_BUTTON = colorant"rgb(82,82,82)"
+const ANSWER_BUTTONS = 34.0   # the room at the bottom of the card for its buttons
 
 "The lines of the card of an answer: the question, then the answer, each paragraph wrapped to `room` px, as many as `most`"
 answer_lines(q::AskedAbout, room, most) = begin
@@ -36484,20 +36783,48 @@ draw_answer(ctx, w, t::CodePicker) = begin
   e = t.editor
   for (n, c) in enumerate(q.places)
     r = asked_rect(e, c)
-    label = n == 1 && q.ended == 0 ? "Asked: $(q.words) …" : length(q.places) > 1 ? string('A' + n - 1) : ""
+    label = n == 1 && q.ended == 0 ? asking_words(q.words, q.step) : length(q.places) > 1 ? string('A' + n - 1) : ""
     r === nothing || pick_mark(ctx, w, r, label; colour=CHIP_MARKS[mod1(n, length(CHIP_MARKS))])
   end
   q.ended == 0 && (q.card = nothing; return nothing)
   W, H = num(w.size[1]), num(w.size[2])
   wide = min(ANSWER_WIDE, W - 32)
-  lines = answer_lines(q, wide - 24, max(3, floor(Int, (H - 80) / ANSWER_LINE)))
-  tall = length(lines) * ANSWER_LINE + 20
+  lines = answer_lines(q, wide - 24, max(3, floor(Int, (H - 120) / ANSWER_LINE)))
+  tall = length(lines) * ANSWER_LINE + 20 + ANSWER_BUTTONS
   x, y = answer_place(asked_rect(e, first(q.places)), wide, tall, (W, H))
   round_box(ctx, x, y, wide, tall, 8; fill=q.failed ? PICK_FAILED : ANSWER_BACK)
   for (k, (face, words)) in enumerate(lines)
     isempty(words) || write_ink(ctx, words, x + 12, y + 10 + k * ANSWER_LINE - 4, face)
   end
+  # Two buttons at the bottom: another question about the same things, or a change to them
+  face = Face(SANS, "Medium", 12px, TIP_INK, false)
+  left, top = x + 12, y + tall - ANSWER_BUTTONS + 2
+  empty!(q.buttons)
+  for (action, words) in ((:ask_about, "Ask More"), (:ask_for_change, "Change It"))
+    across = num(measure(face, words)) + 20
+    round_box(ctx, left, top, across, 24, 6; fill=ANSWER_BUTTON)
+    write_ink(ctx, words, left + 10, top + 16, face)
+    push!(q.buttons, (action, (left, top, across, 24.0)))
+    left += across + 8
+  end
   q.card = (x, y, wide, tall)
+  nothing
+end
+
+"""
+What a click on a button of the card of the answer `q` does: it opens the
+palette with Ask About or Ask For Change, as `action` says, with the same
+things in its first chip and the keyboard in its words. The questions and
+answers so far go to the agent with the words: see `follow_up!`.
+"""
+follow_up_on!(e, q::AskedAbout, action::Symbol) = begin
+  e.nodes[:follow_up] = (places=q.places, talk=[q.talk; (q.words, q.answer)])
+  open_palette!(e, COMMANDS[action])
+  p = palette(e)
+  chips = palette_chips(p)
+  isempty(chips) && return nothing
+  say!(p, chips, 1, length(q.places) == 1 ? only(q.places) : Things(q.places))
+  go_chip!(e, p, 2)
   nothing
 end
 

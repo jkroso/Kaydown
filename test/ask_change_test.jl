@@ -409,9 +409,94 @@ end
   @test p.command.name == :ask_about && [K.chip_name(c) for c in K.palette_chips(p)] == ["Node", "Question"] && p.at == 2
   @test K.chip_value(p, K.palette_chips(p), 1).node === node()
   press(w, Keys.escape); press(w, Keys.escape)
-  # The agent that answers can read files, and can't change them
+  # The agent that answers can read files, and can't change them. Each agent prints its steps as lines of JSON.
   K.AGENT_COMMAND[] = nothing
   @test endswith(string(K.agent_command(changes=false)), "--allowedTools Read,Grep,Glob -p`")
+  @test occursin("--output-format stream-json --verbose", string(K.agent_command()))
+end
+
+@testset "the label says what the agent is doing, from the lines of JSON that it prints" begin
+  step(json) = K.agent_step(json)
+  @test step("""{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/a/b/level.jl"}}]}}""") == "Reading level.jl"
+  @test step("""{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/a/level.jl","old_string":"x"}}]}}""") == "Changing level.jl"
+  @test step("""{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Grep","input":{"pattern":"wide("}}]}}""") == "Looking for wide("
+  @test step("""{"type":"assistant","message":{"content":[{"type":"text","text":"I'll make\\nit thinner."}]}}""") == "I'll make it thinner."
+  @test step("""{"type":"result","result":"Done."}""") === nothing && step("plain words") === nothing && step("{not json") === nothing
+  # What it said at its end: its result line, or the lines that aren't JSON, like an error
+  @test K.agent_text("""{"type":"system"}\n{"type":"result","result":"The bar is thinner."}\n""") == "The bar is thinner."
+  @test K.agent_text("""{"type":"system"}\nError: no network\n""") == "Error: no network\n" && K.agent_text("Plain words.\n") == "Plain words.\n"
+  @test K.asking_words("make it red", "") == "Asked: make it red …" && K.asking_words("make it red", "Reading level.jl") == "Asked: make it red  ·  Reading level.jl …"
+  # While the agent works, the thing's label says its last step
+  steps = joinpath(dir, "steps.sh")
+  write(steps, """
+    #!/bin/sh
+    printf '%s' "\$1" > "$dir/asked.txt"
+    echo '{"type":"system","subtype":"init"}'
+    echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"$source"}}]}}'
+    sleep 2
+    echo '{"type":"result","subtype":"success","result":"It reads the level from the block."}'
+    """)
+  K.AGENT_COMMAND[] = `sh $steps`
+  K.ask_about!(e, first(offered(e, (3, 0))), "where does the level come from?")
+  q = picker().about
+  from = time()
+  while isempty(q.step) && time() - from < 10
+    frames(w, 1); sleep(0.05)
+  end
+  @test q.step == "Reading level.jl" && q.ended == 0
+  while q.ended == 0 && time() - from < 20
+    frames(w, 1); sleep(0.05)
+  end
+  frames(w)
+  @test q.answer == "It reads the level from the block."
+  picker().about = nothing
+end
+
+@testset "the card's buttons ask more, or ask for a change, with what was asked before" begin
+  level = first(offered(e, (3, 0)))
+  answers = agent("more.sh", "true", "It's blue because of its background.")
+  K.AGENT_COMMAND[] = `sh $answers`
+  K.ask_about!(e, level, "why is it blue?")
+  from = time()
+  while picker().about.ended == 0 && time() - from < 20
+    frames(w, 1); sleep(0.05)
+  end
+  frames(w)
+  q = picker().about
+  @test [a for (a, _) in q.buttons] == [:ask_about, :ask_for_change]
+  "Where the button of the card that does `action` is"
+  button(q, action) = last(only(filter(b -> b[1] == action, q.buttons)))
+  # Ask More: the palette asks about the same thing, with the keyboard in the question
+  left, top, wide, tall = button(q, :ask_about)
+  click(w, px(left + wide / 2), px(top + tall / 2))
+  p = K.palette(e)
+  @test picker().about === nothing && e.popup == :commands && p.command.name == :ask_about && p.at == 2
+  @test K.chip_value(p, K.palette_chips(p), 1).node === node()
+  typed(w, "and why is it short?")
+  press(w, Keys.enter); press(w, Keys.enter)
+  from = time()
+  while picker().about.ended == 0 && time() - from < 20
+    frames(w, 1); sleep(0.05)
+  end
+  frames(w)
+  # The agent is told the question before and its answer
+  @test occursin("The user's question: and why is it short?", asked())
+  @test occursin("Before this, the user asked about it, and an agent answered:\n\nQuestion: why is it blue?\nAnswer: It's blue because of its background.", asked())
+  @test length(picker().about.talk) == 1
+  # Change It: the palette asks for a change to the same thing, and the agent is told both questions and answers
+  left, top, wide, tall = button(picker().about, :ask_for_change)
+  click(w, px(left + wide / 2), px(top + tall / 2))
+  @test e.popup == :commands && p.command.name == :ask_for_change && p.at == 2 && K.chip_value(p, K.palette_chips(p), 1).node === node()
+  K.AGENT_COMMAND[] = `sh $quiet`
+  typed(w, "make it red")
+  press(w, Keys.enter); press(w, Keys.enter)
+  finish()
+  @test occursin("The user's words: make it red", asked()) && occursin("Question: why is it blue?", asked()) && occursin("Question: and why is it short?", asked())
+  picker().asked = nothing
+  # What was asked before goes only with the same thing
+  @test K.follow_up!(e, [level]) == Tuple{String,String}[]
+  e.nodes[:follow_up] = (places=[level], talk=[("a", "b")])
+  @test K.follow_up!(e, offered(e, (10, 2))[1:1]) == Tuple{String,String}[] && !haskey(e.nodes, :follow_up)
 end
 
 @testset "a file whose code Ladder never ran changes, and nothing runs" begin

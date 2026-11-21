@@ -179,25 +179,25 @@ It works on Ladder's own parts too, like the count of words at the top right. Mo
 
 The command Show Code does the same. Press ⌘⇧P and run it: a blue A goes round what the caret is on, and Return shows its code. To see the code of something else, click it.
 
-You can ask for a change in words too. Press ⌘⇧P and run Ask For Change. It changes what the caret was on. A blue line with the letter A goes round that, and the command shows the same blue A. To change something else, click it. Type what you want, like `make this bar thinner`, and press Return. Ladder gives your words, and the place of the function that draws the thing, to Claude Code. Claude Code changes the function, and the thing is drawn the new way. A label on the thing then says what changed. This needs Claude Code on your Mac.
+You can ask for a change in words too. Press ⌘⇧P and run Ask For Change. It changes what the caret was on. A blue line with the letter A goes round that, and the command shows the same blue A. To change something else, click it. Type what you want, like `make this bar thinner`, and press Return. Ladder gives your words, and the place of the function that draws the thing, to Claude Code. Claude Code changes the function, and the thing is drawn the new way. While it works, a label on the thing says what it's doing, like `Reading progress.jl`. The label then says what changed. This needs Claude Code on your Mac.
 
 - To make A bigger, press ⌥↑: it's then the part that holds it. ⌥↓ goes back.
 - To change more than one thing, hold ⇧ and click another. It's B, in orange, so your words can say `make A look like B`. ⇧ and a click on it again takes it out.
 - Click the label after the change to see what Claude Code changed. The page lists each change since Ladder started, the newest first. Each part has a Reject button that takes it out again, and Reject all takes out the whole change. The command Undo Change puts back all of the newest change. Run it again to put back the one before.
 
-To ask a question in place of a change, run Ask About. It takes a thing in the same way, and a question like `why is this bar red?`. Claude Code reads the code and changes nothing. Its answer shows in a card beside the thing. Click anywhere, or press Esc, to close the card.
+To ask a question in place of a change, run Ask About. It takes a thing in the same way, and a question like `why is this bar red?`. Claude Code reads the code and changes nothing. Its answer shows in a card beside the thing. Click Ask More on the card for another question about the same thing, or Change It to ask for a change to it. Claude Code gets your earlier questions and its answers with your new words. Click anywhere else, or press Esc, to close the card.
 
 ## A file of code
 
 Ladder opens a Julia file as code that you change, however long the file is. These help you find your way in one. Try them in [progress.jl](progress.jl).
 
-- Press ⌘⇧P and run Go To. It lists the file's functions, and each section that a comment like `# --- name ---` starts. Type a few letters and press Return.
+- Press ⌘⇧P and run Go To. It lists the file's functions, and each section that a comment like `# --- name ---` starts. As ↓ goes down the list, the window shows each place. Type a few letters and press Return.
 - Hold ⌘ and move the mouse over a name. A name that has a place to go to is marked, as a link is. Click it, and the caret goes to where the name is defined. A function with several methods goes to the first. A name from another file shows in a window beside this one. The command Go To Definition does the same for the name at the caret.
 - Hold ⌘ and click a name where the code makes it, or run Find Uses. The palette lists each place that uses the name, with the other Julia files of a git folder too. As ↓ goes down the list, the window shows each place, and Esc puts the window back. Return goes to the place.
 - Hold ⌘ and rest the mouse on a marked name for a moment. A card shows its documentation and its first lines.
-- Press ⌘⇧P and run Rename In Code to give the name at the caret another name. It changes the name wherever it means the same thing, and not in strings or comments. ⌘Z takes it back.
+- Press ⌘⇧P and run Rename In Code to give the name at the caret another name. It changes the name wherever it means the same thing, and not in strings or comments. In a git folder, a name of the whole file changes in the folder's other Julia files too. ⌘Z takes all of it back.
 - Click the number of a line, in a file that git keeps. Ladder shows the commit that last changed the line: its day, who made it, its first line, and what the file had there before.
-- Write a check above a function, as a comment like `# check: share("70%") == 0.7`. Ladder runs it, and a dot at the end of the line is green when it's true. A red dot has the two values that it compared, or why it stopped. The checks run again each time code runs, as with ⌘Return. In a file that Ladder didn't load, press ⌘Return in the function first.
+- Write a check above a function, as a comment like `# check: share("70%") == 0.7`. Ladder runs it, and a dot at the end of the line is green when it's true. A red dot has the two values that it compared, or why it stopped. The checks run again each time code runs, as with ⌘Return. In a file that Ladder didn't load, press ⌘Return in the function first. The top bar says how many checks pass. Click it to go to the next one that fails. To write a check quickly, put the caret on a call like `share("70%")` and run Add Check. It writes the check over the function, with the value that the call has now.
 
 To change a block of the file's code in words, like one function, put the caret in it and run Ask For Change. Click another block to change that one instead. Type what you want and press Return. Claude Code changes the block, and the window shows the new lines.
 

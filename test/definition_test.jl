@@ -253,11 +253,14 @@ end
   # A name of the whole file: its places in the file, then in the other Julia files of its git repository,
   # after the name of a module and a dot too. Not in a comment, a string, or a longer name.
   run(`git -C $dir init -q`)
-  write(joinpath(dir, "house.jl"), "# the area of a house\nhouse_area(rs) = sum(Rooms.area, rs)\nlabel = \"area\"\n")
+  house = joinpath(dir, "house.jl")
+  write(house, "# the area of a house\nhouse_area(rs) = sum(Rooms.area, rs)\nlabel = \"area\"\nfloor(t) = t.area\n")
   b.caret = b.anchor = at("total + area(r)", "area")
   uses = K.choices_for(K.Use, e)
   @test [K.sidenote(u) for u in uses] == ["line 11", "line 12", "line 22", "house.jl:2"] && last(uses).col == 27
   @test K.name_columns("x = area(1) # area", "area") == [4] && K.name_columns("Rooms.area + \"area\"", "area") == [6]
+  # After a name that starts with a small letter, it's a part of a value
+  @test K.name_columns("x = t.area + K.area", "area") == [15]
   # A name that the file doesn't make has no command
   b.caret = b.anchor = at("Walls.paint(wall)", "paint")
   @test !K.works_here(e, Val(:find_uses))
@@ -286,6 +289,28 @@ end
   shown = only(filter(o -> endswith(o.buf.path, "house.jl"), K.editors))
   @test shown.buf.caret == (2, 27)
   close(K.window_of(shown))
+  # Rename In Code changes a name of the whole file in those files too, and ⌘Z takes it back there as well
+  before = copy(b.lines)
+  K.rename_in_code!(e, K.own_name(e, at("total + area(r)", "area")), "surface")
+  frames()
+  @test b.lines[22] == "  total + surface(r)"
+  @test read(house, String) == "# the area of a house\nhouse_area(rs) = sum(Rooms.surface, rs)\nlabel = \"area\"\nfloor(t) = t.area\n"
+  K.undo!(b)
+  frames()
+  @test b.lines == before && occursin("Rooms.area,", read(house, String))
+  K.redo!(b)
+  frames()
+  @test occursin("Rooms.surface,", read(house, String))
+  K.undo!(b)
+  frames()
+  @test occursin("Rooms.area,", read(house, String))
+  # A name that a function makes stays in its function
+  K.rename_in_code!(e, K.own_name(e, at("total + area(r)", "total")), "sum_so_far")
+  frames()
+  @test occursin("Rooms.area,", read(house, String))
+  K.undo!(b)
+  frames()
+  @test b.lines == before
   rm(joinpath(dir, ".git"), recursive=true)
 end
 
@@ -304,6 +329,20 @@ end
     ("the rooms", "section · line 3"), ("HEIGHT", "Float64 · line 5"), ("Room", "struct · line 7"),
     ("area(r::Room)", "function · line 11"), ("area(w::Wall)", "function · line 12"),
     ("the paint", "section · line 14"), ("litres(r::Room, coats=2)", "function · line 16")]
+  # ↓ in the palette's list shows each place with a line round it, and Esc leaves the caret where it was
+  b.caret = b.anchor = (1, 0)
+  K.focus(e)
+  frames()
+  w.keys |= Keys.cmd | Keys.shft; onkey(w, KeyPress{Keys.p}(0, w)); w.keys ⊻= Keys.cmd | Keys.shft
+  frames()
+  foreach(c -> ontype(w, Typed(c, w)), "go to"); frames()
+  onkey(w, KeyPress{Keys.enter}(0, w)); frames()
+  p = K.palette(e)
+  onkey(w, KeyPress{Keys.down}(0, w)); frames()
+  @test p.command.name == :go_to && p.before !== nothing && K.shown_at(e, K.chip_value(p, K.palette_chips(p), 1)) !== nothing
+  foreach(_ -> (onkey(w, KeyPress{Keys.escape}(0, w)); frames()), 1:2)
+  @test e.popup == :none && p.before === nothing && b.caret == (1, 0)
+  K.palette(e).moved = 0.0
   K.go_to!(e, places[end])
   frames()
   @test b.caret[1] == 16 && e.layout[first(e.shown)].first <= 16

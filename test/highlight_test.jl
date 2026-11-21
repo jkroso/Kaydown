@@ -107,3 +107,78 @@ end
   @test left_open("\"\"\"", "js") == '\0' && left_open("\"\"\"", "") == '\0'
   @test whole("the end\"\"\" g(\"x\")", "julia")
 end
+
+"The parts of each of `lines`, a file in `lang`, as `parts` gives them. Each line starts in what the one above left open."
+file(lines, lang) = begin
+  open = '\0'
+  map(lines) do line
+    p = parts(line, lang, open)
+    open = left_open(line, lang, open)
+    p
+  end
+end
+
+@testset "CSS" begin
+  css(line, open='\0') = parts(line, "css", open)
+  # A selector has the colour of a keyword, a property of a type, and in its value a number of a number
+  @test css("a[href^=\"http\"]:not(.x) > p::before {") ==
+    ["a" => :keyword, "[" => :plain, "href" => :type, "^=" => :plain, "\"http\"" => :string, "]" => :plain, ":not" => :keyword,
+     "(" => :plain, ".x" => :keyword, ") > " => :plain, "p" => :keyword, "::before" => :keyword, " {" => :plain]
+  @test css("  margin: -1px auto 0 !important;") ==
+    ["margin" => :type, ": " => :plain, "-1px" => :number, " auto " => :plain, "0" => :number, "!important" => :keyword, ";" => :plain]
+  @test css("  background: url(img/a.png) #fff;") ==
+    ["background" => :type, ": " => :plain, "url" => :call, "(" => :plain, "img/a.png" => :string, ") " => :plain, "#fff" => :number, ";" => :plain]
+  @test css("a{color:red;width:calc(100% - 2rem)}") ==
+    ["a" => :keyword, "{" => :plain, "color" => :type, ":red;" => :plain, "width" => :type, ":" => :plain, "calc" => :call, "(" => :plain,
+     "100%" => :number, " - " => :plain, "2rem" => :number, ")}" => :plain]
+  @test css("@media screen and (min-width: 600px) {") ==
+    ["@media" => :keyword, " screen " => :plain, "and" => :keyword, " (" => :plain, "min-width" => :type, ": " => :plain, "600px" => :number, ") {" => :plain]
+  @test css("li:nth-child(2n+1) { display: none }") ==
+    ["li" => :keyword, ":nth-child" => :keyword, "(" => :plain, "2n" => :number, "+" => :plain, "1" => :number, ") { " => :plain,
+     "display" => :type, ": none }" => :plain]
+  # A selector that goes on below, and a value that does
+  @test file(["html,", "a:hover", "{ color: red }"], "css") ==
+    [["html" => :keyword, "," => :plain], ["a" => :keyword, ":hover" => :keyword], ["{ " => :plain, "color" => :type, ": red }" => :plain]]
+  @test file(["  font-family:", "    -apple-system,", "    \"Segoe UI\";", "  margin: 0;"], "css") ==
+    [["font-family" => :type, ":" => :plain], ["    -apple-system," => :plain], ["\"Segoe UI\"" => :string, ";" => :plain],
+     ["margin" => :type, ": " => :plain, "0" => :number, ";" => :plain]]
+  # A value that lacks its ; ends where the next property starts
+  @test file(["  color: red", "  margin: 0", "}"], "css")[2] == ["margin" => :type, ": " => :plain, "0" => :number]
+  # A comment can run over several lines, among the rules or in a value
+  @test left_open("/* a", "css") == 'C' && css("b */ p {", 'C') == ["b */" => :comment, "p" => :keyword, " {" => :plain]
+  @test left_open("  color: /* a", "css") == 'V' && left_open("b */ red;", "css", 'V') == '\0'
+  # Nothing is left open after a line that ends a rule or a property
+  @test left_open("  color: red; }", "css") == '\0' && left_open("p {", "css") == '\0'
+  @test whole("a[href^='x'] { b: url(\"q\") }", "css") && whole("p { a: b /* c", "css")
+  # In CSS // doesn't start a comment
+  @test css("  background: url(http://a.com/x.png);") ==
+    ["background" => :type, ": " => :plain, "url" => :call, "(" => :plain, "http://a.com/x.png" => :string, ");" => :plain]
+end
+
+@testset "Less" begin
+  less(line, open='\0') = parts(line, "less", open)
+  # A variable that's set has the colour of a property, and // starts a comment
+  @test less("@primary: #4a90e2; // the blue") ==
+    ["@primary" => :type, ": " => :plain, "#4a90e2" => :number, "; " => :plain, "// the blue" => :comment]
+  @test less("  border: @width solid darken(@primary, 10%);") ==
+    ["border" => :type, ": @width solid " => :plain, "darken" => :call, "(@primary, " => :plain, "10%" => :number, ");" => :plain]
+  # A mixin that's made has the colour of a selector, and one that's used the colour of a call
+  @test less(".bordered(@width: 2px) {") ==
+    [".bordered" => :keyword, "(" => :plain, "@width" => :type, ": " => :plain, "2px" => :number, ") {" => :plain]
+  @test less("  .bordered(4px);") == [".bordered" => :call, "(" => :plain, "4px" => :number, ");" => :plain]
+  @test less("  #ns > .clearfix;") == ["#ns" => :call, " > " => :plain, ".clearfix" => :call, ";" => :plain]
+  @test less("  &:hover { color: red }") == ["&" => :keyword, ":hover" => :keyword, " { " => :plain, "color" => :type, ": red }" => :plain]
+  # @{name} puts a variable's value in a selector or a string
+  @test less(".@{name}-box { a: ~\"url(@{base})\" }") ==
+    ["." => :plain, "@{" => :keyword, "name" => :plain, "}" => :keyword, "-box" => :keyword, " { " => :plain, "a" => :type, ": " => :plain,
+     "~\"url(" => :string, "@{" => :keyword, "base" => :plain, "}" => :keyword, ")\"" => :string, " }" => :plain]
+  # A guard, and rules like @import and @media, which a ( can follow
+  @test less(".m(@a) when (iscolor(@a)) {") ==
+    [".m" => :keyword, "(@a) " => :plain, "when" => :keyword, " (" => :plain, "iscolor" => :call, "(@a)) {" => :plain]
+  @test less("@import (reference) \"x.less\";") == ["@import" => :keyword, " (reference) " => :plain, "\"x.less\"" => :string, ";" => :plain]
+  @test less("@media(min-width: 768px) {")[1] == ("@media" => :keyword) && less("  @rules();") == ["@rules" => :call, "();" => :plain]
+  # A // in a string isn't a comment, nor is a { in a comment a rule
+  @test less("@url: \"http://a.com\"; // see { here }") ==
+    ["@url" => :type, ": " => :plain, "\"http://a.com\"" => :string, "; " => :plain, "// see { here }" => :comment]
+  @test left_open("@a: 1; // see {", "less") == '\0' && whole(".a { .m(); } // b", "less")
+end

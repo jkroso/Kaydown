@@ -112,7 +112,7 @@ end
   @test wider isa K.ToChange && wider.node isa K.Paragraph
 end
 
-@testset "a click with ⌘ and ⌥ down shows the run's code" begin
+@testset "a click with ⌘ and ⌥ down, then Show Code on its line, shows the run's code" begin
   move(spot(3, "struck")...)
   w.keys |= Keys.cmd; w.keys |= Keys.opt; frames(1)
   w.keys |= Keys.mouse_left
@@ -121,6 +121,19 @@ end
   onkey(w, KeyRelease{Keys.mouse_left}(0, w))
   w.keys ⊻= Keys.cmd; w.keys ⊻= Keys.opt
   frames()
+  # The run keeps its line, with its buttons. A run is made again each time, and it's still the same run.
+  t = K.code_picker(e)
+  @test t.chosen[1] isa K.TextRun && t.chosen[1].kind == "Struck" && [a for (a, _) in t.buttons] == [:label, :show_code, :ask_for_change, :ask_about]
+  @test K.same_thing(K.code_under(w)[1], t.chosen[1]) && !K.same_thing(picked(3, "bold")[1], t.chosen[1])
+  shot("text-run-buttons.png")
+  left, top, wide, tall = last(only(b for b in t.buttons if b[1] == :show_code))
+  move(px(left + wide / 2), px(top + tall / 2))
+  w.keys |= Keys.mouse_left
+  onkey(w, KeyPress{Keys.mouse_left}(0, w))
+  w.keys ⊻= Keys.mouse_left
+  onkey(w, KeyRelease{Keys.mouse_left}(0, w))
+  frames()
+  @test t.chosen === nothing
   file, line = K.code_place(looks)
   shown = filter(o -> o !== e && o.buf.path == file, K.editors)
   @test length(shown) == 1 && shown[1].buf.caret[1] == line

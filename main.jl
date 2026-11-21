@@ -242,9 +242,12 @@
 #     first page that lists them, and pushes that folder to GitHub, where
 #     GitHub Pages serves it. See "a folder that's a blog".
 #   - Hold ⌘ and ⌥ and click anything in the window: a block, a button, a
-#     row of the sidebar. A window opens beside this one with the function
-#     that draws that thing. Change the function there and press ⌘Return in
-#     it, and the thing is drawn the new way at once. Show Code in the command
+#     row of the sidebar. Buttons show on the blue line round it. Show Code
+#     opens a window beside this one with the function that draws that
+#     thing. Change the function there and press ⌘Return in it, and the
+#     thing is drawn the new way at once. Ask For Change… asks an agent to
+#     change the thing, in words that you type, and Ask About… asks it a
+#     question. Show Code in the command
 #     palette does the same for the next thing that you click. See "the code
 #     of a thing".
 #   - Open a long file of code, like this one. It opens whole, and a typed
@@ -36386,10 +36389,14 @@ page_title(e) = something(first_answer(PAGE_TITLES, e), email_title(e), Some(not
 # --- the code of a thing ------------------------------------------------------------------
 #
 # A function draws each thing that a window shows: the method of `describe`
-# for the thing's type. Hold ⌘ and ⌥ and click a thing, and Ladder shows that
-# method in a window beside this one. While ⌘ and ⌥ are down, a line goes
-# round the thing under the mouse, with a label: the name of its type, and the
-# file and the line of its method.
+# for the thing's type. Hold ⌘ and ⌥ and click a thing, and its line stays,
+# with buttons on its top edge after its label. Show Code shows that method in
+# a window beside this one. Ask For Change… and Ask About… open the command
+# palette with that command, with the thing as its A, ready for the words of
+# the change or the question. A click anywhere else, or Esc, takes the line
+# and its buttons away. While ⌘ and ⌥ are down, a line
+# goes round the thing under the mouse, with a label: the name of its type,
+# and the file and the line of its method.
 #
 # Show Code, in the command palette, takes the thing as its node, as Ask For
 # Change does: it starts as what the caret is on, shown as a blue A, and a
@@ -36589,13 +36596,17 @@ The tool of a window of the editor `editor` that shows the code of a thing.
 `swallow` is true from a click that it took until the button comes up. `asked` is the change
 that an agent is making, or made a moment ago: see "ask for a change to a
 thing". `about` is a question that an agent is answering, or answered: see
-"ask about a thing".
+"ask about a thing". `chosen` is the thing that a click with ⌘ and ⌥ down
+chose, with the method that draws it, while the buttons on its line show.
+`buttons` is where each of those buttons was drawn in the last frame.
 """
 @def mutable struct CodePicker
   editor::Any = nothing
   swallow::Bool = false
   asked::Any = nothing
   about::Any = nothing
+  chosen::Any = nothing
+  buttons::Vector{Any} = Any[]
 end
 
 code_picker(e) = get!(() -> CodePicker(editor=e), e.nodes, :code_picker)::CodePicker
@@ -36617,6 +36628,22 @@ end
 tool_input(t::CodePicker, w, ::KeyPress{Keys.mouse_left}) = begin
   # The palette's chip that a click chooses for takes the click first
   palette_click!(t.editor, w) && (t.swallow = true; return true)
+  # A click on a button of the thing that a click with ⌘ and ⌥ down chose does what the button says.
+  # A click on its label does nothing. A click anywhere else takes its line away, and goes on to the window.
+  if t.chosen !== nothing
+    x, y = num(w.mouse[1]), num(w.mouse[2])
+    k = findfirst(((_, (left, top, wide, tall)),) -> left <= x <= left + wide && top <= y <= top + tall, t.buttons)
+    if k !== nothing
+      t.swallow = true
+      action = t.buttons[k][1]
+      action == :label && return true
+      node, m = t.chosen
+      unchoose!(t)
+      code_act!(t.editor, action, node, m)
+      return true
+    end
+    unchoose!(t)
+  end
   # A click takes the card of an agent's answer away. A click on the card does nothing else.
   q = t.about
   if q !== nothing && q.ended > 0
@@ -36648,13 +36675,33 @@ tool_input(t::CodePicker, w, ::KeyPress{Keys.mouse_left}) = begin
   picks(t, w) || return false
   found = code_under(w)
   t.swallow = true   # the window's parts see neither the press nor the release
-  found === nothing || show_code!(t.editor, found[2])
+  # The thing keeps its line after the keys go up, with a button on its top edge for each thing to do with it
+  found === nothing || (t.chosen = found; redraw_in!(t.editor, 0))
   true
 end
+
+"The buttons on the top edge of the line round a thing that a click with ⌘ and ⌥ down chose: what each does, and its words"
+const CODE_BUTTONS = ((:show_code, "Show Code"), (:ask_for_change, "Ask For Change…"), (:ask_about, "Ask About…"))
+
+"Take the line and the buttons of the thing that a click with ⌘ and ⌥ down chose away"
+unchoose!(t::CodePicker) = (t.chosen = nothing; empty!(t.buttons); redraw_in!(t.editor, 0); nothing)
+
+"""
+Do what the button `action` on the line round the part `node` of the window
+of `e` says. The method `m` draws the part. Show Code shows the method in a
+window beside this one. Ask For Change and Ask About open the palette with
+that command, with the part as its A and the keyboard in the words.
+"""
+code_act!(e, action::Symbol, node, m) = action == :show_code ? show_code!(e, m) : ask_with!(e, action, node)
+
+"True when `a` and `b` are the same thing of the window. A run of text is made again each time, so it's the same when it's the same columns of the same line."
+same_thing(a, b) = a === b || (a isa TextRun && b isa TextRun && (a.line, a.from, a.to) == (b.line, b.from, b.to))
 tool_input(t::CodePicker, w, ::KeyRelease{Keys.mouse_left}) = (was = t.swallow; t.swallow = false; was)
-# Esc stops an agent that's working, and takes the card of an agent's answer away, while no popup and no search shows
+# Esc takes the line of a thing that a click with ⌘ and ⌥ down chose away, stops an agent that's working,
+# and takes the card of an agent's answer away, while no popup and no search shows
 tool_input(t::CodePicker, w, ::KeyPress{Keys.escape}) = begin
   (unmodified(w) && t.editor.popup == :none && !finding(t.editor)) || return false
+  t.chosen === nothing || (unchoose!(t); return true)
   isempty(working_agents(t.editor)) || (stop_agent!(t.editor); return true)
   # The values of Show Steps go: see "the steps of a check"
   haskey(t.editor.nodes, :steps) && (delete!(t.editor.nodes, :steps); redraw_in!(t.editor, 0); return true)
@@ -36668,8 +36715,8 @@ const PICK_LINE = colorant"rgb(48,128,236)"
 
 const PICK_FAILED = colorant"rgb(200,60,50)"
 
-"Draw a line round the place `r` of the window `w`, and a label with `words` over its top left corner. With no place, the label is under the top bar. With no words, there's no label."
-pick_mark(ctx, w, r, words; colour=PICK_LINE) = begin
+"Draw a line round the place `r` of the window `w`, and a label with `words` over its top left corner. With no place, the label is under the top bar. With no words, there's no label. `room` is the width that something after the label, on the same line, needs in the window."
+pick_mark(ctx, w, r, words; colour=PICK_LINE, room=0.0) = begin
   x, y = 16.0, 64.0
   if r !== nothing
     x, y, wide, tall = num(r.left), num(r.top), num(r.width), num(r.height)
@@ -36680,7 +36727,8 @@ pick_mark(ctx, w, r, words; colour=PICK_LINE) = begin
   across = num(measure(face, words)) + 12
   # The label sits on the thing's top edge, and comes down into the thing where the window has no room over it.
   # A thing whose top is above the window, like a whole file, has its label at the top of the window.
-  left = clamp(x, 0.0, max(0.0, num(w.size[1]) - across))
+  # `room` is how much more the label needs after it, for the buttons that follow it
+  left = clamp(x, 0.0, max(0.0, num(w.size[1]) - across - room))
   top = y >= 18 ? y - 18 : max(y, 0.0)
   round_box(ctx, left, top, across, 18, 3; fill=colour)
   write_ink(ctx, words, left + 6, top + 13, face)
@@ -36705,14 +36753,47 @@ draw_tool(ctx, w, t::CodePicker, scene) = begin
     words = length(words) > 140 ? first(words, 139) * "…" : words
     a.label = pick_mark(ctx, w, asked_rect(t.editor, isempty(a.places) ? nothing : first(a.places)), words; colour=a.failed ? PICK_FAILED : PICK_LINE)
   end
+  draw_chosen(ctx, w, t)
   picks(t, w) || return nothing
   redraw_in!(t.editor, 1/30)   # the line follows the mouse
   found = code_under(w)
   found === nothing && return nothing
   node, m = found
+  # The thing that a click chose has its line already, with its buttons
+  t.chosen !== nothing && same_thing(t.chosen[1], node) && return nothing
   r = try rect(node) catch; nothing end
   r === nothing && return nothing
   pick_mark(ctx, w, r, "$(pick_name(node))  ·  $(code_label(m))")
+end
+
+const CODE_BUTTON_FILL = colorant"white"
+
+"""
+Draw the line round the thing that a click with ⌘ and ⌥ down chose, with its
+label, and a button after the label on the line's top edge for each of
+`CODE_BUTTONS`. The button under the mouse is tinted. A thing that no longer
+shows loses its line.
+"""
+draw_chosen(ctx, w, t::CodePicker) = begin
+  empty!(t.buttons)
+  t.chosen === nothing && return nothing
+  node, m = t.chosen
+  r = try rect(node) catch; nothing end
+  r === nothing && (t.chosen = nothing; return nothing)
+  face = Face(SANS, "Medium", 11px, PICK_LINE, false)
+  wides = [num(measure(face, words)) + 12 for (_, words) in CODE_BUTTONS]
+  left, top, across, tall = pick_mark(ctx, w, r, "$(pick_name(node))  ·  $(code_label(m))"; room=sum(wides) + 4 * length(wides))
+  push!(t.buttons, (:label, (left, top, across, tall)))
+  x, y = num(w.mouse[1]), num(w.mouse[2])
+  left += across + 4
+  for ((action, words), wide) in zip(CODE_BUTTONS, wides)
+    over = left <= x <= left + wide && top <= y <= top + tall
+    round_box(ctx, left + 0.5, top + 0.5, wide - 1, tall - 1, 3; fill=over ? RGBA(0.86, 0.92, 1.0, 1.0) : CODE_BUTTON_FILL, line=PICK_LINE, wide=1.0)
+    write_ink(ctx, words, left + 6, top + 13, face)
+    push!(t.buttons, (action, (left, top, wide, tall)))
+    left += wide + 4
+  end
+  nothing
 end
 
 """
@@ -37476,6 +37557,24 @@ ask_for_change!(e, node::Union{ToChange,Things}, request::String) = begin
   isempty(strip(request)) && error("Say what should change, in a few words.")
   agent_free(e)
   ask_change!(e, collect(each_thing(node)), String(strip(request)))
+end
+
+"""
+Open the palette with the command `command`, Ask For Change or Ask About, with
+the part `x` of the window as its thing, and the keyboard in the words. The
+buttons Ask For Change… and Ask About… on the line round a thing that a click
+with ⌘ and ⌥ down chose do this.
+"""
+ask_with!(e, command::Symbol, x) = begin
+  c = part_choice(x)
+  c === nothing && return nothing
+  open_palette!(e, COMMANDS[command])
+  p = palette(e)
+  chips = palette_chips(p)
+  isempty(chips) && return nothing
+  say!(p, chips, 1, c)
+  go_chip!(e, p, 2)
+  nothing
 end
 
 "It's an error while an agent is still making a change in the window of `e`, or when this Mac has no agent"

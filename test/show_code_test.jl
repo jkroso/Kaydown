@@ -1,8 +1,11 @@
-# Tests for the code of a thing, in main.jl: a click with ⌘ and ⌥ down, or
-# Show Code with the thing as its node, shows the method of `describe` that
-# draws the thing, in a window beside this one. Code that runs in that
-# window runs in the module that the file made, so a new method draws the
-# thing at once. Run them with `julia -O0 --project=. test/show_code_test.jl`.
+# Tests for the code of a thing, in main.jl: a click with ⌘ and ⌥ down keeps
+# a line round the thing, with buttons on its top edge. Show Code there, or
+# Show Code in the palette with the thing as its node, shows the method of
+# `describe` that draws the thing, in a window beside this one. Ask For
+# Change… and Ask About… there open the palette with the thing. Code that
+# runs in that window runs in the module that the file made, so a new method
+# draws the thing at once. Run them with
+# `julia -O0 --project=. test/show_code_test.jl`.
 # They click in windows that aren't on the screen. Set `LADDER_SHOTS` to a
 # folder, and they save a picture of the page there.
 
@@ -72,6 +75,25 @@ click(held...) = begin
   foreach(h -> w.keys ⊻= h, held)
   frames()
 end
+"The window's tool, which draws the line round a thing and the buttons on it"
+picker() = K.code_picker(e)
+"What the buttons on the line round the thing that a click with ⌘ and ⌥ down chose do, as the last frame drew them"
+buttons() = [a for (a, _) in picker().buttons if a != :label]
+"Where the last frame drew the button `action`, or the label for `:label`"
+button(action) = last(only(b for b in picker().buttons if b[1] == action))
+"Click the button `action` on the line round the thing that a click with ⌘ and ⌥ down chose"
+press_button(action) = begin
+  left, top, wide, tall = button(action)
+  x, y = px(left + wide / 2), px(top + tall / 2)
+  w.mouse = typeof(w.mouse)(x, y)
+  onmouse(w, MouseMove(Vec2{px}(x, y), w))
+  frames(w, 1)
+  w.keys |= Keys.mouse_left
+  onkey(w, KeyPress{Keys.mouse_left}(0, w))
+  w.keys ⊻= Keys.mouse_left
+  onkey(w, KeyRelease{Keys.mouse_left}(0, w))
+  frames()
+end
 "The editors of the windows that show the file of code"
 code_windows() = filter(o -> o !== e && o.buf.path == realpath(source), K.editors)
 const first_line = findfirst(startswith("describe(g::Gauge)"), readlines(source))
@@ -118,15 +140,55 @@ end
   shot("show-code-line.png")
   w.keys ⊻= Keys.cmd; w.keys ⊻= Keys.opt
   click(Keys.cmd, Keys.opt)
-  # The block didn't get the click, and a window shows its file with the caret on the method
-  @test node().clicks == n
+  # The block didn't get the click. Its line stays after the keys went up, with a button for each thing to do with it.
+  @test node().clicks == n && isempty(code_windows())
+  @test picker().chosen[1] === node() && buttons() == [:show_code, :ask_for_change, :ask_about]
+  # The label and the buttons are in a row on the line's top edge, the label first
+  r = rect(node())
+  label = button(:label)
+  @test label[2] == K.num(r.top) - 18 && all(b -> last(b)[2] == label[2], picker().buttons)
+  @test label[1] + label[3] < button(:show_code)[1] < button(:ask_for_change)[1] < button(:ask_about)[1]
+  # A click on the label does nothing
+  press_button(:label)
+  @test picker().chosen !== nothing && isempty(code_windows()) && node().clicks == n
+  # Esc takes the line and its buttons away
+  onkey(w, KeyPress{Keys.escape}(0, w)); frames()
+  @test picker().chosen === nothing && isempty(picker().buttons) && isempty(code_windows()) && e.popup == :none
+  # So does a click anywhere else, and the click goes on to what it's on
+  click(Keys.cmd, Keys.opt)
+  @test picker().chosen !== nothing
+  click()
+  @test picker().chosen === nothing && node().clicks == n + 1
+  n = node().clicks
+  # Show Code shows a window with the file, with the caret on the method, and the line goes
+  click(Keys.cmd, Keys.opt)
+  press_button(:show_code)
+  @test picker().chosen === nothing && node().clicks == n
   shown = code_windows()
   @test length(shown) == 1
   @test shown[1].buf.caret[1] == first_line
   @test !shown[1].panel
   # A second click shows the same window
   click(Keys.cmd, Keys.opt)
+  press_button(:show_code)
   @test length(code_windows()) == 1
+end
+
+@testset "Ask For Change… and Ask About… on the line open the palette with the thing as A" for command in (:ask_for_change, :ask_about)
+  n = node().clicks
+  click(Keys.cmd, Keys.opt)
+  press_button(command)
+  p = K.palette(e)
+  @test e.popup == :commands && p.command.name == command && node().clicks == n && picker().chosen === nothing
+  c = K.chip_value(p, K.palette_chips(p), 1)
+  @test c isa K.ToChange && c.node === node() && c.file == realpath(source) && c.first <= first_line <= c.last
+  # The keyboard is in the words of the change, which have nothing yet
+  @test p.at == 2 && K.chip_value(p, K.palette_chips(p), 2) === K.UNSAID
+  # Esc empties the bar, and a second Esc closes the palette
+  foreach(_ -> (onkey(w, KeyPress{Keys.escape}(0, w)); frames(w, 1)), 1:2)
+  p.moved = 0.0
+  frames()
+  @test e.popup == :none
 end
 
 @testset "Show Code takes what the caret is on, or what a click chooses" begin
@@ -231,6 +293,7 @@ click_dial() = begin
   onkey(w, KeyRelease{Keys.mouse_left}(0, w))
   w.keys ⊻= Keys.cmd; w.keys ⊻= Keys.opt
   frames()
+  press_button(:show_code)
 end
 "The windows that show the long file"
 shows() = filter(o -> o.buf.path == realpath(long), K.editors)

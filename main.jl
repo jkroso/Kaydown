@@ -22868,7 +22868,11 @@ locate(e, (x, y)) = begin
   # On a page that's scrolled sideways, a point on the numbers of the lines is on the first part of the line that shows
   dx, dy = max(x - e.origin[1], sideways(e)), y - e.origin[2]
   items = e.layout
+  isempty(items) && return e.buf.caret
   it = items[item_under(e, dx, dy)]
+  # Until the next frame, the layout can be of the page that showed before, as when a click opened another
+  # file and the mouse moved with its button still down. That page can have more lines than this one.
+  it.last <= length(e.buf.lines) || return e.buf.caret
   if it.content isa Grid
     g = it.content
     # The row and the column under the point
@@ -22890,7 +22894,8 @@ locate(e, (x, y)) = begin
     return above && it.first > 1 ? line_end(e.buf, it.first - 1) : it.last < length(e.buf.lines) ? (it.last + 1, 0) : (it.first, 0)
   end
   f = it.content::Flow
-  (it.first, colat(f, line_at(f, dy - it.top), dx))
+  # A line of the page before can be longer than this page's line of the same number
+  (it.first, min(colat(f, line_at(f, dy - it.top), dx), length(e.buf.lines[it.first])))
 end
 
 "The link under a point in the window, or nothing"

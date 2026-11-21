@@ -28394,11 +28394,17 @@ const omni_family = Ref(SANS)
 "The family of the palette's text: Manrope once its files are read, and the Mac's font before that or without them"
 omni_font() = omni_family[]
 """
+`family`, after the font files `files` are read, or else `fallback`: when a
+file isn't there, or can't be read. The app's self-test runs where it can see
+Ladder's folder but can't read what's in it.
+"""
+font_from(files, family, fallback) = all(isfile, files) && (try foreach(register_font, files); true catch; false end) ? family : fallback
+"""
 Read the palette's font from its files. As with the sheet's font, a built app
 forgets them when it starts. The files are looked for each time, not when the
 app is built, because a built app can run on a Mac that doesn't have them.
 """
-load_omni_font() = omni_family[] = all(isfile, OMNI_FONT_FILES) ? (foreach(register_font, OMNI_FONT_FILES); "Manrope") : SANS
+load_omni_font() = omni_family[] = font_from(OMNI_FONT_FILES, "Manrope", SANS)
 
 # The text of a page of a blog is in Literata, the typeface of the blog's site. fonts/ has its upright and
 # italic faces in three weights, with the font's licence (Literata-OFL.txt). Without them it's in Charter.
@@ -28406,7 +28412,7 @@ const SITE_FONT_FILES = [joinpath(@__DIR__, "fonts", "Literata-$s.ttf") for s in
 "The family of the text of a page of a blog: Literata once its files are read, and Charter before that or without them"
 const SITE_FONT = Ref(SERIF)
 "Read the typeface of a blog's pages from its files, as `load_omni_font` reads the palette's"
-load_site_font() = SITE_FONT[] = all(isfile, SITE_FONT_FILES) ? (foreach(register_font, SITE_FONT_FILES); "Literata") : SERIF
+load_site_font() = SITE_FONT[] = font_from(SITE_FONT_FILES, "Literata", SERIF)
 """
 The name of the face of the palette's font for `weight`. A font from a file is
 found only by the name of its weight, spelled as UI.jl spells it: \"SemiBold\",

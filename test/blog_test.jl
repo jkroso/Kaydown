@@ -137,3 +137,29 @@ end
     ["# Blog", "", "- [One](one.md), 1 January 2026", "", "## Book Reviews", "", "- [Gene](Book%20Reviews/Gene.md), 3 January 2026", "", "## Humans / Relationships", "", "- [On Men](Humans/Relationships/On%20Men.md), 2 January 2026"]
   @test occursin("<a href=\"../../index.html\">← b</a>", B.framed("<body>\n", "b", "t", men))
 end
+
+@testset "the list of a folder of a blog" begin
+  top = realpath(mktempdir())
+  put!(rel, text="x") = (path = joinpath(top, rel); mkpath(dirname(path)); write(path, text); path)
+  put!("Readme.md", "+++\ndescription = \"Welcome\"\n+++\n")
+  put!("Zebra.md", "+++\ndescription = \"A *striped* [horse](https://example.com)\"\n+++\n")
+  put!("apple.md", "+++\ncomplete = false\n+++\n")
+  notes = put!("Notes/Readme.md", "+++\ndescription = \"Things I noted\"\n+++\n")
+  put!("Notes/one.md", "12345")
+  put!("Notes/.hidden.md", "1234567890")
+  put!(".gitignore", "*.toml\n.bin\n"); put!(".canonignore", "# pictures\nimages/\n")
+  foreach(put!, ("Project.toml", "images/a.png", "favicon.ico", "tracker.html", "feed.jl", "docs/index.html", "index.md"))
+  # The site's own rules leave out hidden files, the Readme, and the names that the ignore files list. Capitals come first.
+  list = B.listing(top)
+  @test [x.name for x in list] == ["Notes", "Zebra.md", "apple.md", "docs", "feed.jl", "index.md"]
+  @test [x.icon for x in list] == [:folder, :markdown, :draft, :folder, :julia, :markdown]
+  # A folder is about what its Readme says, and is as big as the files that it holds, but the hidden ones
+  @test list[1].about == "Things I noted" && list[2].about == "A striped horse" && list[1].bytes == filesize(notes) + 5
+  @test list[2].made <= list[2].saved + 1
+  # A blog that Ladder publishes leaves out the site that it writes, and its front page. A section's list doesn't.
+  @test [x.name for x in B.listing(top, itself=false)] == ["Notes", "Zebra.md", "apple.md", "feed.jl"]
+  @test [x.name for x in B.listing(joinpath(top, "Notes"), top, itself=false)] == ["one.md"]
+  @test B.size_words(614) == "614 B" && B.size_words(3780) == "3.78 kB" && B.size_words(10150) == "10.15 kB" && B.size_words(1_950_000) == "1.95 MB" && B.size_words(1000) == "1 kB"
+  @test occursin(B.glob("*.toml"), "Project.toml") && !occursin(B.glob("*.toml"), "a/b.toml") && occursin(B.glob(".bin/"), ".bin") && occursin(B.glob("a?c"), "abc")
+  @test B.plain("A *b* [c](d) `e`") == "A b c e" && B.short(time()) == Libc.strftime("%d/%m/%y", time())
+end

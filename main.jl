@@ -473,6 +473,27 @@ const NIGHT = Palette(bg=colorant"rgb(30,30,32)", ink=colorant"rgb(222,220,214)"
 const THEMES = (sepia=SEPIA, paper=PAPER, night=NIGHT)
 const colours = deepcopy(SEPIA)
 
+# The colours of a page of a blog: the cream paper, warm ink and rubric red of
+# the blog's site, as the canon tool makes jake.rosoman.info. Code keeps the
+# colours of the sepia theme. See "the look of a blog's site".
+const SITE = Palette(bg=colorant"rgb(245,239,225)", ink=colorant"rgb(43,38,32)", dim=colorant"rgb(110,99,82)",
+                     faint=colorant"rgb(170,158,136)", marker=colorant"rgb(140,128,106)",
+                     line=colorant"rgb(221,209,184)", chip=colorant"rgb(236,227,207)",
+                     chip_line=colorant"rgb(221,209,184)", block=colorant"rgb(250,246,236)",
+                     head=colorant"rgb(236,227,207)", stripe=colorant"rgb(240,233,216)",
+                     accent=colorant"rgb(150,56,32)", select=RGBA(0.59, 0.22, 0.13, 0.2),
+                     panel=colorant"rgb(237,230,213)", hover=colorant"rgb(231,223,204)",
+                     active=colorant"rgb(224,215,194)", float=colorant"rgb(250,246,236)",
+                     shade=RGBA(0.2, 0.15, 0.05, 0.18),
+                     comment=SEPIA.comment, string=SEPIA.string, number=SEPIA.number,
+                     keyword=SEPIA.keyword, call=SEPIA.call, type=SEPIA.type)
+"How many times the size of its text a page of a blog is wide: the site's 52rem column at its 19px text"
+const SITE_MEASURE = 43.8
+"The colours that a site's rules draw darker, under the heading of a list, and the gold of a review's stars"
+const SITE_RULE = colorant"rgb(196,179,145)"
+const SITE_STARS = colorant"rgb(143,101,22)"
+const SITE_INK2 = colorant"rgb(87,78,65)"   # the site's text that's a little lighter than its ink, like a description
+
 # A component's label is 13/12 of its theme's size. This makes a label as tall as the page's text.
 const LABEL = 12 / 13
 
@@ -1167,6 +1188,7 @@ end
   side::px = PANEL_W                    # how wide the sidebar is. Drag its right edge to change it.
   hidden::Bool = false                  # the sidebar lists the hidden files and folders too: the ones whose names start with a dot
   theme::Symbol = :sepia
+  look::Symbol = :own                   # :site on a page of a blog, which looks as the blog's site does. See `page_look`.
   applied::Symbol = :none               # the theme the window was last told about
   font::String = SERIF                  # of the page's text
   weight::Int = 400                     # how heavy the page's text is: the Mac's number for a weight, like 300 for Light. 400 is Regular.
@@ -1366,7 +1388,8 @@ unlist!(d::Document) = begin
   d
 end
 
-const MARKDOWN = (".md", ".markdown", ".mdx")
+# A book review, as a blog's site tool reads it, is Markdown with a header that says the book's title
+const MARKDOWN = (".md", ".markdown", ".mdx", ".review")
 # A folder's own page, `.ladder`, is Markdown too: see "a folder's own page" below
 ismarkdown(path) = lowercase(splitext(path)[2]) in MARKDOWN || basename(path) == FOLDER_PAGE
 
@@ -1392,6 +1415,7 @@ build_editor(path) = begin
   e = Editor()
   load_sheet_font()
   load_omni_font()
+  load_site_font()
   e.nodes[:input] = own!(e, TextInput(placeholder="Find a file", font_family=SANS, font_size=15px,
                                       look=(_, text) -> Row(width(grow=grow), height(grow=grow), clip=true, text)))
   if isdir(path)
@@ -1565,6 +1589,16 @@ that it holds, as a folder of notes lists the pages that link to the page.
 It's as wide as the page's text, `e.width`, and it scrolls with the text.
 """
 page_foot(e, d, o) = nothing
+
+"""
+What shows in place of the card of the front matter of the page `o`, which the
+directory `d` holds, while the caret isn't in it: a node, or nothing for the
+card. A kind of folder has a method of this to show the front matter of the
+pages that it holds its own way, as a blog shows a book review's title and
+stars. `rows` are the front matter's keys, each as its line, the key and what
+it's set to, as it's written.
+"""
+matter_view(e, d, o, rows) = nothing
 
 "The object of the page of text that shows, or nothing. One that the sidebar doesn't list is found again after a second, and not in each frame."
 text_object(e) = begin
@@ -1814,13 +1848,19 @@ input(e) = e.nodes[:input]::TextInput
 # --- faces -----------------------------------------------------------------------------
 
 const TEXT_SIZE = 17px   # of the page's text, before it's zoomed
-body(e) = Face(e.font, nearest_weight(e.font, e.weight).style, TEXT_SIZE * e.zoom, colours.ink, false)
+# A page of a blog has the typeface of the blog's site, in its usual weight. See "the look of a blog's site".
+body(e) = e.look == :site ? Face(SITE_FONT[], "", TEXT_SIZE * e.zoom, colours.ink, false) :
+                            Face(e.font, nearest_weight(e.font, e.weight).style, TEXT_SIZE * e.zoom, colours.ink, false)
 const HEADINGS = (2.1, 1.75, 1.4, 1.2, 1.05, 1.0)
+"How much bigger than the text each level of heading is on a page of a blog, as its site has them"
+const SITE_HEADINGS = (2.3, 1.4, 1.12, 1.0, 1.0, 1.0)
 
 "The face a line's plain text is drawn in"
 face(e, line::Line) = begin
   b = body(e)
   k = line.kind
+  # A blog's site has its headings a little lighter than bold
+  k == Kind.heading && e.look == :site && return Face(b, style=line.level == 4 ? "SemiBold Italic" : "SemiBold", size=b.size * SITE_HEADINGS[line.level])
   k == Kind.heading ? Face(emboldened(b), size=b.size * HEADINGS[line.level]) :
   # A callout's text is the page's own. Its title is bold, in the colour of its kind.
   opens_callout(line) ? Face(emboldened(b), color=callout_colour(line.lang)) :
@@ -2660,7 +2700,9 @@ laid(e, text, line::Line, raw::Bool, i::Int, wide=e.width) = begin
   hang = k in (Kind.bullet, Kind.ordered, Kind.todo) ? sum(p -> measure(p.face, p.text), ps[1:min(end, line.level > 0 ? 2 : 1)], init=0px) : left
   above = k == Kind.heading ? lh * 0.3 : 0px
   below = k == Kind.heading ? lh * 0.12 : 0px
-  wrap(ps, wide; lh, size=base.size, left, hang, above, below, kind=k, raw)
+  f = wrap(ps, wide; lh, size=base.size, left, hang, above, below, kind=k, raw)
+  # A blog's site has its first heading in the middle of the page
+  k == Kind.heading && line.level == 1 && e.look == :site ? align(f, wide, :center) : f
 end
 
 "Forget every layout, after something that changes how all the text is drawn"
@@ -4498,7 +4540,7 @@ room(l::Breadcrumb) = (e = editor(l); (l.inline ? min(LISTING_W, e.width) : e.wi
 filepage(l::Breadcrumb, path) = begin
   e = editor(l)
   wide = room(l) - 28px   # the page has 14px of room on each side
-  kept!(l, path, (:page, wide, e.zoom, e.theme, e.font, e.weight)) do path
+  kept!(l, path, (:page, wide, e.zoom, look_key(e), e.font, e.weight)) do path
     found = reading(path, tidy=false)
     found === nothing && return nothing
     lines, more = found
@@ -10776,7 +10818,7 @@ lay_diagram!(v::ZoomView) = begin
   m.editing = v.block > 0 && !readonly(e.buf)
   m.keys = part!(() -> ZoomArea(of=v), v, :area)
   m.onchange = m -> write_diagram!(v, m.code)
-  key = (code, e.theme, e.font, e.zoom)
+  key = (code, look_key(e), e.font, e.zoom)
   v.drawn !== nothing && v.drawn[1] == key && return v.drawn[2]
   root = with_theme(component_theme(e.zoom)) do
     inner = geometry(m)
@@ -21947,6 +21989,9 @@ end
 matter_card(e, t) = begin
   rows = matter_rows(e.buf.lines, t)
   card = first_answer(MATTER_CARDS, e, rows)
+  # A kind of folder can show the front matter of a page that it holds its own way, as a blog shows a book review's
+  o = card === nothing ? text_object(e) : nothing
+  o === nothing || (card = matter_view(e, o.parent, o, rows))
   if card === nothing
     # An email that came or went shows the top of an email in place of its keys. That top has levels of its own.
     card = email_shows(e, Dict(lowercase(k) => v for (_, k, v) in rows)) ? email_head!(e) : node!(MatterCard, e, :matter)
@@ -22221,8 +22266,10 @@ text_width(e) = begin
   alone = lowered(e) !== nothing
   room = w - ((e.panel || sliding(e)) && !alone ? panel_w(e) : 0px) - 2PAGE_X - gutter(e)
   # A file of code or of text takes all the room that the window has, and so do a CSV file's table and
-  # the lines of a block that fill the window. A page is no wider than the settings say.
-  numbered(e.buf) || alone || json_page(e.buf) || bytes_page(e.buf) || sheet_page(e.buf) || own_page(e) ? max(room, 240px) : clamp(room, 240px, e.widest * e.zoom)
+  # the lines of a block that fill the window. A page is no wider than the settings say. A page of a blog is
+  # as wide as its site's text, for as many words to a line.
+  numbered(e.buf) || alone || json_page(e.buf) || bytes_page(e.buf) || sheet_page(e.buf) || own_page(e) ? max(room, 240px) :
+    clamp(room, 240px, e.look == :site ? SITE_MEASURE * TEXT_SIZE * e.zoom : e.widest * e.zoom)
 end
 
 """
@@ -25707,6 +25754,7 @@ onkey(b::ToolButton, ::KeyPress{Keys.mouse_left}) = begin
   b.action == :back && go_back!(e)
   b.action == :forward && go_forward!(e)
   b.action == :job && make_job!(e)
+  b.action in BLOG_ACTIONS && blog_act!(e, b.action)
   haskey(BUTTONS, b.action) && BUTTONS[b.action].run(e)
   hush!(b)
   focus(e)
@@ -25765,6 +25813,7 @@ tip(b::ToolButton) = begin
     return to === nothing ? "No file to go forward to" : "Forward to $to" * hint(e, :forward)
   end
   b.action == :job && return job_tip(e)
+  b.action in BLOG_ACTIONS && return blog_tip(e, b.action)
   haskey(BUTTONS, b.action) && return BUTTONS[b.action].tip(e)
   b.action == :outside || return ""
   app = opener(e.buf.path)
@@ -26014,6 +26063,7 @@ the startup page added, when that code says so
 off(b::ToolButton) = (b.action == :job && (!Centient.available() || making(editor(b)))) ||
                      (b.action == :back && step_words(editor(b)) === nothing) ||
                      (b.action == :forward && step_words(editor(b), editor(b).ahead) === nothing) ||
+                     (b.action in BLOG_ACTIONS && blog_off(editor(b), b.action)) ||
                      # A button that code from the startup page added says so itself
                      (haskey(BUTTONS, b.action) && BUTTONS[b.action].off(editor(b)))
 
@@ -26113,8 +26163,9 @@ describe(t::TopBar) = begin
   # While the page shows as slides or as an app, the bar is empty. It's still what you drag to move the window.
   (slideshow(e) === nothing && !as_app(e)) || return Row(width(grow=grow), height(TOPBAR_H), name="TopBar")
   b = e.buf
-  # The buttons that code from the startup page adds for the page that shows, like the ones that answer an email
-  more = bar_parts(e)
+  # The buttons that code from the startup page adds for the page that shows, like the ones that answer an email,
+  # and the ones of a page of a blog, which publish it
+  more = (bar_parts(e)..., blog_part(e)...)
   checks = check_part(e)
   mode = mode_part(e)
   # What a file that's only shown says of itself, like how many rows a CSV file has, can need more room than that.
@@ -26162,7 +26213,9 @@ describe(t::TopBar) = begin
       # The words have the room that the picture or the slider, the button after it and the edge leave them.
       # What covers the page's whole space, like a desktop, is no file that's only shown, so the bar says nothing of it.
       # Nor does it say anything when the window shows no file.
+      # A folder of a blog that shows only its list has the blog's buttons in place of the words
       (page_covered(e) || nofile(e) ? () :
+       readonly(b) && page_object(e) isa BlogFolder ? (more..., mode..., button(e, :outside, "box-arrow-up-right")) :
        readonly(b) ? (said_part(isempty(b.about) ? "Read only" : b.about * "  ·  Read only", side - 40px - (isempty(mode) ? 0px : MODE_W + grown)),
                       mode...,
                       # The app that the Mac uses for the file can change it, so a button opens the file there
@@ -28342,6 +28395,14 @@ forgets them when it starts. The files are looked for each time, not when the
 app is built, because a built app can run on a Mac that doesn't have them.
 """
 load_omni_font() = omni_family[] = all(isfile, OMNI_FONT_FILES) ? (foreach(register_font, OMNI_FONT_FILES); "Manrope") : SANS
+
+# The text of a page of a blog is in Literata, the typeface of the blog's site. fonts/ has its upright and
+# italic faces in three weights, with the font's licence (Literata-OFL.txt). Without them it's in Charter.
+const SITE_FONT_FILES = [joinpath(@__DIR__, "fonts", "Literata-$s.ttf") for s in ("Regular", "Italic", "SemiBold", "SemiBoldItalic", "Bold", "BoldItalic")]
+"The family of the text of a page of a blog: Literata once its files are read, and Charter before that or without them"
+const SITE_FONT = Ref(SERIF)
+"Read the typeface of a blog's pages from its files, as `load_omni_font` reads the palette's"
+load_site_font() = SITE_FONT[] = all(isfile, SITE_FONT_FILES) ? (foreach(register_font, SITE_FONT_FILES); "Literata") : SERIF
 """
 The name of the face of the palette's font for `weight`. A font from a file is
 found only by the name of its weight, spelled as UI.jl spells it: \"SemiBold\",
@@ -33115,7 +33176,7 @@ end
 
 "Lay out the documentation of `t` for a box that's `wide`, if it isn't laid out for that yet. Its text is a little smaller than the page's."
 page!(e, t::Detail, wide) = begin
-  key = (wide, e.zoom, e.theme, e.font, e.weight)
+  key = (wide, e.zoom, look_key(e), e.font, e.weight)
   (t.key == key || isempty(t.lines)) && return t
   kinds = classify(t.lines)
   zoom = e.zoom
@@ -35180,12 +35241,15 @@ end
 
 "What the window shows, and what Ladder does in each frame before it"
 describe_window(e::Editor) = begin
-  use!(getproperty(THEMES, e.theme))
+  # A page of a blog looks as the blog's site does, whatever the theme. Text laid out in the other look is laid out again.
+  look = page_look(e)
+  look == e.look || (e.look = look; restyle!(e))
+  use!(look == :site ? SITE : getproperty(THEMES, e.theme))
   use_code_font!(e)
   win = window_of(e)
-  if win !== nothing && e.applied != e.theme
-    set_dark!(win, e.theme == :night)
-    e.applied = e.theme
+  if win !== nothing && e.applied != look_key(e)
+    set_dark!(win, look_key(e) == :night)
+    e.applied = look_key(e)
   end
   receive!(e)
   await_default!(e)
@@ -40481,9 +40545,15 @@ end
 #     Ladder.BlogDirectory
 #     ```
 #
-# The folder's own page lists the posts, the newest first, and says which the
-# site hasn't got yet. The posts of each folder inside the blog are under a
-# heading of their own: that folder is a section of the blog. Its buttons:
+# A folder inside the blog is a section of it. Each folder of the blog shows
+# as its site shows it: its Readme, or the blog's index.md, and under it a list
+# of the folder's files and folders, with what each is about, how big it is,
+# and when it was made and last saved. blog.jl says what the list leaves out.
+# A click on a folder in the sidebar shows that folder's page, and the sidebar
+# lists the folder. A folder with no Readme shows only its list. Every page of
+# the blog has the look of the site: see "the look of a blog's site".
+#
+# The top bar of a page of the blog has three buttons:
 #
 #   - Publish makes each post a page of HTML, as ⌘⇧E does for one page, in
 #     the folder `docs` of the blog. It writes a first page that lists the
@@ -40491,10 +40561,11 @@ end
 #     Then, when git keeps the blog and it has a remote called origin, Ladder
 #     commits the folder `docs` and pushes it. It commits nothing else: the
 #     posts' own files are yours to commit, since a draft is in them.
-#   - Open Site shows the site in the browser: at the address that the blog's
-#     front page gives, or at its address on GitHub Pages, or else the first
+#   - Open Site shows the page in the browser as the site has it: at the
+#     address that the blog's front page gives, or at its address on GitHub
+#     Pages, and then the page's path. With no address, it shows the first
 #     page in `docs`.
-#   - New Post starts a page in the folder.
+#   - New Post starts a page in the folder that shows.
 #
 # A blog with a script of its own at `.bin/publish` makes its site and sends
 # it itself. Publish runs that script in the blog's folder, and writes no
@@ -40508,12 +40579,30 @@ end
 "A blog: a folder whose pages are the posts of a site that Publish writes and sends to GitHub, or that the blog's own script makes and sends"
 @def struct BlogDirectory <: AbstractDirectory end
 
+"A folder inside a blog: a section of the blog, whose page shows as the site shows it"
+@def struct BlogSection <: AbstractDirectory end
+
+"A folder of a blog: the blog's own folder, or a section of it"
+const BlogFolder = Union{BlogDirectory,BlogSection}
+
 entry_icon(::BlogDirectory) = "rss"
-entry_marks(e, o::BlogDirectory) = git_marks(e, o)
-entry_marks(e, ::BlogDirectory, o::FSObject) = git_marks(e, o)
-# A folder in a blog is a section of it. It has the kind that its own page gives it, or that Ladder finds for it, like any folder.
-FS.kind(::BlogDirectory, path::FSPath) = folder_kind(path)
-push!(BLOCK_ICONS, "rss", "globe", "cloud-upload", "pencil-square")
+entry_marks(e, o::BlogFolder) = git_marks(e, o)
+entry_marks(e, ::BlogFolder, o::FSObject) = git_marks(e, o)
+# A folder in a blog is a section of it, unless its own page gives it another kind, or Ladder finds one for it
+FS.kind(::BlogFolder, path::FSPath) = (k = folder_kind(path); k === FS.Directory ? BlogSection : k)
+push!(BLOCK_ICONS, "rss", "globe", "cloud-upload", "pencil-square", "folder-fill", "markdown", "pencil", "book", "file-earmark", "star-fill")
+
+"The blog's own folder, of the folder `d` of a blog"
+blog_root(d::BlogDirectory) = d
+blog_root(d::BlogSection) = d.parent isa BlogFolder ? blog_root(d.parent) : d
+
+"The folder of a blog that the page that shows is, or that holds it, or nothing for a page that's in no blog"
+page_blog_folder(e) = begin
+  o = page_object(e)
+  o === nothing && (o = text_object(e))
+  o isa BlogFolder && return o
+  o isa FSObject && !(o isa AbstractDirectory) && o.parent isa BlogFolder ? o.parent : nothing
+end
 
 "The publishing of a blog that's under way: the posts that are still to write, how many there were, what it does now, and git's push while it runs"
 @def mutable struct Publishing
@@ -40781,64 +40870,320 @@ send_step!(job::Publishing) = begin
   wrote * " git couldn't send it: " * String(first(split(isempty(said) ? "it gave no reason" : said, '\n')))
 end
 
-"What the page shows of a blog: its posts, and the buttons that publish it"
-@def mutable struct BlogView <: SemanticUI
-  path::String = ""
-  rows::Dict{Any,PageRow} = Dict{Any,PageRow}()
-  buttons::Dict{Any,PageButton} = Dict{Any,PageButton}()
+"""
+The page of the folder `d` of a blog that goes over its list, as its site
+shows it: the blog's index.md or Readme, or a section's Readme. It's "" for a
+folder that has none.
+"""
+front_page(d::BlogDirectory) = Blogs.front(path_of(d))
+front_page(d::BlogSection) = begin
+  folder = path_of(d)
+  names = try readdir(folder) catch; String[] end
+  k = findfirst(Blogs.isreadme, names)
+  k === nothing ? "" : joinpath(folder, names[k])
 end
 
-page_view(e, d::BlogDirectory) = (path = path_of(d); node!(() -> BlogView(path=path), e, (:blog, path)))
-# A click on a blog in the sidebar shows its own page, and the sidebar lists its posts
-open!(e, d::BlogDirectory; record=true) = (open!(e, string(d.path); record); go_folder!(e, string(d.path)))
+# A click on a folder of a blog shows its page as the site does: its Readme, with the list of the folder under
+# it, or only the list when it has no Readme. The sidebar lists the folder.
+open!(e, d::BlogFolder; record=true) = begin
+  top = front_page(d)
+  open!(e, isempty(top) ? string(d.path) : top; record)
+  go_folder!(e, string(d.path))
+end
+
+page_foot(e, d::BlogFolder, o::FS.File) = path_of(o) == front_page(d) ? site_listing(e, d) : nothing
+page_view(e, d::BlogFolder) = site_listing(e, d)
 
 "Show the site of the blog in `folder` in the browser: at its address on the web when it has one, or else the first page that Publish wrote"
 open_site(folder) = begin
   site = blog_address(folder)
   page = joinpath(Blogs.site(folder), "index.html")
-  isempty(site) ? (isfile(page) && open_url(page)) : open_url(site)
+  isempty(site) ? (isfile(page) && BROWSER[](page)) : BROWSER[](site)
   nothing
 end
 
-describe(v::BlogView) = begin
-  e = editor(v)
-  folder = v.path
-  list = blog_posts(folder)
-  job = get(PUBLISHING, folder, nothing)
-  redraw_in!(e, job === nothing ? 2.1 : 0.03)   # a post that was saved shows here soon after
-  itself = Blogs.itself(folder)
-  stands = [blog_standing(folder, p) for p in list]
-  waiting = count(s -> s in (:new, :changed), stands)
-  about = join([posts_words(length(list));
-                (waiting == 0 ? String[] : ["$waiting that the site hasn't got as it is"]);
-                (count(==(:draft), stands) == 0 ? String[] : [count(==(:draft), stands) == 1 ? "1 draft" : "$(count(==(:draft), stands)) drafts"])], "  ·  ")
-  said = job === nothing ? get(PUBLISHED, folder, "") :
-         job.step == :script ? "Your script $(Blogs.SCRIPT) is making the site and sending it…" :
-         job.step == :send ? "Sending the site to GitHub…" : "Writing post $(job.count - length(job.posts)) of $(job.count)…"
-  row((p, s)) = page_row!(v, (:post, p.path), _ -> (show_path!(e, p.path); nothing),
-    Icon("file-earmark-text", size=13px, color=colours.dim),
-    Box(label(p.title, 13px, color=s == :draft ? colours.dim : colours.ink)),
-    Box(width(grow=grow)),
-    (isempty(Blogs.words(s)) ? () : (Box(label(Blogs.words(s), 12px, color=s == :draft ? colours.faint : colours.accent)),))...,
-    Box(label(Blogs.long(p.day), 12px, color=colours.dim)))
-  # The posts at the top of the blog come first, and then the posts of each section, under its name
-  listed = Any[]
-  for section in Blogs.sections(list)
-    push!(listed, page_heading(isempty(section) ? "Posts" : replace(section, "/" => " / ")))
-    append!(listed, [row(ps) for ps in zip(list, stands) if ps[1].section == section])
+"""
+The address of the page at `path` on the site of the blog in `folder`: the
+site's address, and then the page's path in the blog, as the site names it. A
+folder and its Readme are the folder's own address, which ends in a /. A post
+ends in .html. It's "" when the site has no address.
+"""
+site_address(folder, path) = begin
+  site = blog_address(folder)
+  isempty(site) && return ""
+  rel = isempty(path) ? "." : relpath(path, folder)
+  (rel == "." || startswith(rel, "..")) && return site
+  parts = String.(split(rel, '/'))
+  name = parts[end]
+  if isdir(path)
+    push!(parts, "")
+  elseif Blogs.isreadme(name) || (length(parts) == 1 && lowercase(name) == Blogs.INDEX)
+    parts[end] = ""
+  else
+    ending = Blogs.ending(name, true)
+    ending === nothing || (parts[end] = name[1:end-length(ending)] * ".html")
   end
-  # A blog that publishes itself can always publish again: its script makes more than the posts
-  Column(width(grow=grow), Alignment.Start, name="Blog",
-    page_title("rss", blog_name(folder), about),
-    Row(padding(8px, 0px, 10px, 8px), child_gap=8px,
-      page_button!(v, :publish, _ -> publish!(folder), icon="cloud-upload", words="Publish", off=job !== nothing || !(itself || any(s -> s != :draft, stands))),
-      page_button!(v, :open, _ -> open_site(folder), icon="globe", words="Open Site", off=!isfile(joinpath(Blogs.site(folder), "index.html")) && isempty(Blogs.said_address(folder))),
-      page_button!(v, :new, _ -> new_page!(e, folder), icon="pencil-square", words="New Post")),
-    (isempty(said) ? () : (page_note(said),))...,
-    (isempty(list) ? (page_heading("Posts"), page_note("This folder has no page yet. New Post starts one.")) : listed)...)
+  parts == [""] && return site   # the blog's own Readme is the site's first page
+  (endswith(site, "/") ? site : site * "/") * join([replace(p, " " => "%20") for p in parts], "/")
 end
 
-cursor(::BlogView) = :arrow
+"Show the page that's in the window as the blog in `folder` has it on its site, or else the site's first page"
+open_site_page(e, folder) = begin
+  url = site_address(folder, e.buf.path)
+  isempty(url) ? open_site(folder) : BROWSER[](url)
+  nothing
+end
+
+# --- the list of a folder of a blog -----------------------------------------------------------
+#
+# Under a folder's Readme, a list of what the folder holds, as the blog's site
+# has it: a line for each file and folder, with its icon and name, what it's
+# about, how big it is, and the days that it was made and last saved. A
+# section's list starts with a line that goes up to the folder above. A click
+# on a line shows that file or folder. A post that the site hasn't got as it
+# is has a dot after its name: that's Ladder's own, and the site has none.
+
+"The list of a folder of a blog, as a part of the page"
+@def mutable struct SiteListing <: SemanticUI
+  path::String = ""   # the folder
+  blog::String = ""   # the blog's own folder
+  rows::Dict{Any,Any} = Dict{Any,Any}()
+end
+
+"A line of the list of a folder of a blog. Its name is the site's red while the mouse is over it."
+@def mutable struct ListingRow <: SemanticUI
+  act::Any = nothing     # what a click does, a function of the window
+  cells::Any = nothing   # what the line shows, a function of whether the mouse is over it
+  last::Bool = false     # the last line has no rule under it
+end
+
+describe(r::ListingRow) = Row(width(grow=grow), Alignment.Center, name="Line",
+  (r.last ? () : (border(1px, :solid, colours.line)[:bottom],))..., r.cells(ishovered(r))...)
+cursor(::ListingRow) = :hand
+onkey(r::ListingRow, ev::KeyPress{Keys.mouse_left}) = r.act === nothing ? nothing : (r.act(ev.window); handled)
+
+"The list of the folder `d` of a blog, as a part of the page"
+site_listing(e, d::BlogFolder) = begin
+  folder = path_of(d)
+  v = node!(() -> SiteListing(path=folder), e, (:listing, folder))
+  v.blog = path_of(blog_root(d))
+  v
+end
+
+"What each folder of a blog holds, as its list has it, by the folder. Each is read again after 2 seconds."
+const SITE_LISTS = Dict{String,Tuple{Float64,Vector{Blogs.Entry}}}()
+
+"The entries of the list of `folder`, of the blog in `blog`"
+site_entries(folder, blog) = begin
+  kept = get(SITE_LISTS, folder, nothing)
+  kept !== nothing && time() - kept[1] < 2 && return kept[2]
+  list = try Blogs.listing(folder, blog, itself=Blogs.itself(blog)) catch; Blogs.Entry[] end
+  SITE_LISTS[folder] = (time(), list)
+  list
+end
+
+"The icon of an entry of a list, and its colour, as the site's icons have them"
+listing_icon(x::Blogs.Entry) =
+  x.icon == :folder ? ("folder-fill", colorant"rgb(192,149,83)") :
+  x.icon == :draft ? ("pencil", colorant"rgb(214,112,82)") :
+  x.icon == :review ? ("book", colours.dim) :
+  x.icon == :markdown ? ("markdown", colours.dim) : (file_icon(x.path), colours.dim)
+
+describe(v::SiteListing) = begin
+  e = editor(v)
+  redraw_in!(e, 2.1)   # a file that's saved or added shows here soon after
+  list = site_entries(v.path, v.blog)
+  stale = Set(p.path for p in blog_posts(v.blog) if blog_standing(v.blog, p) in (:new, :changed))
+  font = SITE_FONT[]
+  s = body(e).size * 0.8   # the list's text is a little smaller than the page's, as the site's is
+  small = s * 0.9
+  said(t, size; style="", color=colours.ink) = Box(Text(t, size=size, family=font, subfamily=style, color=color, wrap=WrapMode.none))
+  # The columns of the size and the days are as wide as they need to be. The names and what each is about share the rest, 3 to 4.
+  size_w = measure(Face(font, "", small, colours.dim, false), "000.00 kB") + s
+  day_w = measure(Face(font, "", small, colours.dim, false), "00/00/00") + s
+  rest = max(240px, e.width - size_w - 2day_w)
+  name_w, about_w = rest * 3 / 7, rest * 4 / 7
+  pad = padding(0px, s * 0.45)
+  right(w, x) = Row(fixed(w), height(grow=grow), pad, justify=Alignment.End, x)
+  heading(t, w; at_end=false) = (x = said(uppercase(t), s * 0.78, style="SemiBold", color=colours.dim);
+                                at_end ? right(w, x) : Row(fixed(w), pad, Alignment.Start, x))
+  head = Row(width(grow=grow), Alignment.Center, border(1px, :solid, SITE_RULE)[:bottom],
+    heading("Name", name_w), heading("Description", about_w),
+    heading("Size", size_w, at_end=true), heading("Created", day_w, at_end=true), heading("Modified", day_w, at_end=true))
+  line(key, path, cells) = begin
+    r = get!(() -> own!(v, ListingRow()), v.rows, key)
+    r.act, r.cells, r.last = _ -> (show_path!(e, path); nothing), cells, false
+    r
+  end
+  name_cell(icon, colour, name, over, dot=false) =
+    Row(fixed(name_w), height(grow=grow), padding(s * 0.45, s * 1.1, s * 0.45, 0px), Alignment.Center, child_gap=s * 0.6, clip=true,
+      Icon(icon, size=s * 1.15, color=colour),
+      said(name, s, style="SemiBold", color=over ? colours.accent : colours.ink),
+      (dot ? (Box(width(6px), height(6px), radius(3px), background(colours.accent)),) : ())...,
+      Box(width(grow=grow)))
+  rows = Any[]
+  # A section's list starts with a line that goes up to the folder above it
+  if rstrip(v.path, '/') != rstrip(v.blog, '/')
+    up = dirname(rstrip(v.path, '/'))
+    push!(rows, line((:up, up), up, over -> (name_cell("folder-fill", colorant"rgb(192,149,83)", "..", over), Box(fixed(about_w)))))
+  end
+  for x in list
+    icon, colour = listing_icon(x)
+    push!(rows, line((:entry, x.path), x.path, over -> (
+      name_cell(icon, colour, x.name, over, x.path in stale),
+      Box(fixed(about_w), padding(s * 0.45, s * 1.1, s * 0.45, 0px), Alignment.Start,
+        Text(x.about, size=s, family=font, subfamily="Italic", color=SITE_INK2, wrap=WrapMode.words)),
+      right(size_w, said(Blogs.size_words(x.bytes), small, color=colours.dim)),
+      right(day_w, said(Blogs.short(x.made), small, color=colours.dim)),
+      right(day_w, said(Blogs.short(x.saved), small, color=colours.dim)))))
+  end
+  Column(width(grow=grow), Alignment.Start, padding(s * 1.6, 0px, 0px, 0px), name="Listing",
+    head, (isempty(rows) ? () : (last(rows).last = true; rows))...)
+end
+
+cursor(::SiteListing) = :arrow
+
+# --- a book review in a blog ------------------------------------------------------------------
+#
+# A book review is Markdown with a header that says the book's title, an
+# address to read about it, its rating out of 5, the year it came out and a
+# line on what it's about:
+#
+#     +++
+#     title = "The Selfish Gene"
+#     link = "https://en.wikipedia.org/wiki/The_Selfish_Gene"
+#     rating = 5
+#     pubDate = 1976-01-01
+#     description = "Extends Darwin's theory of evolution"
+#     +++
+#
+# In a blog, the top of the review shows those as the site does: the title in
+# the middle, then the address's site, the stars and the year, then the line
+# in italics. The header's own lines show while the caret is in them.
+
+"The top of a book review in a blog, in place of the card of its front matter"
+@def mutable struct ReviewHead <: SemanticUI
+  said::Dict{String,String} = Dict{String,String}()   # what the header sets, by its keys in small letters
+  link::Any = nothing                                 # the address under the title, which a click opens
+end
+
+"An address at the top of a book review. A click opens it in the browser."
+@def mutable struct SiteLink <: SemanticUI
+  url::String = ""
+  words::String = ""
+  size::px = 13px
+end
+
+describe(l::SiteLink) = Box(name="Link", border(1px, :solid, RGBA(colours.accent, 0.34))[:bottom],
+  Text(l.words, size=l.size, family=SITE_FONT[], color=colours.accent, wrap=WrapMode.none))
+cursor(::SiteLink) = :hand
+onkey(l::SiteLink, ::KeyPress{Keys.mouse_left}) = (isempty(l.url) || BROWSER[](l.url); handled)
+
+matter_view(e, ::BlogFolder, ::FS.File{:review}, rows) = begin
+  h = node!(ReviewHead, e, :review_head)
+  h.said = Dict(lowercase(k) => String(strip(v, ['"', '\''])) for (_, k, v) in rows)
+  h
+end
+
+describe(h::ReviewHead) = begin
+  e = editor(h)
+  s = body(e).size
+  font = SITE_FONT[]
+  url = get(h.said, "link", "")
+  m = match(r"^[a-z]+://([^/?#]+)"i, url)
+  h.link === nothing && (h.link = own!(h, SiteLink()))
+  h.link.url, h.link.words, h.link.size = url, m === nothing ? url : String(m[1]), s * 0.9
+  stars = clamp(something(tryparse(Int, get(h.said, "rating", "")), 0), 0, 5)
+  y = match(r"\d{4}", get(h.said, "pubdate", ""))
+  about = Blogs.plain(get(h.said, "description", ""))
+  meta = Any[]
+  isempty(h.link.words) || push!(meta, h.link)
+  # Literata has no star, so the stars are icons
+  stars > 0 && push!(meta, Row(child_gap=s * 0.12, (Icon("star-fill", size=s * 0.85, color=SITE_STARS) for _ in 1:stars)...))
+  y === nothing || push!(meta, Box(Text(String(y.match), size=s * 0.9, family=font, color=colours.dim, wrap=WrapMode.none)))
+  Column(width(grow=grow), Alignment.Center, padding(s * 1.2, 0px, s * 1.6, 0px), child_gap=s * 1.1, name="Review",
+    Box(width(grow=grow), Text(get(h.said, "title", ""), size=2.3s, family=font, subfamily="SemiBold", color=colours.ink, wrap=WrapMode.words, align=TextAlign.Center)),
+    (isempty(meta) ? () : (Row(Alignment.Center, child_gap=s * 1.1, meta...),))...,
+    (isempty(about) ? () : (Box(fixed(min(e.width, 26 * 1.12s)), Text(about, size=1.12s, family=font, subfamily="Italic", color=SITE_INK2, wrap=WrapMode.words, align=TextAlign.Center)),))...)
+end
+
+onkey(h::ReviewHead, ev::KeyPress{Keys.mouse_left}) = click_page!(h, ev)
+
+# --- the buttons of a page of a blog ------------------------------------------------------------
+
+"The actions of the buttons that the top bar has on a page of a blog"
+const BLOG_ACTIONS = (:publish, :open_site, :new_post)
+
+"""
+What the top bar has on a page of a blog: the buttons that publish the blog,
+show the page on its site and start a post, and a word on how the last
+publishing went. Publish's tooltip says the rest.
+"""
+blog_part(e) = begin
+  d = page_blog_folder(e)
+  d === nothing && return ()
+  folder = path_of(blog_root(d))
+  going = haskey(PUBLISHING, folder)
+  going && redraw_in!(e, 0.03)   # each frame does the next part of the publishing
+  last = get(PUBLISHED, folder, "")
+  said = going ? "Publishing…" : isempty(last) ? "" : startswith(last, "Published") ? "Published" : "Not published"
+  ((isempty(said) ? () : (Box(height(28px), padding(6px, 0px), label(said, 12px, color=colours.dim)),))...,
+   button(e, :publish, "cloud-upload"), button(e, :open_site, "globe"), button(e, :new_post, "pencil-square"), Box(width(4px)))
+end
+
+"Do what the button of a page of a blog with the action `action` does"
+blog_act!(e, action) = begin
+  d = page_blog_folder(e)
+  d === nothing && return nothing
+  root = path_of(blog_root(d))
+  action == :publish && publish!(root)
+  action == :open_site && open_site_page(e, root)
+  action == :new_post && new_page!(e, path_of(d))
+  nothing
+end
+
+"What the tooltip of the button of a page of a blog with the action `action` says"
+blog_tip(e, action) = begin
+  d = page_blog_folder(e)
+  d === nothing && return ""
+  root = path_of(blog_root(d))
+  action == :new_post && return "Start a post in $(basename(path_of(d)))"
+  action == :open_site && return isempty(blog_address(root)) ? "Show the site that Publish wrote" : "Show this page on the site"
+  job = get(PUBLISHING, root, nothing)
+  job === nothing || return job.step == :script ? "Your script $(Blogs.SCRIPT) is making the site and sending it…" :
+                            job.step == :send ? "Sending the site to GitHub…" : "Writing post $(job.count - length(job.posts)) of $(job.count)…"
+  stands = [blog_standing(root, p) for p in blog_posts(root)]
+  waiting, drafts = count(s -> s in (:new, :changed), stands), count(==(:draft), stands)
+  join(["Publish $(blog_name(root))";
+        (waiting == 0 ? String[] : ["$(posts_words(waiting)) that the site hasn't got as $(waiting == 1 ? "it is" : "they are")"]);
+        (drafts == 0 ? String[] : [drafts == 1 ? "1 draft" : "$drafts drafts"]);
+        (isempty(get(PUBLISHED, root, "")) ? String[] : ["Last time: " * PUBLISHED[root]])], "  ·  ")
+end
+
+"True when the button of a page of a blog with the action `action` does nothing now"
+blog_off(e, action) = begin
+  d = page_blog_folder(e)
+  d === nothing && return true
+  root = path_of(blog_root(d))
+  action == :publish && return haskey(PUBLISHING, root) || !(Blogs.itself(root) || any(p -> !p.draft, blog_posts(root)))
+  action == :open_site && return isempty(blog_address(root)) && !isfile(joinpath(Blogs.site(root), "index.html"))
+  false
+end
+
+# --- the look of a blog's site ----------------------------------------------------------------
+#
+# Every page of a blog looks as the blog's site does, as the canon tool makes
+# jake.rosoman.info: its text is in Literata, on the cream paper and in the
+# warm ink of the site, with links in its red. The text is as wide as the
+# site's, for as many words to a line, and a first heading is in the middle,
+# as big as the site's. The window has the site's colours while such a page
+# shows, whatever the theme. The page's front matter shows as on any page.
+
+"How the page that's in the window looks: :site for a page of a blog, as its site has it, or :own, as the settings say"
+page_look(e) = page_blog_folder(e) === nothing ? :own : :site
+
+"What the window's colours are called now, for what's kept with them: :site on a page of a blog, or else the theme's name"
+look_key(e) = e.look == :site ? :site : e.theme
 
 # --- a kind for a folder, in one step ---------------------------------------------------
 #

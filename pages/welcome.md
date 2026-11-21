@@ -902,13 +902,17 @@ To show another folder in one of these ways, open a file of the folder, press ‚å
 
 Other people can write a kind of folder and keep it on GitHub. To use one, type its address in place of a kind from the list, like `github.com/jkroso/Media.lad`, which shows a folder of films as a page of posters. Ladder gets the code from GitHub the first time.
 
-A folder that shows as a **Blog** puts itself on the web. Each page in the folder is a post, and the folder's own page lists them, the newest first. A folder inside the blog is a section of it, and its posts are under its name. A post's front matter can have a `title`, a `date` like 2026-11-20, and `draft: true` for a post that stays out of the site. Front matter between lines of `+++`, like `complete = false`, works too. Without a date, a post has the day that its file was made.
+A folder that shows as a **Blog** puts itself on the web, and its pages look as its site does. Each page in the folder is a post. A folder inside the blog is a section of it. A post's front matter can have a `title`, a `date` like 2026-11-20, and `draft: true` for a post that stays out of the site. Front matter between lines of `+++`, like `complete = false`, works too. Without a date, a post has the day that its file was made.
 
-The page `index.md`, or else `Readme.md`, goes over the list of posts on the site's first page. Its front matter can say where the site is, like `site: https://me.example.com`. A `Readme.md` in a section says what the section is, and isn't a post.
+Click the blog or one of its sections in the sidebar, and the page shows it as its site does. At the top is the folder's `Readme.md`, or the blog's `index.md`. Under it is a list of the folder's files and folders: what each is about, how big it is, and when it was made and last saved. The list leaves out hidden files, and the names that the folder's `.gitignore` or `.canonignore` lists. A Readme isn't a post. The front page's front matter can say where the site is, like `site: https://me.example.com`.
+
+Every page in a blog is set in Literata, on the site's cream paper, as wide as the site's text. A book review, a file that ends in `.review`, shows its title, its stars and its year at the top.
+
+The top bar of a page in a blog has three buttons:
 
 - **Publish** makes each post a page of HTML in the folder `docs`, with a first page that lists the posts, and copies the pictures that the posts show. If git keeps the folder and it has a remote called `origin`, Ladder then commits the folder `docs` and pushes it. It commits nothing else, so a draft stays on your Mac.
-- **Open Site** shows the site in your browser.
-- **New Post** starts a page in the folder.
+- **Open Site** shows the page that's in the window on the site, in your browser.
+- **New Post** starts a page in the folder that shows.
 
 GitHub serves the site when the repository's settings say so: under Settings, then Pages, choose the branch `main` and the folder `/docs`. You do that once.
 

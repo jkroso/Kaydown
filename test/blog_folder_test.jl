@@ -57,11 +57,14 @@ sent(args...) = git(args...; at=remote)
   kind = only(filter(k -> k.name == "Blog", K.choices_for(K.KindChoice, e)))
   Base.invokelatest(K.show_folder_as!, e, folder(), kind)
   frames()
-  @test folder() isa K.BlogDirectory && K.page_object(e) isa K.BlogDirectory && K.entry_icon(folder()) == "rss"
-  v = e.nodes[(:blog, blog)]
+  # The window shows the blog's front page, with the list of the blog's folder under it, as its site would
+  @test folder() isa K.BlogDirectory && e.buf.path == joinpath(blog, "index.md") && K.page_blog_folder(e) isa K.BlogDirectory && K.entry_icon(folder()) == "rss"
+  l = e.nodes[(:listing, blog)]
   @test [K.Blogs.standing(blog, p) for p in K.blog_posts(blog)] == [:new, :draft]
   @test K.blog_name(blog) == "Sam's blog"
-  @test !v.buttons[:publish].off && v.buttons[:open].off
+  # The list leaves out the front page. The top bar can publish the blog, and the site has no page to show yet.
+  @test haskey(l.rows, (:entry, hello)) && haskey(l.rows, (:entry, joinpath(blog, "pics"))) && !haskey(l.rows, (:entry, joinpath(blog, "index.md")))
+  @test !K.blog_off(e, :publish) && K.blog_off(e, :open_site) && !isempty(K.blog_part(e))
   shot("blog.png")
 end
 
@@ -90,8 +93,7 @@ end
   @test sort(files) == ["docs/.ladder-site", "docs/.nojekyll", "docs/2026-11-20-hello.html", "docs/index.html", "docs/pics/a.png"]
   # The posts' own files are still the user's to commit
   @test occursin("?? shed.md", git("status", "--short")) && occursin("?? 2026-11-20-hello.md", git("status", "--short"))
-  v = e.nodes[(:blog, blog)]
-  @test !v.buttons[:open].off
+  @test !K.blog_off(e, :open_site)
   shot("blog-published.png")
 end
 
@@ -120,7 +122,7 @@ end
   cp(joinpath(blog, "pics", "a.png"), joinpath(blog, "pics", "a b.png"))
   tips = joinpath(blog, "notes", "2026-11-01-tips.md")
   write(tips, "# Tips\n\n![The shed](../pics/a b.png)\n\nSee [the shed](../shed.md).\n")
-  empty!(K.BLOG_POSTS)
+  empty!(K.BLOG_POSTS); empty!(K.SITE_LISTS)
   # The editor shows the picture: the line is a picture's, though its path has a space
   @test K.pictured(K.build_editor(tips).buf, 3)
   publish()
@@ -131,8 +133,8 @@ end
   @test read(site("pics/a b.png")) == read(joinpath(blog, "pics", "a b.png"))
   first = read(site("index.html"), String)
   @test occursin(r"<h2[^>]*>notes</h2>", first) && occursin("<a href=\"notes/2026-11-01-tips.html\">Tips</a>", first)
-  v = e.nodes[(:blog, blog)]
-  @test haskey(v.rows, (:post, tips)) && haskey(v.rows, (:post, shed))
+  l = e.nodes[(:listing, blog)]
+  @test haskey(l.rows, (:entry, joinpath(blog, "notes"))) && haskey(l.rows, (:entry, shed))
   shot("blog-sections.png")
   # The page of a post in a section goes from the site when the post becomes a draft
   write(tips, "---\ndraft: true\n---\n" * read(tips, String))
@@ -143,7 +145,8 @@ end
 
 @testset "a folder in a blog has a kind of its own" begin
   notes = joinpath(blog, "notes")
-  @test K.FS.get(FSPath(notes)) isa K.FS.Directory
+  # A folder in a blog is a section of it, until its own page says otherwise
+  @test K.FS.get(FSPath(notes)) isa K.BlogSection
   kind = only(filter(k -> k.name == "Blog", K.choices_for(K.KindChoice, e)))
   Base.invokelatest(K.show_folder_as!, e, K.FS.get(FSPath(notes)), kind)
   frames()
@@ -164,15 +167,15 @@ end
   kind = only(filter(k -> k.name == "Blog", K.choices_for(K.KindChoice, e)))
   Base.invokelatest(K.show_folder_as!, e, K.FS.get(FSPath(canon)), kind)
   frames()
-  v = e.nodes[(:blog, canon)]
+  l = e.nodes[(:listing, canon)]
   # A Readme with no title doesn't name the blog
   @test K.blog_name(canon) == "Canon"
   list = K.blog_posts(canon)
   @test sort([(p.section, p.title) for p in list]) == [("", "Quotes"), ("Humans", "Dating"), ("Humans", "The Selfish Gene")]
-  @test all(p -> haskey(v.rows, (:post, p.path)), list)
+  @test e.buf.path == joinpath(canon, "Readme.md") && haskey(l.rows, (:entry, joinpath(canon, "Quotes.md"))) && haskey(l.rows, (:entry, joinpath(canon, "Humans")))
   # Before Ladder publishes it, the list can't say which posts the site hasn't got
   @test sort([K.blog_standing(canon, p) for p in list]) == [:draft, :unknown, :unknown]
-  @test !v.buttons[:publish].off && !v.buttons[:open].off
+  @test !K.blog_off(e, :publish) && !K.blog_off(e, :open_site)
   shot("canon.png")
   withenv("KIP_FROZEN" => "1") do
     publish(canon)
@@ -190,6 +193,90 @@ end
   publish(canon)
   @test K.PUBLISHED[canon] == "Your script .bin/publish stopped, and said: ssh: Could not resolve hostname raspberrypi.lan"
   shot("canon-stopped.png")
+end
+
+# The pages of the blog look as its site does, as jake.rosoman.info shows the folder Canon
+const canon = joinpath(dir, "Canon")
+const humans = joinpath(canon, "Humans")
+const city = joinpath(canon, "City")
+const review = joinpath(humans, "Gene.review")
+
+@testset "a click on a section shows its page as the site does" begin
+  write(review, "+++\ntitle = \"The Selfish Gene\"\nlink = \"https://en.wikipedia.org/wiki/The_Selfish_Gene\"\nrating = 4\npubDate = 1976-01-01\ndescription = \"Extends *Darwin's* theory\"\n+++\n\nGenes.\n")
+  empty!(K.SITE_LISTS)
+  e.panel = true
+  frames()
+  item(name) = only(i for i in K.file_tree(e).children if basename(i.firstchild.path) == name)
+  # The sidebar lists the blog's folder. A click on Humans shows its Readme, with the list of the folder under it.
+  K.choose!(e, item("Humans")); frames()
+  @test e.folder == humans && e.buf.path == joinpath(humans, "Readme.md") && K.page_blog_folder(e) isa K.BlogSection
+  l = e.nodes[(:listing, humans)]
+  @test haskey(l.rows, (:up, canon)) && haskey(l.rows, (:entry, joinpath(humans, "Dating.md"))) && !haskey(l.rows, (:entry, joinpath(humans, "Readme.md")))
+  entries = K.site_entries(humans, canon)
+  @test [x.name for x in entries] == ["Dating.md", "Gene.review"] && [x.icon for x in entries] == [:draft, :review]
+  @test entries[2].about == "Extends Darwin's theory"
+  shot("canon-humans.png")
+  # A click on a line shows its page, and the line at the top goes up to the blog's own page
+  l.rows[(:entry, joinpath(humans, "Dating.md"))].act(w); frames()
+  @test e.buf.path == joinpath(humans, "Dating.md")
+  Base.invokelatest(K.open!, e, K.FS.get(FSPath(humans))); frames()
+  l.rows[(:up, canon)].act(w); frames()
+  @test e.buf.path == joinpath(canon, "Readme.md") && e.folder == canon
+end
+
+@testset "a section with no Readme shows only its list" begin
+  mkpath(city)
+  write(joinpath(city, "future city.md"), "+++\ndescription = \"If we started from scratch\"\n+++\n\nWords.\n")
+  Base.invokelatest(K.open!, e, K.FS.get(FSPath(city))); frames()
+  @test e.buf.path == city && e.buf.view == :file && K.page_object(e) isa K.BlogSection
+  @test haskey(e.nodes[(:listing, city)].rows, (:entry, joinpath(city, "future city.md")))
+  # The top bar has the blog's buttons in place of the words that say the page is only shown
+  @test !isempty(K.blog_part(e))
+  shot("canon-city.png")
+end
+
+@testset "a page of a blog looks as its site does" begin
+  quotes = joinpath(canon, "Quotes.md")
+  write(quotes, "Words.\n\n# Quotes\n\nMore words.\n")
+  e.panel = false   # so the window has more room than the site's text needs
+  Base.invokelatest(K.show_path!, e, quotes); frames()
+  @test e.look == :site && K.body(e).family == K.SITE_FONT[] && K.colours.bg == K.SITE.bg
+  all(isfile, K.SITE_FONT_FILES) && @test K.SITE_FONT[] == "Literata"
+  # The text is as wide as the site's, and a first heading is in the middle of it
+  @test e.width ≈ K.SITE_MEASURE * K.TEXT_SIZE * e.zoom
+  it = only(it for it in e.layout if it.first == 3)
+  @test it.content.lines[1].x > 100px
+  shot("canon-quotes.png")
+  # A page outside the blog has the settings' own look again
+  Base.invokelatest(K.show_path!, e, joinpath(K.pages_dir[], "welcome.md")); frames()
+  @test e.look == :own && K.colours.bg == K.SEPIA.bg && K.body(e).family == e.font && isempty(K.blog_part(e))
+end
+
+@testset "a book review shows its title, stars and year as the site does" begin
+  Base.invokelatest(K.show_path!, e, review); frames()
+  @test e.buf.view == :markdown && !K.readonly(e.buf)
+  h = e.nodes[:review_head]
+  @test e.layout[1].content isa K.Live && e.layout[1].content.node === h
+  @test h.said["title"] == "The Selfish Gene" && h.link.words == "en.wikipedia.org" && h.said["rating"] == "4" && h.said["pubdate"] == "1976-01-01"
+  shot("canon-review.png")
+end
+
+@testset "the top bar of a page of a blog" begin
+  @test K.site_address(canon, joinpath(humans, "Readme.md")) == "https://canon.example.com/Humans/"
+  @test K.site_address(canon, joinpath(humans, "Dating.md")) == "https://canon.example.com/Humans/Dating.html"
+  @test K.site_address(canon, review) == "https://canon.example.com/Humans/Gene.html"
+  @test K.site_address(canon, joinpath(city, "future city.md")) == "https://canon.example.com/City/future%20city.html"
+  @test K.site_address(canon, city) == "https://canon.example.com/City/" && K.site_address(canon, joinpath(canon, "Readme.md")) == "https://canon.example.com"
+  # Open Site shows the page that's in the window, on the site
+  was, opened = K.BROWSER[], String[]
+  K.BROWSER[] = url -> (push!(opened, url); nothing)
+  K.blog_act!(e, :open_site)
+  K.BROWSER[] = was
+  @test opened == ["https://canon.example.com/Humans/Gene.html"]
+  @test occursin("Publish Canon", K.blog_tip(e, :publish)) && K.blog_tip(e, :new_post) == "Start a post in Humans"
+  # New Post starts a page in the folder that shows
+  K.blog_act!(e, :new_post); frames()
+  @test dirname(e.buf.path) == humans && startswith(basename(e.buf.path), "Untitled")
 end
 
 close(w)

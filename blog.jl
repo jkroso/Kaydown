@@ -312,3 +312,120 @@ framed(html::AbstractString, blog::AbstractString, title::AbstractString, p::Pos
   a === nothing || b === nothing || (html = html[1:last(a)] * title * html[first(b):end])
   replace(html, "<body>\n" => "<body>\n" * top, count=1)
 end
+
+# --- what a folder of the site lists ------------------------------------------------------
+#
+# A site that mirrors its folders, as the canon tool makes jake.rosoman.info,
+# shows each folder as a page: the folder's Readme, and under it a list of the
+# folder's files and folders, with what each is about, how big it is, and when
+# it was made and last saved. main.jl shows a folder of a blog the same way.
+#
+# The list leaves out a file or a folder whose name starts with a dot, the
+# files favicon.ico and tracker.html, the folder's Readme, and the names that
+# the folder's own `.gitignore` or `.canonignore` lists, like `*.toml`. A blog
+# that Ladder publishes leaves out its folder `docs` and its page `index.md`
+# too. The rest are in the order of their names, with capitals first.
+
+"A file or a folder in the list of a folder of a blog"
+struct Entry
+  path::String
+  name::String
+  folder::Bool
+  icon::Symbol     # :folder, :draft, :review, :markdown, :julia, or :file for anything else
+  about::String    # what its description says, with no Markdown in it, or ""
+  bytes::Int       # how big it is. A folder is as big as the files that it holds.
+  made::Float64    # when it was made, and when it was last saved, in seconds since 1970
+  saved::Float64
+end
+
+"A pattern of an ignore file, like `*.toml` or `.bin/`, as a pattern that a whole name has to match"
+glob(pattern::AbstractString) = begin
+  out = IOBuffer()
+  for c in strip(strip(pattern), '/')
+    print(out, c == '*' ? "[^/]*" : c == '?' ? "[^/]" : c in "[]" ? c : c in ".^\$+(){}|\\" ? "\\" * c : c)
+  end
+  Regex("^" * String(take!(out)) * "\$")
+end
+
+"The patterns of the names that the ignore files of `folder` list"
+ignored(folder::AbstractString) = begin
+  out = Regex[]
+  for file in (".gitignore", ".canonignore"), line in (isfile(joinpath(folder, file)) ? readlines(joinpath(folder, file)) : String[])
+    (isempty(strip(line)) || startswith(strip(line), '#')) && continue
+    p = try glob(line) catch; nothing end
+    p === nothing || push!(out, p)
+  end
+  out
+end
+
+"True when the list of a folder of a blog leaves out the file or the folder called `name`. `top` says that the folder is the blog's own, and `itself` that the blog publishes itself."
+hidden(name::AbstractString, patterns; top::Bool=false, itself::Bool=true) =
+  startswith(name, '.') || name in ("favicon.ico", "tracker.html") || occursin(r"^readme\.\w+$"i, name) ||
+  (top && !itself && (name == SITE || lowercase(name) == INDEX)) || any(p -> occursin(p, name), patterns)
+
+"How many bytes the files in `folder` and in the folders inside it hold, leaving out the hidden ones"
+bytes(folder::AbstractString) = begin
+  total = 0
+  for name in (try readdir(folder) catch; String[] end)
+    startswith(name, '.') && continue
+    path = joinpath(folder, name)
+    total += islink(path) ? 0 : isdir(path) ? bytes(path) : (try filesize(path) catch; 0 end)
+  end
+  total
+end
+
+"What the description of the page at `path` says, with no Markdown in it, or \"\". A folder's is its Readme's."
+about(path::AbstractString) = begin
+  if isdir(path)
+    names = try readdir(path) catch; String[] end
+    k = findfirst(isreadme, names)
+    return k === nothing ? "" : about(joinpath(path, names[k]))
+  end
+  ending(basename(path), true) in (MARKDOWN..., ".review") || return ""
+  lines = try open(io -> collect(Iterators.take(eachline(io), 40)), path) catch; String[] end
+  plain(get(matter(lines), "description", ""))
+end
+
+"`text` with its Markdown taken out: a link shows its words, and the marks of bold, italic and code go"
+plain(text::AbstractString) = String(strip(replace(replace(text, r"\[([^\]]*)\]\([^)]*\)" => s"\1"), r"[*_`]" => "")))
+
+"The entry of the list for the file or the folder at `path`"
+entry(path::AbstractString) = begin
+  name = basename(path)
+  folder = isdir(path)
+  e = ending(name, true)
+  icon = folder ? :folder : e == ".review" ? :review : e in MARKDOWN ? :markdown : endswith(lowercase(name), ".jl") ? :julia : :file
+  if icon == :markdown
+    lines = try open(io -> collect(Iterators.take(eachline(io), 40)), path) catch; String[] end
+    said = matter(lines)
+    (lowercase(get(said, "draft", "")) in ("true", "yes") || lowercase(get(said, "complete", "")) in ("false", "no")) && (icon = :draft)
+  end
+  Entry(String(path), name, folder, icon, about(path), folder ? bytes(path) : (try filesize(path) catch; 0 end), made(path), mtime(path))
+end
+
+"""
+The list of the folder `folder` of the blog in `blog`, as the site lists it:
+an entry for each file and folder that it doesn't leave out, in the order of
+their names. `itself` says that the blog publishes itself.
+"""
+listing(folder::AbstractString, blog::AbstractString=folder; itself::Bool=true) = begin
+  patterns = ignored(folder)
+  top = rstrip(folder, '/') == rstrip(blog, '/')
+  names = try readdir(folder) catch; String[] end
+  [entry(joinpath(folder, name)) for name in names if !hidden(name, patterns; top, itself)]
+end
+
+"How many bytes `n` is, as the site says it, like 614 B, 3.78 kB or 1.95 MB"
+size_words(n::Integer) = begin
+  x, units = Float64(n), ("B", "kB", "MB", "GB", "TB")
+  k = 1
+  while x > 999 && k < length(units)
+    x /= 1000
+    k += 1
+  end
+  x = round(x, digits=2)
+  string(isinteger(x) ? round(Int, x) : x, ' ', units[k])
+end
+
+"The day of the time `t`, in seconds, as the site's list says it, like 05/09/25"
+short(t::Real) = Libc.strftime("%d/%m/%y", t)

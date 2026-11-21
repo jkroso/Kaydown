@@ -83,6 +83,7 @@ const WHATS = (todo=what_is("to-do items", "to-dos", "todos", "todo", "to-do", "
                filter=what_is("filters", "filter", one="filter", langs=("filter",)),
                save=what_is("save blocks", "save block", "saves", one="save block", langs=("save",)),
                load=what_is("load blocks", "load block", "loads", one="load block", langs=("load",)),
+               check=what_is("checks", "check", "check blocks", one="block of checks", many="blocks of checks", langs=("check",)),
                email=what_is("email lists", "email list", "emails", one="email list", langs=("email",)),
                timelog=what_is("time logs", "time log", "timelogs", "timesheets", one="time log", langs=("timelog",)),
                question=what_is("questions", "question", one="question", langs=("ask",)),

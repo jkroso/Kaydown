@@ -248,6 +248,20 @@
 #   - Open a long file of code, like this one. It opens whole, and a typed
 #     letter takes no longer there than in a short file. See "the lines of a
 #     long file".
+#   - In a file of code, press ⌘⇧P and run Go To for a list of the file's
+#     functions and sections. Hold ⌘ and click a name to go to where it's
+#     defined. See "where a name is defined".
+#   - Click the number of a line, in a file that git keeps, to see the commit
+#     that last changed the line. See "when a line last changed".
+#   - Run the command Ask For Change, say what you want in words, and click
+#     a thing. An agent changes the function that draws it. Keep This Change
+#     keeps a function of Ladder's own for each start. See "ask for a change
+#     to a thing".
+#   - Write a code block in the language `check`, with a line of Julia for
+#     each thing that must be true. Each line shows a tick or a cross. See
+#     "checks of the page's code".
+#   - Run the command Show As App to open the page in a window with only the
+#     page: no top bar, no sidebar and no caret. See "a page as an app".
 #
 # It uses these UI.jl features: a `Scroll` that only builds the lines
 # on screen, a `draw` method that adds the caret and selection over a node,
@@ -755,7 +769,8 @@ Base.@kwdef mutable struct Buffer
   # The text as an agent last knew it: what you last sent it, with every change that was made to the file from outside since
   told::Vector{String} = [""]
   sent::Vector{String} = [""]           # the text as it was when you last sent it to an agent, or when the file was opened
-  counted::Vector{String} = String[]    # the lines of a file of code that `words` and `chars` are the counts of
+  counted::Vector{String} = String[]    # the lines that were last counted, and how many words and characters they have in all
+  counts::Tuple{Int,Int} = (0, 0)
 end
 
 "True when the file is only shown. Ladder changes Markdown files and the files of code in `CODE_FILES`, and no others."
@@ -861,32 +876,31 @@ kinds(b::Buffer) = begin
     lang = b.view == :hex ? HEX : b.view == :bits ? BITS : String(lstrip(lowercase(splitext(b.path)[2]), '.'))
     b.kinds = fill(Line(Kind.code, 0, 0, lang), length(b.lines))
     # A file that's only shown has no words to count
-    b.view == :code ? count_lines!(b) : ((b.words, b.chars) = (0, 0); b.counted = String[])
+    b.view == :code ? count_lines!(b) : ((b.words, b.chars) = (0, 0); b.counted = String[]; b.counts = (0, 0))
     b.kinds_at = b.version
   elseif b.kinds_at != b.version
     b.kinds = classify(b.lines)
-    # Front matter says things about the document, so the counts leave it out
-    counted = @view b.lines[front_matter(b.lines)+1:end]
-    b.words = words(counted)
-    b.chars = sum(length, counted, init=0)
+    count_lines!(b)
     b.kinds_at = b.version
   end
   b.kinds
 end
 
 """
-Count the words and the characters of a file of code. After a change, only
-the lines that changed are counted again, so a long file costs no more than a
-short one.
+Count the words and the characters of a page or of a file of code. After a
+change, only the lines that changed are counted again, so a long file costs
+no more than a short one.
 """
 count_lines!(b::Buffer) = begin
   old, lines = b.counted, b.lines
-  isempty(old) && ((b.words, b.chars) = (0, 0))
+  isempty(old) && (b.counts = (0, 0))
   head, tail = unchanged(lines, old)
   now, was = view(lines, head+1:length(lines)-tail), view(old, head+1:length(old)-tail)
-  b.words += words(now) - words(was)
-  b.chars += sum(length, now, init=0) - sum(length, was, init=0)
+  b.counts = (b.counts[1] + words(now) - words(was), b.counts[2] + sum(length, now, init=0) - sum(length, was, init=0))
   b.counted = copy(lines)
+  # Front matter says things about a document, so a document's counts leave it out
+  matter = view(lines, 1:(b.view == :markdown ? front_matter(lines) : 0))
+  b.words, b.chars = b.counts[1] - words(matter), b.counts[2] - sum(length, matter, init=0)
   b
 end
 
@@ -3754,6 +3768,7 @@ evaluate(e, code::String; key=(:live, e.buf.path, code), inline=false) = begin
     inline ? (said(first(split(sprint(showerror, err), '\n'))), true) : note(sprint(showerror, err), colours.accent)
   finally
     delete!(e.nodes, :running)
+    CODE_RUNS[] += 1   # the page's `check` blocks run again
   end
 end
 
@@ -5851,10 +5866,15 @@ in_colour(e, it::Item, f::Flow) = begin
   length(full.lines) == length(f.lines) && all(k -> full.lines[k].from == f.lines[k].from, eachindex(f.lines)) ? full : f
 end
 
-"Forget the lines that are laid out, when many are kept. The layout of a whole file's lines stays: it's made again only after a change."
+"""
+Forget the lines that are laid out, when many are kept: more than a page of
+4,000 lines has, or more than three for each line of a longer page, so that a
+long page's lines stay laid out from one frame to the next. The layout of a
+whole file's lines stays: it's made again only after a change.
+"""
 spare_flows!(e) = begin
-  length(e.flows) > 4000 || return e
-  kept = [p for p in e.flows if p.second isa Laid]
+  length(e.flows) > max(4000, 3length(e.buf.lines)) || return e
+  kept = [p for p in e.flows if p.second isa Laid || p.second isa Vector{Union{Nothing,PlainLine}}]
   empty!(e.flows)
   foreach(p -> e.flows[p.first] = p.second, kept)
   e
@@ -12082,6 +12102,127 @@ filter_html(e, v::FilterView) = begin
 end
 
 BLOCKS[FILTER] = BlockKind("Filter", "funnel", FilterView, filter_html)
+
+# --- checks of the page's code ------------------------------------------------------------------
+#
+# A code block in the language `check` holds a line of Julia for each thing
+# that must be true, like `area(room) == 12` or `length(walls) > 3`. Each line
+# shows a tick or a cross. A line that compares two values and fails says what
+# each of them was, and a line that stops says why. A blank line and a comment
+# are no check.
+#
+# The lines run in the module of the page's code, with the names that the
+# page's `julia` blocks made. They run again when a line of the block changes,
+# and each time the page's code runs, as it does with ⌘Return. A click on the
+# block runs them again too.
+
+const CHECK = "check"
+push!(BLOCK_ICONS, "check2-square", "check-circle-fill", "x-circle-fill", "exclamation-triangle-fill")
+const CHECK_GOOD = colorant"rgb(52,150,86)"
+const CHECK_BAD = colorant"rgb(200,60,50)"
+
+"How many times the code of a page has run in this Ladder. A `check` block runs its lines again when it's more than it was."
+const CODE_RUNS = Ref(0)
+
+"One line of a `check` block as it came out: its code, how it went, which is :pass, :fail or :stop, and what there is to say of one that didn't pass"
+struct Checked
+  code::String
+  went::Symbol
+  said::String
+end
+
+"The functions that compare two values. A check that calls one and fails says what the two values were."
+const COMPARES = (:(==), :(!=), :≠, :≈, :≉, :(<), :(<=), :≤, :(>), :(>=), :≥, :(===), :(!==), :isa, :in, :∈, :∉, :⊆, :isequal, :isapprox)
+
+"`value` in a few characters, as Julia writes it"
+value_brief(value) = (s = try Base.invokelatest(repr, value) catch; "a value" end; length(s) > 40 ? first(s, 39) * "…" : s)
+
+"Run `code`, one line of a `check` block, in the module of the page's code, and give how it went"
+check_line(e, code::AbstractString) = begin
+  path = isempty(e.buf.path) ? joinpath(e.folder, "untitled.md") : e.buf.path
+  # The first line of what went wrong, without the long name that Julia has for the page's module
+  why(err) = replace(String(first(split(trouble(err), '\n'))), r" in `Main\.[^`]*`" => "")
+  ex = try Meta.parse(code) catch err; return Checked(code, :stop, why(err)) end
+  Meta.isexpr(ex, (:incomplete, :error)) && return Checked(code, :stop, "Julia can't read this line.")
+  two = Meta.isexpr(ex, :call, 3) && ex.args[1] in COMPARES
+  # A line that compares two values gives both, with what the comparison came to
+  ran = two ? "let var\"#left\" = ($(ex.args[2])), var\"#right\" = ($(ex.args[3])); (var\"#left\", var\"#right\", $(ex.args[1])(var\"#left\", var\"#right\")) end" : String(code)
+  value = try
+    cd(() -> running_code(m -> run_in(m, ran, path), e), isdir(docdir(e)) ? docdir(e) : pwd())
+  catch err
+    return Checked(code, :stop, why(err))
+  end
+  came = two ? value[3] : value
+  came === true && return Checked(code, :pass, "")
+  came === false || return Checked(code, :fail, "It came to $(value_brief(came)), which is neither true nor false.")
+  Checked(code, :fail, two ? "$(value_brief(value[1])) $(ex.args[1]) $(value_brief(value[2]))" : "")
+end
+
+"What a `check` block shows: how each of its lines went"
+@def mutable struct CheckView <: SemanticUI
+  n::Int = 0                            # its place among the page's check blocks
+  first::Int = 0                        # the lines of its block, when the page was last laid out
+  last::Int = 0
+  lines::Vector{String} = String[]      # the block's lines
+  results::Vector{Checked} = Checked[]
+  ran::Any = nothing                    # the checks, the count of runs of the page's code and the page that `results` are of
+end
+
+reread!(v::CheckView, lines) = (lines == v.lines || (v.lines = lines); v)
+
+"The lines of a `check` block that are checks: each line that isn't blank and isn't a comment"
+checks(lines) = [String(strip(l)) for l in lines if !isempty(strip(l)) && !startswith(strip(l), '#')]
+
+"Run the checks of `v`, unless they ran since they last changed and since the page's code last ran"
+checked!(v::CheckView) = begin
+  e = editor(v)
+  key = (checks(v.lines), CODE_RUNS[], e.buf.path)
+  v.ran == key && return v
+  v.results = Checked[check_line(e, code) for code in key[1]]
+  v.ran = key
+  v
+end
+
+"What the top of a `check` block says: how many of its checks pass"
+check_words(results) = begin
+  n, passed = length(results), count(r -> r.went == :pass, results)
+  n == 0 ? "No checks yet. Write one on each line, like total == 12." :
+  passed < n ? "$passed of $n check$(n == 1 ? "" : "s") pass$(passed == 1 ? "es" : "")" :
+  n == 1 ? "The check passes" : "All $n checks pass"
+end
+
+describe(v::CheckView) = begin
+  checked!(v)
+  rs = v.results
+  good = all(r -> r.went == :pass, rs)
+  mark(r) = r.went == :pass ? Icon("check-circle-fill", size=14px, color=CHECK_GOOD) :
+            Icon(r.went == :fail ? "x-circle-fill" : "exclamation-triangle-fill", size=14px, color=CHECK_BAD)
+  # Each run of words is in a box as tall as its lines, so that the words under it don't come up into it
+  words(text, size, colour) = Box(width(grow=grow), Alignment.Start, padding(0px, 3px), Text(text, size=size, family=codefont(), subfamily=codestyle(), color=colour, wrap=WrapMode.words))
+  row(r) = Row(width(grow=grow), padding(12px, 3px), child_gap=8px, Alignment.Start,
+               Box(fixed(16px), height(25px), Alignment.Center, justify=Alignment.Center, mark(r)),
+               Column(width(grow=grow), Alignment.Start,
+                      words(r.code, 13px, colours.ink), (isempty(r.said) ? () : (words(r.said, 12px, CHECK_BAD),))...))
+  Column(block_look()..., clip=true, name="Check",
+    Row(width(grow=grow), height(34px), padding(12px, 0px), child_gap=8px, Alignment.Center, background(colours.block),
+        Box(fixed(16px), Alignment.Center, justify=Alignment.Center,
+            isempty(rs) ? Icon("check2-square", size=14px, color=colours.dim) : Icon(good ? "check-circle-fill" : "x-circle-fill", size=14px, color=good ? CHECK_GOOD : CHECK_BAD)),
+        Box(width(grow=grow), Alignment.Start, label(check_words(rs), 13px, weight="Medium")),
+        Box(label(ishovered(v) ? "Click to run them again" : "", 11px, color=colours.faint))),
+    (isempty(rs) ? () : (Column(width(grow=grow), Alignment.Start, padding(0px, 5px), map(row, rs)...),))...)
+end
+
+cursor(::CheckView) = :hand
+# A click runs the checks again
+onkey(v::CheckView, ::KeyPress{Keys.mouse_left}) = (v.ran = nothing; redraw_in!(editor(v), 0); handled)
+
+check_html(e, v::CheckView) = begin
+  checked!(v)
+  "<p><strong>$(escape(check_words(v.results)))</strong></p>\n<ul>\n" *
+    join(("<li>$(r.went == :pass ? "✓" : "✗") <code>$(escape(r.code))</code>$(isempty(r.said) ? "" : ": " * escape(r.said))</li>" for r in v.results), "\n") * "\n</ul>"
+end
+
+BLOCKS[CHECK] = BlockKind("Check", "check2-square", CheckView, check_html)
 
 # --- a save of a table's rows ------------------------------------------------------------------
 #
@@ -19219,6 +19360,7 @@ inline_tick!(e) = begin
   also = inline_given!(e)
   e.nodes[key] = (b.version, codes, also)
   seen === nothing && return e
+  also == seen[3] || (CODE_RUNS[] += 1)   # a row of a sheet has a new value, so the page's `check` blocks run again
   (codes == seen[2] && also == seen[3]) && return e
   from = also == seen[3] ? something(findfirst(i -> i > length(seen[2]) || seen[2][i] != codes[i], eachindex(codes)), length(codes) + 1) : 1
   counts = Dict{String,Int}()
@@ -20610,6 +20752,34 @@ text_left(e) = begin
   numbered(e.buf) || bytes_page(e.buf) ? side + PAGE_X + gutter(e) - sideways(e) : side + max(PAGE_X, (w - side - e.width) / 2)
 end
 
+# A page of Markdown is laid out again in each frame, since what a block shows
+# can change with no change to the text. A line of plain text is different: it
+# only changes when its text does. So each such line is kept by its number,
+# with what it was laid out from, and the next frame takes it as it is when
+# the line still has that text and is still the same kind of line. A long
+# page then costs little more in a frame than a short one. The lines are kept
+# with the other layouts, in `e.flows`, so what empties those empties them too.
+
+"A line of plain text as a frame laid it out: its text, what kind of line it was, whether its markup showed, and its layout with its height"
+struct PlainLine
+  text::String
+  line::Line
+  raw::Bool
+  flow::Flow
+  tall::px
+end
+
+"The kinds of line that are laid out from their own text alone. A to-do item is left out: on a day before today its box shows that day's tick."
+const PLAIN_KINDS = (Kind.blank, Kind.paragraph, Kind.heading, Kind.bullet, Kind.ordered, Kind.blockquote, Kind.code, Kind.rule)
+
+"Keep line `i` as it was laid out in this frame, for the next frame, when its layout came from its text alone"
+keep_plain!(kept::Vector{Union{Nothing,PlainLine}}, b::Buffer, i::Int, line::Line, flow::Flow, tall::px) = begin
+  text = b.lines[i]
+  # A picture, what inline code made, and a footnote's number each come from more than the line's text
+  plain = line.kind in PLAIN_KINDS && !occursin("![", text) && !occursin(INLINE, text) && !occursin("[^", text)
+  kept[i] = plain ? PlainLine(text, line, flow.raw, flow, tall) : nothing
+end
+
 "Work out what the page shows and how tall each part is, for text that's `width` wide"
 layout!(e, width=text_width(e)) = begin
   b = e.buf
@@ -20628,9 +20798,11 @@ layout!(e, width=text_width(e)) = begin
   # A file of code is lines of text too, which a key can change
   b.view == :code && columns === nothing && lowered(e) === nothing && return e.layout = slide_items(e, file_lines(e, b))
   items = Item[]
-  top = 0px
-  i = 1
-  n = length(b.lines)
+  # These three have their types written out. What a block or a table gives has no type that Julia knows before it
+  # runs, and without these the loop below would look up the type of each of them for every line of the page.
+  top::px = 0px
+  i::Int = 1
+  n::Int = length(b.lines)
   # The lines of a block that went down a level from the window it filled show by themselves
   span = lowered(e)
   span === nothing || ((i, n) = span)
@@ -20640,9 +20812,24 @@ layout!(e, width=text_width(e)) = begin
   plans = 0   # how many takeoff blocks there have been so far
   schedules = 0   # and how many schedules
   seen = Dict{String,Int}()   # and how many blocks in each of the languages of `BLOCKS`
+  # The lines of plain text as the frame before laid them out: see `PlainLine`. A page in columns, an email as it
+  # was sent, and a page of emails have lines that are laid out another way.
+  kept = columns === nothing && sent === nothing && !Eml.isemail(b.path) ?
+    get!(() -> Union{Nothing,PlainLine}[], e.flows, (:plain, b.path))::Vector{Union{Nothing,PlainLine}} : nothing
+  # A page that has more lines than it had has nothing kept for the new ones
+  kept === nothing || length(kept) == length(b.lines) || (had = length(kept); resize!(kept, length(b.lines)); fill!(view(kept, had+1:length(kept)), nothing))
   while i <= n
     # In a column, the page's text is as wide as the column, and each column starts level with the first
     columns === nothing || (top = column_turn!(columns, e, items, i, top))
+    if kept !== nothing
+      was = kept[i]
+      if was !== nothing && pointer(was.text) == pointer(b.lines[i]) && was.line === ks[i] && was.raw == israw(b, i)
+        push!(items, Item(i, i, top, was.tall, was.flow))
+        top += was.tall
+        i += 1
+        continue
+      end
+    end
     j = i
     if ks[i].kind == Kind.table
       while j < n && ks[j+1].kind == Kind.table
@@ -20800,9 +20987,11 @@ layout!(e, width=text_width(e)) = begin
       top += tall(content)
       i = j + 1
     else
-      content = flow(e, i)
-      push!(items, Item(i, i, top, tall(content), content))
-      top += tall(content)
+      content = flow(e, i)::Flow
+      high = tall(content)
+      push!(items, Item(i, i, top, high, content))
+      kept === nothing || keep_plain!(kept, b, i, ks[i], content, high)
+      top += high
       i += 1
     end
   end
@@ -20984,6 +21173,8 @@ cursor(d::Document) = begin
   todo_at(e, w.mouse) === nothing || return :hand
   # A drag on what a number comes to changes the number
   (haskey(e.nodes, :scrub) || scrub_at(e, w.mouse) !== nothing) && return :resize_x
+  # With ⌘ held, a click on a name of Julia code goes to where the name is defined. Julia compiles definition only when ⌘ is first held.
+  Keys.cmd in w.keys && !(Keys.opt in w.keys) && link_at(e, w.mouse) === nothing && Base.invokelatest(definition, e, locate(e, w.mouse)) !== nothing && return :hand
   (Keys.cmd in w.keys && link_at(e, w.mouse) !== nothing) || (e.buf.fixed && link_on(e, w.mouse) !== nothing) ? :hand : :ibeam
 end
 
@@ -21488,6 +21679,10 @@ press!(e, pos) = begin
   slideshow(e) === nothing || return slide_press!(e, pos)   # a click on a slide goes to the next one, or back
   empty!(e.glides)   # a click puts the caret at its new place at once, even a click that changes the text
   b = e.buf
+  # A click on the number of a line asks git when the line last changed. The click puts the caret on the line too.
+  # Julia compiles line_history! and definition! when they're first used, not with this function, so a first click doesn't wait for them.
+  numbered = number_at(e, pos)
+  numbered === nothing || Base.invokelatest(line_history!, e, numbered)
   box = held(e, Keys.opt) ? nothing : todo_at(e, pos)
   if box !== nothing
     # A click on a to-do item's box ticks it, and doesn't move the caret
@@ -21521,6 +21716,8 @@ press!(e, pos) = begin
   if held(e, Keys.cmd)
     url = link_at(e, pos)
     url === nothing || return follow!(e, url)
+    # In Julia code, a click on a name goes to where the name is defined
+    it.content isa Flow && !held(e, Keys.opt) && !held(e, Keys.shft) && Base.invokelatest(definition!, e, locate(e, pos)) === true && return
   elseif b.fixed && !held(e, Keys.shft)
     # A page that's never changed has no caret for a click to place, so a click on a link opens it
     url = link_on(e, pos)
@@ -26209,6 +26406,8 @@ const INSERTS = [
   # The two blocks that are typed under it show side by side
   ("Columns",       ["```$COLUMN_BLOCK", "2", "```", "", ""], (5, 0)),
   ("Find",          ["```$FIND", "```", "", ""],    (4, 0)),
+  # The caret goes onto the block's empty line, for the first check
+  ("Check",         ["```$CHECK", "", "```"],      (2, 0)),
   # The caret goes after from:, for the name of the file to filter
   ("Filter",        ["```$FILTER", "from: ", "```", "", ""], (2, 6)),
   # The caret goes after to:, for the name of the file or the address of the server
@@ -29870,6 +30069,7 @@ run_code(e, code::String) = begin
   finally
     redirect_stdout(screen)
     close(wr)
+    CODE_RUNS[] += 1   # the page's `check` blocks run again
   end
   # Code that ran in a module of Ladder's own can give a thing a new way to draw itself: see "the code of a thing"
   loaded_module(page_key(path)) === nothing || redraw_windows!()
@@ -32786,6 +32986,9 @@ describe_window(e::Editor) = begin
   slide_tick!(e)
   screen_tick!(e)
   code_tick!(e)
+  ask_tick!(e)
+  line_tick!(e)
+  app_tick!(e)
   publish_tick!(e)
   layout!(e)
   # A page whose long lines don't wrap scrolls sideways as far as its longest line goes, and no further when the window grows
@@ -32811,7 +33014,7 @@ describe_window(e::Editor) = begin
   # lies over the top of the sidebar and the page
   body = Row(width(grow=grow), height(grow=grow), Alignment.Start, background(colours.bg),
     # The lines of a block that fill the window take the sidebar's room too
-    (opened(e) > 0 && lowered(e) === nothing ? (node!(Sidebar, e, :sidebar),) : ())...,
+    (opened(e) > 0 && lowered(e) === nothing && !as_app(e) ? (node!(Sidebar, e, :sidebar),) : ())...,
     Column(width(grow=grow), height(grow=grow), Alignment.Start,
       Box(width(grow=grow), height(TOPBAR_H)),   # under the top bar
       node!(Page, e, :page)))
@@ -32819,7 +33022,7 @@ describe_window(e::Editor) = begin
   popup = palette_shows(e) ? (palette(e),) : e.popup == :none ? () : (node!(Backdrop, e, :backdrop), finder(e))
   Stack(width(grow=grow), height(grow=grow), Alignment.Start, name="Editor",
     body, panel_edge(e)..., tablebar(e)..., outcome_over(e)..., callbox(e)..., suggestbox(e)..., findbar(e)..., sound_over(e)..., fill_over(e)..., task_over(e)..., slides_over(e)..., takeoff_over(e)..., zoom_over(e)...,
-    (screening(e) ? () : (node!(TopBar, e, :topbar),))...,   # a video that fills the screen is all that the window shows
+    (screening(e) || as_app(e) ? () : (node!(TopBar, e, :topbar),))...,   # a video that fills the screen is all that the window shows, and so is a page that shows as an app
     popup...)
 end
 
@@ -33311,22 +33514,178 @@ insert_block!(e, block::InsertKind) = begin
   page_act!(e, i, j)
 end
 
-"A heading of the page that shows, for a command to take"
+
+# --- where a name is defined -----------------------------------------------------------------
+#
+# In Julia code, a click on a name with ⌘ held goes to where the name is
+# defined, and so does the command Go To Definition, for the name at the caret.
+#
+#   - A name that the page's own code makes is on the page. A name of the
+#     function that the click is in comes before a name of the whole file. A
+#     function with several methods has several places: the click goes to the
+#     first, and a click on a place that it went to goes to the next.
+#   - A name from another file that Ladder loaded, like a function of UI.jl,
+#     shows in a window beside this one, as the code of a thing does: see "the
+#     code of a thing". A name after a dot, like `arrange` in `Boards.arrange`,
+#     is looked for in the module before the dot.
+#
+# The command Go To lists the places of a file of code, as it lists the
+# headings of a page: each section that a comment like `# --- name ---` starts,
+# and each name that the code makes at its top, with what its line says of it.
+
+"The comment that starts a section of a file of code: three dashes or more, the section's name, and more dashes"
+const SECTION = r"^#+ -{3,}\s+(.+?)\s+-{3,}\s*$"
+
+"""
+What the line `text`, which makes the name of `made`, says of it for Go To: a
+function with the values that it takes, like `tall(f::Flow)`, or only the name.
+"""
+signature(text::AbstractString, made::Bound) = begin
+  chars = collect(text)
+  from = made.at[2] + 1
+  stop = from + length(made.name) - 1
+  (stop < length(chars) && chars[stop+1] == '(') || return made.name
+  depth = 0
+  for k in stop+1:length(chars)
+    chars[k] == '(' && (depth += 1)
+    chars[k] == ')' && (depth -= 1; depth == 0 && return String(chars[from:k]))
+  end
+  String(chars[from:end])   # the values go on to the next line
+end
+
+"The places in a file of code that Go To offers, from the first line to the last: see \"where a name is defined\""
+code_places(e) = begin
+  b = e.buf
+  out = HeadingLine[]
+  for (i, line) in enumerate(b.lines)
+    startswith(line, '#') || continue
+    m = match(SECTION, line)
+    m === nothing || push!(out, HeadingLine(i, String(m[1]), "section"))
+  end
+  for made in page_bounds(e)
+    (made.span === nothing && 1 <= made.at[1] <= length(b.lines)) || continue
+    push!(out, HeadingLine(made.at[1], signature(b.lines[made.at[1]], made), made.call ? "" : made.words))
+  end
+  sort!(unique(h -> (h.line, h.words), out), by=h -> h.line)
+end
+
+"""
+The name that's written at the place `at` of the page's Julia code: the name,
+the column where it starts, and the names before it that dots join it to, like
+`Boards` for `arrange` in `Boards.arrange`. Nothing when the place has no
+name: it's not in Julia code, or it's in a string, a comment or a word of the
+language.
+"""
+name_at(b::Buffer, at::Pos) = begin
+  i, col = at
+  1 <= i <= length(b.lines) || return nothing
+  line = kinds(b)[i]
+  (line.kind == Kind.code && !(line.lang in NO_NAMES) && shared_lang(line.lang) == "julia") || return nothing
+  chars = collect(b.lines[i])
+  part(c) = isnamechar(c) || c == '!'
+  start = stop = clamp(col, 0, length(chars))
+  while start > 0 && part(chars[start]); start -= 1 end
+  while stop < length(chars) && part(chars[stop+1]); stop += 1 end
+  (stop > start && (isletter(chars[start+1]) || chars[start+1] == '_')) || return nothing
+  for t in tokens(b.lines[i], "julia")
+    t.col <= start < t.col + length(t.text) && t.kind in (:string, :comment, :keyword, :number) && return nothing
+  end
+  name = String(chars[start+1:stop])
+  # The names before it, each with a dot after it
+  owners, k = String[], start
+  while k > 1 && chars[k] == '.'
+    j = k - 1
+    while j > 0 && isnamechar(chars[j]); j -= 1 end
+    j == k - 1 && break
+    pushfirst!(owners, String(chars[j+1:k-1]))
+    k = j
+  end
+  # The @ of a macro is part of its name
+  isempty(owners) && start > 0 && chars[start] == '@' && ((name, start) = ("@" * name, start - 1))
+  (name=name, col=start, owners=owners)
+end
+
+"""
+Where the name at the place `at` of the page is defined: a place `(line,
+column)` of the page, or a method of a function that another file defines, or
+nothing. See "where a name is defined".
+"""
+definition(e, at::Pos) = begin
+  b = e.buf
+  found = name_at(b, at)
+  found === nothing && return nothing
+  i = at[1]
+  if isempty(found.owners)
+    # A line that brings a name in from another file, like `@use "./walls" Wall`, doesn't define it
+    brings(m) = m.span === nothing && occursin(r"^\s*(@use|using|import)\b", b.lines[m.at[1]])
+    made = sort!([m for m in page_bounds(e) if m.name == found.name && inreach(m, i) && !brings(m)], by=m -> m.at)
+    near = filter(m -> m.span !== nothing, made)
+    # A name of the function that the click is in: where it was last made, at the click or before it
+    if !isempty(near)
+      k = findlast(m -> m.at <= (i, found.col), near)
+      return near[something(k, 1)].at
+    end
+    if !isempty(made)
+      # A click on one of a function's methods goes to the next of them
+      k = findfirst(m -> m.at == (i, found.col), made)
+      return made[k === nothing ? 1 : mod1(k + 1, length(made))].at
+    end
+  end
+  home = something(loaded_module(page_key(b.path)), scope(e))
+  value = named_value(home, join([found.owners; found.name], '.'))
+  (value isa Function || value isa Type) || return nothing
+  ms = try collect(Base.invokelatest(methods, value)) catch; return nothing end
+  # A method in a file that Ladder loaded comes before a method of Julia's own
+  ms = filter(m -> code_place(m) !== nothing, ms)
+  isempty(ms) && return nothing
+  first(sort(ms, by=m -> (!haskey(Kip.modules, code_place(m)[1]), code_place(m)[1], m.line)))
+end
+
+"Go to where the name at the place `at` of the page is defined. True when it has a place to go to."
+definition!(e, at::Pos) = begin
+  place = definition(e, at)
+  place === nothing && return false
+  if place isa Method
+    here = code_place(place)
+    # A method of the file that shows is a line of this window
+    here[1] == page_key(e.buf.path) || return (show_code!(e, place); true)
+    place = (settled_line(place, e.buf.lines, here[2]), 0)
+  end
+  place == at && return true
+  e.buf.caret = e.buf.anchor = place
+  focus(e)
+  touch!(e)
+  e.nodes[:hold] = (max(place[1] - 3, 1), 24px - PAGE_TOP)   # the definition goes near the top of the window, with a few lines over it
+  true
+end
+
+"Go to where the name at the caret is defined: a function, a type or a value of the page's Julia code, or of a file that Ladder loaded"
+go_to_definition!(e) = definition!(e, e.buf.caret) || error("Nothing here says where the name at the caret is defined.")
+
+"A heading of the page that shows, or a place of a file of code, for a command to take"
 struct HeadingLine
   line::Int
   words::String
+  what::String   # what a place of a file of code is: "section", "function", "struct". It's "" for a heading of a page.
 end
+HeadingLine(line, words) = HeadingLine(line, words, "")
 choices_for(::Type{HeadingLine}, e) = begin
   b = e.buf
+  b.view == :code && return code_places(e)
   ks = kinds(b)
   [HeadingLine(i, String(strip(rest(b.lines[i], ks[i].prefix)))) for i in eachindex(ks) if ks[i].kind == Kind.heading]
 end
 worded(h::HeadingLine) = h.words
-sidenote(h::HeadingLine) = "line $(h.line)"
+sidenote(h::HeadingLine) = isempty(h.what) ? "line $(h.line)" : "$(h.what) · line $(h.line)"
 
 # Two methods, so the chip takes a heading or a number, and the type of what's said chooses the method
-"Put the caret on a heading of the page, and bring it in sight"
-go_to!(e, heading::HeadingLine) = (show_line!(e, heading.line); nothing)
+"Put the caret on a heading of the page, or on a place of a file of code, and bring it in sight"
+go_to!(e, heading::HeadingLine) = begin
+  show_line!(e, heading.line)
+  # A place of a file of code goes near the top of the window, with a few lines over it
+  e.buf.view == :code && (e.nodes[:hold] = (max(heading.line - 3, 1), 24px - PAGE_TOP))
+  nothing
+end
 "Put the caret on the line with the number `line`, and bring it in sight"
 go_to!(e, line::Integer) = begin
   n = length(e.buf.lines)
@@ -33335,7 +33694,8 @@ go_to!(e, line::Integer) = begin
   nothing
 end
 
-add_command!(go_to!, title="Go to a heading of the page, or to a line by its number", kind=:look)
+add_command!(go_to!, title="Go to a heading of the page, to a function or a section of a file of code, or to a line by its number", kind=:look)
+add_command!(go_to_definition!, title="Go to where the name at the caret is defined", kind=:look)
 add_command!(insert_block!, name=:insert, title="Add a block to the page: a table, a sheet, a chart and so on", kind=:edit)
 add_command!(theme!, title="Use other colours for the page")
 add_command!(text_size!, title="Make the page's text a number of pixels tall")
@@ -33477,11 +33837,19 @@ code_label(m::Method) = begin
   "$name:$line"
 end
 
-"The tool of a window of the editor `editor` that shows the code of a thing. `picking` is true after Show Code, until a click or esc. `swallow` is true from a click that it took until the button comes up."
+"""
+The tool of a window of the editor `editor` that shows the code of a thing.
+`picking` is true after Show Code, until a click or esc. `swallow` is true
+from a click that it took until the button comes up. `asking` has the words
+of Ask For Change until that click, and `asked` is the change that an
+agent is making, or made a moment ago: see "ask for a change to a thing".
+"""
 @def mutable struct CodePicker
   editor::Any = nothing
   picking::Bool = false
   swallow::Bool = false
+  asking::String = ""
+  asked::Any = nothing
 end
 
 code_picker(e) = get!(() -> CodePicker(editor=e), e.nodes, :code_picker)::CodePicker
@@ -33501,16 +33869,43 @@ tool_input(t::CodePicker, w, ::KeyPress{Keys.mouse_left}) = begin
   found = code_under(w)
   t.picking = false
   t.swallow = true   # the window's parts see neither the press nor the release
-  found === nothing || show_code!(t.editor, found[2])
+  asking, t.asking = t.asking, ""
+  found === nothing || (isempty(asking) ? show_code!(t.editor, found[2]) : ask_change!(t, found[1], found[2], asking))
   true
 end
 tool_input(t::CodePicker, w, ::KeyRelease{Keys.mouse_left}) = (was = t.swallow; t.swallow = false; was)
-tool_input(t::CodePicker, w, ::KeyPress{Keys.escape}) = (was = t.picking; t.picking = false; was)
+tool_input(t::CodePicker, w, ::KeyPress{Keys.escape}) = (was = t.picking; t.picking = false; t.asking = ""; was)
 
 const PICK_LINE = colorant"rgb(48,128,236)"
 
-# A line round the thing that a click would show the code of, and a label over its top left corner
+const PICK_FAILED = colorant"rgb(200,60,50)"
+
+"Draw a line round the place `r` of the window `w`, and a label with `words` over its top left corner. With no place, the label is under the top bar."
+pick_mark(ctx, w, r, words; colour=PICK_LINE) = begin
+  x, y = 16.0, 64.0
+  if r !== nothing
+    x, y, wide, tall = num(r.left), num(r.top), num(r.width), num(r.height)
+    round_box(ctx, x + 0.5, y + 0.5, max(1, wide - 1), max(1, tall - 1), 3; fill=RGBA(colour.r, colour.g, colour.b, 0.08), line=colour, wide=1.5)
+  end
+  face = Face(SANS, "", 11px, colorant"white", false)
+  across = num(measure(face, words)) + 12
+  # The label sits on the thing's top edge, and comes down into the thing where the window has no room over it
+  left = clamp(x, 0.0, max(0.0, num(w.size[1]) - across))
+  top = y >= 18 ? y - 18 : y
+  round_box(ctx, left, top, across, 18, 3; fill=colour)
+  write_ink(ctx, words, left + 6, top + 13, face)
+  nothing
+end
+
+# A line round the thing that a click would show the code of, and a label over its top left corner.
+# A thing that an agent is changing keeps its line, with what was asked, and then what the agent said.
 draw_tool(ctx, w, t::CodePicker, scene) = begin
+  a = t.asked
+  if a !== nothing
+    r = try rect(a.node) catch; nothing end
+    words = a.ended == 0 ? "Asked: $(a.words) …" : a.said
+    pick_mark(ctx, w, r, length(words) > 140 ? first(words, 139) * "…" : words; colour=a.failed ? PICK_FAILED : PICK_LINE)
+  end
   picks(t, w) || return nothing
   redraw_in!(t.editor, 1/30)   # the line follows the mouse
   found = code_under(w)
@@ -33518,17 +33913,7 @@ draw_tool(ctx, w, t::CodePicker, scene) = begin
   node, m = found
   r = try rect(node) catch; nothing end
   r === nothing && return nothing
-  x, y, wide, tall = num(r.left), num(r.top), num(r.width), num(r.height)
-  round_box(ctx, x + 0.5, y + 0.5, max(1, wide - 1), max(1, tall - 1), 3; fill=RGBA(PICK_LINE.r, PICK_LINE.g, PICK_LINE.b, 0.08), line=PICK_LINE, wide=1.5)
-  face = Face(SANS, "", 11px, colorant"white", false)
-  words = "$(nameof(typeof(node)))  ·  $(code_label(m))"
-  across = num(measure(face, words)) + 12
-  # The label sits on the thing's top edge, and comes down into the thing where the window has no room over it
-  left = clamp(x, 0.0, max(0.0, num(w.size[1]) - across))
-  top = y >= 18 ? y - 18 : y
-  round_box(ctx, left, top, across, 18, 3; fill=PICK_LINE)
-  write_ink(ctx, words, left + 6, top + 13, face)
-  nothing
+  pick_mark(ctx, w, r, isempty(t.asking) ? "$(nameof(typeof(node)))  ·  $(code_label(m))" : "$(nameof(typeof(node)))  ·  click to ask: $(t.asking)")
 end
 
 """
@@ -33588,6 +33973,374 @@ redraw_windows!() =
 show_code!(e) = (code_picker(e).picking = true; redraw_in!(e, 0); nothing)
 
 add_command!(show_code!, title="Show the code that draws the next thing that you click")
+
+
+# --- a page as an app -------------------------------------------------------------------------
+#
+# The command Show As App opens the page in a window that has only the page:
+# no top bar, no sidebar and no caret. The page's blocks work as they do in
+# any window, so a page with a board, a chart and a few sliders is a small
+# tool that you leave open. What a block changes is written to the page's
+# file at once, since the window has nothing that says a page isn't saved. No
+# key changes the page's text there. The command, run in that window, makes it
+# a window that changes the page again.
+
+"True when the window of `e` shows its page as an app"
+as_app(e) = get(e.nodes, :as_app, false) === true
+
+"In each frame of a window that shows its page as an app: keep the caret away, and write what a block changed"
+app_tick!(e) = begin
+  as_app(e) || return nothing
+  b = e.buf
+  b.reading = true
+  e.panel = false
+  dirty(b) && writes(b) && save!(b)
+  nothing
+end
+
+"Show the page as an app, in a window of its own: only the page, with no top bar, no sidebar and no caret. In that window, go back to a window that changes the page."
+show_as_app!(e) = begin
+  if as_app(e)
+    delete!(e.nodes, :as_app)
+    e.buf.reading = false
+    redraw_in!(e, 0)
+    return nothing
+  end
+  b = e.buf
+  (b.view == :markdown && !isempty(b.path)) || error("Only a page of Markdown that's in a file shows as an app.")
+  dirty(b) && writes(b) && save!(b)
+  shown = build_editor(b.path)
+  foreach(name -> setfield!(shown, name, getfield(e, name)), SHARED)
+  shown.remember = false   # what this window sets, like a sidebar that's shut, isn't written to the settings
+  shown.panel = false
+  shown.nodes[:as_app] = true
+  shown.buf.reading = true
+  by = window_of(e)
+  size, at = by === nothing ? (paper_window(screen_room(), 0px), (0px, 0px)) : ((by.size[1], by.size[2]), (by.position[1] + 30px, by.position[2] + 30px))
+  shown.size = size
+  show_window!(window!(shown, title=something(page_title(shown), splitext(basename(b.path))[1]), size=size, position=at), by)
+  shown
+end
+
+add_command!(show_as_app!, title="Show the page as an app, in a window of its own: only its blocks, with no top bar, sidebar or caret", kind=:look)
+
+# --- when a line last changed ---------------------------------------------------------------
+#
+# A click on the number of a line, in a file that git keeps, shows the commit
+# that last changed the line: its day, who made it, its first line, and the
+# lines that the file had there before. git is asked about the text as the
+# window has it, so a line that you changed and didn't commit says so. The
+# words stay until the next click, key or scroll. git answers in a later
+# frame, so the window never waits for it.
+
+"The line whose number the point `pos` of the window is on, or nothing: the page shows numbers, and the point is beside the text, on them"
+number_at(e, pos) = begin
+  (numbers(e) && !isempty(e.layout)) || return nothing
+  x, y = pos
+  left = e.origin[1] + sideways(e)   # the numbers stay at the left of a page that's scrolled sideways
+  (left - gutter(e) <= x < left - NUMBER_GAP / 2 && y >= e.origin[2]) || return nothing
+  locate(e, pos)[1]
+end
+
+"What's asked of git about a line, and what it said: the line, the process, the caret, version and scroll that the words stay for, and the commit with the lines before it"
+@def mutable struct LineAsked
+  line::Int = 0
+  root::String = ""
+  process::Any = nothing
+  out::Any = nothing
+  stays::Any = nothing
+  found::Any = nothing     # a Git.Blamed once git has answered, or false when it has nothing to say
+  before::Vector{String} = String[]
+end
+
+"Ask git which commit last changed line `i` of the page. True when git keeps the page, so there's something to ask."
+line_history!(e, i::Int) = begin
+  b = e.buf
+  h = isempty(b.path) ? nothing : page_history(page_key(b.path))
+  h === nothing && return false
+  asked = try
+    process, out = Git.blame(h.root, h.rel, i, join(b.lines, "\n"))
+    LineAsked(line=i, root=h.root, process=process, out=out)
+  catch
+    return false
+  end
+  e.nodes[:line_asked] = asked
+  redraw_in!(e, 0)
+  true
+end
+
+"The day of a time in seconds, like 14 Nov 2026"
+day_words(at::Real) = Dates.format(Dates.unix2datetime(at) + (Dates.now() - Dates.now(Dates.UTC)), "d u yyyy")
+
+"What the window says of the commit that last changed a line"
+history_words(a::LineAsked) = begin
+  c = a.found
+  c === false && return Box(padding(10px, 7px), label("git has nothing on this line.", 12px, color=TIP_INK))
+  isempty(c.hash) && return Box(padding(10px, 7px), label("Changed since the last commit.", 12px, color=TIP_INK))
+  said(text; family=SANS, color=TIP_INK) = Text(length(text) > 90 ? first(text, 89) * "…" : text, size=12px, family=family, color=color, wrap=WrapMode.none)
+  rows = Any[said("$(day_words(c.at))  ·  $(c.who)  ·  $(first(c.hash, 7))", color=RGBA(TIP_INK.r, TIP_INK.g, TIP_INK.b, 0.65)), said(c.words)]
+  if isempty(a.before)
+    push!(rows, said("This commit added the line.", color=RGBA(TIP_INK.r, TIP_INK.g, TIP_INK.b, 0.65)))
+  else
+    push!(rows, said("Before:", color=RGBA(TIP_INK.r, TIP_INK.g, TIP_INK.b, 0.65)))
+    append!(rows, [said(isempty(l) ? " " : l, family=codefont()) for l in first(a.before, 6)])
+    length(a.before) > 6 && push!(rows, said("and $(length(a.before) - 6) more", color=RGBA(TIP_INK.r, TIP_INK.g, TIP_INK.b, 0.65)))
+  end
+  Box(padding(10px, 8px), Column(Alignment.Start, child_gap=3px, [Box(r) for r in rows]...))
+end
+
+"In each frame: read what git said about a line, show it beside the line's number, and take it away after the next click, key or scroll"
+line_tick!(e) = begin
+  a = get(e.nodes, :line_asked, nothing)
+  a isa LineAsked || return nothing
+  w, b = window_of(e), e.buf
+  if a.found === nothing
+    yield()   # git's end is noticed by a task, which gets its turn here
+    process_exited(a.process) || return (redraw_in!(e, 0.05); nothing)
+    found = Git.read_blame(String(take!(a.out)))
+    a.found = something(found, false)
+    found === nothing || isempty(found.hash) || (a.before = try Git.before(a.root, found) catch; String[] end)
+    a.stays = (b.path, b.version, b.caret, e.scroll.offset)
+  end
+  if w === nothing || a.stays != (b.path, b.version, b.caret, e.scroll.offset) || !(1 <= a.line <= length(e.layout))
+    w === nothing || close_popup!(w, :line_asked)
+    delete!(e.nodes, :line_asked)
+    return nothing
+  end
+  it = item(e, a.line)
+  spot = (e.origin[1] + sideways(e) - gutter(e), e.origin[2] + it.top, gutter(e) - NUMBER_GAP / 2, it.content isa Flow ? it.content.lines[1].high : it.tall)
+  # The words look as a tooltip does. They stay while the mouse moves, which a tooltip doesn't.
+  popup!(w, Bubble(content=history_words(a), target=spot), anchor=spot, placement=:bottom, gap=4px, key=:line_asked, input=false)
+  nothing
+end
+
+# --- ask for a change to a thing ----------------------------------------------------------
+#
+# The command Ask For Change takes what you want in words, like "make this
+# bar thinner". The next click picks a thing, as it does after Show Code.
+# Ladder gives the words, with the file and the line of the function that
+# draws the thing, to an agent: the command `claude` of Claude Code, which it
+# starts in the folder of that file. The agent changes the file. When it has
+# ended, Ladder reads the file again and runs each part of its code that
+# changed, in the module that the file made, so the thing is drawn the new
+# way: see `reload_changed!`. Until then a line stays round the thing, with a
+# label that has your words. After, the label has what the agent said of its
+# change, for a few seconds.
+#
+# The app that's installed writes its own files again each time it starts, so
+# a change to one of them lasts until Ladder quits. The command Keep This
+# Change keeps the function that the caret is in: it adds the function to the
+# startup page, in a block of code that runs each time Ladder starts. See
+# "the startup page".
+
+"The command that changes code when it's asked to in words. Nothing means the command `claude` of Claude Code. A test puts a command of its own here."
+const AGENT_COMMAND = Ref{Any}(nothing)
+
+"The command that an agent is started with. The words that ask for the change go after it."
+agent_command() = begin
+  AGENT_COMMAND[] === nothing || return AGENT_COMMAND[]
+  # An app that the Finder opened doesn't have the terminal's PATH, so the usual places are tried too
+  places = (joinpath(homedir(), ".local", "bin", "claude"), "/opt/homebrew/bin/claude", "/usr/local/bin/claude", joinpath(homedir(), ".claude", "local", "claude"))
+  found = something(Sys.which("claude"), Some(get(filter(isfile, collect(places)), 1, nothing)))
+  found === nothing && error("Ladder can't find the command `claude`. Install Claude Code, and ask again.")
+  # The words go straight after -p. An option that takes a list, like --allowedTools, would take them as part of its list.
+  `$found --permission-mode acceptEdits --allowedTools Read,Edit,Grep,Glob -p`
+end
+
+"What an agent is told when a change is asked for: the function, where it is, and the user's words"
+change_prompt(file, line::Int, code, kind, words) = """
+  The user of the app Ladder pointed at a part of its window, a $kind, and asked for a change to it.
+
+  The function that draws that part is in the file $file, at line $line. It starts:
+
+      $code
+
+  The user's words: $words
+
+  Change that function, or the code that it uses, so the part is as the user asks. Change only files in $(dirname(file)). Keep the change small, and write code that looks like the code around it. Ladder runs the changed code as soon as you end, so leave the file in a state that runs. Then say what you changed, in one short sentence.
+  """
+
+"The text of each part of the Julia code of `lines`, with the line that the part starts on: see `read_parts`"
+part_texts(lines::Vector{String}) = begin
+  ps = read_parts(lines, 1)
+  [(p.first, String(rstrip(join(view(lines, p.first:(k == length(ps) ? length(lines) : ps[k+1].first - 1)), "\n")))) for (k, p) in enumerate(ps)]
+end
+
+"""
+Run each part of the code of the file at `file` that's new since the file had
+the lines `before`, in the module `mod` that the file made. So a function
+that was changed in the file is changed in the app that runs, and every
+window draws again. It gives how many parts ran, and what went wrong with the
+first that failed, or "".
+"""
+reload_changed!(mod::Module, file::AbstractString, before::Vector{String}) = begin
+  was = Set(t for (_, t) in part_texts(before))
+  ran, failed = 0, ""
+  for (first, code) in part_texts(text(file))
+    (code in was || isempty(strip(code))) && continue
+    try
+      # Blank lines before the code give each of its lines the number that it has in the file
+      Base.include_string(mod, "\n"^(first - 1) * code, String(file))
+      ran += 1
+    catch err
+      isempty(failed) && (failed = trouble(err))
+    end
+  end
+  ran > 0 && redraw_windows!()
+  (ran, failed)
+end
+
+"A change that an agent was asked to make, for the thing `node` that the method `method` draws. `said` is what there is to say when it has ended, at the time `ended`."
+@def mutable struct AskedChange
+  words::String = ""
+  node::Any = nothing
+  mod::Any = nothing
+  file::String = ""
+  before::Vector{String} = String[]
+  process::Any = nothing
+  out::Any = nothing         # a task that reads what the agent prints
+  gone::Float64 = 0.0        # when the agent's process was first seen to have ended
+  said::String = ""
+  failed::Bool = false
+  ended::Float64 = 0.0
+end
+
+"Ask an agent to change the thing `node`, which the method `m` draws, as `words` say. The picker `t` shows how it goes."
+ask_change!(t::CodePicker, node, m::Method, words::AbstractString) = begin
+  file, line = code_place(m)
+  lines = text(file)
+  line = settled_line(m, lines, line)
+  prompt = change_prompt(file, line, lines[line], nameof(typeof(node)), words)
+  out = Pipe()
+  process = try
+    run(pipeline(Cmd(`$(agent_command()) $prompt`, dir=dirname(file)), stdin=devnull, stdout=out, stderr=out), wait=false)
+  catch err
+    t.asked = AskedChange(words=words, node=node, said="The agent didn't start. " * trouble(err), failed=true, ended=time())
+    return nothing
+  end
+  close(out.in)   # only the agent writes to it now, so reading ends when the agent does
+  t.asked = AskedChange(words=words, node=node, mod=m.module, file=file, before=lines, process=process, out=(@async read(out, String)))
+  redraw_in!(t.editor, 0)
+  nothing
+end
+
+"The last lines of what an agent printed that have words: what it said of its change"
+agent_said(printed::AbstractString) = begin
+  parts = filter(!isempty, strip.(split(printed, r"\n\s*\n")))
+  isempty(parts) ? "" : String(replace(last(parts), r"\s+" => " "))
+end
+
+"In each frame: when the agent that was asked for a change has ended, run the code that it changed, and say how it went"
+ask_tick!(e) = begin
+  t = get(e.nodes, :code_picker, nothing)
+  (t isa CodePicker && t.asked !== nothing) || return nothing
+  a = t.asked
+  if a.ended == 0
+    yield()   # the agent's end is noticed by a task, which gets its turn here
+    process_exited(a.process) && a.gone == 0 && (a.gone = time())
+    # What it printed is all read a moment after it ends. A program that it left running can hold that up, so the wait has an end.
+    if a.gone > 0 && (istaskdone(a.out) || time() - a.gone > 2)
+      printed = istaskdone(a.out) && !istaskfailed(a.out) ? fetch(a.out) : ""
+      ran, failed = reload_changed!(a.mod, a.file, a.before)
+      a.failed = !success(a.process) || !isempty(failed)
+      a.said = !success(a.process) ? "The agent stopped. " * agent_said(printed) :
+               !isempty(failed) ? "The new code doesn't run. " * failed :
+               ran == 0 ? "Nothing changed. " * agent_said(printed) : agent_said(printed)
+      a.ended = time()
+    end
+    redraw_in!(e, 0.1)
+  elseif time() - a.ended > (a.failed ? 15 : 8)
+    t.asked = nothing
+    redraw_in!(e, 0)
+  else
+    redraw_in!(e, 0.5)
+  end
+  nothing
+end
+
+"""
+Ask for a change to the next thing that you click, in words, like "make this
+bar thinner". An agent changes the function that draws the thing, and the
+thing is drawn the new way. Esc leaves it.
+"""
+ask_for_change!(e, words::String) = begin
+  isempty(strip(words)) && error("Say what should change, in a few words.")
+  t = code_picker(e)
+  t.asked !== nothing && t.asked.ended == 0 && error("The agent is still making the last change.")
+  agent_command()   # it says so now if this Mac has no agent
+  t.asking = String(strip(words))
+  t.picking = true
+  redraw_in!(e, 0)
+  nothing
+end
+
+"The module of the file of code that Ladder loaded whose path ends with `name`, like \"Ladder/main.jl\". The startup page uses it to keep a change: see `keep_change!`."
+loaded(name::AbstractString) = begin
+  found = [m for (path, m) in Kip.modules if m isa Module && endswith(path, "/" * name)]
+  length(found) == 1 || error(isempty(found) ? "Ladder loaded no file called $name." : "Ladder loaded more than one file called $name.")
+  only(found)
+end
+
+"The shortest end of the path `file` that names one file of the code that Ladder loaded, like \"Ladder/main.jl\""
+loaded_name(file::AbstractString) = begin
+  parts = splitpath(file)
+  for k in 2:length(parts)
+    name = join(parts[end-k+1:end], "/")
+    count(path -> endswith(path, "/" * name), keys(Kip.modules)) == 1 && return name
+  end
+  String(file)
+end
+
+"The first and the last line of the part of the code of `lines` that line `i` is in, without the blank lines after it: see `read_parts`"
+part_lines(lines::Vector{String}, i::Int) = begin
+  ps = read_parts(lines, 1)
+  k = something(findlast(p -> p.first <= i, ps), 1)
+  first, last = ps[k].first, k == length(ps) ? length(lines) : ps[k+1].first - 1
+  while last > first && isempty(strip(lines[last])); last -= 1 end
+  (first, last)
+end
+
+"""
+Keep the function that the caret is in, for each time that Ladder starts. It's
+for a function of Ladder's own code, in the app that's installed: that app
+writes its own files again when it starts, so a change to one lasts only
+until Ladder quits. This adds the function to the startup page, in a block of
+code that runs it in the module of its file. A function that was kept before
+is kept as it is now.
+"""
+keep_change!(e) = begin
+  b = e.buf
+  file = page_key(b.path)
+  mod = loaded_module(file)
+  mod === nothing && error("Ladder didn't load this file, so there's no change to Ladder to keep.")
+  file in values(SOURCE_FILES) || error("Ladder doesn't write this file again when it starts. ⌘S keeps the change.")
+  first, last = part_lines(b.lines, b.caret[1])
+  code = join(b.lines[first:last], "\n")
+  isempty(strip(code)) && error("The caret isn't in a function.")
+  made = [m for m in page_bounds(e) if m.span === nothing && first <= m.at[1] <= last]
+  isempty(made) && error("The caret isn't in a function.")
+  name = loaded_name(file)
+  heading = "## Kept: `$(signature(b.lines[made[1].at[1]], made[1]))` of $name"
+  # The function is as it's kept from now, in the app that runs too
+  Base.include_string(mod, code, file)
+  block = [heading, "", "```julia", "@eval Ladder.loaded(\"$name\") begin", split(code, '\n')..., "end", "```"]
+  page = startup_page()
+  lines = isfile(page) ? text(page) : String[]
+  at = findfirst(==(heading), lines)
+  if at === nothing
+    while !isempty(lines) && isempty(strip(lines[end])); pop!(lines) end
+    append!(lines, ["", block..., ""])
+  else
+    stop = something(findnext(l -> startswith(l, "## "), lines, at + 1), length(lines) + 1) - 1
+    splice!(lines, at:stop, [block..., ""])
+  end
+  write(page, join(lines, "\n"))
+  redraw_windows!()
+  nothing
+end
+
+add_command!(ask_for_change!, title="Ask an agent to change the next thing that you click, in your own words")
+add_command!(keep_change!, name=:keep_this_change, title="Keep the function at the caret for each time that Ladder starts: a change to Ladder's own code")
 
 # --- a folder's own page ----------------------------------------------------------------
 #
@@ -36221,7 +36974,8 @@ add_command!(show_folder_as!, title="Show a folder as a kind of folder: a deskto
 # first time Ladder starts, it writes the page, with links to the welcome page
 # and to the settings. From then on the page is yours, and Ladder never writes
 # to it: it isn't one of the pages that a newer Ladder brings, and git leaves
-# it out of Ladder's own repository.
+# it out of Ladder's own repository. Only the command Keep This Change adds to
+# it, when you run it: see "ask for a change to a thing".
 #
 # Code that fails stops the code after it, and Ladder opens all the same. The
 # window then says which line of the page failed, under its top bar.

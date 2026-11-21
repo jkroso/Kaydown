@@ -250,6 +250,64 @@ end
 "Forget what git said, so the next question starts git at once: after a commit that Ladder made, or in a test"
 forget!() = (foreach(a -> (a.at = a.took = 0.0), values(STATES)); foreach(a -> (a.at = a.took = 0.0), values(LOGS)); nothing)
 
+"""
+The commit that last changed a line of a file: its hash, who made it, when, its
+first line, and the number that the line has in that commit's own text of the
+file `file`. `hash` is "" for a line that's in no commit yet.
+"""
+struct Blamed
+  hash::String
+  who::String
+  at::Float64
+  words::String
+  line::Int
+  file::String
+end
+
+"""
+Start git to say which commit last changed line `line` of the file at `rel`.
+`text` is the file's text as the window has it, which can be newer than the
+file. It gives the process and what it prints: `read_blame` reads that.
+"""
+blame(root::AbstractString, rel::AbstractString, line::Int, text::AbstractString) = begin
+  out = IOBuffer()
+  cmd = setenv(`$(program[]) --no-optional-locks -C $root blame -L $line,$line --porcelain --contents - -- $rel`, merge(ENV, Dict("LC_ALL" => "C")))
+  (run(pipeline(cmd, stdin=IOBuffer(text), stdout=out, stderr=devnull), wait=false), out)
+end
+
+"Read what `git blame --porcelain` printed for one line, or nothing when it printed no commit"
+read_blame(text::AbstractString) = begin
+  lines = split(text, '\n')
+  m = match(r"^([0-9a-f]{40}) (\d+) \d+", first(lines))
+  m === nothing && return nothing
+  field(name) = (k = findfirst(startswith(name * " "), lines); k === nothing ? "" : String(chop(lines[k], head=length(name) + 1, tail=0)))
+  # git gives a line that's in no commit a hash of zeros
+  all(==('0'), m[1]) && return Blamed("", "", 0.0, "", parse(Int, m[2]), "")
+  Blamed(String(m[1]), field("author"), something(tryparse(Float64, field("author-time")), 0.0), field("summary"), parse(Int, m[2]), field("filename"))
+end
+
+"""
+The lines that the commit `b` took away where it wrote its line: what the file
+had there before. It's empty when the commit only added lines. It asks git and
+waits.
+"""
+before(root::AbstractString, b::Blamed) = begin
+  out = String[]
+  text = ask(root, `show --format= -U0 $(b.hash) -- $(b.file)`)
+  text === nothing && return out
+  within = false
+  for line in split(text, '\n')
+    m = match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", line)
+    if m !== nothing
+      from, count = parse(Int, m[1]), m[2] === nothing ? 1 : parse(Int, m[2])
+      within = from <= b.line < from + max(count, 1)
+    elseif within && startswith(line, '-') && !startswith(line, "---")
+      push!(out, String(chop(line, head=1, tail=0)))
+    end
+  end
+  out
+end
+
 "What the file at `rel` had in the last commit, or nothing when the commit hasn't got it. It asks git and waits."
 committed(root::AbstractString, rel::AbstractString) = ask(root, `show HEAD:$rel`)
 

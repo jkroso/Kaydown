@@ -103,6 +103,16 @@ area = width * 3.6
 grid = [row * column for row in 1:3, column in 1:4]
 ```
 
+A block in the language `check` holds a line of Julia for each thing that must be true. Each line shows a tick or a cross, and a line that fails says what it found. The last line under this fails on purpose.
+
+```check
+2 + 2 == 4
+sqrt(16) ≈ 4
+length("ladder") < 6
+```
+
+The lines can use the names that the page's code made. Run the three lines of the block above, then hold ⌥, click the checks, and add the line `area ≈ 8.64`. The checks run again each time the page's code runs, and when you click them.
+
 The page [julia.md](julia.md) has more code to run: an expression of several lines, what code prints, the names that a block offers as you type, and the box of a function.
 
 ## Live blocks
@@ -163,9 +173,19 @@ A function draws each thing in this window: a block, a button, a row of the list
 
 Try it on the bar of the block above. The window shows `progress.jl`, with the caret on the function `describe`. Change a colour or a size there, and press ⌘Return in the function. The bar is drawn the new way at once. ⌘S writes the change to the file.
 
-It works on Ladder's own parts too, like the count of words at the top right. Most of those are in one very long file. The window shows the whole of it, with the function at the top, and ⌘Return and ⌘S work there as they do in any file. The app that you installed writes its own files again each time it starts, so a change to one of its own parts lasts until you quit. To keep the change, put the function on your startup page, between a line `@eval Ladder begin` and a line `end`.
+It works on Ladder's own parts too, like the count of words at the top right. Most of those are in one very long file. The window shows the whole of it, with the function at the top, and ⌘Return and ⌘S work there as they do in any file. The app that you installed writes its own files again each time it starts, so a change to one of its own parts lasts until you quit. To keep the change, put the caret in the function and run the command Keep This Change. It adds the function to your startup page, whose code runs each time Ladder starts.
 
 The command Show Code does the same for the next thing that you click. Press ⌘⇧P and type its name to run it. Esc gives the mouse back.
+
+You can ask for a change in words too. Run the command Ask For Change, type what you want, like `make this bar thinner`, and click the thing. Ladder gives your words, and the place of the function that draws the thing, to Claude Code. Claude Code changes the function, and the thing is drawn the new way. The label on the thing then says what changed. This needs Claude Code on your Mac.
+
+## A file of code
+
+Ladder opens a Julia file as code that you change, however long the file is. Three things help you find your way in one. Try them in [progress.jl](progress.jl).
+
+- Press ⌘⇧P and run Go To. It lists the file's functions, and each section that a comment like `# --- name ---` starts. Type a few letters and press Return.
+- Hold ⌘ and click a name. The caret goes to where the name is defined. A function with several methods goes to the first, and a click there goes to the next. A name from another file shows in a window beside this one. The command Go To Definition does the same for the name at the caret.
+- Click the number of a line, in a file that git keeps. Ladder shows the commit that last changed the line: its day, who made it, its first line, and what the file had there before.
 
 ## Sheets
 
@@ -793,6 +813,10 @@ export PATH="$HOME/Library/Application Support/Ladder/bin:$PATH"
 Press ⌃⌘⇧P to show this page as slides, for when you show a plan to someone. The window shows one part of the page at a time, with bigger text and nothing else of the app. A slide starts at each heading of level 1 or 2. A line across the page, which you write as `---`, starts one too. A right-click on the page has Show as Slides in its menu too.
 
 Press → or Space to go to the next slide, and ← to go back. A click on the right half of the window goes on, and a click on the left half goes back. A click still ticks a to-do item and opens a link. Press esc to see the page again.
+
+## A page as an app
+
+The command Show As App opens the page in a window that has only the page: no top bar, no sidebar and no caret. The blocks work as they do here, and what a block changes is saved at once. So a page with a board, a chart or a few sliders is a small tool that you leave open. Run the command in that window to change the page again.
 
 ## Files, menus and settings
 

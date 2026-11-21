@@ -460,6 +460,20 @@ This paragraph is under the columns.
 - The headings and the tasks in the columns are the page's own. They are in the list of contents, on a `board` and in a `schedule`.
 - In a narrow window, Ladder shows the blocks one under another. Use two or three columns, not more.
 
+### Checks
+
+A code block in the language `check` has a line of Julia for each thing that must be true. Ladder shows a tick or a cross beside each line, and says what a line that fails found. Use it to show the user that the numbers of a page agree.
+
+````markdown
+```check
+total == sum(parts)
+length(rooms) == 4
+```
+````
+
+- Each line is one Julia expression that comes to `true` or `false`. A blank line and a line that starts with `#` are no check.
+- The lines can use the names of the page's `sheet` rows and of its `julia` blocks. A `julia` block's names exist only after the user runs the block.
+
 ### Code that runs
 
 A code block in the language `ui`, and code between backticks straight after a `!`, is Julia code that Ladder runs when the page opens. Use these only if the user asks for a live block.

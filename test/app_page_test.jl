@@ -1,12 +1,13 @@
 # Tests for a page as an app, in main.jl: the command Show As App opens the
-# page in a window that has only the page, with no top bar, no sidebar and no
-# caret. Its blocks still work, and what one changes is written to the file.
+# page in a window that has only the page, with no sidebar, no caret and an
+# empty top bar to drag. Its blocks still work, and what one changes is written
+# to the file.
 # Run them with `julia -O0 --project=. test/app_page_test.jl`. They draw
 # windows that aren't on the screen.
 
 @use Test: @test, @testset, @test_throws
 @use "../main" => K
-@use "github.com/jkroso/MiniFB.jl" Window Typed Keys ontype
+@use "github.com/jkroso/MiniFB.jl" Window Typed Keys ontype KeyPress
 @use "github.com/jkroso/UI.jl/Interface/draw" frame
 const px = K.px
 
@@ -26,8 +27,12 @@ frames()
   win = K.window_of(shown)
   frames(win)
   @test shown !== e && shown.buf.path == page && K.as_app(shown)
-  # No top bar, no sidebar and no caret
-  @test !haskey(shown.nodes, :topbar) && !haskey(shown.nodes, :sidebar) && !shown.panel && K.caretless(shown.buf)
+  # No sidebar and no caret
+  @test !haskey(shown.nodes, :sidebar) && !shown.panel && K.caretless(shown.buf)
+  # The top bar is there with nothing in it, so you can drag it to move the window
+  bar = K.describe(shown.nodes[:topbar])
+  @test isempty(bar.children) && !isempty(K.describe(e.nodes[:topbar]).children)
+  @test hasmethod(K.onkey, Tuple{K.TopBar, KeyPress{Keys.mouse_left}})
   # The page's blocks are there
   @test haskey(shown.nodes, (:block, K.BOARD, page, 1))
   # The window that changes the page is as it was

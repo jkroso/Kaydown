@@ -864,7 +864,7 @@ Press → or Space to go to the next slide, and ← to go back. A click on the r
 
 ## A page as an app
 
-The command Show As App opens the page in a window that has only the page: no top bar, no sidebar and no caret. The blocks work as they do here, and what a block changes is saved at once. So a page with a board, a chart or a few sliders is a small tool that you leave open. Run the command in that window to change the page again.
+The command Show As App opens the page in a window that has only the page: no sidebar, no caret, and nothing in the top bar. Drag the top bar to move the window. The blocks work as they do here, and what a block changes is saved at once. So a page with a board, a chart or a few sliders is a small tool that you leave open. Run the command in that window to change the page again.
 
 ## Files, menus and settings
 

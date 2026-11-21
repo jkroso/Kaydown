@@ -283,7 +283,8 @@
 #     line, and a click on it shows each line with a tick or a cross. See
 #     "checks of the page's code".
 #   - Run the command Show As App to open the page in a window with only the
-#     page: no top bar, no sidebar and no caret. See "a page as an app".
+#     page: no sidebar, no caret, and nothing in the top bar, which still
+#     moves the window. See "a page as an app".
 #
 # It uses these UI.jl features: a `Scroll` that only builds the lines
 # on screen, a `draw` method that adds the caret and selection over a node,
@@ -26050,8 +26051,8 @@ filled(e) = full_block(e) !== nothing || lowered(e) !== nothing || zooming(e) !=
 
 describe(t::TopBar) = begin
   e = editor(t)
-  # While the page shows as slides, the bar is empty. It's still what you drag to move the window.
-  slideshow(e) === nothing || return Row(width(grow=grow), height(TOPBAR_H), name="TopBar")
+  # While the page shows as slides or as an app, the bar is empty. It's still what you drag to move the window.
+  (slideshow(e) === nothing && !as_app(e)) || return Row(width(grow=grow), height(TOPBAR_H), name="TopBar")
   b = e.buf
   # The buttons that code from the startup page adds for the page that shows, like the ones that answer an email
   more = bar_parts(e)
@@ -34961,7 +34962,7 @@ describe_window(e::Editor) = begin
   popup = palette_shows(e) ? (palette(e),) : e.popup == :none ? () : (node!(Backdrop, e, :backdrop), finder(e))
   Stack(width(grow=grow), height(grow=grow), Alignment.Start, name="Editor",
     body, panel_edge(e)..., tablebar(e)..., outcome_over(e)..., callbox(e)..., suggestbox(e)..., findbar(e)..., sound_over(e)..., fill_over(e)..., task_over(e)..., slides_over(e)..., takeoff_over(e)..., zoom_over(e)...,
-    (screening(e) || as_app(e) ? () : (node!(TopBar, e, :topbar),))...,   # a video that fills the screen is all that the window shows, and so is a page that shows as an app
+    (screening(e) ? () : (node!(TopBar, e, :topbar),))...,   # a video that fills the screen is all that the window shows
     popup...)
 end
 
@@ -36411,12 +36412,13 @@ redraw_windows!() =
 # --- a page as an app -------------------------------------------------------------------------
 #
 # The command Show As App opens the page in a window that has only the page:
-# no top bar, no sidebar and no caret. The page's blocks work as they do in
-# any window, so a page with a board, a chart and a few sliders is a small
-# tool that you leave open. What a block changes is written to the page's
-# file at once, since the window has nothing that says a page isn't saved. No
-# key changes the page's text there. The command, run in that window, makes it
-# a window that changes the page again.
+# no sidebar, no caret, and a top bar with nothing in it, which you drag to
+# move the window. The page's blocks work as they do in any window, so a page
+# with a board, a chart and a few sliders is a small tool that you leave open.
+# What a block changes is written to the page's file at once, since the window
+# has nothing that says a page isn't saved. No key changes the page's text
+# there. The command, run in that window, makes it a window that changes the
+# page again.
 
 "True when the window of `e` shows its page as an app"
 as_app(e) = get(e.nodes, :as_app, false) === true
@@ -36431,7 +36433,7 @@ app_tick!(e) = begin
   nothing
 end
 
-"Show the page as an app, in a window of its own: only the page, with no top bar, no sidebar and no caret. In that window, go back to a window that changes the page."
+"Show the page as an app, in a window of its own: only the page, with no sidebar, no caret and nothing in the top bar. In that window, go back to a window that changes the page."
 show_as_app!(e) = begin
   if as_app(e)
     delete!(e.nodes, :as_app)
@@ -36455,7 +36457,7 @@ show_as_app!(e) = begin
   shown
 end
 
-add_command!(show_as_app!, title="Show the page as an app, in a window of its own: only its blocks, with no top bar, sidebar or caret", kind=:look)
+add_command!(show_as_app!, title="Show the page as an app, in a window of its own: only its blocks, with no sidebar or caret, and nothing in the top bar", kind=:look)
 
 # --- when a line last changed ---------------------------------------------------------------
 #

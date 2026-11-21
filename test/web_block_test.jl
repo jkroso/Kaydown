@@ -110,7 +110,7 @@ block_text(n) = (span = K.block_lines(e.buf, K.WEBVIEW, n); span === nothing ? n
   @test rect(held).height == 76px && K.Browsers.Live.evaluate(held.view.live, "document.getElementById('out').textContent") == "a script ran"
   # A file beside the document is a page too
   beside = e.nodes[(:block, K.WEBVIEW, page, 3)].browser
-  @test beside.title == "Beside" && beside.shown == joinpath(dir, "beside.html") && rect(beside).height == K.WEB_LEAST
+  @test beside.title == "Beside" && beside.shown == "file://" * joinpath(dir, "beside.html") && rect(beside).height == K.WEB_LEAST
   # A block with no address has no page
   @test e.nodes[(:block, K.WEBVIEW, page, 4)].browser.view.page === nothing
   shot("web-block.png")

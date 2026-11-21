@@ -605,11 +605,11 @@ place!(l::List, b::Box, x, y, w, h) = begin
   push!(l.places, (element=b.element, left=x, top=y, wide=w, tall=h))
 end
 
-"Add a rectangle of the page that's a link"
+"Add a rectangle of the page that's a link. Only a page that's a file of this computer links to a file of it."
 link!(l::List, url, x, y, w, h) = begin
   (isempty(url) || w <= 0 || h <= 0) && return
   url = resolve(l.base, url)
-  occursin(r"^(https?|mailto|tel):"i, url) || return
+  occursin(r"^(https?|mailto|tel):"i, url) || (occursin(r"^file:"i, url) && occursin(r"^file:"i, l.base)) || return
   x, y, w, h = around(l, x, y, w, h)
   last = isempty(l.links) ? nothing : l.links[end]
   # A link's words on one line are one rectangle

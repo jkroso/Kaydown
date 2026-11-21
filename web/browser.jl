@@ -151,11 +151,16 @@ end
 "True for an address that the view shows itself: a page of the web, or a file of this computer"
 shows(address::AbstractString) = occursin(r"^(https?|file)://"i, address) || startswith(address, '/')
 
-"The whole address that `words` mean when someone types them: `julialang.org` is `https://julialang.org`"
+"""
+The whole address that `words` mean when someone types them: `julialang.org`
+is `https://julialang.org`. A path of a file of this computer is its `file://`
+address, so that the addresses in its page are from its folder.
+"""
 whole(words::AbstractString) = begin
   t = String(strip(words))
   isempty(t) && return t
-  startswith(t, '~') && return expanduser(t)
+  startswith(t, '~') && (t = expanduser(t))
+  startswith(t, '/') && return "file://" * replace(t, '%' => "%25", ' ' => "%20", '#' => "%23", '?' => "%3F")
   if !shows(t)
     # A name with a colon and no // is the kind of address that another app opens: mailto:jake@example.com. A port is a number.
     occursin(r"^[a-z][a-z0-9+.-]*:(?!\d)"i, t) && return t

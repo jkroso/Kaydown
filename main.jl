@@ -1640,6 +1640,7 @@ leave_page!(e, path; record=true) = begin
   e.buf.offset = e.scroll.offset
   from = e.buf.path
   from == path || forget_ticked!(e)   # an item that was ticked in a list of what's found leaves that list
+  from == path || delete!(e.nodes, (:html, from))   # the page of an HTML file ends, with its scripts
   # A new file ends the list of files to go forward to, as a new address does in a web browser
   record && !isempty(from) && from != path && (push!(e.back, from); empty!(e.ahead))
   e
@@ -4746,13 +4747,15 @@ shown_line(line) = begin
   length(s) > MOST_LINE ? first(s, MOST_LINE) * "…" : String(s)
 end
 
-"The buffer that shows the file at `path`, which isn't Markdown. A JSON file shows as a tree, or with `tree` false as its text."
+"The buffer that shows the file at `path`, which isn't Markdown. A JSON file shows as a tree and an HTML file as its page, or with `tree` false as their text."
 look(path; tree=true) = begin
   ext = lowercase(splitext(path)[2])
   if ext in ZIPS
     return Buffer(path=path, view=:file)   # the list of what it holds: see "a zip file"
   elseif tree && ext in JSONS && json_of(path) !== nothing
     return Buffer(path=path, view=:file)
+  elseif tree && ext in HTMLS && text_file(path)
+    return Buffer(path=path, view=:file)   # the page that its HTML makes: see "an HTML file as its page"
   elseif !viewed(ext)
     shown = text_look(path)
     shown === nothing || return shown
@@ -4793,11 +4796,11 @@ The ways that the file of `b` can show, from its lowest level to its highest,
 or () for a page and for a file with one way to show. A file of text shows as
 its bits, its bytes in hexadecimal and its text. A JSON file and a CSV file
 have a level over their text: :file, which is the tree of the one and the
-table of the other.
+table of the other. So has an HTML file: the page that its HTML makes.
 """
 file_views(b::Buffer) = begin
   (b.view in FILE_VIEWS && !isdir(b.path)) || return ()   # a folder that shows in the page has one way to show
-  json_page(b) && return FILE_VIEWS
+  (json_page(b) || html_page(b)) && return FILE_VIEWS
   ext = lowercase(splitext(b.path)[2])
   ext in TABLES ? (text_file(b.path) ? FILE_VIEWS : ()) :
   viewed(ext) || !text_file(b.path) ? () : FILE_VIEWS[1:3]
@@ -6098,7 +6101,7 @@ cursor(::FileView) = :arrow
 file_item(e, b::Buffer) = begin
   v = node!(() -> FileView(path=b.path), e, (:fileview, b.path))
   # What covers the page's whole space isn't one of the page's items, so it has no height to learn
-  b === e.buf && page_covered(e) && return Item(1, 1, 0px, 1px, Live(v, 1px))
+  b === e.buf && (page_covered(e) || html_shown(e)) && return Item(1, 1, 0px, 1px, Live(v, 1px))
   # Lay it out once to learn how tall it is
   concrete = describe(Column(fixed(e.width), Alignment.Start, geometry(v)), (e.width, 9999px))
   high = concrete.height + 2LIVE_GAP
@@ -19893,6 +19896,59 @@ end
 
 BLOCKS[WEBVIEW] = BlockKind("Web page", "globe", WebView, web_html)
 
+# --- an HTML file as its page ---------------------------------------------------------------------
+#
+# An HTML file has four levels. Over its bits, its bytes in hexadecimal and its
+# text is the page that its HTML makes, which Ladder's own engine lays out and
+# draws, as a `web` block does. That's its highest level, the ladder, so an
+# HTML file opens as its page, and ⌘E shows its text.
+#
+# The page covers the page's whole space in the window, as it would a
+# browser's window, and it's yours to use: the wheel scrolls it, a click
+# follows a link or presses a button, its scripts run, and you type in its
+# fields. After a click it has the keyboard, so the arrows and Space scroll
+# it. When the file changes on the disk, the page shows it afresh.
+
+const HTMLS = (".html", ".htm")
+
+"True when the page shows an HTML file at one of its levels: as its page, its text, its bytes in hexadecimal or its bits"
+html_page(b::Buffer) = b.view in FILE_VIEWS && lowercase(splitext(b.path)[2]) in HTMLS && isfile(b.path) && text_file(b.path)
+
+"True when the page shows an HTML file as the page that its HTML makes"
+html_shown(e) = e.buf.view == :file && html_page(e.buf)
+
+"What shows an HTML file as the page that its HTML makes"
+@def mutable struct HTMLPage <: SemanticUI
+  path::String = ""
+  read::Float64 = 0.0      # when the file had last changed, as the page last read it
+  browser::Any = nothing   # the Browser that lays the page out and shows it
+end
+
+"The HTMLPage of the HTML file that the page shows. A file that another file takes the window from loses its page, and its scripts end."
+html_part(e) = node!(() -> HTMLPage(path=e.buf.path), e, (:html, e.buf.path))
+
+"The Browser of `v`, which gets the file and the files that it names, and shows the page"
+html_browser(v::HTMLPage) = begin
+  v.browser === nothing || return v.browser
+  e = editor(v)
+  files = Webfiles.Files(getter=(a...) -> WEB_GETTER[](a...), online=() -> web_online(e))
+  v.read = mtime(v.path)
+  v.browser = own!(v, Browsers.Browser(address=v.path, files=files, open=url -> BROWSER[](url)))
+end
+
+describe(v::HTMLPage) = begin
+  e = editor(v)
+  b = html_browser(v)
+  # A file that changed on the disk shows afresh, as after a browser's reload
+  at = mtime(v.path)
+  at == v.read || (v.read = at; Browsers.reload!(b))
+  b.zoom = round(Float64(e.zoom), digits=2)
+  b.wide, b.high = page_room(e)
+  Box(width(grow=grow), height(grow=grow), Alignment.Start, name="Web page", b)
+end
+
+keyboard_part(v::HTMLPage) = html_browser(v)
+
 # --- one thing in many parts of the page -------------------------------------------------------
 #
 # One thing can show in many parts of a page. A to-do item is a line of the
@@ -22622,6 +22678,8 @@ describe(p::Page) = begin
   # A kind of folder or of file can cover the page's whole space, as a desktop does with its wallpaper
   cover = page_cover(e)
   cover === nothing || return cover
+  # An HTML file at its highest level covers it with the page that its HTML makes, as a browser's window would show it
+  html_shown(e) && return Box(width(grow=grow), height(grow=grow), Alignment.Start, html_part(e))
   # Long lines that don't wrap go on to the right edge of the window. The text moves left as the page
   # scrolls sideways. None of it shows past the edges of the page, and the numbers of the lines go over it.
   # A kind of folder can show something under the text of each page that it holds
@@ -26283,7 +26341,7 @@ levels(d::Document) = begin
   b = e.buf
   views = file_views(b)
   isempty(views) && return full_block(e) === nothing ? PAGE_LEVELS : BLOCK_LEVELS
-  length(views) == 3 ? FILE_LEVELS : (FILE_LEVELS..., json_page(b) ? "the tree of the file's values" : "the file's table")
+  length(views) == 3 ? FILE_LEVELS : (FILE_LEVELS..., json_page(b) ? "the tree of the file's values" : html_page(b) ? "the page that the HTML makes" : "the file's table")
 end
 
 level(d::Document) = begin

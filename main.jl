@@ -30311,9 +30311,11 @@ end
 # A line that holds only a picture, like ![plan](plan.png), shows the picture.
 # The line's own text shows again while the caret is on it. The picture can be
 # a file, named from the document's folder, or an address on the web. One from
-# the web is fetched once, and kept in a folder of the Mac's caches.
+# the web is fetched once, and kept in a folder of the Mac's caches. The
+# picture's path can have spaces in it, like ![Costs](../images/air cost.png),
+# or be between < and >.
 
-const PICTURE_LINE = r"^\s*(?:\[\s*)?!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)(?:\s*\]\([^)]*\))?\s*$"
+const PICTURE_LINE = r"^\s*(?:\[\s*)?!\[([^\]]*)\]\(\s*(?|<([^>\n]+)>|([^)\s\"<](?:[^)\"\n]*[^)\s\"])?))(?:\s+\"[^\"]*\")?\s*\)(?:\s*\]\([^)]*\))?\s*$"
 
 "A picture that a line of the document shows"
 @def mutable struct Picture <: SemanticUI
@@ -40250,7 +40252,8 @@ end
 #     ```
 #
 # The folder's own page lists the posts, the newest first, and says which the
-# site hasn't got yet. Its buttons:
+# site hasn't got yet. The posts of each folder inside the blog are under a
+# heading of their own: that folder is a section of the blog. Its buttons:
 #
 #   - Publish makes each post a page of HTML, as ⌘⇧E does for one page, in
 #     the folder `docs` of the blog. It writes a first page that lists the
@@ -40258,19 +40261,28 @@ end
 #     Then, when git keeps the blog and it has a remote called origin, Ladder
 #     commits the folder `docs` and pushes it. It commits nothing else: the
 #     posts' own files are yours to commit, since a draft is in them.
-#   - Open Site shows the site in the browser: at its address on GitHub Pages
-#     when it has one, or else the first page in `docs`.
+#   - Open Site shows the site in the browser: at the address that the blog's
+#     front page gives, or at its address on GitHub Pages, or else the first
+#     page in `docs`.
 #   - New Post starts a page in the folder.
 #
-# Publish writes one post in each frame, so the window goes on. git's push
-# runs beside the window, and a later frame reads what it said.
+# A blog with a script of its own at `.bin/publish` makes its site and sends
+# it itself. Publish runs that script in the blog's folder, and writes no
+# `docs`. Ladder notes when the script last did its work, and from then on the
+# list says which posts were made or saved since. Before that, it can't tell.
+#
+# Publish writes one post in each frame, so the window goes on. git's push,
+# and a blog's own script, run beside the window, and a later frame reads what
+# they said.
 
-"A blog: a folder whose pages are the posts of a site that Publish writes and sends to GitHub"
+"A blog: a folder whose pages are the posts of a site that Publish writes and sends to GitHub, or that the blog's own script makes and sends"
 @def struct BlogDirectory <: AbstractDirectory end
 
 entry_icon(::BlogDirectory) = "rss"
 entry_marks(e, o::BlogDirectory) = git_marks(e, o)
 entry_marks(e, ::BlogDirectory, o::FSObject) = git_marks(e, o)
+# A folder in a blog is a section of it. It has the kind that its own page gives it, or that Ladder finds for it, like any folder.
+FS.kind(::BlogDirectory, path::FSPath) = folder_kind(path)
 push!(BLOCK_ICONS, "rss", "globe", "cloud-upload", "pencil-square")
 
 "The publishing of a blog that's under way: the posts that are still to write, how many there were, what it does now, and git's push while it runs"
@@ -40279,9 +40291,9 @@ push!(BLOCK_ICONS, "rss", "globe", "cloud-upload", "pencil-square")
   posts::Vector{Blogs.Post} = Blogs.Post[]
   every::Vector{Blogs.Post} = Blogs.Post[]
   count::Int = 0
-  step::Symbol = :write      # :write, :index or :send
-  push::Any = nothing        # git's process and what it prints
-  since::Float64 = 0.0       # when the push started
+  step::Symbol = :write      # :write, :index or :send, or :script for a blog that publishes itself
+  push::Any = nothing        # git's process, or the blog's own script, and what it prints
+  since::Float64 = 0.0       # when the push or the script started
   wrote::Vector{String} = String[]   # the pages of the site that this publishing wrote, by their names
 end
 
@@ -40294,24 +40306,60 @@ const PUSH_LIMIT = 90.0
 "The file in a site's folder that lists the pages that Ladder wrote there, so that it can take away the page of a post that's gone"
 const SITE_LIST = ".ladder-site"
 
+"How many seconds a blog's own script has to make its site and send it before Ladder stops it"
+const SCRIPT_LIMIT = 600.0
+"The folders of commands that an app that the Finder opened has no PATH to, which a blog's own script can need: Julia's, Homebrew's and the like"
+const COMMAND_FOLDERS = ("~/.juliaup/bin", "~/.local/bin", "/opt/homebrew/bin", "/usr/local/bin")
+
 "The posts of the blog in `folder`, as blog.jl reads them. They're read again after 2 seconds."
 blog_posts(folder) = begin
   kept = get(BLOG_POSTS, folder, nothing)
   kept !== nothing && time() - kept[1] < 2 && return kept[2]
-  list = try Blogs.posts(folder) catch; Blogs.Post[] end
+  list = try Blogs.posts(folder, itself=Blogs.itself(folder)) catch; Blogs.Post[] end
   BLOG_POSTS[folder] = (time(), list)
   list
 end
 const BLOG_POSTS = Dict{String,Tuple{Float64,Vector{Blogs.Post}}}()
 
-"What the blog in `folder` is called: the title of its page `index.md`, or else its folder's name"
+"What the blog in `folder` is called: the title of its front page, `index.md` or `Readme.md`, or else its folder's name. A Readme with no title of its own doesn't name the blog."
 blog_name(folder) = begin
-  top = joinpath(folder, Blogs.INDEX)
-  isfile(top) ? (try Blogs.post(top).title catch; basename(folder) end) : basename(folder)
+  top = Blogs.front(folder)
+  isempty(top) && return basename(folder)
+  p = try Blogs.post(top) catch; nothing end
+  p === nothing || (Blogs.isreadme(basename(top)) && p.title == p.name) ? basename(folder) : p.title
 end
 
-"The address of the blog's site on GitHub Pages, or \"\" when git doesn't keep the blog or its remote isn't on GitHub"
+"The file in Ladder's own folder that says when each blog's own script last sent its site"
+sent_file() = joinpath(dirname(settings_file()), "blogs sent")
+
+"When the script of the blog in `folder` last sent its site, in seconds, or nothing when Ladder hasn't published it"
+blog_sent(folder) = begin
+  for line in (isfile(sent_file()) ? readlines(sent_file()) : String[])
+    at, path = split(line, '\t', limit=2) .|> String
+    path == folder && return tryparse(Float64, at)
+  end
+  nothing
+end
+
+"Note that the script of the blog in `folder` sent its site at the time `at`"
+blog_sent!(folder, at::Float64) = begin
+  kept = filter(l -> !endswith(l, "\t" * folder), isfile(sent_file()) ? readlines(sent_file()) : String[])
+  mkpath(dirname(sent_file()))
+  write(sent_file(), join([kept; "$at\t$folder"], "\n") * "\n")
+  nothing
+end
+
+"How the post `p` of the blog in `folder` stands beside the site: see `Blogs.standing`"
+blog_standing(folder, p::Blogs.Post) = Blogs.standing(folder, p, sent=Blogs.itself(folder) ? blog_sent(folder) : nothing)
+
+"""
+The address of the blog's site: the one that the blog's front page gives, or
+else its address on GitHub Pages. It's \"\" when the page gives none and git
+doesn't keep the blog, or its remote isn't on GitHub.
+"""
 blog_address(folder) = begin
+  said = Blogs.said_address(folder)
+  isempty(said) || return said
   root = git_top(folder)
   isempty(root) && return ""
   url = something(Git.ask(root, `remote get-url origin`), "")
@@ -40329,14 +40377,19 @@ post_html(p::Blogs.Post, blog) = begin
   Blogs.framed(Blogs.linked(page_html(o)), escape(blog), escape(p.title), p; heading)
 end
 
-"Copy each file that the page `html` shows from the blog's folder into its site, when the site hasn't got it as it is"
-copy_assets!(folder, html) = begin
+"""
+Copy each file that the page `html` shows from the blog's folder into its
+site, when the site hasn't got it as it is. The page's links start from the
+folder `at`, where its post is. The site's folders are the blog's, so each
+link goes to the same file from the post's page in the site.
+"""
+copy_assets!(folder, html, at=folder) = begin
   site = Blogs.site(folder)
   for rel in Blogs.assets(html)
-    from = normpath(joinpath(folder, rel))
+    from = normpath(joinpath(at, rel))
     # A file outside the blog's folder isn't the blog's to put on the web
     (startswith(from, folder * "/") && isfile(from) && !startswith(from, site * "/")) || continue
-    to = joinpath(site, rel)
+    to = joinpath(site, relpath(from, folder))
     (isfile(to) && mtime(to) >= mtime(from) && filesize(to) == filesize(from)) && continue
     mkpath(dirname(to))
     cp(from, to, force=true)
@@ -40352,7 +40405,13 @@ publish!(folder::AbstractString) = begin
   haskey(PUBLISHING, folder) && return nothing
   list = blog_posts(folder)
   todo = filter(p -> !p.draft, list)
-  PUBLISHING[folder] = Publishing(folder=folder, posts=copy(todo), every=todo, count=length(todo))
+  job = Publishing(folder=folder, posts=copy(todo), every=todo, count=length(todo))
+  # A blog that publishes itself runs its own script, which makes every page
+  if Blogs.itself(folder)
+    job.step, job.posts = :script, Blogs.Post[]
+    job.push, job.since = run_script(folder), time()
+  end
+  PUBLISHING[folder] = job
   delete!(PUBLISHED, folder)
   foreach(e -> redraw_in!(e, 0), editors)
   nothing
@@ -40379,18 +40438,23 @@ end
 "The next part of the publishing `job`. It gives nothing while there's more to do, and at the end the words that say what it came to."
 publish_step!(job::Publishing) = begin
   folder, site = job.folder, Blogs.site(job.folder)
-  if job.step == :write
+  if job.step == :script
+    script_step!(job)
+  elseif job.step == :write
     isempty(job.posts) && (job.step = :index; return nothing)
     p = popfirst!(job.posts)
     made = post_html(p, blog_name(folder))
-    mkpath(site)
-    write(Blogs.page(folder, p), made)
-    copy_assets!(folder, made)
-    push!(job.wrote, p.name * ".html")
+    to = Blogs.page(folder, p)
+    mkpath(dirname(to))
+    write(to, made)
+    copy_assets!(folder, made, dirname(p.path))
+    push!(job.wrote, relpath(to, site))
     nothing
   elseif job.step == :index
-    top = joinpath(folder, Blogs.INDEX)
-    lines = isfile(top) ? text(top) : ["# " * basename(folder), ""]
+    top = Blogs.front(folder)
+    # A Readme with no title of its own has the blog's name over it
+    lines = isempty(top) ? String[] : text(top)
+    any(l -> startswith(l, "# "), Blogs.body(lines)) || (lines = ["# " * blog_name(folder), "", Blogs.body(lines)...])
     made = Blogs.linked(html(Blogs.index(lines, job.every), title=blog_name(folder)))
     mkpath(site)
     write(joinpath(site, "index.html"), made)
@@ -40398,10 +40462,10 @@ publish_step!(job::Publishing) = begin
     push!(job.wrote, "index.html")
     # GitHub Pages leaves out a folder whose name starts with a dot, like .media, unless this file is there
     touch(joinpath(site, ".nojekyll"))
-    # The page of a post that's gone, or that's a draft now, goes from the site
+    # The page of a post that's gone, or that's a draft now, goes from the site. Only a page in the site's own folders goes.
     list = joinpath(site, SITE_LIST)
     for name in (isfile(list) ? readlines(list) : String[])
-      name in job.wrote || !endswith(name, ".html") || occursin('/', name) || rm(joinpath(site, name), force=true)
+      name in job.wrote || !endswith(name, ".html") || occursin("..", name) || startswith(name, '/') || rm(joinpath(site, name), force=true)
     end
     write(list, join(job.wrote, "\n") * "\n")
     job.step = :send
@@ -40413,6 +40477,48 @@ end
 
 "How many posts, in words"
 posts_words(n) = n == 1 ? "1 post" : "$n posts"
+
+"""
+Start the script of the blog in `folder`, which makes the blog's site and
+sends it. It gives the script's process, and what the script prints. The
+script runs in the blog's folder, and finds commands in the folders that a
+terminal would. Nothing of the Julia that runs Ladder goes to it.
+"""
+run_script(folder) = begin
+  script = joinpath(folder, Blogs.SCRIPT)
+  env = Dict(k => v for (k, v) in ENV if !startswith(k, "KIP_") && !(k in ("JULIA_PROJECT", "JULIA_LOAD_PATH")))
+  paths = [split(get(ENV, "PATH", "/usr/bin:/bin:/usr/sbin:/sbin"), ':'); [expanduser(p) for p in COMMAND_FOLDERS]]
+  env["PATH"] = join(unique(filter(!isempty, paths)), ':')
+  out = IOBuffer()
+  cmd = Sys.isexecutable(script) ? `$script` : `/bin/sh $script`
+  (run(pipeline(setenv(cmd, env; dir=folder), stdin=devnull, stdout=out, stderr=out), wait=false), out)
+end
+
+"The last line that's not blank in `said`, or \"\""
+last_words(said::AbstractString) = (k = findlast(l -> !isempty(strip(l)), split(said, '\n')); k === nothing ? "" : String(strip(split(said, '\n')[k])))
+
+"""
+Wait for the script of the publishing `job`. It gives nothing while the
+script runs, and then the words that say what the publishing came to. When
+the script did its work, Ladder notes the time that it started: a post saved
+after that may not be in the site.
+"""
+script_step!(job::Publishing) = begin
+  p, out = job.push
+  if process_running(p)
+    time() - job.since > SCRIPT_LIMIT || return nothing
+    kill(p)
+    return "Your script $(Blogs.SCRIPT) didn't finish in $(round(Int, SCRIPT_LIMIT / 60)) minutes, so Ladder stopped it."
+  end
+  wait(p)   # the last of what the script printed can still be on its way
+  said = last_words(String(take!(out)))
+  if success(p)
+    blog_sent!(job.folder, job.since)
+    site = blog_address(job.folder)
+    return "Published. Your script $(Blogs.SCRIPT) made the site and sent it." * (isempty(site) ? "" : " The site is at $site")
+  end
+  "Your script $(Blogs.SCRIPT) stopped, and said: " * (isempty(said) ? "nothing" : said)
+end
 
 "Send the site of the publishing `job` to GitHub: commit the site's folder, and push. It gives nothing while git's push runs, and then the words that say what the publishing came to."
 send_step!(job::Publishing) = begin
@@ -40470,12 +40576,14 @@ describe(v::BlogView) = begin
   list = blog_posts(folder)
   job = get(PUBLISHING, folder, nothing)
   redraw_in!(e, job === nothing ? 2.1 : 0.03)   # a post that was saved shows here soon after
-  stands = [Blogs.standing(folder, p) for p in list]
+  itself = Blogs.itself(folder)
+  stands = [blog_standing(folder, p) for p in list]
   waiting = count(s -> s in (:new, :changed), stands)
   about = join([posts_words(length(list));
                 (waiting == 0 ? String[] : ["$waiting that the site hasn't got as it is"]);
                 (count(==(:draft), stands) == 0 ? String[] : [count(==(:draft), stands) == 1 ? "1 draft" : "$(count(==(:draft), stands)) drafts"])], "  ·  ")
   said = job === nothing ? get(PUBLISHED, folder, "") :
+         job.step == :script ? "Your script $(Blogs.SCRIPT) is making the site and sending it…" :
          job.step == :send ? "Sending the site to GitHub…" : "Writing post $(job.count - length(job.posts)) of $(job.count)…"
   row((p, s)) = page_row!(v, (:post, p.path), _ -> (show_path!(e, p.path); nothing),
     Icon("file-earmark-text", size=13px, color=colours.dim),
@@ -40483,15 +40591,21 @@ describe(v::BlogView) = begin
     Box(width(grow=grow)),
     (isempty(Blogs.words(s)) ? () : (Box(label(Blogs.words(s), 12px, color=s == :draft ? colours.faint : colours.accent)),))...,
     Box(label(Blogs.long(p.day), 12px, color=colours.dim)))
+  # The posts at the top of the blog come first, and then the posts of each section, under its name
+  listed = Any[]
+  for section in Blogs.sections(list)
+    push!(listed, page_heading(isempty(section) ? "Posts" : replace(section, "/" => " / ")))
+    append!(listed, [row(ps) for ps in zip(list, stands) if ps[1].section == section])
+  end
+  # A blog that publishes itself can always publish again: its script makes more than the posts
   Column(width(grow=grow), Alignment.Start, name="Blog",
     page_title("rss", blog_name(folder), about),
     Row(padding(8px, 0px, 10px, 8px), child_gap=8px,
-      page_button!(v, :publish, _ -> publish!(folder), icon="cloud-upload", words="Publish", off=job !== nothing || !any(s -> s != :draft, stands)),
-      page_button!(v, :open, _ -> open_site(folder), icon="globe", words="Open Site", off=!isfile(joinpath(Blogs.site(folder), "index.html"))),
+      page_button!(v, :publish, _ -> publish!(folder), icon="cloud-upload", words="Publish", off=job !== nothing || !(itself || any(s -> s != :draft, stands))),
+      page_button!(v, :open, _ -> open_site(folder), icon="globe", words="Open Site", off=!isfile(joinpath(Blogs.site(folder), "index.html")) && isempty(Blogs.said_address(folder))),
       page_button!(v, :new, _ -> new_page!(e, folder), icon="pencil-square", words="New Post")),
     (isempty(said) ? () : (page_note(said),))...,
-    page_heading("Posts"),
-    (isempty(list) ? (page_note("This folder has no page yet. New Post starts one."),) : map(row, zip(list, stands)))...)
+    (isempty(list) ? (page_heading("Posts"), page_note("This folder has no page yet. New Post starts one.")) : listed)...)
 end
 
 cursor(::BlogView) = :arrow

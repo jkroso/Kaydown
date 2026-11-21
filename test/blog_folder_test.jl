@@ -41,10 +41,10 @@ frames()
 shot(name) = haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], name), w)
 folder() = K.FS.get(FSPath(blog))
 "Draw frames until the blog is published, as the window does while Publish works"
-publish() = begin
-  K.publish!(blog)
+publish(folder=blog) = begin
+  K.publish!(folder)
   started = time()
-  while haskey(K.PUBLISHING, blog) && time() - started < 60
+  while haskey(K.PUBLISHING, folder) && time() - started < 60
     frames(1)
     sleep(0.01)
   end
@@ -113,6 +113,83 @@ end
   publish()
   @test occursin("no remote called origin", K.PUBLISHED[blog]) && isfile(site("shed.html"))
   @test K.blog_address(blog) == ""
+end
+
+@testset "a section of the blog, and a picture whose path has a space" begin
+  mkpath(joinpath(blog, "notes"))
+  cp(joinpath(blog, "pics", "a.png"), joinpath(blog, "pics", "a b.png"))
+  tips = joinpath(blog, "notes", "2026-11-01-tips.md")
+  write(tips, "# Tips\n\n![The shed](../pics/a b.png)\n\nSee [the shed](../shed.md).\n")
+  empty!(K.BLOG_POSTS)
+  # The editor shows the picture: the line is a picture's, though its path has a space
+  @test K.pictured(K.build_editor(tips).buf, 3)
+  publish()
+  page = read(site("notes/2026-11-01-tips.html"), String)
+  # The post's page is in a folder of the section's name, and its links start from there, as the post's do
+  @test occursin("<img src=\"../pics/a%20b.png\"", page) && occursin("<a href=\"../index.html\">← Sam's blog</a>", page)
+  @test occursin("href=\"../shed.html\"", page)
+  @test read(site("pics/a b.png")) == read(joinpath(blog, "pics", "a b.png"))
+  first = read(site("index.html"), String)
+  @test occursin(r"<h2[^>]*>notes</h2>", first) && occursin("<a href=\"notes/2026-11-01-tips.html\">Tips</a>", first)
+  v = e.nodes[(:blog, blog)]
+  @test haskey(v.rows, (:post, tips)) && haskey(v.rows, (:post, shed))
+  shot("blog-sections.png")
+  # The page of a post in a section goes from the site when the post becomes a draft
+  write(tips, "---\ndraft: true\n---\n" * read(tips, String))
+  empty!(K.BLOG_POSTS)
+  publish()
+  @test !isfile(site("notes/2026-11-01-tips.html")) && isfile(site("shed.html"))
+end
+
+@testset "a folder in a blog has a kind of its own" begin
+  notes = joinpath(blog, "notes")
+  @test K.FS.get(FSPath(notes)) isa K.FS.Directory
+  kind = only(filter(k -> k.name == "Blog", K.choices_for(K.KindChoice, e)))
+  Base.invokelatest(K.show_folder_as!, e, K.FS.get(FSPath(notes)), kind)
+  frames()
+  @test K.FS.get(FSPath(notes)) isa K.BlogDirectory && folder() isa K.BlogDirectory
+end
+
+@testset "a blog that publishes itself with its own script" begin
+  canon = joinpath(dir, "Canon")
+  mkpath(joinpath(canon, ".bin")); mkpath(joinpath(canon, "Humans"))
+  write(joinpath(canon, "Readme.md"), "+++\nsite = \"https://canon.example.com\"\n+++\n\nWelcome.\n")
+  write(joinpath(canon, "Quotes.md"), "Quotes.\n")
+  write(joinpath(canon, "Humans", "Readme.md"), "+++\ndescription = \"People\"\n+++\n")
+  write(joinpath(canon, "Humans", "Dating.md"), "+++\ncomplete = false\n+++\n\nWords.\n")
+  write(joinpath(canon, "Humans", "Gene.review"), "+++\ntitle = \"The Selfish Gene\"\n+++\n\nGenes.\n")
+  script = joinpath(canon, ".bin", "publish")
+  write(script, "#!/bin/sh\n{ pwd; echo \"kip=\${KIP_FROZEN:-none}\"; echo \"\$PATH\"; } > sent.txt\necho Making the site\necho Sent it\n")
+  chmod(script, 0o755)
+  kind = only(filter(k -> k.name == "Blog", K.choices_for(K.KindChoice, e)))
+  Base.invokelatest(K.show_folder_as!, e, K.FS.get(FSPath(canon)), kind)
+  frames()
+  v = e.nodes[(:blog, canon)]
+  # A Readme with no title doesn't name the blog
+  @test K.blog_name(canon) == "Canon"
+  list = K.blog_posts(canon)
+  @test sort([(p.section, p.title) for p in list]) == [("", "Quotes"), ("Humans", "Dating"), ("Humans", "The Selfish Gene")]
+  @test all(p -> haskey(v.rows, (:post, p.path)), list)
+  # Before Ladder publishes it, the list can't say which posts the site hasn't got
+  @test sort([K.blog_standing(canon, p) for p in list]) == [:draft, :unknown, :unknown]
+  @test !v.buttons[:publish].off && !v.buttons[:open].off
+  shot("canon.png")
+  withenv("KIP_FROZEN" => "1") do
+    publish(canon)
+  end
+  @test K.PUBLISHED[canon] == "Published. Your script .bin/publish made the site and sent it. The site is at https://canon.example.com"
+  ran = readlines(joinpath(canon, "sent.txt"))
+  # The script ran in the blog's folder, with a terminal's folders of commands, and without what the Julia of Ladder is told
+  @test realpath(ran[1]) == realpath(canon) && ran[2] == "kip=none" && occursin(expanduser("~/.juliaup/bin"), ran[3])
+  @test !isdir(joinpath(canon, "docs"))
+  @test sort([K.blog_standing(canon, p) for p in list]) == [:draft, :published, :published]
+  write(joinpath(canon, "Quotes.md"), "More quotes.\n")
+  @test K.blog_standing(canon, K.Blogs.post(joinpath(canon, "Quotes.md"))) == :changed
+  # A script that fails says why, in its last words
+  write(script, "#!/bin/sh\necho Making the site\necho 'ssh: Could not resolve hostname raspberrypi.lan' >&2\nexit 255\n")
+  publish(canon)
+  @test K.PUBLISHED[canon] == "Your script .bin/publish stopped, and said: ssh: Could not resolve hostname raspberrypi.lan"
+  shot("canon-stopped.png")
 end
 
 close(w)

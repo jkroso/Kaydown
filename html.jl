@@ -21,7 +21,8 @@
 "`s` with the characters that mean something in HTML written as their names"
 escape(s::AbstractString) = replace(s, '&' => "&amp;", '<' => "&lt;", '>' => "&gt;", '"' => "&quot;")
 
-const PICTURE = r"!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)"
+# A picture's path can have spaces in it, like ../images/air transport.png, or be between < and >
+const PICTURE = r"!\[([^\]]*)\]\(\s*(?|<([^>\n]+)>|([^)\s\"<](?:[^)\"\n]*[^)\s\"])?))(?:\s+\"[^\"]*\")?\s*\)"
 const NOTE = r"^\[\^([^\]\s]+)\]:\s*"   # the start of the line that holds a footnote's text
 
 "What turns Markdown into HTML needs to know of the document: its footnotes, and what its inline code made"
@@ -54,6 +55,8 @@ file that a `#t=61,86` at the end of `src` names, as the editor does.
 """
 embed(src, alt) = begin
   ext = lowercase(splitext(first(split(src, r"[?#]")))[2])
+  # A space can't be in an address
+  src = replace(src, " " => "%20")
   tag = ext in VIDEO_FILES ? "video" : ext in SOUND_FILES ? "audio" : nothing
   tag === nothing && return "<img src=\"" * escape(src) * "\" alt=\"" * escape(alt) * "\">"
   "<$tag controls preload=\"metadata\" src=\"$(escape(src))\" title=\"$(escape(alt))\"></$tag>"

@@ -1,46 +1,73 @@
 # A blog is a folder of pages that puts itself on the web. Each Markdown file
-# in the folder is a post. main.jl shows the folder's own page, with a list of
-# the posts and a Publish button, and makes each post a page of HTML. This
-# file knows what a post is and where the site goes. It draws nothing.
+# in the folder, and in the folders inside it, is a post. main.jl shows the
+# folder's own page, with a list of the posts and a Publish button, and makes
+# each post a page of HTML. This file knows what a post is and where the site
+# goes. It draws nothing.
 #
-#     posts("/Users/sam/blog")              # [Post("…/2026-11-20-hello.md", "2026-11-20-hello", "Hello", Date(2026, 11, 20), false), …]
-#     standing("/Users/sam/blog", post)     # :new, :changed, :published or :draft
+#     posts("/Users/sam/blog")              # [Post("…/2026-11-20-hello.md", "2026-11-20-hello", "", "Hello", Date(2026, 11, 20), false), …]
+#     standing("/Users/sam/blog", post)     # :new, :changed, :published, :draft or :unknown
 #     address("git@github.com:sam/blog.git")   # "https://sam.github.io/blog/"
 #
-# A post says things about itself in its front matter:
+# A post says things about itself in its front matter, between lines of `---`
+# as YAML writes it, or between lines of `+++` as TOML writes it:
 #
-#     ---
-#     title: Hello
-#     date: 2026-11-20
-#     draft: true
-#     ---
+#     ---                         +++
+#     title: Hello                title = "Hello"
+#     date: 2026-11-20            date = 2026-11-20
+#     draft: true                 complete = false
+#     ---                         +++
 #
 # Without a title, a post has the words of its first heading, or else its
 # file's name. Without a date, it has the day that its file's name starts
-# with, like `2026-11-20-hello.md`, or else the day that the file was last
-# saved. A draft stays out of the site. The page `index.md`, when the folder
-# has one, is no post: its text goes over the list of the posts on the site's
-# first page.
+# with, like `2026-11-20-hello.md`, or else the day that the file was made. A
+# post that says `draft: true`, or `complete = false`, is a draft.
 #
-# The site is written into the folder `docs` in the blog's folder: a page for
-# each post, with the same name and `.html`, a first page called `index.html`,
-# and a copy of each picture that a post shows. GitHub Pages serves that
-# folder when the repository's settings say so.
+# A folder inside the blog's folder is a section of the blog, and its posts
+# are that section's. The page `Readme.md` of a folder, in any case, is no
+# post: it says what the folder is. The page `index.md` of the blog's own
+# folder is no post either. The text of that page, or else of the blog's
+# `Readme.md`, goes over the list of the posts on the site's first page. That
+# page can say where the site is, as `site: https://sam.example.com` in its
+# front matter. A file or a folder whose name starts with a dot or an
+# underscore is left out.
+#
+# Ladder writes the site into the folder `docs` in the blog's folder: a page
+# for each post, with the same name and `.html`, in a folder of the section's
+# name, a first page called `index.html`, and a copy of each picture that a
+# post shows. GitHub Pages serves that folder when the repository's settings
+# say so.
+#
+# A blog can make its site and send it itself, with a script of its own at
+# `.bin/publish`. Then Ladder runs that script to publish it, and writes no
+# `docs`. Such a blog's posts are also its book reviews, the files that end
+# in `.review`, and the pages that Julia code makes, the files that end in
+# `.dom.jl`, since its own script makes pages of them too. The folder `docs`
+# of such a blog is a section like any other.
 
 @use Dates: Dates, Date
 
-"The folder in a blog's folder that the site is written into"
+"The folder in a blog's folder that Ladder writes the site into"
 const SITE = "docs"
 "The page of a blog whose text goes over the list of the posts"
 const INDEX = "index.md"
+"The script in a blog's folder that makes the blog's site and sends it, for a blog that does that itself"
+const SCRIPT = joinpath(".bin", "publish")
+"The endings of the files that are the posts of any blog"
+const MARKDOWN = (".md", ".markdown")
+"The endings of the other files that are posts of a blog that publishes itself: a book review, and the code of a page"
+const OTHERS = (".review", ".dom.jl")
 
 struct Post
-  path::String    # its Markdown file
-  name::String    # the file's name without its ending. The page of the site has this name, and .html.
+  path::String     # its file
+  name::String     # the file's name without its ending. The page of the site has this name, and .html.
+  section::String  # the folder that it's in, from the blog's folder, like "Humans/Relationships", or "" for a post at the top
   title::String
   day::Date
   draft::Bool
 end
+
+"A post at the top of its blog's folder"
+Post(path, name, title, day::Date, draft::Bool) = Post(path, name, "", title, day, draft)
 
 const DAY = r"(?<!\d)(\d{4})-(\d{1,2})-(\d{1,2})(?!\d)"
 
@@ -53,61 +80,173 @@ day(text::AbstractString) = begin
   nothing
 end
 
-"What the front matter at the top of `lines` sets each of its keys to, by the key in lower case. Lines with no front matter have none."
+"""
+What the front matter at the top of `lines` sets each of its keys to, by the
+key in lower case. Front matter is between lines of `---`, with a colon after
+each key, or between lines of `+++`, with `=` after each key. Lines with no
+front matter have none.
+"""
 matter(lines) = begin
   out = Dict{String,String}()
-  (!isempty(lines) && rstrip(lines[1]) == "---") || return out
+  isempty(lines) && return out
+  fence = rstrip(lines[1])
+  fence in ("---", "+++") || return out
+  pattern = fence == "---" ? r"^([^:#\s-][^:#]*):\s*(.*?)\s*$" : r"^([A-Za-z0-9_-]+)\s*=\s*(.*?)\s*$"
   for line in @view lines[2:end]
-    rstrip(line) == "---" && break
-    m = match(r"^([^:#\s-][^:#]*):\s*(.*?)\s*$", line)
+    rstrip(line) == fence && break
+    m = match(pattern, line)
     m === nothing || (out[lowercase(strip(m[1]))] = String(strip(m[2], ['"', '\''])))
   end
   out
 end
 
-"The post in the file at `path`, whose lines are `lines`"
-post(path::AbstractString, lines=readlines(path)) = begin
-  said = matter(lines)
-  name = splitext(basename(path))[1]
-  k = findfirst(l -> startswith(l, "# "), lines)
-  title = get(said, "title", "")
-  isempty(title) && (title = k === nothing ? name : String(strip(lines[k][3:end])))
-  d = something(day(get(said, "date", "")), startswith(name, r"\d{4}-\d") ? day(name) : nothing, Date(Libc.strftime("%Y-%m-%d", mtime(path))))
-  Post(String(path), name, title, d, lowercase(get(said, "draft", "")) in ("true", "yes"))
+"`lines` after their front matter, if they have some"
+body(lines) = begin
+  (!isempty(lines) && rstrip(lines[1]) in ("---", "+++")) || return lines
+  k = findnext(l -> rstrip(l) == rstrip(lines[1]), lines, 2)
+  k === nothing ? lines : lines[k+1:end]
 end
 
-"The posts of the blog in `folder`, the newest first: each Markdown file in the folder. A file whose name starts with a dot or an underscore is left out, and so is the page `index.md`."
-posts(folder::AbstractString) = begin
-  out = Post[]
-  for name in readdir(folder)
-    (endswith(lowercase(name), ".md") && !startswith(name, '.') && !startswith(name, '_') && lowercase(name) != INDEX) || continue
-    path = joinpath(folder, name)
-    isfile(path) || continue
-    p = try post(path) catch; nothing end   # a file that can't be read is no post
-    p === nothing || push!(out, p)
+"""
+When the file at `path` was made, in seconds since 1970, as macOS keeps it.
+Saving a file again doesn't change it. It's when the file was last saved
+where the Mac can't say.
+"""
+made(path::AbstractString) = begin
+  # Julia's stat fills libuv's uv_stat_t: twelve numbers of 8 bytes, then the times of access, change, status change and making, of 16 bytes each.
+  # A time is its seconds, and then its nanoseconds in 4 bytes. The 4 bytes after those hold nothing that counts.
+  buf = fill!(Vector{UInt8}(undef, Int(ccall(:jl_sizeof_stat, Int32, ()))), 0x00)
+  (length(buf) >= 160 && ccall(:jl_stat, Int32, (Cstring, Ptr{UInt8}), path, buf) == 0) || return mtime(path)
+  secs, nanos = reinterpret(Int64, buf[145:160])
+  nanos = Int(nanos % UInt32)
+  secs > 0 ? secs + (nanos < 1_000_000_000 ? nanos / 1e9 : 0.0) : mtime(path)
+end
+
+"The ending of the file called `name` that makes it a post, or nothing. With `others`, a book review and the code of a page are posts too."
+ending(name::AbstractString, others::Bool=false) = begin
+  low = lowercase(name)
+  for e in (others ? (MARKDOWN..., OTHERS...) : MARKDOWN)
+    endswith(low, e) && length(low) > length(e) && return e
   end
+  nothing
+end
+
+"True for the page that says what its folder is"
+isreadme(name::AbstractString) = occursin(r"^readme\.(md|markdown)$"i, name)
+
+"The post in the file at `path`, whose lines are `lines`. `section` is the folder that it's in, from the blog's folder."
+post(path::AbstractString, lines=readlines(path); section::AbstractString="") = begin
+  said = matter(lines)
+  file = basename(path)
+  e = something(ending(file, true), splitext(file)[2])
+  name = file[1:end-length(e)]
+  title = get(said, "title", "")
+  if isempty(title)
+    # The code of a page has no Markdown heading, and a line that starts with # is a comment there. Its heading is in an :h1.
+    m = e == ".dom.jl" ? match(r"\[:h1\s+\"([^\"\\]+)\"", join(lines, '\n')) : nothing
+    k = e == ".dom.jl" ? nothing : findfirst(l -> startswith(l, "# "), lines)
+    title = m !== nothing ? String(m[1]) : k === nothing ? name : String(strip(lines[k][3:end]))
+  end
+  d = something(day(get(said, "date", "")), startswith(name, r"\d{4}-\d") ? day(name) : nothing, Date(Libc.strftime("%Y-%m-%d", made(path))))
+  draft = lowercase(get(said, "draft", "")) in ("true", "yes") || lowercase(get(said, "complete", "")) in ("false", "no")
+  Post(String(path), name, String(section), title, d, draft)
+end
+
+"The post that each file was last read as, and when the file had changed then, by its path. A file that hasn't changed isn't read again."
+const READ = Dict{String,Tuple{Float64,Post}}()
+
+"""
+The posts of the blog in `folder`, the newest first: each Markdown file in
+the folder and in the folders inside it. With `itself`, for a blog that
+publishes itself, its book reviews and the code of its pages are posts too,
+and its folder `docs` is a section like any other.
+"""
+posts(folder::AbstractString; itself::Bool=false) = begin
+  out = Post[]
+  gather!(out, folder, "", itself)
   sort!(out, by=p -> (p.day, p.name), rev=true)
 end
 
-"The folder that the site of the blog in `folder` is written into"
+"Put the posts of the section `section` of the blog in `folder` into `out`, and the posts of the sections inside it"
+gather!(out, folder, section, itself) = begin
+  at = isempty(section) ? folder : joinpath(folder, section)
+  names = try readdir(at) catch; return out end   # a folder that macOS doesn't let Ladder read has no posts
+  for name in names
+    (startswith(name, '.') || startswith(name, '_')) && continue
+    path = joinpath(at, name)
+    if isdir(path)
+      # A link to a folder could lead back to the blog, and Ladder writes the site in docs
+      islink(path) || (!itself && isempty(section) && name == SITE) ||
+        gather!(out, folder, isempty(section) ? name : section * "/" * name, itself)
+      continue
+    end
+    e = ending(name, itself)
+    (e === nothing || isreadme(name) || (isempty(section) && lowercase(name) == INDEX)) && continue
+    changed = try mtime(path) catch; continue end
+    kept = get(READ, path, nothing)
+    if kept !== nothing && kept[1] == changed && kept[2].section == section
+      push!(out, kept[2])
+      continue
+    end
+    p = try post(path; section) catch; nothing end   # a file that can't be read is no post
+    p === nothing && continue
+    READ[path] = (changed, p)
+    push!(out, p)
+  end
+  out
+end
+
+"The sections of the posts `list`, by their names: the top of the blog, \"\", comes first"
+sections(list) = sort!(unique(p.section for p in list))
+
+"The page of the blog in `folder` whose text goes over the list of its posts: its `index.md`, or else its `Readme.md`. It's \"\" when it has neither."
+front(folder::AbstractString) = begin
+  isfile(joinpath(folder, INDEX)) && return joinpath(folder, INDEX)
+  names = try readdir(folder) catch; String[] end
+  k = findfirst(isreadme, names)
+  k === nothing ? "" : joinpath(folder, names[k])
+end
+
+"The address that the front page of the blog in `folder` gives its site, or \"\""
+said_address(folder::AbstractString) = begin
+  top = front(folder)
+  isempty(top) && return ""
+  said = try open(io -> matter(collect(Iterators.take(eachline(io), 40))), top) catch; Dict{String,String}() end
+  get(said, "site", "")
+end
+
+"True when the blog in `folder` makes its site and sends it itself, with a script of its own"
+itself(folder::AbstractString) = isfile(joinpath(folder, SCRIPT))
+
+"The folder that Ladder writes the site of the blog in `folder` into"
 site(folder::AbstractString) = joinpath(folder, SITE)
 
 "The page of the site that the post `p` of the blog in `folder` has"
-page(folder::AbstractString, p::Post) = joinpath(site(folder), p.name * ".html")
+page(folder::AbstractString, p::Post) = joinpath(site(folder), p.section, p.name * ".html")
+
+"The link from the page of the post `p` to the first page of its site"
+home(p::Post) = "../"^(isempty(p.section) ? 0 : count('/', p.section) + 1) * "index.html"
 
 """
 How the post `p` of the blog in `folder` stands: `:draft` for one that stays
 out of the site, `:new` for one that the site hasn't got, `:changed` for one
-that was saved since the site got it, and `:published`.
+that was saved since the site got it, and `:published`. A blog that publishes
+itself was last sent at the time `sent`, in seconds. With `sent` nothing,
+Ladder hasn't published it, so it can't tell, and the post is `:unknown`.
 """
-standing(folder::AbstractString, p::Post) = begin
+standing(folder::AbstractString, p::Post; sent::Union{Nothing,Float64}=nothing) = begin
   p.draft && return :draft
-  made = page(folder, p)
-  isfile(made) || return :new
-  mtime(p.path) > mtime(made) ? :changed : :published
+  if itself(folder)
+    sent === nothing && return :unknown
+    made(p.path) > sent && return :new
+    return mtime(p.path) > sent ? :changed : :published
+  end
+  written = page(folder, p)
+  isfile(written) || return :new
+  mtime(p.path) > mtime(written) ? :changed : :published
 end
 
-"What a list says of a post that stands as `s`, or \"\" for one that the site has as it is"
+"What a list says of a post that stands as `s`, or \"\" for one that the site has as it is, or that Ladder can't tell about"
 words(s::Symbol) = s == :draft ? "a draft" : s == :new ? "not on the site yet" : s == :changed ? "changed since the site got it" : ""
 
 "The day `d` as a post shows it, like 20 November 2026"
@@ -128,7 +267,7 @@ end
 "`html` with each link to a Markdown page beside it made a link to that page of the site"
 linked(html::AbstractString) = replace(html, r"(href=\"(?![a-zA-Z][a-zA-Z0-9+.-]*:|#|/)[^\"#?]*?)\.md((?:#[^\"]*)?\")" => s"\1.html\2")
 
-"The files of the blog's folder that the page `html` shows or links to, by their paths from that folder: pictures, sounds, videos and the like. A page of the site is none of them."
+"The files of the blog's folder that the page `html` shows or links to, by their paths from that page: pictures, sounds, videos and the like. A page of the site is none of them."
 assets(html::AbstractString) = begin
   out = String[]
   for m in eachmatch(r"(?:src|href)=\"((?![a-zA-Z][a-zA-Z0-9+.-]*:|#|/)[^\"#?]+)\"", html)
@@ -138,12 +277,24 @@ assets(html::AbstractString) = begin
   out
 end
 
-"The lines of the Markdown that the site's first page is made from: `top`, the lines of the blog's own `index.md` or a heading with the blog's name, and a list of the posts that are no drafts"
+"The link from the first page of the site to the page of the post `p`, before `linked` makes it a link to HTML"
+link(p::Post) = replace((isempty(p.section) ? "" : p.section * "/") * p.name, " " => "%20") * ".md"
+
+"""
+The lines of the Markdown that the site's first page is made from: `top`, the
+lines of the blog's own front page or a heading with the blog's name, and a
+list of the posts that are no drafts. The posts of each section are under a
+heading with the section's name.
+"""
 index(top, list) = begin
-  out = String[String(l) for l in top]
-  isempty(out) || isempty(strip(out[end])) || push!(out, "")
-  for p in list
-    p.draft || push!(out, "- [$(p.title)]($(replace(p.name, " " => "%20")).md), $(long(p.day))")
+  out = String[String(l) for l in body(top)]
+  shown = filter(p -> !p.draft, list)
+  for section in sections(shown)
+    isempty(out) || isempty(strip(out[end])) || push!(out, "")
+    isempty(section) || push!(out, "## " * replace(section, "/" => " / "), "")
+    for p in shown
+      p.section == section && push!(out, "- [$(p.title)]($(link(p))), $(long(p.day))")
+    end
   end
   out
 end
@@ -155,7 +306,7 @@ the first page of the blog called `blog`, and says the post's day. `blog` and
 title is the page's first heading too, for a post whose text has none.
 """
 framed(html::AbstractString, blog::AbstractString, title::AbstractString, p::Post; heading::Bool=false) = begin
-  top = "<p style=\"color: #8a7d6b; font-size: 0.85em\"><a href=\"index.html\">← $blog</a> &nbsp;·&nbsp; $(long(p.day))</p>\n" * (heading ? "<h1>$title</h1>\n" : "")
+  top = "<p style=\"color: #8a7d6b; font-size: 0.85em\"><a href=\"$(home(p))\">← $blog</a> &nbsp;·&nbsp; $(long(p.day))</p>\n" * (heading ? "<h1>$title</h1>\n" : "")
   # The title goes in as it is: it can have a backslash or a dollar sign in it, which a pattern's replacement would read as its own
   a, b = findfirst("<title>", html), findfirst("</title>", html)
   a === nothing || b === nothing || (html = html[1:last(a)] * title * html[first(b):end])

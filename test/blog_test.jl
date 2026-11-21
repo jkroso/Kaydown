@@ -66,3 +66,74 @@ end
   @test occursin("2 November 2026</p>\n<h1>A \$5 title</h1>\n<p>Words</p>", page)
   @test !occursin("<h1>", B.framed("<title>x</title><body>\n", "b", "t", list[1]))
 end
+
+# A blog like Jake's Canon: posts in folders, a Readme in each folder, TOML front matter, and a script of its own that publishes it
+const canon = realpath(mktempdir())
+at!(rel, text) = (path = joinpath(canon, rel); mkpath(dirname(path)); write(path, text); path)
+
+@testset "front matter between lines of +++" begin
+  p = B.post(at!("Humans/Dating.md", "+++\ndescription = \"How to, roughly\"\ncomplete = false\ndate = 2025-12-12\n+++\n\nWords.\n"))
+  @test p.title == "Dating" && p.day == Date(2025, 12, 12) && p.draft && p.section == ""
+  @test B.matter(readlines(p.path))["description"] == "How to, roughly"
+  @test B.body(readlines(p.path)) == ["", "Words."] && B.body(["# x"]) == ["# x"]
+  p = B.post(at!("Book Reviews/The Selfish Gene.review", "+++\ntitle = \"The Selfish Gene\"\nrating = 5\n+++\n\nGenes.\n"), section="Book Reviews")
+  @test p.name == "The Selfish Gene" && p.title == "The Selfish Gene" && p.section == "Book Reviews" && !p.draft
+  # The code of a page has its title in an :h1, and its comments aren't headings
+  p = B.post(at!("Civilization/Fairness.dom.jl", "# The sidenotes\n@dom[:div\n  [:h1 \"Fairness Matters\"]\n  [:p \"Words\"]]\n"))
+  @test p.name == "Fairness" && p.title == "Fairness Matters"
+end
+
+@testset "a post's day is the day its file was made" begin
+  path = at!("History/Chivalry.md", "Knights.\n")
+  run(`touch -t 203001010000 $path`)   # saved again later
+  @test B.made(path) <= time() + 1 && mtime(path) > time() + 86400
+  @test B.post(path).day == Date(Libc.strftime("%Y-%m-%d", time()))
+end
+
+@testset "the sections of a blog" begin
+  at!("Readme.md", "+++\nsite = \"https://words.example.com\"\n+++\n\nWelcome.\n")
+  at!("Quotes.md", "Quotes.\n")
+  at!("Humans/Readme.md", "+++\ndescription = \"People\"\n+++\n")
+  at!("Humans/Relationships/On Men.md", "# On Men\n")
+  at!("Civilization/democracy-proof/index.md", "# The Problem of Democracy\n")
+  at!("_drafts/later.md", "# Later\n")
+  at!(".remember/note.md", "# Hidden\n")
+  at!("docs/old.md", "# In docs\n")
+  # Without a script of its own, a blog's posts are its Markdown files, and Ladder's site in docs holds none
+  names(list) = sort([(p.section, p.name) for p in list])
+  @test names(B.posts(canon)) == [("", "Quotes"), ("Civilization/democracy-proof", "index"), ("History", "Chivalry"), ("Humans", "Dating"), ("Humans/Relationships", "On Men")]
+  @test !B.itself(canon)
+  at!(".bin/publish", "#!/bin/sh\necho sent\n")
+  @test B.itself(canon)
+  # A blog that publishes itself has its book reviews and the code of its pages as posts too, and docs is a section of it
+  list = B.posts(canon, itself=true)
+  @test names(list) == [("", "Quotes"), ("Book Reviews", "The Selfish Gene"), ("Civilization", "Fairness"), ("Civilization/democracy-proof", "index"), ("History", "Chivalry"), ("Humans", "Dating"), ("Humans/Relationships", "On Men"), ("docs", "old")]
+  @test B.sections(list) == ["", "Book Reviews", "Civilization", "Civilization/democracy-proof", "History", "Humans", "Humans/Relationships", "docs"]
+  # The Readme is the front page when there's no index.md, and it can say where the site is
+  @test B.front(canon) == joinpath(canon, "Readme.md") && B.said_address(canon) == "https://words.example.com"
+  at!("index.md", "# The index\n")
+  @test B.front(canon) == joinpath(canon, "index.md") && B.said_address(canon) == ""
+  rm(joinpath(canon, "index.md"))
+end
+
+@testset "how a post of a blog that publishes itself stands" begin
+  quotes = B.post(joinpath(canon, "Quotes.md"))
+  # Before Ladder has published it, Ladder can't tell
+  @test B.standing(canon, quotes) == :unknown && B.words(:unknown) == ""
+  @test B.standing(canon, quotes, sent=time() + 10) == :published
+  @test B.standing(canon, quotes, sent=time() - 3600) == :new
+  # A post that was made before the site was sent, and saved after, has changed
+  @test B.standing(canon, quotes, sent=B.made(quotes.path) + 0.5) == (mtime(quotes.path) > B.made(quotes.path) + 0.5 ? :changed : :published)
+  run(`touch -t 203001010000 $(quotes.path)`)
+  @test B.standing(canon, quotes, sent=B.made(quotes.path) + 0.5) == :changed
+end
+
+@testset "the pages of a site with sections" begin
+  men = B.Post("/b/Humans/Relationships/On Men.md", "On Men", "Humans/Relationships", "On Men", Date(2026, 1, 2), false)
+  gene = B.Post("/b/Book Reviews/Gene.md", "Gene", "Book Reviews", "Gene", Date(2026, 1, 3), false)
+  top = B.Post("/b/one.md", "one", "One", Date(2026, 1, 1), false)
+  @test B.page("/b", men) == "/b/docs/Humans/Relationships/On Men.html" && B.home(men) == "../../index.html" && B.home(top) == "index.html"
+  @test B.index(["+++", "site = \"x\"", "+++", "# Blog"], [men, gene, top]) ==
+    ["# Blog", "", "- [One](one.md), 1 January 2026", "", "## Book Reviews", "", "- [Gene](Book%20Reviews/Gene.md), 3 January 2026", "", "## Humans / Relationships", "", "- [On Men](Humans/Relationships/On%20Men.md), 2 January 2026"]
+  @test occursin("<a href=\"../../index.html\">← b</a>", B.framed("<body>\n", "b", "t", men))
+end

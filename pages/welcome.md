@@ -902,13 +902,17 @@ To show another folder in one of these ways, open a file of the folder, press ‚å
 
 Other people can write a kind of folder and keep it on GitHub. To use one, type its address in place of a kind from the list, like `github.com/jkroso/Media.lad`, which shows a folder of films as a page of posters. Ladder gets the code from GitHub the first time.
 
-A folder that shows as a **Blog** puts itself on the web. Each page in the folder is a post, and the folder's own page lists them, the newest first. A post's front matter can have a `title`, a `date` like 2026-11-20, and `draft: true` for a post that stays out of the site. The page `index.md`, if the folder has one, goes over the list of posts on the site's first page.
+A folder that shows as a **Blog** puts itself on the web. Each page in the folder is a post, and the folder's own page lists them, the newest first. A folder inside the blog is a section of it, and its posts are under its name. A post's front matter can have a `title`, a `date` like 2026-11-20, and `draft: true` for a post that stays out of the site. Front matter between lines of `+++`, like `complete = false`, works too. Without a date, a post has the day that its file was made.
+
+The page `index.md`, or else `Readme.md`, goes over the list of posts on the site's first page. Its front matter can say where the site is, like `site: https://me.example.com`. A `Readme.md` in a section says what the section is, and isn't a post.
 
 - **Publish** makes each post a page of HTML in the folder `docs`, with a first page that lists the posts, and copies the pictures that the posts show. If git keeps the folder and it has a remote called `origin`, Ladder then commits the folder `docs` and pushes it. It commits nothing else, so a draft stays on your Mac.
 - **Open Site** shows the site in your browser.
 - **New Post** starts a page in the folder.
 
 GitHub serves the site when the repository's settings say so: under Settings, then Pages, choose the branch `main` and the folder `/docs`. You do that once.
+
+A blog can make its site and send it with a script of its own. Put the script in the blog's folder at `.bin/publish`. Then **Publish** runs that script, and Ladder writes no `docs`. After the script has done its work once, the list says which posts were made or changed since. The posts of such a blog are also its book reviews, the files that end in `.review`, and its pages of Julia code, the files that end in `.dom.jl`.
 
 You can write the file `.ladder` yourself too. It ends with a block like the one for a desktop, with `Ladder.NotesDirectory`, `Ladder.BlogDirectory`, `Ladder.DownloadsDirectory`, `Ladder.PicturesDirectory` or `Ladder.ScreenshotsDirectory`. Show Folder As leaves a file that you wrote as it is.
 

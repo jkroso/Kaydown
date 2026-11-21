@@ -35722,13 +35722,128 @@ end
 
 "The thing under the mouse of the window `w` that has code to show, with the method that draws it: the nearest part of the window whose method is in a file on this Mac. It's nothing over a place with none."
 code_under(w) = begin
-  node = hittest(w)
+  node = text_run(hittest(w), w)
   while node !== nothing
     m = drawn_by(node)
     m === nothing || code_place(m) === nothing || return (node, m)
     node = node.parent
   end
   nothing
+end
+
+# A paragraph, a heading, a list or a quote draws its words as runs of text,
+# and a link or bold words in it are runs too. They aren't parts of the
+# window, so the part under the mouse there is the whole block. ⌘⌥ looks in
+# the block for the run under the mouse, and picks it when it's drawn its own
+# way. Its code is the function that gives it that look. A node in a line, like
+# a switch that inline code made, is a part of the window, and picks itself.
+
+"""
+A run of a line's text that's drawn its own way: a link, a wiki link, bold,
+slanted or struck words, inline code, what inline code came to, a footnote's
+number, or a to-do item's box. It's in the block that holds its line, and
+isn't drawn as a node of its own. `code` is the method that gives it its look.
+"""
+@def mutable struct TextRun <: SemanticUI
+  kind::String = ""     # what it is, like "Link"
+  line::Int = 0         # the line of the page that it's on
+  from::Int = 0         # the columns of that line that it draws: from `from` up to `to`
+  to::Int = 0
+  code::Any = nothing
+end
+
+drawn_by(r::TextRun) = r.code
+
+"What the label over a thing calls the part `x` of the window: the name of its type, or what a run of text is"
+pick_name(x) = string(nameof(typeof(x)))
+pick_name(r::TextRun) = r.kind
+
+"""
+What the run `seg` of a line's text is, and the method that gives it its look,
+or nothing for a run of plain words. `s` is the span of the line that it's
+part of, or nothing. `raw` is true while the line's markup shows.
+"""
+run_kind(seg::Seg, s, raw::Bool) = begin
+  looks = which(face, Tuple{Face,Span})
+  isbox(seg) && return ("To-do box", which(todo_box, Tuple{Seg}))
+  startswith(seg.link, '^') && return ("Footnote", which(describe, Tuple{Seg}))
+  isempty(seg.link) || return (wikitarget(seg.link) === nothing ? "Link" : "Wiki link", looks)
+  (s === nothing || s.markup) && return nothing
+  s.live && !raw && return ("Value", which(inline, Tuple{Any,Int,Span,Face}))
+  s.code && return ("Code", which(describe, Tuple{Seg}))
+  s.math ? ("Formula", looks) : s.strike ? ("Struck", looks) :
+  s.bold && s.italic ? ("Bold italic", looks) : s.bold ? ("Bold", looks) : s.italic ? ("Italic", looks) : nothing
+end
+
+"""
+The run of text at the point `(x, y)` of the window of `e` that's drawn its
+own way, or nothing. A link takes in each run of its words, even where bold
+words or markup split them.
+"""
+run_on(e, (x, y)) = begin
+  rich(e.buf) && !isempty(e.layout) || return nothing
+  dx, dy = x - e.origin[1], y - e.origin[2]
+  dy >= 0px || return nothing
+  it = e.layout[item_under(e, dx, dy)]
+  f = it.content
+  (f isa Flow && 1 <= it.first <= length(e.buf.lines) && kinds(e.buf)[it.first].kind in TEXT_KINDS) || return nothing
+  dx -= item_room(e, it)[1]
+  segs = [seg for vl in f.lines for seg in vl.segs]
+  k = findfirst(vl -> it.top + f.above + vl.top <= dy < it.top + f.above + vl.top + vl.high, f.lines)
+  k === nothing && return nothing
+  hit = findfirst(seg -> seg.x <= dx < seg.x + seg.w, f.lines[k].segs)
+  hit === nothing && return nothing
+  seg = f.lines[k].segs[hit]
+  seg.node === nothing || return nothing
+  _, line_spans = richspans(e.buf, it.first)
+  j = findlast(o -> o.col <= seg.col < o.col + length(o.text), line_spans)
+  s = j === nothing ? nothing : line_spans[j]
+  found = run_kind(seg, s, f.raw)
+  found === nothing && return nothing
+  kind, code = found
+  # The runs round this one that are part of it: the rest of a link, the rest of a span
+  ours(o) = !isempty(seg.link) ? o.link == seg.link : s !== nothing && kind != "Footnote" && kind != "To-do box" && s.col <= o.col < s.col + length(s.text)
+  i = findfirst(o -> o === seg, segs)
+  lo = hi = i
+  while lo > 1 && ours(segs[lo-1]); lo -= 1 end
+  while hi < length(segs) && ours(segs[hi+1]); hi += 1 end
+  TextRun(kind=kind, line=it.first, from=segs[lo].col, to=segs[hi].col + max(segs[hi].n, 1), code=code)
+end
+
+"Where the run `r` is in the window: round each piece of it, on each of the lines that it's on. It's nothing when the page has no such run now."
+rect(r::TextRun) = begin
+  e = editor(r)
+  (e isa Editor && !isempty(e.layout) && 1 <= r.line <= length(e.buf.lines)) || return nothing
+  it = item(e, r.line)
+  f = it.content
+  f isa Flow || return nothing
+  box = nothing
+  for vl in f.lines, seg in vl.segs
+    r.from <= seg.col < r.to || continue
+    y = it.top + f.above + vl.top
+    box = box === nothing ? (seg.x, seg.x + seg.w, y, y + vl.high) :
+      (min(box[1], seg.x), max(box[2], seg.x + seg.w), min(box[3], y), max(box[4], y + vl.high))
+  end
+  box === nothing && return nothing
+  # A little room on each side, so the line round it doesn't touch its first and last letters
+  left = e.origin[1] + item_room(e, it)[1] - RUN_ROOM
+  (left=left + box[1], top=e.origin[2] + box[3], width=box[2] - box[1] + 2RUN_ROOM, height=box[4] - box[3])
+end
+
+const RUN_ROOM = 2px
+
+"""
+The part of the window to show the code of, when `node` is the part under the
+mouse of the window `w`: the run of text under the mouse that's drawn its own
+way, when `node` is a block of the page's text and there's such a run. It's
+`node` itself anywhere else.
+"""
+text_run(node, w) = begin
+  node isa Union{Paragraph,Heading,List,Quote} || return node
+  r = run_on(editor(node), (w.mouse[1], w.mouse[2]))
+  r === nothing && return node
+  setfield!(r, :parent, node)   # so it can reach the editor, and ⌥↑ goes from it to the block
+  r
 end
 
 "What a window's label says of the method `m`: its file's name, with the folder that holds it for a file called main.jl, and its line"
@@ -35861,7 +35976,7 @@ draw_tool(ctx, w, t::CodePicker, scene) = begin
   node, m = found
   r = try rect(node) catch; nothing end
   r === nothing && return nothing
-  pick_mark(ctx, w, r, "$(nameof(typeof(node)))  ·  $(code_label(m))")
+  pick_mark(ctx, w, r, "$(pick_name(node))  ·  $(code_label(m))")
 end
 
 """
@@ -36313,7 +36428,7 @@ part_choice(x) = begin
   k = max(1, searchsortedlast(starts, line))
   from, to = starts[k], k == length(starts) ? length(lines) : starts[k+1] - 1
   while to > from && isempty(strip(lines[to])); to -= 1 end
-  ToChange(worded(typeof(x)), "drawn at $(code_label(m))", file, from, to, x, m.module)
+  ToChange(x isa TextRun ? x.kind : worded(typeof(x)), "drawn at $(code_label(m))", file, from, to, x, m.module)
 end
 
 "A block of a kind that a file defines holds what the file's function made, which that file draws. It comes before the block."
@@ -36352,7 +36467,7 @@ bar of a `progress` block.
 """
 chip_click(::Type{ToChange}, e, w) = begin
   chain = Any[]
-  node = under_palette(w, palette(e))
+  node = text_run(under_palette(w, palette(e)), w)
   while node !== nothing
     push!(chain, node)
     node = node.parent
@@ -36402,7 +36517,7 @@ end
 thing_words(c::ToChange) = begin
   lines = text(c.file)
   start = 1 <= c.first <= length(lines) ? lines[code_start(lines, c.first)] : ""
-  what = c.node !== nothing ? "a part of its window, a $(nameof(typeof(c.node))). The function that draws that part" :
+  what = c.node !== nothing ? "a part of its window, a $(pick_name(c.node)). The function that draws that part" :
          whole_file(c) ? "the whole of a file" :
          endswith(c.file, ".jl") ? "a block of the file's Julia code" : "a block of Julia code on a page of Markdown"
   (what, start)

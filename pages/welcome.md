@@ -691,6 +691,23 @@ When `to` is a web address, like `to: https://example.com/api/costs`, the button
 
 The line under the top of the block says what a click will do. After a click, it says when the rows went and what the server said.
 
+## Loading rows
+
+A code block in the language `load` shows the rows of a file or of a server as a table. A filter, a chart or a save block under it uses those rows. This block shows the costs in [costs.csv](costs.csv), and loads them again when the file changes:
+
+```load
+from: costs.csv
+```
+
+When `from` is a web address, like `from: https://example.com/api/orders`, Ladder asks that server for the rows when the page opens. The Refresh button asks again. The server can send JSON, CSV or TSV. Two more lines can help:
+
+- `key: orders-api` names a password in your Keychain, as a save block's `key` does.
+- `at: data.orders` names the list in a JSON answer, as a filter's `at` does.
+
+Ladder keeps a copy of the last rows that each server sent. The block shows that copy while it waits, and when the server can't be reached. The line under the top of the block says when the rows came.
+
+Click a heading of the table to sort the rows, hide a column, or show only some values, as in a filter.
+
 ## Time logs
 
 A code block in the language `timelog` keeps the hours that you work on each task. Type a task in the field at its top and click Start. The block adds a line for now, and the row counts up. Click Stop when you stop. With an empty field, Start goes on with the task of the last line.

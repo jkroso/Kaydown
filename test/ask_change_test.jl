@@ -1,7 +1,8 @@
 # Tests for a change that's asked for, in main.jl: the command Ask For Change
 # takes what to change, a block of Julia code or a part of the window, and
 # words. It starts with what the caret is on, and a click chooses another. An
-# agent changes the code, and Ladder runs the code that changed. The command Keep This Change adds the function at the caret to the
+# agent changes the code, and Ladder runs the code that changed. Ask About
+# takes a question, and the agent's answer shows in a card. The command Keep This Change adds the function at the caret to the
 # startup page. Run them with `julia -O0 --project=. test/ask_change_test.jl`.
 # The agent here is a small script, so no real agent runs. They draw windows
 # that aren't on the screen.
@@ -260,10 +261,10 @@ end
   @test rect(node()).width == 120px
   @test a.ended > 0 && !a.failed && a.said == "The bar is 120 pixels wide now."
   # The label says what the agent said, and a click on it shows the change
-  @test a.changed && K.LAST_CHANGE[] === a
+  @test a.changed && last(K.AGENT_CHANGES) === a
   left, top, wide, tall = a.label
   click(cw, px(left + wide / 2), px(top + tall / 2))
-  shown = only(filter(o -> endswith(o.buf.path, "the agent's change.md"), K.editors))
+  shown = only(filter(o -> endswith(o.buf.path, "what the agents changed.md"), K.editors))
   close(K.window_of(shown))
   # The label goes after a few seconds
   a.ended -= 9
@@ -277,7 +278,7 @@ end
   frames(K.window_of(shown), 3)
   page = join(shown.buf.lines, "\n")
   @test occursin("```changes\n--- $(realpath(source))\n+++ $(realpath(source))\n@@", page) && occursin("[accepted]", page)
-  @test occursin("-wide(l::Level) = 200px", page) && occursin("+wide(l::Level) = 120px", page) && occursin("You asked: make the bar wider", page)
+  @test occursin("-wide(l::Level) = 200px", page) && occursin("+wide(l::Level) = 120px", page) && occursin(r"## \d+:\d\d [ap]m: make the bar wider", page)
   # Reject takes the change out of the file, and the code that it changed runs. Accept puts it back.
   v = shown.nodes[(:block, K.CHANGES, shown.buf.path, 1)]
   K.decide!(v, 1, :rejected)
@@ -290,9 +291,9 @@ end
   # Undo Change puts each file back as it was, and runs its code. There's nothing to undo after that.
   K.undo_change!(code)
   frames(w, 3)
-  @test occursin("wide(l::Level) = 200px", read(source, String)) && rect(node()).width == 200px && K.LAST_CHANGE[] === nothing
+  @test occursin("wide(l::Level) = 200px", read(source, String)) && rect(node()).width == 200px && last(K.AGENT_CHANGES).undone
   @test_throws ErrorException K.undo_change!(code)
-  @test !K.works_here(code, Val(:undo_change))
+  @test !K.works_here(code, Val(:undo_change)) && K.works_here(code, Val(:show_change))
 end
 
 @testset "a change to a part of the window" begin
@@ -301,6 +302,17 @@ end
   @test occursin("a Level", asked()) && rect(node()).height == 12px
   @test !a.failed && a.said == "The bar is 12 pixels tall now."
   picker().asked = nothing
+  # Show Change lists each change, the newest first. Each is marked by what its file has now: the first was undone.
+  shown = K.show_change!(e)
+  frames(K.window_of(shown), 3)
+  page = join(shown.buf.lines, "\n")
+  @test count("## ", page) == 2 && findfirst("make the bar thinner", page).start < findfirst("make the bar wider", page).start
+  thinner_part, wider_part = split(page, "make the bar wider")
+  @test occursin("+  Box(width(wide(l)), height(12px)", thinner_part) && occursin("[accepted]", thinner_part) && !occursin("[rejected]", thinner_part)
+  @test occursin("+wide(l::Level) = 120px", wider_part) && occursin("[rejected]", wider_part)
+  # Again, it shows the same window
+  @test K.show_change!(e) === shown
+  close(K.window_of(shown))
   # A file that changed after the agent's change isn't put back
   open(io -> println(io, "# a line of mine"), source, "a")
   @test_throws ErrorException K.undo_change!(e)
@@ -337,6 +349,69 @@ end
   frames(w, 3)
   @test rect(node()).width == 80px
   @test K.reload_changed!(mod, realpath(source), K.text(source)) == (0, "")
+end
+
+@testset "Ask About shows the agent's answer in a card beside the thing, and changes nothing" begin
+  level = first(offered(e, (3, 0)))
+  answers = agent("answers.sh", "true", "The bar is blue because describe(l::Level) gives it a steelblue background.", "", "It is 12 pixels tall.")
+  before = read(source, String)
+  "Ask the question `words` about `c` with the script `script` as the agent, and wait for the answer"
+  ask_about(script, c, words) = begin
+    K.AGENT_COMMAND[] = `sh $script`
+    K.ask_about!(e, c, words)
+    from = time()
+    while picker().about.ended == 0 && time() - from < 20
+      frames(w, 1)
+      sleep(0.05)
+    end
+    frames(w)
+    picker().about
+  end
+  q = ask_about(answers, level, "  why is it blue? ")
+  @test q.words == "why is it blue?" && !q.failed
+  @test q.answer == "The bar is blue because describe(l::Level) gives it a steelblue background.\n\nIt is 12 pixels tall."
+  # The agent was told what the thing is, the question, and to change nothing. Nothing changed.
+  @test occursin("a question about a part of its window, a Level.", asked()) && occursin("The user's question: why is it blue?", asked())
+  @test occursin("Don't change any file.", asked()) && read(source, String) == before
+  # The card is at the right of the bar, with the question, then each paragraph of the answer
+  r = rect(node())
+  left, top, wide, tall = q.card
+  @test left >= K.num(r.left + r.width) && top >= K.num(r.top) - 50
+  lines = [l for (_, l) in K.answer_lines(q, wide - 24, 30)]
+  @test lines[1] == "why is it blue?" && lines[2] == "" && "It is 12 pixels tall." in lines && lines[end-1] == ""
+  # A click on the card takes it away, and does nothing else
+  e.buf.caret = e.buf.anchor = (7, 3)
+  frames(w)
+  was = e.buf.caret
+  click(w, px(left + wide / 2), px(top + tall / 2))
+  @test picker().about === nothing
+  @test e.buf.caret == was
+  # So does Esc
+  ask_about(answers, level, "why?")
+  press(w, Keys.escape)
+  @test picker().about === nothing
+  # A thing at the bottom of a window with no room at its side has its card over it
+  @test K.answer_place((left=10px, top=500px, width=880px, height=60px), 380.0, 120.0, (900.0, 600.0)) == (10.0, 370.0)
+  @test K.answer_place((left=10px, top=100px, width=880px, height=60px), 380.0, 120.0, (900.0, 600.0)) == (10.0, 170.0)
+  # An agent that stops says so in the card. Words with nothing in them ask nothing.
+  q = ask_about(stopped, level, "why?")
+  @test q.failed && q.answer == "The agent stopped. No network."
+  picker().about = nothing
+  @test_throws ErrorException K.ask_about!(e, level, "  ")
+  # The palette asks for the thing, which starts as what the caret is on, and the question
+  K.focus(e)
+  e.buf.caret = e.buf.anchor = (3, 0)
+  frames(w)
+  press(w, Keys.p, Keys.cmd, Keys.shft)
+  typed(w, "ask about")
+  press(w, Keys.enter)
+  p = K.palette(e)
+  @test p.command.name == :ask_about && [K.chip_name(c) for c in K.palette_chips(p)] == ["Node", "Question"] && p.at == 2
+  @test K.chip_value(p, K.palette_chips(p), 1).node === node()
+  press(w, Keys.escape); press(w, Keys.escape)
+  # The agent that answers can read files, and can't change them
+  K.AGENT_COMMAND[] = nothing
+  @test endswith(string(K.agent_command(changes=false)), "--allowedTools Read,Grep,Glob -p`")
 end
 
 @testset "a file whose code Ladder never ran changes, and nothing runs" begin

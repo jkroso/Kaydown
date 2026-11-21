@@ -254,15 +254,24 @@
 #     functions and sections. Hold ⌘ and click a name to go to where it's
 #     defined, or rest the mouse on it to see a card of it. See "where a name
 #     is defined" and "a card of what a name is". Rename In Code gives a name
-#     another name: see "give a name another name".
+#     another name: see "give a name another name". ⌘-click a name where the
+#     code makes it, or run Find Uses, to list each place that uses it: see
+#     "where a name is used".
+#   - Write `# check: share("70%") == 0.7` above a function in a file of
+#     Julia code. A dot at the end of the line says whether it's true. See
+#     "checks in a file of Julia code".
+#   - Press ⌘⇧P, run Theme or Text Size, and press ↓: the page shows each
+#     choice at once, and Esc puts it back. See "a look before you choose".
 #   - Click the number of a line, in a file that git keeps, to see the commit
 #     that last changed the line. See "when a line last changed".
 #   - Run the command Ask For Change, choose a block of the file's code or a
 #     part of the window, and say what you want in words. An agent changes the
 #     code. ⌥↑ makes the thing bigger, and ⇧ and a click add another. Show
-#     Change and Undo Change show and take back what the agent did. Keep This
-#     Change keeps a function of Ladder's own for each start. See "ask for a
-#     change to a thing" and "what the agent changed".
+#     Change lists each change that an agent made, and Undo Change takes back
+#     the newest. Keep This Change keeps a function of Ladder's own for each
+#     start. Ask About takes a question in place of a change, and the agent's
+#     answer shows beside the thing. See "ask for a change to a thing", "ask
+#     about a thing" and "what the agents changed".
 #   - A function that a page's code makes is a command of the palette. See "a
 #     page's own commands".
 #   - Write a code block in the language `check`, with a line of Julia for
@@ -12550,6 +12559,88 @@ end
 
 BLOCKS[CHECK] = BlockKind("Check", "check2-square", CheckView, check_html)
 
+# --- checks in a file of Julia code ---
+#
+# A comment like `# check: share("70%") == 0.7` in a file of Julia code is a
+# check, as a line of a `check` block is. It runs in the module of the file's
+# code, and a dot at the end of its line says how it went: green when it comes
+# to true, and red when it doesn't, with the two values that it compared, or
+# with why it stopped. The checks run when the window opens the file, when a
+# check changes, and each time code runs, as it does with ⌘Return. A name that
+# the file's code makes is there once that code ran: in a file that Ladder
+# loaded, at once, and in any other file after ⌘Return in its function.
+
+const FILE_CHECK = r"^\s*#\s*check:\s*(.*\S)\s*$"
+
+"The checks of a file of Julia code: the line of each, and its code"
+file_checks(lines) = begin
+  out = Tuple{Int,String}[]
+  for (i, l) in enumerate(lines)
+    occursin("check:", l) || continue
+    m = match(FILE_CHECK, l)
+    m === nothing || push!(out, (i, String(m[1])))
+  end
+  out
+end
+
+"True for a window that shows a file of Julia code as its text"
+julia_file(e) = endswith(e.buf.path, ".jl") && e.buf.view == :code
+
+"""
+In each frame: find the checks of a file of Julia code when its text changed,
+and run them when a check changed or code ran since they last ran. What they
+found is in `e.nodes[:file_checks]`.
+"""
+file_checks_tick!(e) = begin
+  julia_file(e) || return nothing
+  b = e.buf
+  s = get(e.nodes, :file_checks, nothing)
+  if s === nothing || s.version != b.version
+    s = (version=b.version, found=file_checks(b.lines), ran=s === nothing ? nothing : s.ran,
+         results=s === nothing ? Dict{String,Checked}() : s.results)
+  end
+  key = (unique(last.(s.found)), CODE_RUNS[])
+  if !isempty(key[1]) && key != s.ran
+    s = (; s..., ran=key, results=Dict(code => check_line(e, code) for code in key[1]))
+  end
+  e.nodes[:file_checks] = s
+  nothing
+end
+
+"What a check of a file says after its dot: nothing when it passed, the values that it compared, or why it stopped"
+check_note(r::Checked, loaded::Bool) = begin
+  r.went == :pass && return ""
+  note = r.went == :fail ? (isempty(r.said) ? "It came to false." : r.said) : r.said
+  # A name that the file makes isn't there until the file's code runs
+  !loaded && r.went == :stop && occursin("UndefVarError", note) && (note = rstrip(note, '.') * ". Press ⌘Return in its function to run it.")
+  length(note) > 100 ? first(note, 99) * "…" : note
+end
+
+"Draw a dot at the end of each line of a file of Julia code that's a check, green or red, and what a check that failed found. The page's text is at `ui`."
+mark_checks(ctx, e, ui) = begin
+  s = get(e.nodes, :file_checks, nothing)
+  (s === nothing || isempty(s.found) || s.version != e.buf.version) && return nothing
+  rows = Dict(s.found)
+  loaded = loaded_module(page_key(e.buf.path)) !== nothing
+  for it in e.layout[e.shown]
+    f = it.content
+    f isa Flow || continue
+    code = get(rows, it.first, nothing)
+    code === nothing && continue
+    r = get(s.results, code, nothing)
+    r === nothing && continue
+    k = length(f.lines)
+    vl = f.lines[k]
+    right = isempty(vl.segs) ? 0px : last(vl.segs).x + last(vl.segs).w
+    mid = num(ui.top + it.top + line_top(f, k) + vl.high / 2)
+    x = num(ui.left + right) + 10
+    round_box(ctx, x, mid - 4, 8, 8, 4; fill=check_colour(r))
+    note = check_note(r, loaded)
+    isempty(note) || write_ink(ctx, note, x + 14, mid + 4, Face(SANS, "", px(round(num(f.size) * 0.85)), check_colour(r), false))
+  end
+  nothing
+end
+
 # --- a save of a table's rows ------------------------------------------------------------------
 #
 # A code block in the language `save` writes the rows of the table above it
@@ -22345,6 +22436,7 @@ draw(ctx, size, ui::ConcreteRect, d::Document) = begin
   mark_pointed(ctx, e, ui)
   underline_scrubs(ctx, e, ui)
   mark_clickable(ctx, e, ui)
+  mark_checks(ctx, e, ui)
   ring_part(ctx, e, ui)
   annotate(ctx, e, ui)
   glow_bracket_pair(ctx, e, ui)
@@ -27835,6 +27927,7 @@ Wanted(names, types, optional) = Wanted(names, types, optional, false)
   listed::Vector{Command} = Command[]                    # the commands that it lists: the ones that what's in focus takes
   had::Any = nothing                                     # what had the keyboard when the palette opened. It gets the keyboard back.
   inner::Vector{Any} = Any[]                             # what ⌥↑ made a chip bigger from, the last last, for ⌥↓ to go back to
+  before::Any = nothing                                  # how the window looked before it showed a row of the list, for Esc to put back: see `preview!`
 end
 "What takes a click outside the palette"
 @def mutable struct PaletteCatch <: SemanticUI end
@@ -28417,8 +28510,9 @@ palette_focus!(e, p::CommandPalette) = begin
   nothing
 end
 
-"Empty the bar: no command, no chips and no text, with the list of commands at its first row"
+"Empty the bar: no command, no chips and no text, with the list of commands at its first row. A row that the window showed goes."
 palette_clear!(e, p::CommandPalette) = begin
+  unpreview!(e, p)
   p.command, p.at, p.pick, p.shown = nothing, 1, 1, 0
   p.advanced = p.wrap = p.browsed = false
   p.query = p.fault = ""
@@ -28454,6 +28548,7 @@ end
 # The page under it stays as it was: the caret doesn't show again, and the page doesn't scroll to it
 close_palette!(e) = begin
   p = palette(e)
+  unpreview!(e, p)
   e.popup == :commands && ((p.from, p.moved) = (palette_risen(e, p), time()); e.popup = :none)
   w = window_of(e)
   w === nothing || hide_tooltip!(w)
@@ -28733,7 +28828,7 @@ starts something that takes a while, like Rename or Ask For Change, waits for
 Run. A command that takes nothing runs at once anyway.
 """
 runs_at_once(::Val) = false
-runs_at_once(::Union{Val{:go_to},Val{:theme},Val{:text_size},Val{:key_bindings},Val{:spelling},Val{:autosave},Val{:insert},Val{:rename_in_code},Val{:show_code}}) = true
+runs_at_once(::Union{Val{:go_to},Val{:theme},Val{:text_size},Val{:key_bindings},Val{:spelling},Val{:autosave},Val{:insert},Val{:rename_in_code},Val{:show_code},Val{:find_uses}}) = true
 
 """
 Run the palette's command when it runs at once and each of its chips has
@@ -28748,8 +28843,80 @@ run_when_ready!(e, p::CommandPalette) = begin
   true
 end
 
+"The number that ↑ and ↓ count from in chip `k` of the command `name` while the chip has nothing: 0, or for Text Size the size that the text is now"
+counts_from(e, ::Val, k) = 0
+counts_from(e, ::Val{:text_size}, k) = text_size(e)
+
 "Go on from the chip that the keyboard is in to the next one, or to the Run button after the last. A command that runs at once runs when its last chip has something."
 palette_next!(e, p::CommandPalette) = run_when_ready!(e, p) || go_chip!(e, p, p.at + 1)
+
+# --- a look before you choose ---
+#
+# As the arrows go through the list of Theme, the window shows each colours,
+# and Text Size shows each size. Find Uses shows each place in the window. Esc,
+# or a click outside the palette, puts the window back as it was. Return keeps
+# the one that's chosen.
+
+"""
+`look_of(e, Val(name))` gives how the window of `e` looks now in the ways
+that the command `name` changes it, for a command that shows each row of its
+list in the window as the arrows reach it. `put_look!` puts that look back.
+It's nothing for a command that doesn't show its rows so.
+"""
+look_of(e, ::Val) = nothing
+look_of(e, ::Val{:theme}) = e.theme
+look_of(e, ::Val{:text_size}) = e.zoom
+put_look!(e, ::Val{:theme}, was) = theme!(e, was)
+put_look!(e, ::Val{:text_size}, was) = (e.zoom = was; rewrap!(e))
+
+"Show in the window what the command `name` does with `args`, for a row that the arrows reached: see `look_of`. Most commands just run."
+look!(e, ::Val, f, args...) = Base.invokelatest(f, args...)
+
+"What the command's function takes: what's said for each chip, and the editor or the window where it takes them"
+palette_args(e, w, sig, said) = (said = copy(said); Any[a.from === nothing ? popfirst!(said) : a.from === :editor ? e : a.from === :window ? w : a.from for a in sig if !a.keyword])
+
+"""
+Show in the window the row of the list that the arrows reached, for a command
+that does that, like Theme: see `look_of`. The palette keeps how the window
+looked before the first, for Esc to put back.
+"""
+preview!(e, p::CommandPalette) = begin
+  p.command === nothing && return nothing
+  name = Val(p.command.name)
+  was = look_of(e, name)
+  was === nothing && return nothing
+  said = palette_said(e, p)
+  any(x -> x === UNSAID, said) && return nothing
+  sig = ready_method(p.methods, said)
+  sig === nothing && return nothing
+  p.before === nothing && (p.before = was)
+  try
+    look!(e, name, p.command.call, palette_args(e, window_of(e), sig, said)...)
+  catch err
+    err isa InterruptException && rethrow()
+  end
+  nothing
+end
+
+"Put the window back as it looked before the palette showed a row of its list in it: see `preview!`"
+unpreview!(e, p::CommandPalette) = begin
+  was, p.before = p.before, nothing
+  (was === nothing || p.command === nothing) || put_look!(e, Val(p.command.name), was)
+  nothing
+end
+
+"While the window shows a row of the list, a line round the thing of that row, as for a place that Find Uses found"
+mark_preview(ctx, w, e) = begin
+  p = get(e.nodes, :palette, nothing)
+  (p isa CommandPalette && p.before !== nothing && e.popup == :commands && p.command !== nothing) || return nothing
+  chips = palette_chips(p)
+  p.at <= length(chips) || return nothing
+  x = chip_value(p, chips, p.at)
+  x === UNSAID && return nothing
+  r = shown_at(e, x)
+  r === nothing || pick_mark(ctx, w, r, sidenote(x))
+  nothing
+end
 
 """
 Take in what the field has, when it changed since the palette last looked.
@@ -28879,9 +29046,11 @@ palette_run!(e, w, p::CommandPalette) = begin
     p.fault = "$(chip_name(chips[k])) has nothing yet"
     return
   end
-  args = Any[a.from === nothing ? popfirst!(said) : a.from === :editor ? e : a.from === :window ? w : a.from for a in sig if !a.keyword]
+  args = palette_args(e, w, sig, said)
   named = Pair{Symbol,Any}[name => x for (name, x) in p.keywords]
-  # The palette closes first, so that the function finds the page with the keyboard, and can show something of its own
+  # The palette closes first, so that the function finds the page with the keyboard, and can show something of its own.
+  # A row that the window showed stays, as the command runs with it.
+  p.before = nothing
   close_palette!(e)
   try
     value = Base.invokelatest(p.command.call, args...; named...)
@@ -28973,7 +29142,7 @@ palette_key!(e, w, K, command) = begin
       say!(p, chips, p.at, UNSAID)
     elseif kind == :number && by != 0
       x = chip_value(p, chips, p.at)
-      x = (x isa Number ? x : 0) - by   # ↑ adds one
+      x = (x isa Number ? x : counts_from(e, Val(p.command.name), p.at)) - by   # ↑ adds one
       fits(x, chips[p.at]) && (say!(p, chips, p.at, x); palette_text!(e, p, worded(x), select=true))
     elseif kind == :segment && K in (Keys.left, Keys.up)
       segment_step!(e, p, p.at, -1)
@@ -28982,6 +29151,8 @@ palette_key!(e, w, K, command) = begin
     elseif kind == :switch && K == Keys.space
       switch!(p, p.at)
     end
+    # A command like Theme shows the row that the arrows reached
+    by != 0 && preview!(e, p)
   end
   nothing
 end
@@ -34282,6 +34453,8 @@ describe_window(e::Editor) = begin
   screen_tick!(e)
   code_tick!(e)
   ask_tick!(e)
+  about_tick!(e)
+  file_checks_tick!(e)
   line_tick!(e)
   app_tick!(e)
   publish_tick!(e)
@@ -34936,8 +35109,18 @@ definition(e, at::Pos) = begin
   first(sort(ms, by=m -> (!haskey(Kip.modules, code_place(m)[1]), code_place(m)[1], m.line)))
 end
 
-"Go to where the name at the place `at` of the page is defined. True when it has a place to go to."
+"""
+Go to where the name at the place `at` of the page is defined. At a place
+where the page's code makes the name, it lists the places that use it: see
+"where a name is used". True when it has a place to go to.
+"""
 definition!(e, at::Pos) = begin
+  n = own_name(e, at)
+  if n !== nothing && any(m -> m.name == n.name && m.at == (n.line, n.col), page_bounds(e))
+    e.buf.caret = e.buf.anchor = (n.line, n.col)
+    open_palette!(e, COMMANDS[:find_uses])
+    return true
+  end
   place = definition(e, at)
   place === nothing && return false
   if place isa Method
@@ -35066,6 +35249,122 @@ end
 
 works_here(e, ::Val{:rename_in_code}) = !isempty(code_blocks(e))
 
+# --- where a name is used ---
+#
+# The command Find Uses lists each place that uses the name at the caret, a
+# name that the page's own Julia code makes. A name of a whole file of Julia
+# code is looked for in the other Julia files of its git repository too, by
+# itself or after the name of a module and a dot, as `K.share` is. ⌘-click on
+# a name where the code makes it shows the same list. As the arrows go down
+# the list, the window shows each place of its own file, with a line round
+# the name, and Esc puts the window back. Return goes to the place, in a
+# window beside for another file.
+
+"A place that uses a name: the file, the line and the column where the name starts, the line's words, and where it is in words"
+struct Use
+  name::String
+  file::String
+  line::Int
+  col::Int
+  words::String
+  note::String
+end
+worded(u::Use) = u.words
+sidenote(u::Use) = u.note
+
+"A line of code as a row of a list shows it: without the spaces at its ends, and at most 90 characters"
+row_words(line) = (s = strip(line); length(s) > 90 ? first(s, 89) * "…" : String(s))
+
+"The columns where the name `name` starts in the line of Julia `line`, by itself or after a dot, and not in a string or a comment"
+name_columns(line::AbstractString, name::AbstractString) = begin
+  cols = Int[]
+  skip = [(t.col, t.col + length(t.text)) for t in tokens(line, "julia") if t.kind in (:string, :comment)]
+  for m in eachmatch(Regex("(?<![\\w!@])\\Q$name\\E(?![\\w!])"), line)
+    col = length(line, 1, prevind(line, m.offset))
+    any(((a, z),) -> a <= col < z, skip) || push!(cols, col)
+  end
+  cols
+end
+
+"""
+The places in the other Julia files of the git repository that holds `file`
+that use the name `name`, at most `most` of them. `git grep` finds them, so a
+file that git ignores isn't looked in.
+"""
+uses_elsewhere(name::AbstractString, file::AbstractString; most=500) = begin
+  top = Diffs.repository(dirname(file))
+  top === nothing && return Use[]
+  out = IOBuffer()
+  try
+    run(pipeline(ignorestatus(`git -C $top grep -n -I --untracked -F -e $name -- '*.jl'`), stdout=out, stderr=devnull))
+  catch
+    return Use[]
+  end
+  found = Use[]
+  for l in eachline(IOBuffer(take!(out)))
+    m = match(r"^(.*?):(\d+):(.*)$", l)
+    m === nothing && continue
+    path = joinpath(top, m[1])
+    page_key(path) == file && continue
+    i = parse(Int, m[2])
+    for col in name_columns(m[3], name)
+      push!(found, Use(name, path, i, col, row_words(m[3]), "$(m[1]):$i"))
+    end
+    length(found) >= most && break
+  end
+  found
+end
+
+"""
+Each place that uses the name `n`: in the page's own code, where it means
+what it means where it's written, and for a name of the whole of a file of
+Julia code, in the other Julia files of its repository.
+"""
+uses_of(e, n::NameAt) = begin
+  b = e.buf
+  file = isempty(b.path) ? "" : page_key(b.path)
+  out = [Use(n.name, file, i, col, row_words(b.lines[i]), "line $i") for (i, col) in name_uses(e, n)]
+  place = Base.invokelatest(definition, e, (n.line, n.col))
+  whole = place isa Tuple && !any(m -> m.at == place && m.span !== nothing, page_bounds(e))
+  whole && endswith(file, ".jl") && append!(out, uses_elsewhere(n.name, file))
+  out
+end
+
+"The places that use the name at the caret, for the palette's list. They're found again only when the page or the name changed."
+choices_for(::Type{Use}, e) = begin
+  n = own_name(e, e.buf.caret)
+  n === nothing && return Use[]
+  key = (e.buf.version, n)
+  was = get(e.nodes, :uses, nothing)
+  was !== nothing && was[1] == key && return was[2]
+  found = uses_of(e, n)
+  e.nodes[:uses] = (key, found)
+  found
+end
+
+"Where the name at the place `u` is in the window of `e`, while the window shows its file"
+shown_at(e, u::Use) = !isempty(e.buf.path) && page_key(e.buf.path) == u.file ? shown_at(e, NameAt(u.name, u.line, u.col)) : nothing
+
+"Find each place that uses the name at the caret, and go to the one that you choose: in this window, or in a window beside for another file"
+find_uses!(e, place::Use) = begin
+  if !isempty(e.buf.path) && page_key(e.buf.path) == place.file
+    show_line!(e, place.line)
+    e.buf.caret = e.buf.anchor = (place.line, place.col)
+    e.nodes[:hold] = (max(place.line - 3, 1), 24px - PAGE_TOP)
+  else
+    shown = show_place!(e, place.file, place.line)
+    shown.buf.caret = shown.buf.anchor = (place.line, place.col)
+  end
+  nothing
+end
+
+works_here(e, ::Val{:find_uses}) = own_name(e, e.buf.caret) !== nothing
+
+# As the arrows go down the list, the window scrolls to each place of its own file. The caret stays where it is.
+look_of(e, ::Val{:find_uses}) = e.scroll.offset
+put_look!(e, ::Val{:find_uses}, was) = (e.scroll.offset = was; delete!(e.nodes, :hold); nothing)
+look!(e, ::Val{:find_uses}, f, _, u::Use) = (!isempty(e.buf.path) && page_key(e.buf.path) == u.file && (e.nodes[:hold] = (max(u.line - 3, 1), 24px - PAGE_TOP)); nothing)
+
 "A heading of the page that shows, or a place of a file of code, for a command to take"
 struct HeadingLine
   line::Int
@@ -35101,6 +35400,7 @@ end
 add_command!(go_to!, title="Go to a heading of the page, to a function or a section of a file of code, or to a line by its number", kind=:look)
 add_command!(go_to_definition!, title="Go to where the name at the caret is defined", kind=:look)
 add_command!(rename_in_code!, title="Give a name of the page's Julia code another name, wherever it means the same thing", kind=:edit)
+add_command!(find_uses!, title="List each place that uses the name at the caret, and go to one", kind=:look)
 add_command!(insert_block!, name=:insert, title="Add a block to the page: a table, a sheet, a chart and so on", kind=:edit)
 add_command!(theme!, title="Use other colours for the page")
 add_command!(text_size!, title="Make the page's text a number of pixels tall")
@@ -35249,12 +35549,14 @@ end
 The tool of a window of the editor `editor` that shows the code of a thing.
 `swallow` is true from a click that it took until the button comes up. `asked` is the change
 that an agent is making, or made a moment ago: see "ask for a change to a
-thing".
+thing". `about` is a question that an agent is answering, or answered: see
+"ask about a thing".
 """
 @def mutable struct CodePicker
   editor::Any = nothing
   swallow::Bool = false
   asked::Any = nothing
+  about::Any = nothing
 end
 
 code_picker(e) = get!(() -> CodePicker(editor=e), e.nodes, :code_picker)::CodePicker
@@ -35276,6 +35578,17 @@ end
 tool_input(t::CodePicker, w, ::KeyPress{Keys.mouse_left}) = begin
   # The palette's chip that a click chooses for takes the click first
   palette_click!(t.editor, w) && (t.swallow = true; return true)
+  # A click takes the card of an agent's answer away. A click on the card does nothing else.
+  q = t.about
+  if q !== nothing && q.ended > 0
+    t.about = nothing
+    redraw_in!(t.editor, 0)
+    x, y = num(w.mouse[1]), num(w.mouse[2])
+    if q.card !== nothing
+      left, top, wide, tall = q.card
+      left <= x <= left + wide && top <= y <= top + tall && (t.swallow = true; return true)
+    end
+  end
   # A click on the label that says what an agent changed shows the change
   a = t.asked
   if a !== nothing && a.ended > 0 && a.changed && a.label !== nothing
@@ -35294,18 +35607,26 @@ tool_input(t::CodePicker, w, ::KeyPress{Keys.mouse_left}) = begin
   true
 end
 tool_input(t::CodePicker, w, ::KeyRelease{Keys.mouse_left}) = (was = t.swallow; t.swallow = false; was)
+# Esc takes the card of an agent's answer away, while the palette doesn't show
+tool_input(t::CodePicker, w, ::KeyPress{Keys.escape}) = begin
+  (t.about !== nothing && t.about.ended > 0 && unmodified(w) && t.editor.popup == :none) || return false
+  t.about = nothing
+  redraw_in!(t.editor, 0)
+  true
+end
 
 const PICK_LINE = colorant"rgb(48,128,236)"
 
 const PICK_FAILED = colorant"rgb(200,60,50)"
 
-"Draw a line round the place `r` of the window `w`, and a label with `words` over its top left corner. With no place, the label is under the top bar."
+"Draw a line round the place `r` of the window `w`, and a label with `words` over its top left corner. With no place, the label is under the top bar. With no words, there's no label."
 pick_mark(ctx, w, r, words; colour=PICK_LINE) = begin
   x, y = 16.0, 64.0
   if r !== nothing
     x, y, wide, tall = num(r.left), num(r.top), num(r.width), num(r.height)
     round_box(ctx, x + 0.5, y + 0.5, max(1, wide - 1), max(1, tall - 1), 3; fill=RGBA(colour.r, colour.g, colour.b, 0.08), line=colour, wide=1.5)
   end
+  isempty(words) && return nothing
   face = Face(SANS, "", 11px, colorant"white", false)
   across = num(measure(face, words)) + 12
   # The label sits on the thing's top edge, and comes down into the thing where the window has no room over it.
@@ -35321,6 +35642,8 @@ end
 # A thing or a block of code that an agent is changing keeps its line, with what was asked, and then what the agent said.
 draw_tool(ctx, w, t::CodePicker, scene) = begin
   mark_chips(ctx, w, t.editor)
+  mark_preview(ctx, w, t.editor)
+  draw_answer(ctx, w, t)
   a = t.asked
   if a !== nothing
     # Each thing has its letter, and the first has what was asked, then what the agent said
@@ -35581,15 +35904,27 @@ end
 "The command that changes code when it's asked to in words. Nothing means the command `claude` of Claude Code. A test puts a command of its own here."
 const AGENT_COMMAND = Ref{Any}(nothing)
 
-"The command that an agent is started with. The words that ask for the change go after it."
-agent_command() = begin
+"""
+The command that an agent is started with. The words that ask for the change
+go after it. With `changes` false, the agent can read files and can't change
+them, for a question.
+"""
+agent_command(; changes=true) = begin
   AGENT_COMMAND[] === nothing || return AGENT_COMMAND[]
   # An app that the Finder opened doesn't have the terminal's PATH, so the usual places are tried too
   places = (joinpath(homedir(), ".local", "bin", "claude"), "/opt/homebrew/bin/claude", "/usr/local/bin/claude", joinpath(homedir(), ".claude", "local", "claude"))
   found = something(Sys.which("claude"), Some(get(filter(isfile, collect(places)), 1, nothing)))
   found === nothing && error("Ladder can't find the command `claude`. Install Claude Code, and ask again.")
   # The words go straight after -p. An option that takes a list, like --allowedTools, would take them as part of its list.
-  `$found --permission-mode acceptEdits --allowedTools Read,Edit,Grep,Glob -p`
+  changes ? `$found --permission-mode acceptEdits --allowedTools Read,Edit,Grep,Glob -p` : `$found --allowedTools Read,Grep,Glob -p`
+end
+
+"Start an agent with the command `command` and the words `prompt`, in the folder `dir`. It gives the agent's process, and a task that reads what the agent prints."
+start_agent(command, prompt, dir) = begin
+  out = Pipe()
+  process = run(pipeline(Cmd(`$command $prompt`, dir=dir), stdin=devnull, stdout=out, stderr=out), wait=false)
+  close(out.in)   # only the agent writes to it now, so reading ends when the agent does
+  (process, @async read(out, String))
 end
 
 """
@@ -35871,7 +36206,7 @@ reload_changed!(mod::Module, file::AbstractString, before::Vector{String}) = beg
       isempty(failed) && (failed = trouble(err))
     end
   end
-  ran > 0 && redraw_windows!()
+  ran > 0 && (CODE_RUNS[] += 1; redraw_windows!())   # the checks of a page or a file run again
   (ran, failed)
 end
 # Code that Ladder never ran has no module to run in. The file changes, and that's all.
@@ -35882,7 +36217,8 @@ A change that an agent was asked to make to `places`, the things of Ask For
 Change. `before` and `after` have the text of each file that the things are
 in, before the agent started and after it ended. `said` is what there is to
 say when it has ended, at the time `ended`. `label` is where the label with
-those words was drawn last, for a click on it.
+those words was drawn last, for a click on it. `undone` is true once Undo
+Change put its files back.
 """
 @def mutable struct AskedChange
   words::String = ""
@@ -35897,10 +36233,11 @@ those words was drawn last, for a click on it.
   changed::Bool = false
   ended::Float64 = 0.0
   label::Any = nothing
+  undone::Bool = false
 end
 
-"The last change that an agent made, for Show Change and Undo Change, or nothing"
-const LAST_CHANGE = Ref{Any}(nothing)
+"Each change that an agent made since Ladder started, the last last, for Show Change and Undo Change"
+const AGENT_CHANGES = AskedChange[]
 
 """
 Where the window of `e` shows what an agent is changing, `c`: the part of the
@@ -35931,16 +36268,13 @@ ask_change!(e, places::AbstractVector, words::AbstractString) = begin
     !isempty(o.buf.path) && page_key(o.buf.path) in files && dirty(o.buf) && writes(o.buf) && save!(o.buf)
   end
   before = Dict(f => read(f, String) for f in files)
-  prompt = change_prompt(places, words)
-  out = Pipe()
-  process = try
-    run(pipeline(Cmd(`$(agent_command()) $prompt`, dir=dirname(first(files))), stdin=devnull, stdout=out, stderr=out), wait=false)
+  process, out = try
+    start_agent(agent_command(), change_prompt(places, words), dirname(first(files)))
   catch err
     t.asked = AskedChange(words=words, places=collect(places), said="The agent didn't start. " * trouble(err), failed=true, ended=time())
     return nothing
   end
-  close(out.in)   # only the agent writes to it now, so reading ends when the agent does
-  t.asked = AskedChange(words=words, places=collect(places), before=before, process=process, out=(@async read(out, String)))
+  t.asked = AskedChange(words=words, places=collect(places), before=before, process=process, out=out)
   redraw_in!(e, 0)
   nothing
 end
@@ -35988,7 +36322,7 @@ ask_tick!(e) = begin
                !isempty(failed) ? "The new code doesn't run. " * failed :
                !a.changed ? "Nothing changed. " * agent_said(printed) : agent_said(printed)
       a.ended = time()
-      a.changed && (LAST_CHANGE[] = a)
+      a.changed && push!(AGENT_CHANGES, a)
     end
     redraw_in!(e, 0.1)
   elseif time() - a.ended > (a.failed ? 15 : 8)
@@ -36015,16 +36349,172 @@ ask_for_change!(e, node::Union{ToChange,Things}, request::String) = begin
   ask_change!(e, collect(each_thing(node)), String(strip(request)))
 end
 
-# --- what the agent changed ---
+# --- ask about a thing ---
 #
-# The command Show Change opens a page with the last change that an agent made,
-# in a `changes` block: the lines that went in red and the lines that came in
-# green, each change marked as accepted. Reject on one takes it out of its file
-# again, and a file of code that Ladder loaded runs the code that changed. A
-# click on the label that says what the agent did shows it too. Undo Change
-# puts every file back as it was before the agent started, and runs its code.
+# The command Ask About takes a thing as Ask For Change does, the block of code
+# or the part of the window that the caret is on, or one that a click chooses,
+# and a question in your own words, like "why is this bar red?". An agent reads
+# the code and answers, and changes no file. The answer shows in a card beside
+# the thing. A click anywhere, or Esc, takes the card away.
 
-"The diff of the text `was` of the file `file` to the text `now`, as `git diff` writes it, with the file's whole path and each change accepted"
+"""
+A question that an agent was asked about `places`, the things of Ask About.
+`answer` is what it said, once it has ended, at the time `ended`. `card` is
+where the card with the answer was drawn last, for a click on it.
+"""
+@def mutable struct AskedAbout
+  words::String = ""
+  places::Vector{Any} = Any[]
+  process::Any = nothing
+  out::Any = nothing         # a task that reads what the agent prints
+  gone::Float64 = 0.0        # when the agent's process was first seen to have ended
+  answer::String = ""
+  failed::Bool = false
+  ended::Float64 = 0.0
+  card::Any = nothing
+end
+
+"What an agent is told when the user asks the question `words` about the things `cs`: what each is, where its code is, and the question"
+about_prompt(cs::AbstractVector, words) = begin
+  told = if length(cs) == 1
+    c = only(cs)
+    what, start = thing_words(c)
+    """
+    The user of the app Ladder has a question about $what.
+
+    It's in the file $(c.file), lines $(c.first) to $(c.last). It starts:
+
+        $start
+    """
+  else
+    parts = map(enumerate(cs)) do (n, c)
+      what, start = thing_words(c)
+      "$('A' + n - 1): $what, in the file $(c.file), lines $(c.first) to $(c.last). It starts:\n\n    $start\n"
+    end
+    "The user of the app Ladder has a question about some things. The user marked them in the window with letters, and the question can name them by their letters:\n\n$(join(parts, "\n"))"
+  end
+  told * """
+
+  The user's question: $words
+
+  Read the code to find the answer. Don't change any file. Answer in a few short sentences of plain words, with no Markdown, as the answer shows in a small card beside the thing.
+  """
+end
+
+"""
+Ask an agent the question `question` about `node`, like "why is this bar
+red?". `node` is a block of Julia code, or a part of the window. The agent
+reads the code and changes nothing, and its answer shows in a card beside the
+thing. See "ask about a thing".
+"""
+ask_about!(e, node::Union{ToChange,Things}, question::String) = begin
+  question = String(strip(question))
+  isempty(question) && error("Write the question.")
+  t = code_picker(e)
+  t.about !== nothing && t.about.ended == 0 && error("The agent is still answering the last question.")
+  command = agent_command(changes=false)   # it says so now if this Mac has no agent
+  places = collect(each_thing(node))
+  t.about = try
+    process, out = start_agent(command, about_prompt(places, question), dirname(first(places).file))
+    AskedAbout(words=question, places=places, process=process, out=out)
+  catch err
+    AskedAbout(words=question, places=places, answer="The agent didn't start. " * trouble(err), failed=true, ended=time())
+  end
+  redraw_in!(e, 0)
+  nothing
+end
+
+"In each frame: when the agent that was asked a question has ended, keep its answer"
+about_tick!(e) = begin
+  t = get(e.nodes, :code_picker, nothing)
+  (t isa CodePicker && t.about !== nothing && t.about.ended == 0) || return nothing
+  a = t.about
+  yield()   # the agent's end is noticed by a task, which gets its turn here
+  process_exited(a.process) && a.gone == 0 && (a.gone = time())
+  if a.gone > 0 && (istaskdone(a.out) || time() - a.gone > 2)
+    printed = istaskdone(a.out) && !istaskfailed(a.out) ? fetch(a.out) : ""
+    a.failed = !success(a.process)
+    said = strip(replace(printed, "**" => ""))
+    a.answer = a.failed ? "The agent stopped. " * agent_said(printed) : isempty(said) ? "The agent said nothing." : String(said)
+    a.ended = time()
+  end
+  redraw_in!(e, 0.1)
+  nothing
+end
+
+const ANSWER_WIDE = 380.0   # how wide the card of an answer is, at most
+const ANSWER_LINE = 17.0    # how tall each line of it is
+const ANSWER_BACK = colorant"rgb(50,50,50)"   # the dark grey of a tooltip
+
+"The lines of the card of an answer: the question, then the answer, each paragraph wrapped to `room` px, as many as `most`"
+answer_lines(q::AskedAbout, room, most) = begin
+  ask, say = Face(SANS, "Semibold", 12px, TIP_INK, false), Face(SANS, "", 12px, TIP_INK, false)
+  lines = Any[(ask, l) for l in wrapped(ask, q.words, room)]
+  push!(lines, (say, ""))
+  paragraphs = split(q.ended == 0 ? "The agent is reading the code…" : q.answer, r"\n\s*\n")
+  for (k, para) in enumerate(paragraphs)
+    k > 1 && push!(lines, (say, ""))
+    append!(lines, [(say, l) for l in wrapped(say, replace(para, r"\s+" => " "), room)])
+  end
+  length(lines) <= most && return lines
+  [lines[1:most-1]; (say, "…")]
+end
+
+"""
+Where the card of an answer goes for the thing at `r`, when it's `wide` by
+`tall` and the window is `room`: at its right, or under it, or over it, or
+else in the window's bottom right corner.
+"""
+answer_place(r, wide, tall, room) = begin
+  W, H = room
+  r === nothing && return (16.0, 64.0)
+  x, y, w, h = num(r.left), num(r.top), num(r.width), num(r.height)
+  top = clamp(y, 40.0, max(40.0, H - tall - 8))
+  x + w + 10 + wide <= W - 8 && return (x + w + 10, top)
+  left = clamp(x, 8.0, max(8.0, W - wide - 8))
+  y + h + 10 + tall <= H - 8 && return (left, y + h + 10)
+  y - 10 - tall >= 40 && return (left, y - 10 - tall)
+  (max(8.0, W - wide - 16), max(40.0, H - tall - 16))
+end
+
+"The card with an agent's answer, beside the thing that it's about, with a line round each thing. While the agent reads, a label says what was asked."
+draw_answer(ctx, w, t::CodePicker) = begin
+  q = t.about
+  q === nothing && return nothing
+  e = t.editor
+  for (n, c) in enumerate(q.places)
+    r = asked_rect(e, c)
+    label = n == 1 && q.ended == 0 ? "Asked: $(q.words) …" : length(q.places) > 1 ? string('A' + n - 1) : ""
+    r === nothing || pick_mark(ctx, w, r, label; colour=CHIP_MARKS[mod1(n, length(CHIP_MARKS))])
+  end
+  q.ended == 0 && (q.card = nothing; return nothing)
+  W, H = num(w.size[1]), num(w.size[2])
+  wide = min(ANSWER_WIDE, W - 32)
+  lines = answer_lines(q, wide - 24, max(3, floor(Int, (H - 80) / ANSWER_LINE)))
+  tall = length(lines) * ANSWER_LINE + 20
+  x, y = answer_place(asked_rect(e, first(q.places)), wide, tall, (W, H))
+  round_box(ctx, x, y, wide, tall, 8; fill=q.failed ? PICK_FAILED : ANSWER_BACK)
+  for (k, (face, words)) in enumerate(lines)
+    isempty(words) || write_ink(ctx, words, x + 12, y + 10 + k * ANSWER_LINE - 4, face)
+  end
+  q.card = (x, y, wide, tall)
+  nothing
+end
+
+# --- what the agents changed ---
+#
+# The command Show Change opens a page with each change that an agent made
+# since Ladder started, the newest first. Each has what you asked, what the
+# agent said, and a `changes` block: the lines that went in red and the lines
+# that came in green. A change whose lines are in its file now is marked as
+# accepted, and one whose lines were taken out again as rejected. Reject on one
+# takes it out of its file again, and Reject all takes out all of an agent's
+# change. A file of code that Ladder loaded runs the code that changed. A click
+# on the label that says what the agent did shows the page too. Undo Change
+# puts every file of the newest change back as it was before the agent
+# started, and runs its code. Again, it does the same to the change before.
+
+"The diff of the text `was` of the file `file` to the text `now`, as `git diff` writes it, with the file's whole path"
 change_diff(file, was, now) = begin
   dir = mktempdir()
   a, b = joinpath(dir, "before"), joinpath(dir, "after")
@@ -36035,30 +36525,59 @@ change_diff(file, was, now) = begin
   lines = split(String(take!(out)), '\n')
   k = findfirst(startswith("@@"), lines)
   k === nothing && return String[]
-  ["--- $file"; "+++ $file"; [startswith(l, "@@") ? "$l [accepted]" : String(l) for l in lines[k:end] if !startswith(l, "\\")]]
+  ["--- $file"; "+++ $file"; [String(l) for l in lines[k:end] if !startswith(l, "\\") && !isempty(l)]]
 end
 
-"The page of the change `a`: what was asked, what the agent said, and its change to each file"
-change_page(a::AskedChange) = begin
-  diffs = [change_diff(f, a.before[f], a.after[f]) for f in sort!(collect(keys(a.before))) if a.before[f] != a.after[f]]
-  lines = String["# What the agent changed", "", "You asked: $(a.words)", ""]
-  isempty(a.said) || push!(lines, "The agent said: $(a.said)", "")
-  push!(lines, "Reject a change to take it out of its file again.", "", "```$CHANGES")
-  for d in diffs
-    filter!(!isempty, d)
-    append!(lines, d)
+"""
+The lines of a `changes` block for each file of the change `a`, with each of
+its changes marked by what its file has now: accepted when its new lines are
+there, and rejected when its old lines are there again.
+"""
+change_lines(a::AskedChange) = begin
+  out = String[]
+  for f in sort!(collect(keys(a.before)))
+    a.before[f] == a.after[f] && continue
+    c = Diffs.changes(change_diff(f, a.before[f], a.after[f]))
+    now, _, _ = Diffs.read_lines(f)
+    for h in c.hunks
+      h.state = first(Diffs.apply(now, h)) == :already ? :accepted : first(Diffs.apply(now, h; back=true)) == :already ? :rejected : :open
+    end
+    append!(out, Diffs.written(c))
   end
-  push!(lines, "```", "")
+  out
+end
+
+"The page of the changes `changes`, the newest first: for each, when it ended, what was asked, what the agent said, and its change to each file"
+change_page(changes::AbstractVector) = begin
+  lines = String["# What the agents changed", "",
+                 "Each change that an agent made since Ladder started, the newest first. Reject a part of a change to take it out of its file again, or Reject all to take out all of the change.", ""]
+  for a in Iterators.reverse(changes)
+    push!(lines, "## $(lowercase(Libc.strftime("%-I:%M %p", a.ended))): $(a.words)", "")
+    isempty(a.said) || push!(lines, "The agent said: $(a.said)", "")
+    push!(lines, "```$CHANGES")
+    append!(lines, change_lines(a))
+    push!(lines, "```", "")
+  end
   join(lines, "\n")
 end
+change_page(a::AskedChange) = change_page([a])
 
-"Show the last change that an agent made, in a window beside this one, in a block of changes that you can reject one at a time"
+"Show each change that an agent made since Ladder started, the newest first, in a window beside this one. Reject takes a part of a change out of its file again."
 show_change!(e) = begin
-  a = LAST_CHANGE[]
-  a === nothing && error("No agent has changed anything since Ladder started.")
-  page = joinpath(tempdir(), "ladder-changes", "the agent's change.md")
+  isempty(AGENT_CHANGES) && error("No agent has changed anything since Ladder started.")
+  page = joinpath(tempdir(), "ladder-changes", "what the agents changed.md")
   mkpath(dirname(page))
-  write(page, change_page(a))
+  write(page, change_page(AGENT_CHANGES))
+  # A window that shows the page already reads it again, and comes to the front. A window that closed has no editor in the list.
+  k = findfirst(o -> !isempty(o.buf.path) && page_key(o.buf.path) == page_key(page) && window_of(o) !== nothing, editors)
+  if k !== nothing
+    shown = editors[k]
+    w = window_of(shown)
+    isopen(w) && front!(w)
+    shown.buf.caret = shown.buf.anchor = (1, 0)
+    shown.scroll.offset = 0px
+    return shown
+  end
   shown = build_editor(page)
   foreach(name -> setfield!(shown, name, getfield(e, name)), SHARED)
   shown.remember = false
@@ -36066,27 +36585,34 @@ show_change!(e) = begin
   by = window_of(e)
   size, at = window_beside(by)
   shown.size = size
-  show_window!(window!(shown, title="What the agent changed", size=size, position=at), by)
+  show_window!(window!(shown, title="What the agents changed", size=size, position=at), by)
   shown
 end
 
-"Put back each file that the last change of an agent changed, as it was before the agent started, and run its code as it was"
+"True when each file of the change `a` has the text that it had before the agent started: it was taken out again"
+taken_out(a::AskedChange) = all(((f, was),) -> isfile(f) && read(f, String) == was, a.before)
+
+"The newest change that an agent made that's still in its files, or nothing"
+newest_change() = (k = findlast(a -> !a.undone && !taken_out(a), AGENT_CHANGES); k === nothing ? nothing : AGENT_CHANGES[k])
+
+"Put back each file that the newest change of an agent changed, as it was before the agent started, and run its code as it was"
 undo_change!(e) = begin
-  a = LAST_CHANGE[]
-  a === nothing && error("No agent has changed anything since Ladder started.")
+  a = newest_change()
+  a === nothing && error(isempty(AGENT_CHANGES) ? "No agent has changed anything since Ladder started." : "Each change that an agent made is undone.")
   for (f, now) in a.after
-    (isfile(f) && read(f, String) == now) || error("$(basename(f)) has changed since the agent's change, so Ladder didn't put it back.")
+    (isfile(f) && read(f, String) == now) || error("$(basename(f)) has changed since the agent's change, so Ladder didn't put it back. Show Change can take out a part of the change.")
   end
   for (f, was) in a.before
     write(f, was)
   end
   ran, failed = reload_files!(a.places, a.after)
-  LAST_CHANGE[] = nothing
+  a.undone = true
   isempty(failed) || error("The files are as they were, but some of the code doesn't run: " * failed)
   nothing
 end
 
-works_here(e, ::Union{Val{:show_change},Val{:undo_change}}) = LAST_CHANGE[] !== nothing
+works_here(e, ::Val{:show_change}) = !isempty(AGENT_CHANGES)
+works_here(e, ::Val{:undo_change}) = any(a -> !a.undone, AGENT_CHANGES)
 
 "The module of the file of code that Ladder loaded whose path ends with `name`, like \"Ladder/main.jl\". The startup page uses it to keep a change: see `keep_change!`."
 loaded(name::AbstractString) = begin
@@ -36154,7 +36680,8 @@ keep_change!(e) = begin
 end
 
 add_command!(ask_for_change!, title="Ask an agent to change a block of code, or a part of the window, in your own words")
-add_command!(show_change!, title="Show the last change that an agent made, and reject any part of it")
+add_command!(ask_about!, title="Ask an agent a question about a block of code, or a part of the window, and see the answer beside it")
+add_command!(show_change!, title="Show each change that an agent made, the newest first, and reject any part of one")
 add_command!(undo_change!, title="Put back the files that an agent changed last, as they were before")
 
 # Show Code takes the same node as Ask For Change: see "the code of a thing"

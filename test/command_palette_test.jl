@@ -217,7 +217,7 @@ end
   @test list.frame.w == plan.bar.w - 2 * 87 && list.frame.x - plan.bar.x == plan.bar.x + plan.bar.w - (list.frame.x + list.frame.w)
   shot(w, "omni-open.png")
   # It lists every command that makes sense here, in the order of their names
-  @test names(e) == sort(names(e)) && first(names(e)) == "Ask For Change"
+  @test names(e) == sort(names(e)) && first(names(e)) == "Ask About"
   @test "Save" in names(e) && "Theme" in names(e) && "Insert" in names(e) && "Go To" in names(e)
   @test !("Left" in names(e)) && !("Commands" in names(e)) && !("Erase Back" in names(e))
   # ⌘⇧P again closes it. It stays in the window while it slides down.
@@ -294,9 +294,13 @@ end
   shown = e.panel
   click(w, e.nodes[(:palette_row, 1)])
   @test e.popup == :none && e.panel != shown
-  # A click outside the list closes the palette
+  # A click outside the list closes the palette. The list is tall, so the click is near the top of the window.
   open_palette(w)
-  click(w, e.nodes[:palette_catch])
+  w.mouse = typeof(w.mouse)(450px, 60px)
+  onmouse(w, MouseMove(Vec2{px}(450px, 60px), w))
+  frames(w)
+  w.keys |= Keys.mouse_left; onkey(w, KeyPress{Keys.mouse_left}(0, w)); w.keys ⊻= Keys.mouse_left
+  frames(w)
   @test e.popup == :none
   close(w)
 end
@@ -320,15 +324,17 @@ end
   node.over = time() - 0.45
   frame(w); frame(w)
   @test any(pop -> pop.key == :tooltip, popups(w))
-  # It takes no text: the arrows choose, and say the row at once
+  # It takes no text: the arrows choose, and say the row at once. The window shows each colours as the arrow reaches it.
   typed(w, "ni")
   @test names(e) == ["Sepia", "Paper", "Night"] && field(e) == ""
-  press(w, Keys.down); press(w, Keys.down)
-  @test said(e, 1) == K.Colours(:night) && p.at == 1 && e.theme == :sepia
+  press(w, Keys.down)
+  @test e.theme == :paper && p.before == :sepia
+  press(w, Keys.down)
+  @test said(e, 1) == K.Colours(:night) && p.at == 1 && e.theme == :night
   # Return takes the row, and Theme runs at once: it changes nothing that you'd want to look at first
   @test K.runs_at_once(Val(:theme)) && !K.runs_at_once(Val(:rename)) && !K.runs_at_once(Val(:ask_for_change))
   press(w, Keys.enter)
-  @test e.theme == :night && e.popup == :none && w.focus === e
+  @test e.theme == :night && e.popup == :none && w.focus === e && p.before === nothing
   take(w, "go to")
   shot(w, "omni-night.png")
   press(w, Keys.escape); press(w, Keys.escape)
@@ -343,7 +349,7 @@ end
   @eval K runs_at_once(::Val{:theme}) = false
   take(w, "theme")
   press(w, Keys.down); press(w, Keys.enter)
-  @test p.at == 2 && p.plan.list === nothing && e.theme == :sepia
+  @test p.at == 2 && p.plan.list === nothing && e.theme == :paper
   shot(w, "omni-run.png")
   press(w, Keys.enter)
   @test e.theme == :paper && e.popup == :none
@@ -363,9 +369,17 @@ end
   # Tab takes the row that's chosen, as Return does
   take(w, "theme")
   press(w, Keys.down); press(w, Keys.tab)
-  @test p.at == 2 && said(e, 1) == K.Colours(:paper)
+  @test p.at == 2 && said(e, 1) == K.Colours(:paper) && e.theme == :paper
+  # Esc puts back the colours that the page had before the arrows showed another
   press(w, Keys.escape); press(w, Keys.escape)
+  @test e.theme == :sepia && e.popup == :none
   @eval K runs_at_once(::Val{:theme}) = true
+  # So does a click outside the palette
+  take(w, "theme")
+  press(w, Keys.down)
+  @test e.theme == :paper
+  K.close_palette!(e)
+  @test e.theme == :sepia
   close(w)
 end
 
@@ -632,6 +646,11 @@ end
   typed(w, "20"); press(w, Keys.enter)
   @test K.text_size(e) == 20 && e.popup == :none
   take(w, "text size"); typed(w, "17"); press(w, Keys.enter)
+  # ↑ counts from the size that the text is now, and the page shows each size at once. Esc puts back the size that it had.
+  take(w, "text size"); press(w, Keys.up); press(w, Keys.up)
+  @test K.text_size(e) == 19 && e.popup == :commands
+  press(w, Keys.escape); press(w, Keys.escape)
+  @test K.text_size(e) == 17 && e.popup == :none
   # A switch that isn't touched is off, and doesn't run the command by itself: Tab goes on to the Run button
   take(w, "spelling")
   @test kinds(e) == [:switch] && e.popup == :commands

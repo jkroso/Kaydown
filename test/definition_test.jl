@@ -1,7 +1,7 @@
 # Tests for where a name is defined, in main.jl: in Julia code, a click on a
 # name with ⌘ held goes to where the name is defined, and so does the command
 # Go To Definition. The command Go To lists the functions and the sections of
-# a file of code. Run them with `julia -O0 --project=. test/definition_test.jl`.
+# a file of code, and Find Uses lists the places that use a name. Run them with `julia -O0 --project=. test/definition_test.jl`.
 # They click in a window that isn't on the screen.
 
 @use Test: @test, @testset, @test_throws
@@ -140,7 +140,12 @@ end
   # The mouse is a hand over a name that has a place to go to
   @test click(at("total + area(r)", "area"))
   @test b.caret == (line("area(r::Room)"), 0)
-  @test click(b.caret) && b.caret == (line("area(w::Wall)"), 0)
+  # On the name where the file makes it, the click lists the places that use it
+  @test click(b.caret) && e.popup == :commands && K.palette(e).command.name == :find_uses
+  foreach(_ -> (onkey(w, KeyPress{Keys.escape}(0, w)); frames()), 1:2)
+  @test e.popup == :none
+  K.palette(e).moved = 0.0   # the palette has slid away, so that a click doesn't land on it
+  frames()
   # A name with no place leaves the caret where the click put it, and the mouse isn't a hand
   p = at("sum(w -> w.long", "long")
   @test !click(p) && b.caret[1] == p[1]
@@ -237,6 +242,51 @@ end
   @test e.popup == :none && b.lines[5] == "const WALL_HEIGHT = 2.4" && count(l -> occursin("WALL_HEIGHT", l), b.lines) == 3
   K.undo!(b)
   @test b.lines == before
+end
+
+@testset "Find Uses lists each place that uses a name, and goes to the one that's chosen" begin
+  # A name made in a function: its places in that function, each with its line's words
+  b.caret = b.anchor = at("total + area(r)", "total")
+  uses = K.choices_for(K.Use, e)
+  @test [(u.line, u.col) for u in uses] == [(17, 2), (19, 4), (21, 2), (21, 16), (22, 2)]
+  @test (K.worded(uses[1]), K.sidenote(uses[1])) == ("total = 0.0", "line 17")
+  # A name of the whole file: its places in the file, then in the other Julia files of its git repository,
+  # after the name of a module and a dot too. Not in a comment, a string, or a longer name.
+  run(`git -C $dir init -q`)
+  write(joinpath(dir, "house.jl"), "# the area of a house\nhouse_area(rs) = sum(Rooms.area, rs)\nlabel = \"area\"\n")
+  b.caret = b.anchor = at("total + area(r)", "area")
+  uses = K.choices_for(K.Use, e)
+  @test [K.sidenote(u) for u in uses] == ["line 11", "line 12", "line 22", "house.jl:2"] && last(uses).col == 27
+  @test K.name_columns("x = area(1) # area", "area") == [4] && K.name_columns("Rooms.area + \"area\"", "area") == [6]
+  # A name that the file doesn't make has no command
+  b.caret = b.anchor = at("Walls.paint(wall)", "paint")
+  @test !K.works_here(e, Val(:find_uses))
+  # In the palette: ↓ shows the next place in the window, with a line round the name, and Esc puts the window back
+  b.caret = b.anchor = at("total + area(r)", "area")
+  K.focus(e)
+  frames()
+  was = e.scroll.offset
+  w.keys |= Keys.cmd | Keys.shft; onkey(w, KeyPress{Keys.p}(0, w)); w.keys ⊻= Keys.cmd | Keys.shft
+  frames()
+  foreach(c -> ontype(w, Typed(c, w)), "find uses"); frames()
+  onkey(w, KeyPress{Keys.enter}(0, w)); frames()
+  p = K.palette(e)
+  @test p.command.name == :find_uses && p.at == 1 && length(K.palette_rows(e, p)) == 4
+  onkey(w, KeyPress{Keys.down}(0, w)); frames()
+  @test K.chip_value(p, K.palette_chips(p), 1).line == 12 && p.before == was && K.shown_at(e, uses[2]) !== nothing
+  @test K.shown_at(e, uses[4]) === nothing
+  foreach(_ -> (onkey(w, KeyPress{Keys.escape}(0, w)); frames()), 1:2)
+  @test e.popup == :none && e.scroll.offset == was && p.before === nothing
+  # Return goes to the place, with the caret on the name
+  K.find_uses!(e, uses[3])
+  frames()
+  @test b.caret == (22, 10)
+  # A place in another file shows in a window beside this one
+  K.find_uses!(e, uses[4])
+  shown = only(filter(o -> endswith(o.buf.path, "house.jl"), K.editors))
+  @test shown.buf.caret == (2, 27)
+  close(K.window_of(shown))
+  rm(joinpath(dir, ".git"), recursive=true)
 end
 
 @testset "the command Go To Definition" begin

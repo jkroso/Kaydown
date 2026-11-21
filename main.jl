@@ -250,13 +250,19 @@
 #     long file".
 #   - In a file of code, press ⌘⇧P and run Go To for a list of the file's
 #     functions and sections. Hold ⌘ and click a name to go to where it's
-#     defined. See "where a name is defined".
+#     defined, or rest the mouse on it to see a card of it. See "where a name
+#     is defined" and "a card of what a name is". Rename In Code gives a name
+#     another name: see "give a name another name".
 #   - Click the number of a line, in a file that git keeps, to see the commit
 #     that last changed the line. See "when a line last changed".
 #   - Run the command Ask For Change, choose a block of the file's code or a
 #     part of the window, and say what you want in words. An agent changes the
-#     code. Keep This Change keeps a function of Ladder's own for each start.
-#     See "ask for a change to a thing".
+#     code. ⌥↑ makes the thing bigger, and ⇧ and a click add another. Show
+#     Change and Undo Change show and take back what the agent did. Keep This
+#     Change keeps a function of Ladder's own for each start. See "ask for a
+#     change to a thing" and "what the agent changed".
+#   - A function that a page's code makes is a command of the palette. See "a
+#     page's own commands".
 #   - Write a code block in the language `check`, with a line of Julia for
 #     each thing that must be true. It shows a green or a red dot for each
 #     line, and a click on it shows each line with a tick or a cross. See
@@ -14340,10 +14346,16 @@ change_file!(v::ChangesView, h; back=false) = begin
   isempty(h.file) && return "This change doesn't name its file, so Ladder can't make it. A diff names the file in a line that starts with +++, over the change."
   path = Diffs.located(h.file, dirname(abspath(editor(v).buf.path)))
   name = basename(h.file)
+  was = isfile(path) ? text(path) : String[]
   done = try
     Diffs.apply!(path, h; back)
   catch err
     return "Ladder couldn't change $path. " * sprint(showerror, err)
+  end
+  # A file of code that Ladder loaded runs the code that changed, so what it draws is drawn the new way
+  if done == :made
+    mod = loaded_module(page_key(path))
+    mod === nothing || reload_changed!(mod, page_key(path), was)
   end
   done in (:made, :already) ? nothing :
   done == :nofile ? "There's no file at $path, so Ladder didn't make this change." :
@@ -19797,9 +19809,14 @@ there. The page's text is at `ui`.
 """
 mark_clickable(ctx, e, ui) = begin
   w = window_of(e)
-  (w !== nothing && only_held(w, Keys.cmd) && e.popup == :none && e.buf.view != :file && slideshow(e) === nothing) || return
+  if !(w !== nothing && only_held(w, Keys.cmd) && e.popup == :none && e.buf.view != :file && slideshow(e) === nothing)
+    # The card of a name goes when ⌘ comes up
+    w === nothing || pop!(e.nodes, :peek, nothing) === nothing || hide_tooltip!(w)
+    return
+  end
   redraw_in!(e, 1/30)   # the mark follows the mouse, and goes when ⌘ comes up
   found = cmd_words(e, w.mouse)
+  peek!(e, w, found)
   found === nothing && return
   line, lo, hi = found
   it = item(e, line)
@@ -19818,6 +19835,109 @@ mark_clickable(ctx, e, ui) = begin
     y = num(top + vl.high / 2) + num(f.size) * 0.62
     trace(ctx, [(num(ui.left + left), y), (num(ui.left + right), y)], colours.accent, 1.0)
   end
+end
+
+# --- a card of what a name is ---
+#
+# While ⌘ is held, a name that has a place where it's defined is marked. When
+# the mouse rests on it for a moment, a card under it shows that place: the
+# name's documentation and the first lines of its code, from the page or from
+# another file. A link's card has where it goes. The card goes when the mouse
+# moves, and comes again when the mouse rests.
+
+const PEEK_WAIT = 0.6   # seconds that the mouse rests on a name before its card shows
+const PEEK_LINES = 8    # the most lines of code that a card shows
+
+"""
+The lines of `lines` that a card shows for the definition on line `at`: its
+documentation above it, and the lines of its code, as many as `most`, up to
+the line `last`.
+"""
+peek_lines(lines, at::Int, last::Int, most=PEEK_LINES) = begin
+  from = at
+  above = at > 1 ? strip(lines[at-1]) : ""
+  if startswith(above, '"') && endswith(above, '"')
+    # One line of documentation, like "Words" or """Words"""
+    from = at - 1
+    # Documentation of several lines ends with three quotes, and starts on the line that starts with three quotes
+    if endswith(above, "\"\"\"") && !(startswith(above, "\"\"\"") && length(above) >= 6)
+      from = something(findprev(l -> startswith(strip(l), "\"\"\""), lines, at - 2), at - 1)
+    end
+  elseif endswith(above, "\"\"\"")
+    from = something(findprev(l -> startswith(strip(l), "\"\"\""), lines, at - 2), at)
+  end
+  from = max(from, at - 6)   # long documentation shows its last lines, next to the code
+  stop = min(last, at + most - 1)
+  while stop > at && isempty(strip(lines[stop])); stop -= 1 end
+  [length(l) > 100 ? first(l, 99) * "…" : l for l in lines[from:stop]]
+end
+
+"""
+What the card of the words `found`, which `cmd_words` gave, shows: where a
+link goes, or where a name is defined, with the lines there. It's nothing
+when there's nothing to show.
+"""
+peek_card(e, found) = begin
+  line, lo, hi = found
+  b = e.buf
+  it = item(e, line)
+  segs = it.content isa Flow ? [s for vl in it.content.lines for s in vl.segs] : []
+  k = findfirst(s -> s.col <= lo < s.col + s.n && !isempty(s.link), segs)
+  # Each line has a set height: a Text alone in a box can be less tall than its line, and the lines then overlap
+  said(text; family=SANS, color=TIP_INK) = Box(height(17px), Text(text, size=12px, family=family, color=color, wrap=WrapMode.none))
+  faint = RGBA(TIP_INK.r, TIP_INK.g, TIP_INK.b, 0.65)
+  k === nothing || return Box(padding(10px, 7px), said(segs[k].link))
+  place = Base.invokelatest(definition, e, (line, lo))
+  place === nothing && return nothing
+  head, lines = if place isa Method
+    spot = code_place(place)
+    spot === nothing && return nothing
+    file, at = spot
+    _, all, starts = file_parts(file)
+    at = settled_line(place, all, at)
+    j = max(1, searchsortedlast(starts, at))
+    last = j == length(starts) ? length(all) : starts[j+1] - 1
+    ("$(basename(file)):$at", peek_lines(all, at, last))
+  else
+    at = place[1]
+    # A name of a function, like a variable in it, is one line. A name of the whole page shows its code.
+    local_name = any(m -> m.at == place && m.span !== nothing, page_bounds(e))
+    j = local_name ? nothing : findfirst(c -> c.first <= at <= c.last, code_blocks(e))
+    last = local_name ? at : j === nothing ? at + PEEK_LINES - 1 : code_blocks(e)[j].last
+    ("line $at", peek_lines(b.lines, at, min(last, length(b.lines))))
+  end
+  rows = Any[said(head, color=faint)]
+  append!(rows, [said(isempty(l) ? " " : l, family=codefont()) for l in lines])
+  Box(padding(10px, 8px), Column(Alignment.Start, child_gap=1px, rows...))
+end
+
+"""
+Show the card of the words `found` when the mouse has rested on them for a
+moment while ⌘ is held, and take it away when the mouse is on other words.
+"""
+peek!(e, w, found) = begin
+  was = get(e.nodes, :peek, nothing)
+  if found === nothing || was === nothing || was.words != found
+    was === nothing || !was.shown || hide_tooltip!(w)
+    found === nothing ? delete!(e.nodes, :peek) : (e.nodes[:peek] = (words=found, since=time(), shown=false))
+    return
+  end
+  # A mouse move took the card away. It comes again when the mouse rests.
+  if was.shown
+    any(p -> p.key == :tooltip, popups(w)) || (e.nodes[:peek] = (words=found, since=time(), shown=false))
+    return
+  end
+  time() - was.since < PEEK_WAIT && return
+  card = peek_card(e, found)
+  e.nodes[:peek] = (words=found, since=was.since, shown=true)
+  card === nothing && return
+  line, lo, hi = found
+  it = item(e, line)
+  f = it.content::Flow
+  k, x = spot(f, lo)
+  _, x2 = spot(f, hi)
+  top = e.origin[2] + it.top + line_top(f, k)
+  show_tooltip!(w, card, e.origin[1] + x, top, max(x2 - x, 4px), f.lines[k].high; placement=:bottom, gap=4px)
 end
 
 "Take hold of the number at `found`, which `scrub_at` gave, with the mouse at `pos`"
@@ -27391,6 +27511,7 @@ Wanted(names, types, optional) = Wanted(names, types, optional, false)
   focus::Vector{Any} = Any[]                             # what was in focus when the palette opened, from the nearest: see `in_focus`
   listed::Vector{Command} = Command[]                    # the commands that it lists: the ones that what's in focus takes
   had::Any = nothing                                     # what had the keyboard when the palette opened. It gets the keyboard back.
+  inner::Vector{Any} = Any[]                             # what ⌥↑ made a chip bigger from, the last last, for ⌥↓ to go back to
 end
 "What takes a click outside the palette"
 @def mutable struct PaletteCatch <: SemanticUI end
@@ -27851,14 +27972,15 @@ has no method for what's in focus.
 in_palette(e, c::Command, focus=in_focus(e)) = begin
   (c.name == :commands || c.kind in (:move, :type)) && return false
   b = e.buf
-  (!readonly(b) || c.kind == :window || (c.kind == :look && b.view != :file)) || return false
+  (!readonly(b) || c.kind in (:window, :page) || (c.kind == :look && b.view != :file)) || return false
   works_here(e, Val(c.name)) || return false
   c.call === nothing || !isempty(callable_methods(c.call, focus))
 end
 
-"The commands that the palette lists while the things in `focus` are in focus, in the order of their names"
+"The commands that the palette lists while the things in `focus` are in focus, in the order of their names. The page's own functions are among them: see `page_commands`."
 palette_commands(e, focus=in_focus(e)) =
-  sort!(Command[c for (_, cs) in COMMAND_GROUPS for c in cs if in_palette(e, c, focus)], by=c -> String(c.name))
+  sort!(Command[[c for (_, cs) in COMMAND_GROUPS for c in cs if in_palette(e, c, focus)]; [c for c in page_commands(e) if in_palette(e, c, focus)]],
+        by=c -> String(c.name))
 
 """
 The name of the thing in focus that the command `c` works on, to show in its
@@ -27977,7 +28099,7 @@ palette_clear!(e, p::CommandPalette) = begin
   p.command, p.at, p.pick, p.shown = nothing, 1, 1, 0
   p.advanced = p.wrap = p.browsed = false
   p.query = p.fault = ""
-  empty!(p.methods); empty!(p.values); empty!(p.keywords); empty!(p.rows)
+  empty!(p.methods); empty!(p.values); empty!(p.keywords); empty!(p.rows); empty!(p.inner)
   p.scroll.offset = 0px
   palette_text!(e, p, "")
   palette_focus!(e, p)
@@ -28036,7 +28158,7 @@ take_command!(e, w, p::CommandPalette, c::Command) = begin
   # A function that takes nothing but the editor runs at once
   isempty(p.values) && return palette_run!(e, w, p)
   start_chips!(e, p)
-  run_when_ready!(e, p) && return
+  # A command that runs at once still waits here: what the window gave its chips is shown first, and Return or a click runs it
   # The keyboard goes to the first chip that has nothing yet, or to the Run button
   go_chip!(e, p, something(findfirst(x -> x === UNSAID, p.values), length(palette_chips(p)) + 1))
 end
@@ -28065,16 +28187,43 @@ chip_points(c::Wanted) = !c.keyword && any(T -> hasmethod(chip_click, Tuple{Type
 const CHIP_MARKS = [colorant"rgb(48,128,236)", colorant"rgb(226,112,28)", colorant"rgb(36,150,84)", colorant"rgb(148,76,206)"]
 
 """
-The letter and the colour of chip `k` of `chips`, when it's for a thing that
-shows in the window: A in blue for the first such chip, B in orange for the
-next. The chip shows them in place of the thing's words, and the line round
-the thing in the window has them too. It's nothing for any other chip.
+Several things that one chip has. ⇧ and a click on the window add a thing to
+a chip for things in the window, when its function takes them: an argument
+of type `Union{T,Things}`, where `T` is the type of one thing.
 """
-chip_mark(chips, k::Int) = begin
-  chip_points(chips[k]) || return nothing
-  n = count(j -> chip_points(chips[j]), 1:k)
-  (string('A' + n - 1), CHIP_MARKS[mod1(n, length(CHIP_MARKS))])
+struct Things
+  all::Vector{Any}
 end
+Base.:(==)(a::Things, b::Things) = a.all == b.all
+Base.hash(t::Things, h::UInt) = hash(t.all, hash(:Things, h))
+worded(t::Things) = join(map(worded, t.all), ", ")
+
+"The things that `x`, what a chip has, is: itself, or each of several"
+each_thing(x) = x isa Things ? x.all : Any[x]
+
+"""
+The letter and the colour of each thing that the palette's chips for things
+in the window have, in the order of the chips: A in blue for the first, B in
+orange for the next. A chip shows them in place of the things' words, and
+the line round each thing in the window has them too. Each is the chip's
+number, the thing, its letter and its colour.
+"""
+chip_letters(p::CommandPalette, chips) = begin
+  out = NamedTuple[]
+  for k in eachindex(chips)
+    chip_points(chips[k]) || continue
+    x = chip_value(p, chips, k)
+    x === UNSAID && continue
+    for y in each_thing(x)
+      n = length(out) + 1
+      push!(out, (k=k, thing=y, letter=string('A' + n - 1), colour=CHIP_MARKS[mod1(n, length(CHIP_MARKS))]))
+    end
+  end
+  out
+end
+
+"The colour that the next thing that a chip for things in the window takes would have"
+next_mark(p::CommandPalette, chips) = CHIP_MARKS[mod1(length(chip_letters(p, chips)) + 1, length(CHIP_MARKS))]
 
 "The colour `c` made paler, for the line round what a click would choose"
 paler(c) = RGBA(0.6c.r + 0.4, 0.6c.g + 0.4, 0.6c.b + 0.4, 1.0)
@@ -28090,6 +28239,9 @@ click_chip(e, p::CommandPalette) = begin
   p.at <= length(chips) && chip_points(chips[p.at]) && return p.at
   findfirst(k -> chip_points(chips[k]), eachindex(chips))
 end
+
+"True when the chip `c` can have several things, which ⇧ and a click add: its function takes `Things` there"
+adds_things(c::Wanted) = any(T -> T isa Type && Things <: T, c.types)
 
 "True when the point `(x, y)` of the window is on the palette: the strip along the bottom, or the list over it"
 on_palette(p::CommandPalette, x, y) = begin
@@ -28128,6 +28280,37 @@ hit_past(ui, (x, y), p) = begin
   made
 end
 
+"""
+`chip_wider(x, e)` gives the thing of the same type as `x` that holds it in the
+window of `e`, like the block that a paragraph is in, or nothing. ⌥↑ in the
+palette makes a chip for a thing in the window take it: see `resize_thing!`.
+"""
+chip_wider(x, e) = nothing
+
+"""
+What ⌥↑ and ⌥↓ do while the palette shows a chip for a thing in the window:
+↑ (`by` 1) gives the chip the part that holds its thing, and ↓ (`by` -1)
+goes back to the thing that it was before.
+"""
+resize_thing!(e, p::CommandPalette, by::Int) = begin
+  k = click_chip(e, p)
+  k === nothing && return nothing
+  chips = palette_chips(p)
+  x = chip_value(p, chips, k)
+  x === UNSAID && return nothing
+  if by > 0
+    bigger = Base.invokelatest(chip_wider, x, e)
+    bigger === nothing && return nothing
+    push!(p.inner, x)
+    say!(p, chips, k, bigger)
+  else
+    isempty(p.inner) && return nothing
+    say!(p, chips, k, pop!(p.inner))
+  end
+  redraw_in!(e, 0)
+  nothing
+end
+
 "What a click at the mouse of the window `w` would choose for chip `k` of the palette, or nothing"
 clicked_thing(e, p::CommandPalette, w, k::Int) = begin
   for T in askable_types(palette_chips(p)[k].types)
@@ -28151,7 +28334,20 @@ palette_click!(e, w) = begin
   (k === nothing || on_palette(p, num(w.mouse[1]), num(w.mouse[2]))) && return false
   x = clicked_thing(e, p, w, k)
   x === nothing && return true
-  say!(p, palette_chips(p), k, x)
+  empty!(p.inner)
+  chips = palette_chips(p)
+  had = chip_value(p, chips, k)
+  if only_held(w, Keys.shft) && adds_things(chips[k]) && had !== UNSAID
+    # ⇧ and a click add the thing to what the chip has, or take it out when it has it. The keyboard stays where it is.
+    now = each_thing(had)
+    j = findfirst(y -> y == x, now)
+    now = j === nothing ? Any[now; x] : deleteat!(copy(now), j)
+    say!(p, chips, k, isempty(now) ? UNSAID : length(now) == 1 ? only(now) : Things(now))
+    palette_focus!(e, p)
+    redraw_in!(e, 0)
+    return true
+  end
+  say!(p, chips, k, x)
   k == p.at ? palette_next!(e, p) : (run_when_ready!(e, p) || palette_focus!(e, p))
   redraw_in!(e, 0)
   true
@@ -28170,18 +28366,20 @@ mark_chips(ctx, w, e) = begin
   k === nothing && return nothing
   redraw_in!(e, 1/30)   # the line follows the mouse
   chips = palette_chips(p)
-  for j in eachindex(chips)
-    mark = chip_mark(chips, j)
-    x = chip_value(p, chips, j)
-    (mark === nothing || x === UNSAID) && continue
-    r = shown_at(e, x)
-    r === nothing || pick_mark(ctx, w, r, mark[1]; colour=mark[2])
+  letters = chip_letters(p, chips)
+  for l in letters
+    r = shown_at(e, l.thing)
+    r === nothing || pick_mark(ctx, w, r, l.letter; colour=l.colour)
   end
   on_palette(p, num(w.mouse[1]), num(w.mouse[2])) && return nothing
   x = clicked_thing(e, p, w, k)
-  (x === nothing || x == chip_value(p, chips, k)) && return nothing
+  (x === nothing || any(l -> l.thing == x, letters)) && return nothing
   r = shown_at(e, x)
-  r === nothing || pick_mark(ctx, w, r, "Click to choose: $(worded(x))"; colour=paler(chip_mark(chips, k)[2]))
+  r === nothing && return nothing
+  # With ⇧ held, a click adds the thing, in the colour that it would have
+  adds = only_held(w, Keys.shft) && adds_things(chips[k]) && chip_value(p, chips, k) !== UNSAID
+  colour = adds ? next_mark(p, chips) : (k2 = findfirst(l -> l.k == k, letters); k2 === nothing ? CHIP_MARKS[1] : letters[k2].colour)
+  pick_mark(ctx, w, r, (adds ? "Click to add: " : "Click to choose: ") * worded(x); colour=paler(colour))
   nothing
 end
 
@@ -28212,7 +28410,7 @@ starts something that takes a while, like Rename or Ask For Change, waits for
 Run. A command that takes nothing runs at once anyway.
 """
 runs_at_once(::Val) = false
-runs_at_once(::Union{Val{:go_to},Val{:theme},Val{:text_size},Val{:key_bindings},Val{:spelling},Val{:autosave},Val{:insert}}) = true
+runs_at_once(::Union{Val{:go_to},Val{:theme},Val{:text_size},Val{:key_bindings},Val{:spelling},Val{:autosave},Val{:insert},Val{:rename_in_code}}) = true
 
 """
 Run the palette's command when it runs at once and each of its chips has
@@ -28273,6 +28471,7 @@ end
 palette_say!(e, p::CommandPalette) = begin
   rows = palette_rows(e, p)
   isempty(rows) && return
+  empty!(p.inner)
   say!(p, palette_chips(p), p.at, rows[clamp(p.pick, 1, length(rows))].value)
   nothing
 end
@@ -28362,7 +28561,13 @@ palette_run!(e, w, p::CommandPalette) = begin
   # The palette closes first, so that the function finds the page with the keyboard, and can show something of its own
   close_palette!(e)
   try
-    Base.invokelatest(p.command.call, args...; named...)
+    value = Base.invokelatest(p.command.call, args...; named...)
+    # What a command of the page's own gave back shows under the top bar
+    if p.command.kind == :page && value !== nothing
+      said = first(split(value isa AbstractString ? value : value_text(value, parentmodule(p.command.call)), '\n'))
+      e.nodes[:result] = ("$(palette_name(p.command.name)): " * (length(said) > 120 ? first(said, 119) * "…" : said), time())
+      redraw_in!(e, 0)
+    end
   catch err
     err isa InterruptException && rethrow()
     p.from, p.moved = palette_risen(e, p), time()
@@ -28413,6 +28618,8 @@ palette_key!(e, w, K, command) = begin
   palette_sync!(e, p)
   command == :commands && return close_palette!(e)
   # Esc, Return, ↑, ↓ and ⌫ do what they do here only by themselves. Tab can have ⇧ with it, to go back. ⌥ goes down by itself.
+  # ⌥↑ makes the thing of a chip for a thing in the window bigger: the part that holds it. ⌥↓ goes back.
+  K in (Keys.up, Keys.down) && only_held(w, Keys.opt) && return (resize_thing!(e, p, K == Keys.up ? 1 : -1); nothing)
   K in (Keys.escape, Keys.enter, Keys.up, Keys.down, Keys.backspace) && !unmodified(w) && return nothing
   K == Keys.tab && !(unmodified(w) || only_held(w, Keys.shft)) && return nothing
   K == Keys.opt && setdiff(held_keys(w), Keys.opt) != Keys(0) && return nothing
@@ -28475,9 +28682,9 @@ chip_wide(e, p::CommandPalette, chips, k::Int) = begin
   end
   words, _ = chip_words(p, chips, k)
   on = p.at == k
-  # A chip for a thing in the window shows only its letter, once it has the thing
-  mark = chip_mark(chips, k)
-  mark === nothing || on || chip_value(p, chips, k) === UNSAID || return frame + ceil(omni_wide(mark[1], 13, "Semibold")) + 6
+  # A chip for things in the window shows only their letters, once it has them
+  letters = filter(l -> l.k == k, chip_letters(p, chips))
+  isempty(letters) || on || return sum(l -> ceil(omni_wide(l.letter, 13, "Semibold")) + 24, letters)
   wide = omni_wide(on && kind != :pick && !isempty(input(e).text) ? input(e).text : on && kind == :search ? chip_name(chip) : words, 13)
   on && kind == :search && (wide = max(wide, min(320.0, maximum(o -> omni_wide(worded(o), 13), chip_choices(e, chip), init=0.0))))
   # A chip that's typed in has room for one more letter and the caret, so the field holds a letter before the chip grows for it
@@ -28920,14 +29127,14 @@ describe(chip::PaletteChip) = begin
   if on && kind != :pick
     return Box(look..., name="Chip", omni_field(e, p, 13))
   end
-  # A chip for a thing in the window has the thing's colour and letter, which the line round the thing has too
-  mark = chip_mark(plan.chips, chip.k)
-  if mark !== nothing && x !== UNSAID
-    letter, colour = mark
-    # The letter is in a box of its own, as wide as it is, so the chip can centre it
-    return Box(fixed(px(pl.w)), height(px(pl.h)), Alignment.Center, justify=Alignment.Center, radius(4px),
-               background(hovered ? paler(colour) : colour), border(1px, :solid, colour), name="Chip",
-               Box(omni_label(letter, 13, colorant"white", weight="Semibold")))
+  # A chip for things in the window has each thing's colour and letter, which the line round the thing has too
+  letters = filter(l -> l.k == chip.k, chip_letters(p, plan.chips))
+  if !isempty(letters)
+    # Each letter is in a box of its own, as wide as it is, so its part of the chip can centre it
+    cells = [Box(fixed(px(ceil(omni_wide(l.letter, 13, "Semibold")) + 24)), height(px(pl.h)), Alignment.Center, justify=Alignment.Center,
+                 background(hovered ? paler(l.colour) : l.colour), Box(omni_label(l.letter, 13, colorant"white", weight="Semibold")))
+             for l in letters]
+    return Row(fixed(px(pl.w)), height(px(pl.h)), radius(4px), clip=true, name="Chip", cells...)
   end
   words, unsaid = chip_words(p, plan.chips, chip.k)
   Box(look..., clip_x=true, name="Chip", omni_label(words, 13, unsaid ? c.placeholder : c.ink))
@@ -34432,6 +34639,115 @@ end
 "Go to where the name at the caret is defined: a function, a type or a value of the page's Julia code, or of a file that Ladder loaded"
 go_to_definition!(e) = definition!(e, e.buf.caret) || error("Nothing here says where the name at the caret is defined.")
 
+# --- give a name another name ---------------------------------------------------------------
+#
+# The command Rename In Code takes a name of the page's own Julia code and a
+# new name, and writes the new one wherever the old one means the same thing:
+# for a name made in a function, in that function, and for a name of the whole
+# page or file, in all of its Julia code, but not in a function that makes a
+# name of its own with those letters. A name after a dot, and words in a
+# string or a comment, stay as they are. It's one change, which ⌘Z takes back.
+# The name starts as the one at the caret, and a click on another chooses it,
+# as the node of Ask For Change does.
+
+"A name of the page's own Julia code where it's written: its line, and the column where it starts"
+struct NameAt
+  name::String
+  line::Int
+  col::Int
+end
+worded(n::NameAt) = n.name
+sidenote(n::NameAt) = "line $(n.line)"
+
+"The name at the place `at` of the page, when the page's own code makes it, or nothing"
+own_name(e, at) = begin
+  found = name_at(e.buf, at)
+  (found === nothing || !isempty(found.owners)) && return nothing
+  Base.invokelatest(definition, e, (at[1], found.col)) isa Tuple || return nothing
+  NameAt(found.name, at[1], found.col)
+end
+
+"The names that the page's Julia code makes, for the palette's list: the one at the caret, and each that all of the code can use, where it's made"
+choices_for(::Type{NameAt}, e) = begin
+  out = NameAt[]
+  here = own_name(e, e.buf.caret)
+  here === nothing || push!(out, here)
+  for m in page_bounds(e)
+    m.span === nothing && !any(n -> n.name == m.name, out) && push!(out, NameAt(m.name, m.at[1], m.at[2]))
+  end
+  out
+end
+chip_start(::Type{NameAt}, e) = own_name(e, e.buf.caret)
+chip_click(::Type{NameAt}, e, w) = own_name(e, locate(e, w.mouse))
+
+"Where the name `n` is in the window of `e`, for a line round it"
+shown_at(e, n::NameAt) = begin
+  1 <= n.line <= length(e.layout) || return nothing
+  it = item(e, n.line)
+  it.content isa Flow || return nothing
+  f = it.content
+  k, x1 = spot(f, n.col)
+  _, x2 = spot(f, n.col + length(n.name))
+  (left=e.origin[1] + x1 - 2px, top=e.origin[2] + it.top + line_top(f, k), width=x2 - x1 + 4px, height=f.lines[k].high)
+end
+
+"""
+The places where the name `n` means what it means where it's written: each as
+its line and the column where it starts. A name that a function makes is
+looked for in that function. A name of the whole page is looked for in all of
+its Julia code, but not in a function that makes a name of its own with
+those letters.
+"""
+name_uses(e, n::NameAt) = begin
+  b = e.buf
+  place = Base.invokelatest(definition, e, (n.line, n.col))
+  place isa Tuple || return Tuple{Int,Int}[]
+  made = filter(m -> m.name == n.name, page_bounds(e))
+  k = findfirst(m -> m.at == place, made)
+  span = k === nothing ? nothing : made[k].span
+  # A function with a name of its own with those letters keeps it
+  others = [m.span for m in made if m.span !== nothing && m.span != span]
+  rows = span === nothing ? (1:length(b.lines)) : span
+  ks = kinds(b)
+  pattern = Regex("(?<![\\w!@.])\\Q$(n.name)\\E(?![\\w!])")
+  out = Tuple{Int,Int}[]
+  for i in rows
+    (1 <= i <= length(ks) && ks[i].kind == Kind.code && !(ks[i].lang in NO_NAMES) && shared_lang(ks[i].lang) == "julia") || continue
+    span === nothing && any(s -> i in s, others) && continue
+    line = b.lines[i]
+    for m in eachmatch(pattern, line)
+      col = length(line, 1, prevind(line, m.offset))
+      # The name there is the same name, and not part of a string, a comment or a name after a dot
+      found = name_at(b, (i, col + 1))
+      found !== nothing && found.name == n.name && found.col == col && isempty(found.owners) && push!(out, (i, col))
+    end
+  end
+  out
+end
+
+"""
+Give the name `name` of the page's Julia code the name `new_name`, wherever it
+means the same thing. ⌘Z takes it back. See "give a name another name".
+"""
+rename_in_code!(e, name::NameAt, new_name::String) = begin
+  new_name = String(strip(new_name))
+  Base.isidentifier(new_name) || error("Julia doesn't take $(repr(new_name)) as a name.")
+  uses = name_uses(e, name)
+  isempty(uses) && error("$(name.name) isn't a name that this page's code makes.")
+  b = e.buf
+  lines = copy(b.lines)
+  # From the end of each line, so that the columns before a change stay where they are
+  for (i, col) in sort(uses, rev=true)
+    chars = collect(lines[i])
+    lines[i] = String([chars[1:col]; collect(new_name); chars[col+length(name.name)+1:end]])
+  end
+  lo, hi = extrema(first.(uses))
+  edit!(b, (lo, 0), (hi, length(b.lines[hi])), join(lines[lo:hi], "\n"))
+  nothing
+end
+
+works_here(e, ::Val{:rename_in_code}) = !isempty(code_blocks(e))
+
 "A heading of the page that shows, or a place of a file of code, for a command to take"
 struct HeadingLine
   line::Int
@@ -34466,6 +34782,7 @@ end
 
 add_command!(go_to!, title="Go to a heading of the page, to a function or a section of a file of code, or to a line by its number", kind=:look)
 add_command!(go_to_definition!, title="Go to where the name at the caret is defined", kind=:look)
+add_command!(rename_in_code!, title="Give a name of the page's Julia code another name, wherever it means the same thing", kind=:edit)
 add_command!(insert_block!, name=:insert, title="Add a block to the page: a table, a sheet, a chart and so on", kind=:edit)
 add_command!(theme!, title="Use other colours for the page")
 add_command!(text_size!, title="Make the page's text a number of pixels tall")
@@ -34640,6 +34957,17 @@ end
 tool_input(t::CodePicker, w, ::KeyPress{Keys.mouse_left}) = begin
   # The palette's chip that a click chooses for takes the click first
   palette_click!(t.editor, w) && (t.swallow = true; return true)
+  # A click on the label that says what an agent changed shows the change
+  a = t.asked
+  if a !== nothing && a.ended > 0 && a.changed && a.label !== nothing
+    x, y = num(w.mouse[1]), num(w.mouse[2])
+    left, top, wide, tall = a.label
+    if left <= x <= left + wide && top <= y <= top + tall
+      t.swallow = true
+      show_change!(t.editor)
+      return true
+    end
+  end
   picks(t, w) || return false
   found = code_under(w)
   t.picking = false
@@ -34663,12 +34991,13 @@ pick_mark(ctx, w, r, words; colour=PICK_LINE) = begin
   end
   face = Face(SANS, "", 11px, colorant"white", false)
   across = num(measure(face, words)) + 12
-  # The label sits on the thing's top edge, and comes down into the thing where the window has no room over it
+  # The label sits on the thing's top edge, and comes down into the thing where the window has no room over it.
+  # A thing whose top is above the window, like a whole file, has its label at the top of the window.
   left = clamp(x, 0.0, max(0.0, num(w.size[1]) - across))
-  top = y >= 18 ? y - 18 : y
+  top = y >= 18 ? y - 18 : max(y, 0.0)
   round_box(ctx, left, top, across, 18, 3; fill=colour)
   write_ink(ctx, words, left + 6, top + 13, face)
-  nothing
+  (left, top, across, 18.0)   # where the label is, for a click on it
 end
 
 # A line round the thing that a click would show the code of, and a label over its top left corner.
@@ -34677,9 +35006,15 @@ draw_tool(ctx, w, t::CodePicker, scene) = begin
   mark_chips(ctx, w, t.editor)
   a = t.asked
   if a !== nothing
-    r = asked_rect(t.editor, a.place)
-    words = a.ended == 0 ? "Asked: $(a.words) …" : a.said
-    pick_mark(ctx, w, r, length(words) > 140 ? first(words, 139) * "…" : words; colour=a.failed ? PICK_FAILED : PICK_LINE)
+    # Each thing has its letter, and the first has what was asked, then what the agent said
+    for (n, c) in enumerate(a.places)
+      n == 1 && continue
+      r = asked_rect(t.editor, c)
+      r === nothing || pick_mark(ctx, w, r, string('A' + n - 1); colour=CHIP_MARKS[mod1(n, length(CHIP_MARKS))])
+    end
+    words = a.ended == 0 ? "Asked: $(a.words) …" : a.changed ? "$(a.said)  ·  Show Change" : a.said
+    words = length(words) > 140 ? first(words, 139) * "…" : words
+    a.label = pick_mark(ctx, w, asked_rect(t.editor, isempty(a.places) ? nothing : first(a.places)), words; colour=a.failed ? PICK_FAILED : PICK_LINE)
   end
   picks(t, w) || return nothing
   redraw_in!(t.editor, 1/30)   # the line follows the mouse
@@ -34902,7 +35237,7 @@ end
 #
 # It starts as what the caret is on. The chip shows only a letter in a colour,
 # A in blue, and a line of that colour with that letter goes round the thing
-# in the window: see `chip_mark`. A click on the window chooses another: see
+# in the window: see `chip_letters`. A click on the window chooses another: see
 # `chip_click`. The palette's list has the rest, from the nearest.
 #
 # Ladder gives the words, with the file and the lines of the code, to an
@@ -35113,12 +35448,54 @@ end
 
 shown_at(e, c::ToChange) = asked_rect(e, c)
 
-"What an agent is told when a change to `c` is asked for: what it is, where its code is, and the user's words"
-change_prompt(c::ToChange, words) = begin
+"True when `c` is the whole of its file, which ⌥↑ gives from a block of it"
+whole_file(c::ToChange) = c.node === nothing && c.first == 1 && c.note == "the whole file"
+
+"""
+What holds the thing `c` of Ask For Change, for ⌥↑: for a part of the window,
+the nearest part round it that a function in a file on this Mac draws, and
+for a block of Julia code, the whole file that it's in. A part that covers
+the same place on the screen, like one that only holds another, is passed
+over, so each ⌥↑ shows a bigger line.
+"""
+chip_wider(c::ToChange, e) = begin
+  if c.node !== nothing
+    place(x) = (r = try rect(x) catch; nothing end; r === nothing ? nothing : (r.left, r.top, r.width, r.height))
+    was = place(c.node)
+    y = c.node.parent
+    while y !== nothing
+      found = part_choice(y)
+      found === nothing || (found.file, found.first) == (c.file, c.first) || place(y) == was || return found
+      y = y.parent
+    end
+    return nothing
+  end
+  whole_file(c) && return nothing
+  b = e.buf
+  n = !isempty(b.path) && page_key(b.path) == c.file ? length(b.lines) : length(text(c.file))
+  ToChange(basename(c.file), "the whole file", c.file, 1, n, nothing, c.mod)
+end
+
+"What the thing `c` of Ask For Change is, in words for an agent, and the first line of its code"
+thing_words(c::ToChange) = begin
   lines = text(c.file)
   start = 1 <= c.first <= length(lines) ? lines[code_start(lines, c.first)] : ""
   what = c.node !== nothing ? "a part of its window, a $(nameof(typeof(c.node))). The function that draws that part" :
+         whole_file(c) ? "the whole of a file" :
          endswith(c.file, ".jl") ? "a block of the file's Julia code" : "a block of Julia code on a page of Markdown"
+  (what, start)
+end
+
+"What an agent is told after it's told what to change: the user's words, and how to change the files in the folders `dirs`"
+change_ask(words, dirs) = """
+  The user's words: $words
+
+  Change that code, or the code that it uses, as the user asks. Change only files in $(join(dirs, " and ")). Keep the change small, and write code that looks like the code around it. Ladder runs the changed code as soon as you end, so leave the file in a state that runs. Then say what you changed, in one short sentence.
+  """
+
+"What an agent is told when a change to `c` is asked for: what it is, where its code is, and the user's words"
+change_prompt(c::ToChange, words) = begin
+  what, start = thing_words(c)
   """
   The user of the app Ladder asked for a change to $what.
 
@@ -35126,10 +35503,24 @@ change_prompt(c::ToChange, words) = begin
 
       $start
 
-  The user's words: $words
+  """ * change_ask(words, [dirname(c.file)])
+end
 
-  Change that code, or the code that it uses, as the user asks. Change only files in $(dirname(c.file)). Keep the change small, and write code that looks like the code around it. Ladder runs the changed code as soon as you end, so leave the file in a state that runs. Then say what you changed, in one short sentence.
+"""
+What an agent is told when a change to several things is asked for. The window
+marks each with a letter, A, B and on, so the user's words can name them so.
+"""
+change_prompt(cs::AbstractVector, words) = begin
+  length(cs) == 1 && return change_prompt(only(cs), words)
+  parts = map(enumerate(cs)) do (n, c)
+    what, start = thing_words(c)
+    "$('A' + n - 1): $what, in the file $(c.file), lines $(c.first) to $(c.last). It starts:\n\n    $start\n"
+  end
   """
+  The user of the app Ladder asked for a change. The user marked these things in the window with letters, and the user's words can name them by their letters:
+
+  $(join(parts, "\n"))
+  """ * change_ask(words, unique(dirname(c.file) for c in cs))
 end
 
 "The text of each part of the Julia code of `lines`, with the line that the part starts on: see `read_parts`"
@@ -35164,18 +35555,30 @@ end
 # Code that Ladder never ran has no module to run in. The file changes, and that's all.
 reload_changed!(::Nothing, file::AbstractString, before::Vector{String}) = (0, "")
 
-"A change that an agent was asked to make to `place`, a `ToChange`. `said` is what there is to say when it has ended, at the time `ended`."
+"""
+A change that an agent was asked to make to `places`, the things of Ask For
+Change. `before` and `after` have the text of each file that the things are
+in, before the agent started and after it ended. `said` is what there is to
+say when it has ended, at the time `ended`. `label` is where the label with
+those words was drawn last, for a click on it.
+"""
 @def mutable struct AskedChange
   words::String = ""
-  place::Any = nothing
-  before::Vector{String} = String[]
+  places::Vector{Any} = Any[]
+  before::Dict{String,String} = Dict{String,String}()
+  after::Dict{String,String} = Dict{String,String}()
   process::Any = nothing
   out::Any = nothing         # a task that reads what the agent prints
   gone::Float64 = 0.0        # when the agent's process was first seen to have ended
   said::String = ""
   failed::Bool = false
+  changed::Bool = false
   ended::Float64 = 0.0
+  label::Any = nothing
 end
+
+"The last change that an agent made, for Show Change and Undo Change, or nothing"
+const LAST_CHANGE = Ref{Any}(nothing)
 
 """
 Where the window of `e` shows what an agent is changing, `c`: the part of the
@@ -35194,32 +35597,54 @@ asked_rect(e, c::ToChange) = begin
 end
 asked_rect(e, ::Nothing) = nothing
 
-"Ask an agent to make the change to `c` that `words` say. The picker of the window of `e` shows how it goes."
-ask_change!(e, c::ToChange, words::AbstractString) = begin
+"The lines of the file text `s`, as `text` reads them from a file"
+text_lines(s::AbstractString) = String.(split(replace(s, "\r\n" => "\n"), '\n'))
+
+"Ask an agent to make the change to the things `places` that `words` say. The picker of the window of `e` shows how it goes."
+ask_change!(e, places::AbstractVector, words::AbstractString) = begin
   t = code_picker(e)
-  # The agent reads the file, so what a window shows of it and didn't write goes to the file first
+  files = unique(c.file for c in places)
+  # The agent reads the files, so what a window shows of one and didn't write goes to its file first
   for o in editors
-    !isempty(o.buf.path) && page_key(o.buf.path) == c.file && dirty(o.buf) && writes(o.buf) && save!(o.buf)
+    !isempty(o.buf.path) && page_key(o.buf.path) in files && dirty(o.buf) && writes(o.buf) && save!(o.buf)
   end
-  before = text(c.file)
-  prompt = change_prompt(c, words)
+  before = Dict(f => read(f, String) for f in files)
+  prompt = change_prompt(places, words)
   out = Pipe()
   process = try
-    run(pipeline(Cmd(`$(agent_command()) $prompt`, dir=dirname(c.file)), stdin=devnull, stdout=out, stderr=out), wait=false)
+    run(pipeline(Cmd(`$(agent_command()) $prompt`, dir=dirname(first(files))), stdin=devnull, stdout=out, stderr=out), wait=false)
   catch err
-    t.asked = AskedChange(words=words, place=c, said="The agent didn't start. " * trouble(err), failed=true, ended=time())
+    t.asked = AskedChange(words=words, places=collect(places), said="The agent didn't start. " * trouble(err), failed=true, ended=time())
     return nothing
   end
   close(out.in)   # only the agent writes to it now, so reading ends when the agent does
-  t.asked = AskedChange(words=words, place=c, before=before, process=process, out=(@async read(out, String)))
+  t.asked = AskedChange(words=words, places=collect(places), before=before, process=process, out=(@async read(out, String)))
   redraw_in!(e, 0)
   nothing
 end
+ask_change!(e, c::ToChange, words::AbstractString) = ask_change!(e, [c], words)
 
 "The last lines of what an agent printed that have words: what it said of its change"
 agent_said(printed::AbstractString) = begin
   parts = filter(!isempty, strip.(split(printed, r"\n\s*\n")))
   isempty(parts) ? "" : String(replace(last(parts), r"\s+" => " "))
+end
+
+"""
+Run the code of each file in `texts`, a file's text by its path, that's new
+since the file had that text, in the module that the things `places` say for
+it. It gives how many parts ran, and what went wrong with the first that
+failed, or "".
+"""
+reload_files!(places, texts::Dict{String,String}) = begin
+  ran, failed = 0, ""
+  for (f, was) in texts
+    k = findfirst(c -> c.file == f, places)
+    n, why = reload_changed!(k === nothing ? nothing : places[k].mod, f, text_lines(was))
+    ran += n
+    isempty(failed) && (failed = why)
+  end
+  (ran, failed)
 end
 
 "In each frame: when the agent that was asked for a change has ended, run the code that it changed, and say how it went"
@@ -35233,14 +35658,15 @@ ask_tick!(e) = begin
     # What it printed is all read a moment after it ends. A program that it left running can hold that up, so the wait has an end.
     if a.gone > 0 && (istaskdone(a.out) || time() - a.gone > 2)
       printed = istaskdone(a.out) && !istaskfailed(a.out) ? fetch(a.out) : ""
-      c = a.place
-      ran, failed = reload_changed!(c.mod, c.file, a.before)
-      changed = ran > 0 || text(c.file) != a.before
+      ran, failed = reload_files!(a.places, a.before)
+      a.after = Dict(f => read(f, String) for f in keys(a.before))
+      a.changed = a.after != a.before
       a.failed = !success(a.process) || !isempty(failed)
       a.said = !success(a.process) ? "The agent stopped. " * agent_said(printed) :
                !isempty(failed) ? "The new code doesn't run. " * failed :
-               !changed ? "Nothing changed. " * agent_said(printed) : agent_said(printed)
+               !a.changed ? "Nothing changed. " * agent_said(printed) : agent_said(printed)
       a.ended = time()
+      a.changed && (LAST_CHANGE[] = a)
     end
     redraw_in!(e, 0.1)
   elseif time() - a.ended > (a.failed ? 15 : 8)
@@ -35254,17 +35680,91 @@ end
 
 """
 Ask an agent for a change to `node`, in the words of `request`, like "make
-this bar thinner". `node` is a block of the file's Julia code, or a part of
-the window, which the agent changes the function that draws. See "ask for a
-change to a thing".
+this bar thinner". `node` is a block of Julia code, or a part of the window,
+which the agent changes the function that draws. ⇧ and a click give it more
+than one, and the words can name each by its letter: "make A look like B".
+See "ask for a change to a thing".
 """
-ask_for_change!(e, node::ToChange, request::String) = begin
+ask_for_change!(e, node::Union{ToChange,Things}, request::String) = begin
   isempty(strip(request)) && error("Say what should change, in a few words.")
   t = code_picker(e)
   t.asked !== nothing && t.asked.ended == 0 && error("The agent is still making the last change.")
   agent_command()   # it says so now if this Mac has no agent
-  ask_change!(e, node, String(strip(request)))
+  ask_change!(e, collect(each_thing(node)), String(strip(request)))
 end
+
+# --- what the agent changed ---
+#
+# The command Show Change opens a page with the last change that an agent made,
+# in a `changes` block: the lines that went in red and the lines that came in
+# green, each change marked as accepted. Reject on one takes it out of its file
+# again, and a file of code that Ladder loaded runs the code that changed. A
+# click on the label that says what the agent did shows it too. Undo Change
+# puts every file back as it was before the agent started, and runs its code.
+
+"The diff of the text `was` of the file `file` to the text `now`, as `git diff` writes it, with the file's whole path and each change accepted"
+change_diff(file, was, now) = begin
+  dir = mktempdir()
+  a, b = joinpath(dir, "before"), joinpath(dir, "after")
+  write(a, was); write(b, now)
+  out = IOBuffer()
+  try run(pipeline(ignorestatus(`git diff --no-index --no-color -U3 -- $a $b`), stdout=out, stderr=devnull)) catch end
+  rm(dir, recursive=true, force=true)
+  lines = split(String(take!(out)), '\n')
+  k = findfirst(startswith("@@"), lines)
+  k === nothing && return String[]
+  ["--- $file"; "+++ $file"; [startswith(l, "@@") ? "$l [accepted]" : String(l) for l in lines[k:end] if !startswith(l, "\\")]]
+end
+
+"The page of the change `a`: what was asked, what the agent said, and its change to each file"
+change_page(a::AskedChange) = begin
+  diffs = [change_diff(f, a.before[f], a.after[f]) for f in sort!(collect(keys(a.before))) if a.before[f] != a.after[f]]
+  lines = String["# What the agent changed", "", "You asked: $(a.words)", ""]
+  isempty(a.said) || push!(lines, "The agent said: $(a.said)", "")
+  push!(lines, "Reject a change to take it out of its file again.", "", "```$CHANGES")
+  for d in diffs
+    filter!(!isempty, d)
+    append!(lines, d)
+  end
+  push!(lines, "```", "")
+  join(lines, "\n")
+end
+
+"Show the last change that an agent made, in a window beside this one, in a block of changes that you can reject one at a time"
+show_change!(e) = begin
+  a = LAST_CHANGE[]
+  a === nothing && error("No agent has changed anything since Ladder started.")
+  page = joinpath(tempdir(), "ladder-changes", "the agent's change.md")
+  mkpath(dirname(page))
+  write(page, change_page(a))
+  shown = build_editor(page)
+  foreach(name -> setfield!(shown, name, getfield(e, name)), SHARED)
+  shown.remember = false
+  shown.panel = false
+  by = window_of(e)
+  size, at = window_beside(by)
+  shown.size = size
+  show_window!(window!(shown, title="What the agent changed", size=size, position=at), by)
+  shown
+end
+
+"Put back each file that the last change of an agent changed, as it was before the agent started, and run its code as it was"
+undo_change!(e) = begin
+  a = LAST_CHANGE[]
+  a === nothing && error("No agent has changed anything since Ladder started.")
+  for (f, now) in a.after
+    (isfile(f) && read(f, String) == now) || error("$(basename(f)) has changed since the agent's change, so Ladder didn't put it back.")
+  end
+  for (f, was) in a.before
+    write(f, was)
+  end
+  ran, failed = reload_files!(a.places, a.after)
+  LAST_CHANGE[] = nothing
+  isempty(failed) || error("The files are as they were, but some of the code doesn't run: " * failed)
+  nothing
+end
+
+works_here(e, ::Union{Val{:show_change},Val{:undo_change}}) = LAST_CHANGE[] !== nothing
 
 "The module of the file of code that Ladder loaded whose path ends with `name`, like \"Ladder/main.jl\". The startup page uses it to keep a change: see `keep_change!`."
 loaded(name::AbstractString) = begin
@@ -35332,6 +35832,8 @@ keep_change!(e) = begin
 end
 
 add_command!(ask_for_change!, title="Ask an agent to change a block of code, or a part of the window, in your own words")
+add_command!(show_change!, title="Show the last change that an agent made, and reject any part of it")
+add_command!(undo_change!, title="Put back the files that an agent changed last, as they were before")
 add_command!(keep_change!, name=:keep_this_change, title="Keep the function at the caret for each time that Ladder starts: a change to Ladder's own code")
 
 # --- a folder's own page ----------------------------------------------------------------
@@ -38054,11 +38556,50 @@ run_startup!(path=startup_page()) = begin
   m
 end
 
+# --- a page's own commands ---
+#
+# A function that a page's own Julia code makes is a command of the palette
+# while the page shows, once the page's code has run. Its arguments are its
+# chips, as they are for a command of Ladder's own, so it needs a type for
+# each that the palette can ask for, like `invoice(client::String,
+# hours::Number)`. Its documentation says what it does. What it gives back
+# shows under the top bar for a while.
+
+"""
+The functions that the Julia code of the page that `e` shows made, as
+commands. The page's code must have run, so its module has them.
+"""
+page_commands(e) = begin
+  b = e.buf
+  (b.view == :markdown && !isempty(b.path)) || return Command[]
+  m = get(PAGE_MODULES, page_key(b.path), nothing)
+  m === nothing && return Command[]
+  out = Command[]
+  for made in page_bounds(e)
+    made.span === nothing || continue
+    name = Symbol(made.name)
+    any(c -> c.name == name, out) && continue
+    f = Base.invokelatest(isdefined, m, name) ? Base.invokelatest(getglobal, m, name) : nothing
+    (f isa Function && parentmodule(f) === m) || continue
+    # A function whose arguments the palette can't ask for, like one with no types, isn't a command
+    isempty(callable_methods(f, in_focus(e))) && continue
+    title = try first_words(f) catch; "" end
+    c = Ref{Command}()
+    c[] = Command(name, isempty(title) ? "A function of this page" : title, :page, "", (e, w, _) -> open_palette!(e, c[]), f)
+    push!(out, c[])
+  end
+  out
+end
+
+"Say what a command of the page gave back, under the top bar, for a while"
+result_tick!(e) = (r = get(e.nodes, :result, nothing); r === nothing || stopped_tick!(e, :result, r...))
+
 "Say what failed in the code of the startup page, under the top bar, for a while after Ladder starts. A folder's page that failed is said the same way."
 startup_tick!(e) = begin
   words, since = STARTUP[]
   stopped_tick!(e, :startup, isempty(words) ? "" : "The startup page stopped. " * words, since)
   stopped_tick!(e, :folder_page, FOLDER_PAGE_STOPPED[]...)
+  result_tick!(e)
 end
 
 "Say `words` under the top bar for a while after the time `since`. `key` names what failed, and \"\" says nothing."

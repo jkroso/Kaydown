@@ -113,6 +113,8 @@ length("ladder") < 6
 
 The lines can use the names that the page's code made. Run the three lines of the block above, then click the dots. Click "Add a check" at the end of the list, type `area ≈ 8.64`, and press Return. Click a check to change it where it is: Return runs it again, and Esc leaves it as it was. A check that you leave empty goes. The checks run again each time the page's code runs, and when you open them. Click the top of the open block to see only the dots again. Hold ⌥ and click the checks to see all their lines as Julia code.
 
+A function that the page's code makes is a command too, once the code has run, when its arguments have types: like `invoice(client::String, hours::Number)`. Press ⌘⇧P and type its name. The palette asks for each argument, and what the function gives back shows under the top bar.
+
 The page [julia.md](julia.md) has more code to run: an expression of several lines, what code prints, the names that a block offers as you type, and the box of a function.
 
 ## Live blocks
@@ -179,12 +181,18 @@ The command Show Code does the same for the next thing that you click. Press ⌘
 
 You can ask for a change in words too. Press ⌘⇧P and run Ask For Change. It changes what the caret was on. A blue line with the letter A goes round that, and the command shows the same blue A. To change something else, click it. Type what you want, like `make this bar thinner`, and press Return. Ladder gives your words, and the place of the function that draws the thing, to Claude Code. Claude Code changes the function, and the thing is drawn the new way. A label on the thing then says what changed. This needs Claude Code on your Mac.
 
+- To make A bigger, press ⌥↑: it's then the part that holds it. ⌥↓ goes back.
+- To change more than one thing, hold ⇧ and click another. It's B, in orange, so your words can say `make A look like B`. ⇧ and a click on it again takes it out.
+- Click the label after the change to see what Claude Code changed. Each change has a Reject button that takes it out again. The command Undo Change puts back all of it.
+
 ## A file of code
 
-Ladder opens a Julia file as code that you change, however long the file is. Three things help you find your way in one. Try them in [progress.jl](progress.jl).
+Ladder opens a Julia file as code that you change, however long the file is. These help you find your way in one. Try them in [progress.jl](progress.jl).
 
 - Press ⌘⇧P and run Go To. It lists the file's functions, and each section that a comment like `# --- name ---` starts. Type a few letters and press Return.
 - Hold ⌘ and move the mouse over a name. A name that has a place to go to is marked, as a link is. Click it, and the caret goes to where the name is defined. A function with several methods goes to the first, and a click there goes to the next. A name from another file shows in a window beside this one. The command Go To Definition does the same for the name at the caret.
+- Hold ⌘ and rest the mouse on a marked name for a moment. A card shows its documentation and its first lines.
+- Press ⌘⇧P and run Rename In Code to give the name at the caret another name. It changes the name wherever it means the same thing, and not in strings or comments. ⌘Z takes it back.
 - Click the number of a line, in a file that git keeps. Ladder shows the commit that last changed the line: its day, who made it, its first line, and what the file had there before.
 
 To change a block of the file's code in words, like one function, put the caret in it and run Ask For Change. Click another block to change that one instead. Type what you want and press Return. Claude Code changes the block, and the window shows the new lines.

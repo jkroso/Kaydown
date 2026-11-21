@@ -6,8 +6,18 @@
 
 @use Test: @test, @testset, @test_throws
 @use "../main" => K
-@use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse
-@use "github.com/jkroso/UI.jl/Interface/draw" frame cursor
+@use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse Typed ontype
+@use "github.com/jkroso/UI.jl/Interface/draw" frame cursor popups
+"The words of each Text in the layout `x`, from the top"
+texts(x) = begin
+  hasfield(typeof(x), :content) && getfield(x, :content) isa AbstractString && return Any[x]
+  out, c = Any[], hasfield(typeof(x), :firstchild) ? x.firstchild : nothing
+  while c !== nothing
+    append!(out, texts(c))
+    c = c.nextsibling
+  end
+  out
+end
 @use GeometryBasics: Vec2
 const px = K.px
 
@@ -166,6 +176,67 @@ point(p) = (it = K.item(e, p[1]); (e.origin[1] + K.spot(it.content, p[2])[2] + 1
   w.keys ⊻= Keys.cmd
   frames(1)
   @test true
+end
+
+@testset "with ⌘ held, a name that the mouse rests on shows a card of what it is" begin
+  # Its documentation, one line or several, and its code up to the end of its block
+  lines = ["x = 1", "\"How much paint\"", "paint(w) = w * 2", "\"\"\"", "Two lines", "of words", "\"\"\"", "f(x) = begin", "  x", "end"]
+  @test K.peek_lines(lines, 3, 3) == lines[2:3] && K.peek_lines(lines, 8, 10) == lines[4:10] && K.peek_lines(lines, 1, 1) == ["x = 1"]
+  @test K.peek_lines(["\"\"\"Short\"\"\"", "g() = 2"], 2, 2) == ["\"\"\"Short\"\"\"", "g() = 2"]
+  # A name of another file: where it is, and its documentation and code
+  card(p) = (c = K.peek_card(e, K.cmd_words(e, point(p))); c === nothing ? nothing : [x.content for x in texts(c)])
+  @test card(at("Walls.paint(wall)", "paint")) == ["walls.jl:7", "\"How much paint a wall takes\"", "paint(w::Wall) = w.long * 2.4 / 10"]
+  # A name of a function of this file: its lines. A name made in a function: the one line.
+  @test card(at("total + area(r)", "area"))[1:2] == ["line 11", "area(r::Room) = sum(w -> w.long, r.walls) * HEIGHT"]
+  @test card(at("total + area(r)", "total")) == ["line $(line("total = round"))", "  total = round(total, digits=1)   # a string with area( in it: \"area(r)\""]
+  # The card shows when the mouse has rested on the name for a moment with ⌘ held, and goes when ⌘ comes up
+  p = at("Walls.paint(wall)", "paint")
+  w.mouse = typeof(w.mouse)(point(p)...)
+  w.keys |= Keys.cmd
+  frames(1)
+  @test !e.nodes[:peek].shown && !any(x -> x.key == :tooltip, popups(w))
+  e.nodes[:peek] = (words=e.nodes[:peek].words, since=time() - 1, shown=false)
+  frames(1)
+  @test e.nodes[:peek].shown && any(x -> x.key == :tooltip, popups(w))
+  w.keys ⊻= Keys.cmd
+  frames(1)
+  @test !haskey(e.nodes, :peek) && !any(x -> x.key == :tooltip, popups(w))
+end
+
+@testset "Rename In Code gives a name another name, wherever it means the same thing" begin
+  name(words, n) = K.own_name(e, at(words, n))
+  # A name of another file, and a word of the language, aren't the page's own names
+  @test name("Walls.paint(wall)", "paint") === nothing && name("function litres", "function") === nothing
+  # A name made in a function is changed in that function, and not in the comment or the string
+  total = name("total + area(r)", "total")
+  @test total.name == "total" && K.name_uses(e, total) == [(17, 2), (19, 4), (21, 2), (21, 16), (22, 2)]
+  # A name of the whole file is changed in all of its code
+  area = name("total + area(r)", "area")
+  @test [u[1] for u in K.name_uses(e, area)] == [11, 12, 22]
+  before = copy(b.lines)
+  K.rename_in_code!(e, area, "surface")
+  @test b.lines[11] == "surface(r::Room) = sum(w -> w.long, r.walls) * HEIGHT" && b.lines[22] == "  total + surface(r)"
+  @test occursin("area(", b.lines[21])   # the comment and the string say area still
+  # It's one change, which ⌘Z takes back
+  K.undo!(b)
+  @test b.lines == before
+  @test_throws ErrorException K.rename_in_code!(e, area, "not a name")
+  # In the palette, the name is the one at the caret, as a letter, and Return after the new name runs it
+  b.caret = b.anchor = at("* HEIGHT", "HEIGHT")
+  K.focus(e)
+  frames()
+  w.keys |= Keys.cmd | Keys.shft; onkey(w, KeyPress{Keys.p}(0, w)); w.keys ⊻= Keys.cmd | Keys.shft
+  frames()
+  foreach(c -> ontype(w, Typed(c, w)), "rename in code"); frames()
+  onkey(w, KeyPress{Keys.enter}(0, w)); frames()
+  p = K.palette(e)
+  @test p.command.name == :rename_in_code && K.chip_value(p, K.palette_chips(p), 1).name == "HEIGHT" && p.at == 2
+  @test [(l.letter) for l in K.chip_letters(p, K.palette_chips(p))] == ["A"] && K.shown_at(e, K.chip_value(p, K.palette_chips(p), 1)) !== nothing
+  foreach(c -> ontype(w, Typed(c, w)), "WALL_HEIGHT"); frames()
+  onkey(w, KeyPress{Keys.enter}(0, w)); frames()
+  @test e.popup == :none && b.lines[5] == "const WALL_HEIGHT = 2.4" && count(l -> occursin("WALL_HEIGHT", l), b.lines) == 3
+  K.undo!(b)
+  @test b.lines == before
 end
 
 @testset "the command Go To Definition" begin

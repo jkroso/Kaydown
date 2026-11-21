@@ -171,7 +171,8 @@ end
   # What the caret was on is the node, so the keyboard is in the words
   @test said().node === node() && p.at == 2 && K.click_chip(e, p) == 1
   # The node's chip shows only a letter in a colour, which the line round the node has too
-  @test K.chip_mark(K.palette_chips(p), 1) == ("A", K.CHIP_MARKS[1]) && K.chip_mark(K.palette_chips(p), 2) === nothing
+  letters() = [(l.k, l.letter, l.colour) for l in K.chip_letters(p, K.palette_chips(p))]
+  @test letters() == [(1, "A", K.CHIP_MARKS[1])]
   @test K.chip_wide(e, p, K.palette_chips(p), 1) < 40
   # A click on the page's `julia` block chooses it, and the keyboard stays in the words
   click(w, on_line(e, 10)...)
@@ -179,6 +180,33 @@ end
   # A click on the bar chooses the thing that the block shows
   click(w, middle(rect(node()))...)
   @test said().node === node() && p.at == 2
+  # ⇧ and a click add a second thing, B in orange, and the chip shows both letters. Again takes it out.
+  w.keys |= Keys.shft
+  click(w, on_line(e, 10)...)
+  w.keys ⊻= Keys.shft
+  @test said() isa K.Things && [x.words for x in said().all] == ["Level", "x = 1"] && p.at == 2
+  @test letters() == [(1, "A", K.CHIP_MARKS[1]), (1, "B", K.CHIP_MARKS[2])] && 60 < K.chip_wide(e, p, K.palette_chips(p), 1) < 80
+  prompt = K.change_prompt(said().all, "make A look like B")
+  @test occursin("A: a part of its window, a Level.", prompt) && occursin("B: a block of Julia code on a page of Markdown, in the file", prompt)
+  @test occursin("The user's words: make A look like B", prompt)
+  w.keys |= Keys.shft
+  click(w, on_line(e, 10)...)
+  w.keys ⊻= Keys.shft
+  @test said().node === node()
+  # ⌥↑ takes the part that holds it, which is bigger on the screen, and ⌥↓ goes back, with the keyboard where it was
+  place(x) = (r = rect(x); (r.left, r.top, r.width, r.height))
+  press(w, Keys.up, Keys.opt)
+  @test said().node !== node() && place(said().node) != place(node()) && p.at == 2
+  ups = 1
+  while !(said().node isa K.Document) && ups < 6
+    press(w, Keys.up, Keys.opt)
+    ups += 1
+  end
+  @test said().node isa K.Document
+  foreach(_ -> press(w, Keys.down, Keys.opt), 1:ups)
+  @test said().node === node()
+  press(w, Keys.down, Keys.opt)
+  @test said().node === node()
   # A click on the palette's own bar isn't a choice
   @test K.on_palette(p, K.num(w.size[1]) / 2, K.num(w.size[2]) - 30)
   press(w, Keys.escape)
@@ -204,15 +232,24 @@ end
   @test K.chip_value(p, chips, 1).words == "describe(l::Level)" && p.at == 2
   click(cw, on_line(code, 14)...)
   @test K.chip_value(p, chips, 1).words == "wide(l::Level)" && code.buf.caret == (14, 3)
+  # ⌥↑ takes the whole file, which nothing holds, and ⌥↓ goes back to the block
+  press(cw, Keys.up, Keys.opt)
+  whole = K.chip_value(p, chips, 1)
+  @test (whole.words, whole.note, whole.first, whole.last) == ("level.jl", "the whole file", 1, length(code.buf.lines))
+  @test occursin("the whole of a file", K.change_prompt(whole, "tidy it"))
+  press(cw, Keys.up, Keys.opt)
+  @test K.chip_value(p, chips, 1) == whole
+  press(cw, Keys.down, Keys.opt)
+  @test K.chip_value(p, chips, 1).words == "wide(l::Level)"
   typed(cw, "make the bar wider")
   press(cw, Keys.enter)
   @test p.at == 3
   press(cw, Keys.enter)
   @test code.popup == :none
   a = picker(cw).asked
-  @test a !== nothing && a.words == "make the bar wider" && a.place.first == 13
+  @test a !== nothing && a.words == "make the bar wider" && a.places[1].first == 13
   # A line goes round the block while the agent works
-  @test K.asked_rect(code, a.place) !== nothing
+  @test K.asked_rect(code, a.places[1]) !== nothing
   finish(cw)
   # The agent got the words and the block's place, and ran in the folder of the file
   @test occursin("The user's words: make the bar wider", asked()) && occursin("lines 13 to 14", asked())
@@ -222,10 +259,40 @@ end
   frames(w, 3)
   @test rect(node()).width == 120px
   @test a.ended > 0 && !a.failed && a.said == "The bar is 120 pixels wide now."
+  # The label says what the agent said, and a click on it shows the change
+  @test a.changed && K.LAST_CHANGE[] === a
+  left, top, wide, tall = a.label
+  click(cw, px(left + wide / 2), px(top + tall / 2))
+  shown = only(filter(o -> endswith(o.buf.path, "the agent's change.md"), K.editors))
+  close(K.window_of(shown))
   # The label goes after a few seconds
   a.ended -= 9
   frames(cw)
   @test picker(cw).asked === nothing
+end
+
+@testset "Show Change shows what the agent changed, and Undo Change puts it back" begin
+  @test K.works_here(code, Val(:undo_change)) && K.works_here(code, Val(:show_change))
+  shown = K.show_change!(code)
+  frames(K.window_of(shown), 3)
+  page = join(shown.buf.lines, "\n")
+  @test occursin("```changes\n--- $(realpath(source))\n+++ $(realpath(source))\n@@", page) && occursin("[accepted]", page)
+  @test occursin("-wide(l::Level) = 200px", page) && occursin("+wide(l::Level) = 120px", page) && occursin("You asked: make the bar wider", page)
+  # Reject takes the change out of the file, and the code that it changed runs. Accept puts it back.
+  v = shown.nodes[(:block, K.CHANGES, shown.buf.path, 1)]
+  K.decide!(v, 1, :rejected)
+  frames(w, 3)
+  @test occursin("wide(l::Level) = 200px", read(source, String)) && rect(node()).width == 200px
+  K.decide!(v, 1, :accepted)
+  frames(w, 3)
+  @test occursin("wide(l::Level) = 120px", read(source, String)) && rect(node()).width == 120px
+  close(K.window_of(shown))
+  # Undo Change puts each file back as it was, and runs its code. There's nothing to undo after that.
+  K.undo_change!(code)
+  frames(w, 3)
+  @test occursin("wide(l::Level) = 200px", read(source, String)) && rect(node()).width == 200px && K.LAST_CHANGE[] === nothing
+  @test_throws ErrorException K.undo_change!(code)
+  @test !K.works_here(code, Val(:undo_change))
 end
 
 @testset "a change to a part of the window" begin
@@ -234,6 +301,10 @@ end
   @test occursin("a Level", asked()) && rect(node()).height == 12px
   @test !a.failed && a.said == "The bar is 12 pixels tall now."
   picker().asked = nothing
+  # A file that changed after the agent's change isn't put back
+  open(io -> println(io, "# a line of mine"), source, "a")
+  @test_throws ErrorException K.undo_change!(e)
+  write(source, replace(read(source, String), "# a line of mine\n" => ""))
   # Words with nothing in them ask for nothing
   @test_throws ErrorException K.ask_for_change!(e, first(offered(e, (3, 0))), "  ")
 end

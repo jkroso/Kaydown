@@ -146,6 +146,28 @@ end
   @test shown.buf.caret[1] == 7 && shown.buf.view == :code
 end
 
+"The point of the window over the place `p` of the page"
+point(p) = (it = K.item(e, p[1]); (e.origin[1] + K.spot(it.content, p[2])[2] + 1px, e.origin[2] + it.top + it.tall / 2))
+
+@testset "with ⌘ held, the words that a click would act on are marked" begin
+  # A name that has a place to go to: its first column and the column after its last
+  p = at("total + area(r)", "area", into=2)
+  @test K.cmd_words(e, point(p)) == (p[1], p[2] - 2, p[2] + 2)
+  q = at("Walls.paint(wall)", "paint")
+  @test K.cmd_words(e, point(q)) == (q[1], q[2] - 1, q[2] + 4)
+  # A name with no place, a word of the language and a comment have no mark
+  @test K.cmd_words(e, point(at("sum(w -> w.long", "long"))) === nothing
+  @test K.cmd_words(e, point(at("function litres", "function"))) === nothing
+  # It's drawn only while ⌘ is held by itself, and the window draws again soon, so the mark follows the mouse
+  w.mouse = typeof(w.mouse)(point(p)...)
+  frames(1)
+  w.keys |= Keys.cmd
+  frames(1)
+  w.keys ⊻= Keys.cmd
+  frames(1)
+  @test true
+end
+
 @testset "the command Go To Definition" begin
   b.caret = b.anchor = at("* HEIGHT", "HEIGHT")
   K.go_to_definition!(e)
@@ -170,6 +192,18 @@ end
   K.open!(e, page)
   frames()
   @test [(K.worded(p), K.sidenote(p)) for p in K.choices_for(K.HeadingLine, e)] == [("One", "line 1"), ("Two", "line 5")]
+end
+
+@testset "with ⌘ held, a link's words are marked" begin
+  page = joinpath(dir, "links.md")
+  write(page, "See [the **walls** file](walls.jl) for more.\n")
+  K.open!(e, page)
+  frames()
+  # A point on "the", and one on "walls", which is bold: both give all of the link's words
+  @test K.cmd_words(e, point((1, 6))) == K.cmd_words(e, point((1, 12)))
+  line, lo, hi = K.cmd_words(e, point((1, 6)))
+  @test line == 1 && lo <= 5 && hi >= 22
+  @test K.cmd_words(e, point((1, 1))) === nothing
 end
 
 foreach(o -> (win = K.window_of(o); win === nothing || close(win)), copy(K.editors))

@@ -184,7 +184,7 @@ You can ask for a change in words too. Press ⌘⇧P and run Ask For Change. It 
 Ladder opens a Julia file as code that you change, however long the file is. Three things help you find your way in one. Try them in [progress.jl](progress.jl).
 
 - Press ⌘⇧P and run Go To. It lists the file's functions, and each section that a comment like `# --- name ---` starts. Type a few letters and press Return.
-- Hold ⌘ and click a name. The caret goes to where the name is defined. A function with several methods goes to the first, and a click there goes to the next. A name from another file shows in a window beside this one. The command Go To Definition does the same for the name at the caret.
+- Hold ⌘ and move the mouse over a name. A name that has a place to go to is marked, as a link is. Click it, and the caret goes to where the name is defined. A function with several methods goes to the first, and a click there goes to the next. A name from another file shows in a window beside this one. The command Go To Definition does the same for the name at the caret.
 - Click the number of a line, in a file that git keeps. Ladder shows the commit that last changed the line: its day, who made it, its first line, and what the file had there before.
 
 To change a block of the file's code in words, like one function, put the caret in it and run Ask For Change. Click another block to change that one instead. Type what you want and press Return. Claude Code changes the block, and the window shows the new lines.

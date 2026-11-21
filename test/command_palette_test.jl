@@ -325,17 +325,29 @@ end
   @test names(e) == ["Sepia", "Paper", "Night"] && field(e) == ""
   press(w, Keys.down); press(w, Keys.down)
   @test said(e, 1) == K.Colours(:night) && p.at == 1 && e.theme == :sepia
-  # Return takes the row and goes on to the Run button, which runs the command
-  press(w, Keys.enter)
-  @test p.at == 2 && p.plan.list === nothing
-  shot(w, "omni-run.png")
+  # Return takes the row, and Theme runs at once: it changes nothing that you'd want to look at first
+  @test K.runs_at_once(Val(:theme)) && !K.runs_at_once(Val(:rename)) && !K.runs_at_once(Val(:ask_for_change))
   press(w, Keys.enter)
   @test e.theme == :night && e.popup == :none && w.focus === e
   take(w, "go to")
   shot(w, "omni-night.png")
   press(w, Keys.escape); press(w, Keys.escape)
   K.theme!(e, :sepia)
+  # The mouse does the same: a click on a row
+  take(w, "theme")
+  click(w, e.nodes[(:palette_row, 2)])
+  @test e.theme == :paper && e.popup == :none
+  K.theme!(e, :sepia)
 
+  # A command that waits for Run: Return takes the row and goes on to the Run button. Theme waits here, for a moment.
+  @eval K runs_at_once(::Val{:theme}) = false
+  take(w, "theme")
+  press(w, Keys.down); press(w, Keys.enter)
+  @test p.at == 2 && p.plan.list === nothing && e.theme == :sepia
+  shot(w, "omni-run.png")
+  press(w, Keys.enter)
+  @test e.theme == :paper && e.popup == :none
+  K.theme!(e, :sepia)
   # The mouse does the same: a row, then the Run button
   take(w, "theme")
   click(w, e.nodes[(:palette_row, 2)])
@@ -353,6 +365,7 @@ end
   press(w, Keys.down); press(w, Keys.tab)
   @test p.at == 2 && said(e, 1) == K.Colours(:paper)
   press(w, Keys.escape); press(w, Keys.escape)
+  @eval K runs_at_once(::Val{:theme}) = true
   close(w)
 end
 
@@ -368,8 +381,7 @@ end
   # The letters keep the rows that have them, and the rest of the row's name shows after them
   typed(w, "cos")
   @test names(e) == ["Costs"] && K.palette_ghost(e, p) == "ts" && said(e, 1) === K.UNSAID
-  press(w, Keys.enter)
-  @test said(e, 1) == K.HeadingLine(5, "Costs") && p.at == 2
+  # Return takes the row, and Go To runs at once
   press(w, Keys.enter)
   @test e.popup == :none && e.buf.caret[1] == 5
 
@@ -377,8 +389,6 @@ end
   take(w, "go to")
   typed(w, "9")
   @test names(e) == ["9"]
-  press(w, Keys.enter)
-  @test said(e, 1) === 9
   press(w, Keys.enter)
   @test e.popup == :none && e.buf.caret[1] == 9
 
@@ -404,7 +414,7 @@ end
 
   # What the function throws shows over the bar, and the palette stays
   take(w, "go to")
-  typed(w, "999"); press(w, Keys.enter); press(w, Keys.enter)
+  typed(w, "999"); press(w, Keys.enter)
   @test e.popup == :commands && p.fault == "Command failed: The page has $(length(e.buf.lines)) lines." && e.buf.caret[1] == 9
   shot(w, "omni-fault.png")
   press(w, Keys.escape); press(w, Keys.escape)
@@ -618,27 +628,28 @@ end
   p = K.palette(e)
   take(w, "text size")
   @test kinds(e) == [:number]
-  typed(w, "20"); press(w, Keys.enter); press(w, Keys.enter)
-  @test K.text_size(e) == 20
-  take(w, "text size"); typed(w, "17"); press(w, Keys.enter); press(w, Keys.enter)
-  # A switch that isn't touched is off
+  # These run as soon as their chip has something: Return after the number runs it
+  typed(w, "20"); press(w, Keys.enter)
+  @test K.text_size(e) == 20 && e.popup == :none
+  take(w, "text size"); typed(w, "17"); press(w, Keys.enter)
+  # A switch that isn't touched is off, and doesn't run the command by itself: Tab goes on to the Run button
   take(w, "spelling")
-  @test kinds(e) == [:switch]
+  @test kinds(e) == [:switch] && e.popup == :commands
   press(w, Keys.tab); press(w, Keys.enter)
   @test !e.spelling
-  take(w, "spelling"); press(w, Keys.enter); press(w, Keys.enter)
-  @test e.spelling
+  take(w, "spelling"); press(w, Keys.enter)
+  @test e.spelling && e.popup == :none
   take(w, "key bindings")
   @test kinds(e) == [:pick] && names(e) == ["Ladder", "VS Code", "Sublime Text", "Emacs"]
-  foreach(_ -> press(w, Keys.down), 1:3); press(w, Keys.enter); press(w, Keys.enter)
+  foreach(_ -> press(w, Keys.down), 1:3); press(w, Keys.enter)
   @test e.bundle == "Emacs"
-  take(w, "key bindings"); press(w, Keys.enter); press(w, Keys.enter)
+  take(w, "key bindings"); press(w, Keys.enter)
   @test e.bundle == "Ladder"
   # A new block goes where the caret is
   e.buf.caret = e.buf.anchor = (3, 0); K.touch!(e); frame(w)
   take(w, "insert")
   @test kinds(e) == [:search]
-  typed(w, "divider"); press(w, Keys.enter); press(w, Keys.enter)
+  typed(w, "divider"); press(w, Keys.enter)
   @test "---" in e.buf.lines && e.popup == :none
   close(w)
 end

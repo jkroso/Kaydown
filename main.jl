@@ -19524,6 +19524,60 @@ underline_scrubs(ctx, e, ui) = begin
   end
 end
 
+"""
+The words that a click with ⌘ at the point `pos` acts on, as the line and the
+columns where they start and end: a link, or a name of Julia code that has a
+place where it's defined. It's nothing where a click with ⌘ does neither.
+`cursor(::Document)` and `press!` find the same.
+"""
+cmd_words(e, pos) = begin
+  line, col = locate(e, pos)
+  it = item(e, line)
+  it.content isa Flow || return nothing
+  segs = [seg for vl in it.content.lines for seg in vl.segs]
+  k = findfirst(s -> s.col <= col < s.col + s.n && !isempty(s.link), segs)
+  if k !== nothing
+    # A link's words can be in several runs of text, as where part of them is bold
+    a = z = k
+    while a > 1 && segs[a-1].link == segs[k].link; a -= 1 end
+    while z < length(segs) && segs[z+1].link == segs[k].link; z += 1 end
+    return (line, segs[a].col, segs[z].col + segs[z].n)
+  end
+  found = name_at(e.buf, (line, col))
+  (found === nothing || Base.invokelatest(definition, e, (line, col)) === nothing) && return nothing
+  (line, found.col, found.col + length(found.name))
+end
+
+"""
+While ⌘ is held by itself, mark the words under the mouse that a click would
+act on: a soft box behind them and a line under them, as the mouse is a hand
+there. The page's text is at `ui`.
+"""
+mark_clickable(ctx, e, ui) = begin
+  w = window_of(e)
+  (w !== nothing && only_held(w, Keys.cmd) && e.popup == :none && e.buf.view != :file && slideshow(e) === nothing) || return
+  redraw_in!(e, 1/30)   # the mark follows the mouse, and goes when ⌘ comes up
+  found = cmd_words(e, w.mouse)
+  found === nothing && return
+  line, lo, hi = found
+  it = item(e, line)
+  f = it.content::Flow
+  k1, x1 = spot(f, lo)
+  k2, x2 = spot(f, hi)
+  # Words that wrap onto a second line are marked on each line that they're on
+  for k in k1:k2
+    vl = f.lines[k]
+    isempty(vl.segs) && continue
+    left = k == k1 ? x1 : first(vl.segs).x
+    right = k == k2 ? x2 : last(vl.segs).x + last(vl.segs).w
+    right > left || continue
+    top = ui.top + it.top + line_top(f, k)
+    round_box(ctx, num(ui.left + left) - 1, num(top), num(right - left) + 2, num(vl.high), 3; fill=tint(colours.accent, MARK_FILL))
+    y = num(top + vl.high / 2) + num(f.size) * 0.62
+    trace(ctx, [(num(ui.left + left), y), (num(ui.left + right), y)], colours.accent, 1.0)
+  end
+end
+
 "Take hold of the number at `found`, which `scrub_at` gave, with the mouse at `pos`"
 scrub!(e, found, pos) = begin
   i, lo, hi = found
@@ -21636,6 +21690,7 @@ draw(ctx, size, ui::ConcreteRect, d::Document) = begin
   outline_same_word(ctx, e, ui)
   mark_pointed(ctx, e, ui)
   underline_scrubs(ctx, e, ui)
+  mark_clickable(ctx, e, ui)
   ring_part(ctx, e, ui)
   annotate(ctx, e, ui)
   glow_bracket_pair(ctx, e, ui)
@@ -27739,6 +27794,7 @@ take_command!(e, w, p::CommandPalette, c::Command) = begin
   # A function that takes nothing but the editor runs at once
   isempty(p.values) && return palette_run!(e, w, p)
   start_chips!(e, p)
+  run_when_ready!(e, p) && return
   # The keyboard goes to the first chip that has nothing yet, or to the Run button
   go_chip!(e, p, something(findfirst(x -> x === UNSAID, p.values), length(palette_chips(p)) + 1))
 end
@@ -27854,7 +27910,7 @@ palette_click!(e, w) = begin
   x = clicked_thing(e, p, w, k)
   x === nothing && return true
   say!(p, palette_chips(p), k, x)
-  k == p.at ? palette_next!(e, p) : palette_focus!(e, p)
+  k == p.at ? palette_next!(e, p) : (run_when_ready!(e, p) || palette_focus!(e, p))
   redraw_in!(e, 0)
   true
 end
@@ -27906,8 +27962,31 @@ go_chip!(e, p::CommandPalette, k::Int) = begin
   palette_focus!(e, p)
 end
 
-"Go on from the chip that the keyboard is in to the next one, or to the Run button after the last"
-palette_next!(e, p::CommandPalette) = go_chip!(e, p, p.at + 1)
+"""
+True for a command that changes nothing that you'd want to look at before it
+runs, like Go To or Theme. The palette runs it as soon as each of its chips
+has something, with no press of Run. A command that changes a file, or that
+starts something that takes a while, like Rename or Ask For Change, waits for
+Run. A command that takes nothing runs at once anyway.
+"""
+runs_at_once(::Val) = false
+runs_at_once(::Union{Val{:go_to},Val{:theme},Val{:text_size},Val{:key_bindings},Val{:spelling},Val{:autosave},Val{:insert}}) = true
+
+"""
+Run the palette's command when it runs at once and each of its chips has
+something that was said for it. A switch that wasn't touched counts as
+nothing here, so taking Spelling doesn't turn it off. True when it ran.
+"""
+run_when_ready!(e, p::CommandPalette) = begin
+  (p.command !== nothing && runs_at_once(Val(p.command.name)) && !isempty(p.values)) || return false
+  any(x -> x === UNSAID, p.values) && return false
+  ready_method(p.methods, palette_said(e, p)) === nothing && return false
+  palette_run!(e, window_of(e), p)
+  true
+end
+
+"Go on from the chip that the keyboard is in to the next one, or to the Run button after the last. A command that runs at once runs when its last chip has something."
+palette_next!(e, p::CommandPalette) = run_when_ready!(e, p) || go_chip!(e, p, p.at + 1)
 
 """
 Take in what the field has, when it changed since the palette last looked.

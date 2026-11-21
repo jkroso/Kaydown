@@ -62,17 +62,20 @@ const SQL = Language("""select from where and or not null insert into values upd
 
 const DATA = Language("", "true false null yes no", comment="#")
 
+const JSONC = Language("", "true false null Infinity NaN")   # JSON with comments, as JSONC and JSON5 have them
+
 const LANGUAGES = Dict{String,Language}()
 for (names, language) in ("julia jl ui" => JULIA, "python py" => PYTHON,
                           "javascript js jsx mjs cjs typescript ts tsx" => JAVASCRIPT, "rust rs" => RUST,
                           "c cpp c++ cc h hpp go java swift kotlin kt csharp cs zig" => C,
-                          "bash sh zsh shell fish" => SHELL, "sql" => SQL, "json yaml yml toml" => DATA)
+                          "bash sh zsh shell fish" => SHELL, "sql" => SQL, "json jsonl ndjson yaml yml toml" => DATA,
+                          "jsonc json5" => JSONC)
   for name in split(names)
     LANGUAGES[name] = language
   end
 end
 
-"One part of a line of code. `kind` is :plain, :comment, :string, :number, :keyword, :call or :type."
+"One part of a line of code. `kind` is :plain, :comment, :string, :number, :keyword, :call, :type, or in a diff :added or :removed."
 struct Token
   col::Int       # the column of its first character
   text::String
@@ -247,9 +250,10 @@ line `text`, or '\\0' when there's none. `open` is the quote of the one that's
 open at its start. A line with no three quotes leaves things as they were, so
 for most lines this is quick. For HTML, CSS, Less and SCSS it's what the line
 leaves open: see "HTML" and "CSS, Less and SCSS".
+So it is for a session of Julia's REPL: see "what Julia's REPL shows".
 """
 left_open(text::AbstractString, name::AbstractString, open::Char='\0') =
-  ishtml(name) || iscss(name) || occursin("\"\"\"", text) || occursin("'''", text) ? last(read_line(text, name, open)) : open
+  ishtml(name) || iscss(name) || isrepl(name) || occursin("\"\"\"", text) || occursin("'''", text) ? last(read_line(text, name, open)) : open
 
 "The parts of the line `text`, and what `left_open` says of it"
 read_line(text, name, open) = begin
@@ -259,6 +263,8 @@ read_line(text, name, open) = begin
     left = html!(marks, chars, open)
     return (marked(chars, marks), left)
   end
+  isrepl(name) && return repl_line(text, name, open)
+  isdiff(name) && return (diff_line(text), '\0')
   if iscss(name)
     chars = collect(text)
     marks = Tuple{Int,Int,Symbol}[]
@@ -786,6 +792,109 @@ interpolated!(marks, chars, i, upto, dialect) = begin
   end
   k <= upto && chars[k] == '}' && push!(marks, (k, k, :keyword))
   min(k, upto)
+end
+
+# --- what Julia's REPL shows ------------------------------------------------------------------
+#
+# A julia-repl or jldoctest block shows a session of Julia's REPL. Each line of
+# code follows a prompt, like `julia>`, and what the code printed comes after
+# it. A prompt has the colour of a keyword, the code after julia> the colours of
+# Julia, and the code after shell> the colours of a shell. The words after
+# help?> and pkg>, and what the code printed, are all one colour. The code after
+# julia> goes on in the lines below it that start with 7 spaces, the width of
+# `julia> `, as in the doctests of Documenter.
+#
+# A jldoctest block can be a script instead, with no prompts. Its code has the
+# colours of Julia up to a line `# output`, and what follows that line is what
+# the code printed. What a line leaves open:
+
+const REPL_START = '\0'      # nothing: the block starts
+const REPL_OUTPUT = 'o'      # what the code printed
+const REPL_CODE = 'i'        # the code after julia>, which a line that starts with 7 spaces goes on
+const REPL_CODE_DOC = 'I'    # the same, in a string in three quotes
+const REPL_SCRIPT = 'k'      # the code of a jldoctest with no prompts
+const REPL_SCRIPT_DOC = 'K'  # the same, in a string in three quotes
+const REPL_OPENS = (REPL_OUTPUT, REPL_CODE, REPL_CODE_DOC, REPL_SCRIPT, REPL_SCRIPT_DOC)
+
+"""
+A prompt of Julia's REPL, like julia>, help?>, shell> or (@v1.12) pkg>, with
+the space after it. Spaces can come before it, as in a block in a list.
+"""
+const PROMPT = r"^(\s*)(julia|help\?|shell|(?:\([^()]*\) )?pkg)> ?"
+
+"""
+True when `name` is a language that shows a session of Julia's REPL. A fence
+like ```` ```jldoctest; setup = :(using X) ```` gives the name `jldoctest;`.
+"""
+isrepl(name) = lowercase(first(split(name, ';'))) in ("julia-repl", "jldoctest", "jlcon")
+
+"The parts of `text` in the language `lang`, as `read_line` gives them, `by` columns to the right"
+shifted(text, lang, open, by) = begin
+  ts, left = read_line(text, lang, open)
+  ([Token(t.col + by, t.text, t.kind) for t in ts if !isempty(t.text)], left)
+end
+
+"The parts of a line of a julia-repl or jldoctest block, and what it leaves open. `name` is the block's language."
+repl_line(text, name, open) = begin
+  state = open in REPL_OPENS ? open : REPL_START
+  m = match(PROMPT, text)
+  if m !== nothing
+    chars = collect(text)
+    s = length(m[1])                     # the spaces before the prompt
+    p = length(m.match)                  # those, the prompt and the space after it
+    q = length(rstrip(m.match))          # those and the prompt
+    julia = m[2] == "julia"
+    ts, left = shifted(String(chars[p+1:end]), julia ? "julia" : m[2] == "shell" ? "sh" : "", '\0', p)
+    head = s > 0 ? [Token(0, String(chars[1:s]), :plain)] : Token[]
+    push!(head, Token(s, String(chars[s+1:q]), :keyword))
+    p > q && push!(head, Token(q, String(chars[q+1:p]), :plain))
+    return ([head; ts], !julia ? REPL_OUTPUT : left == '\0' ? REPL_CODE : REPL_CODE_DOC)
+  end
+  if state in (REPL_CODE, REPL_CODE_DOC) && startswith(text, "       ")
+    ts, left = shifted(text[8:end], "julia", state == REPL_CODE_DOC ? '"' : '\0', 7)
+    return ([Token(0, "       ", :plain); ts], left == '\0' ? REPL_CODE : REPL_CODE_DOC)
+  end
+  doctest = startswith(lowercase(name), "jldoctest")
+  if state in (REPL_SCRIPT, REPL_SCRIPT_DOC) || (doctest && state == REPL_START && !all(isspace, text))
+    strip(text) == "# output" && return ([Token(0, String(text), :comment)], REPL_OUTPUT)
+    ts, left = read_line(text, "julia", state == REPL_SCRIPT_DOC ? '"' : '\0')
+    return (ts, left == '\0' ? REPL_SCRIPT : REPL_SCRIPT_DOC)
+  end
+  # What the code printed. Blank lines at the start don't yet say which kind of block it is.
+  ([Token(0, String(text), :plain)], state == REPL_START && all(isspace, text) ? REPL_START : REPL_OUTPUT)
+end
+
+# --- diffs -------------------------------------------------------------------------------------
+#
+# A line that a diff adds, which starts with +, has the colour of an added line,
+# and a line that it takes away, which starts with -, the colour of a removed
+# line. They're the colours that Ladder shows a change in. A line that names a
+# file, like `--- a/main.jl` or `diff --git a/main.jl b/main.jl`, has the colour
+# of a keyword, and the @@ ... @@ that starts a part of a change the colour of a
+# type. Git's other lines, like `index 1a2b..3c4d`, have the colour of a comment.
+
+"True when `name` is a language that's read as a diff"
+isdiff(name) = lowercase(name) in ("diff", "patch")
+
+"A line that names a file: diff, or --- or +++ before a/, b/, /dev/null, or a name, a tab and a time"
+const DIFF_FILE = r"^(diff |(---|\+\+\+) (a/|b/|/dev/null|[^\t]*\t))"
+
+"The other lines that git writes about a file"
+const DIFF_NOTE = r"^(index |new file mode|deleted file mode|old mode|new mode|similarity index|dissimilarity index|rename from|rename to|copy from|copy to|Binary files|\\ )"
+
+"The parts of a line of a diff"
+diff_line(text) = begin
+  s = String(text)
+  isempty(s) && return Token[]
+  if startswith(s, "@@")
+    k = findnext("@@", s, 3)
+    k === nothing && return [Token(0, s, :type)]
+    head = s[1:last(k)]
+    last(k) == lastindex(s) && return [Token(0, head, :type)]
+    return [Token(0, head, :type), Token(length(head), s[nextind(s, last(k)):end], :plain)]
+  end
+  [Token(0, s, occursin(DIFF_FILE, s) ? :keyword : s[1] == '+' ? :added : s[1] == '-' ? :removed :
+               occursin(DIFF_NOTE, s) ? :comment : :plain)]
 end
 
 "The tokens of the characters `chars`, which have the marks `marks`"

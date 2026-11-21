@@ -246,3 +246,47 @@ end
   # In CSS, a $ is nothing special
   @test parts("a: \$b;", "css") == ["a" => :type, ": \$b;" => :plain]
 end
+
+@testset "Julia's REPL" begin
+  repl(line, open='\0') = parts(line, "julia-repl", open)
+  # A prompt has the colour of a keyword, the code after julia> the colours of Julia, and what it printed is one colour
+  @test repl("julia> f(x) = 1") == ["julia>" => :keyword, "f" => :call, "(x) = " => :plain, "1" => :number]
+  @test file(["julia> function f(x)", "           x + 1", "       end", "f (generic function with 1 method)"], "julia-repl") ==
+    [["julia>" => :keyword, "function" => :keyword, "f" => :call, "(x)" => :plain], ["    x + " => :plain, "1" => :number],
+     ["end" => :keyword], ["f (generic function with 1 method)" => :plain]]
+  @test left_open("julia> 1 + 1", "julia-repl") == 'i' && left_open("2", "julia-repl", 'i') == 'o' && repl("2", 'i') == ["2" => :plain]
+  # Other prompts
+  @test repl("shell> ls \"\$HOME\"") == ["shell>" => :keyword, "ls " => :plain, "\"" => :string, "\$" => :keyword, "HOME" => :plain, "\"" => :string]
+  @test repl("(@v1.12) pkg> add DataFrames") == ["(@v1.12) pkg>" => :keyword, "add DataFrames" => :plain]
+  @test repl("help?> sum") == ["help?>" => :keyword, "sum" => :plain] && repl("julia>") == ["julia>" => :keyword]
+  # A docstring in the code goes on in the lines below
+  @test left_open("julia> \"\"\"", "julia-repl") == 'I' && repl("       Adds one", 'I') == ["Adds one" => :string]
+  # A block in a list has spaces before its prompts
+  @test file(["    julia> x = 1", "           + 2", "    3"], "jldoctest") ==
+    [["julia>" => :keyword, "x = " => :plain, "1" => :number], ["    + " => :plain, "2" => :number], ["    3" => :plain]]
+  # A line with no prompt at the start of a julia-repl block is what some code printed
+  @test repl("a = 1") == ["a = 1" => :plain]
+  # A jldoctest block, whose fence can have more after the name, can be a script that ends with # output
+  @test parts("julia> x", "jldoctest;") == ["julia>" => :keyword, "x" => :plain]
+  @test file(["a = 1", "", "# output", "", "1"], "jldoctest") == [["a = " => :plain, "1" => :number], [], ["# output" => :comment], [], ["1" => :plain]]
+  @test whole("julia> x = \"a\" # b", "julia-repl") && whole("       y", "julia-repl")
+end
+
+@testset "diffs" begin
+  @test file(["diff --git a/x.jl b/x.jl", "index 1a2b..3c4d 100644", "--- a/x.jl", "+++ b/x.jl", "@@ -1,2 +1,2 @@ f(x) =",
+              " same", "-old", "+new", "\\ No newline at end of file"], "diff") ==
+    [["diff --git a/x.jl b/x.jl" => :keyword], ["index 1a2b..3c4d 100644" => :comment], ["--- a/x.jl" => :keyword], ["+++ b/x.jl" => :keyword],
+     ["@@ -1,2 +1,2 @@" => :type, " f(x) =" => :plain], [" same" => :plain], ["-old" => :removed], ["+new" => :added],
+     ["\\ No newline at end of file" => :comment]]
+  # A line taken away that starts with --- is still a line taken away, as in a block written by hand
+  @test parts("--- a heading", "diff") == ["--- a heading" => :removed] && parts("- old", "patch") == ["- old" => :removed]
+  @test parts("--- old.txt\t2026-11-21 10:00", "diff") == ["--- old.txt\t2026-11-21 10:00" => :keyword]
+  @test parts("@@ -1 +1 @@", "diff") == ["@@ -1 +1 @@" => :type] && whole("@@ -1 +1 @@ end", "diff") && parts("", "diff") == []
+end
+
+@testset "JSON Lines, and JSON with comments" begin
+  @test parts("{\"a\": 1, \"b\": null}", "jsonl") ==
+    ["{" => :plain, "\"a\"" => :string, ": " => :plain, "1" => :number, ", " => :plain, "\"b\"" => :string, ": " => :plain, "null" => :number, "}" => :plain]
+  @test parts("{\"a\": 1} // see \"x\"", "jsonc") == ["{" => :plain, "\"a\"" => :string, ": " => :plain, "1" => :number, "} " => :plain, "// see \"x\"" => :comment]
+  @test parts("{\"url\": \"http://a.com\"}", "json5") == ["{" => :plain, "\"url\"" => :string, ": " => :plain, "\"http://a.com\"" => :string, "}" => :plain]
+end

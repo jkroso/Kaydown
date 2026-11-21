@@ -429,6 +429,9 @@ Base.@kwdef mutable struct Palette
   keyword::Colorant
   call::Colorant      # the name of a function being called
   type::Colorant
+  # In a diff, and in a change that the page shows
+  added::Colorant = colorant"rgb(40,128,56)"     # a line that's added
+  removed::Colorant = colorant"rgb(186,52,40)"   # a line that's taken away
 end
 
 const SEPIA = Palette(bg=colorant"rgb(243,236,218)", ink=colorant"rgb(60,52,42)", dim=colorant"rgb(128,116,98)",
@@ -468,7 +471,8 @@ const NIGHT = Palette(bg=colorant"rgb(30,30,32)", ink=colorant"rgb(222,220,214)"
                       shade=RGBA(0, 0, 0, 0.4),
                       comment=colorant"rgb(112,112,118)", string=colorant"rgb(160,200,120)",
                       number=colorant"rgb(230,170,100)", keyword=colorant"rgb(200,130,220)",
-                      call=colorant"rgb(120,170,250)", type=colorant"rgb(110,200,200)")
+                      call=colorant"rgb(120,170,250)", type=colorant"rgb(110,200,200)",
+                      added=colorant"rgb(130,200,120)", removed=colorant"rgb(240,120,110)")
 
 const THEMES = (sepia=SEPIA, paper=PAPER, night=NIGHT)
 const colours = deepcopy(SEPIA)
@@ -4628,7 +4632,7 @@ const MAC_PICTURES = (".heic", ".heif", ".tif", ".tiff", ".svg", ".ico", ".icns"
 const DOCUMENTS = (".rtf", ".rtfd", ".doc", ".docx", ".pages", ".key", ".numbers", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".epub")
 const FONTS = (".ttf", ".otf", ".ttc", ".woff", ".woff2")
 const CODE = (".jl", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rb", ".rs", ".go", ".c", ".h", ".cc", ".cpp", ".hpp", ".swift",
-              ".kt", ".java", ".sh", ".zsh", ".css", ".less", ".scss", ".html", ".json", ".toml", ".yml", ".yaml", ".xml", ".sql", ".lua")
+              ".kt", ".java", ".sh", ".zsh", ".css", ".less", ".scss", ".html", ".json", ".jsonl", ".toml", ".yml", ".yaml", ".xml", ".sql", ".lua")
 
 "The icon for the file at `path`. It says what kind of file it is, from the end of the file's name."
 file_icon(path) = begin
@@ -15023,9 +15027,9 @@ laid(v::ChangesView, k, wide=diff_wide(v)) = get!(v.laid, (k, wide, beside(v, wi
 end
 
 "The colour of a line that a change takes away, and of the count of those lines"
-removed_colour() = dark_page() ? colorant"rgb(240,120,110)" : colorant"rgb(186,52,40)"
+removed_colour() = colours.removed
 "The colour of a line that a change adds"
-added_colour() = dark_page() ? colorant"rgb(130,200,120)" : colorant"rgb(40,128,56)"
+added_colour() = colours.added
 
 "How many lines a change adds and takes away, as two small numbers"
 tally_words(added, removed) =
@@ -25772,7 +25776,7 @@ tip_label(words) = Box(padding(10px, 7px), label(words, 12px, color=TIP_INK))
 # The colours of code in a tooltip. A tooltip is dark grey in each theme, so
 # they're the night theme's, with comments lighter so that they can be read.
 const TIP_CODE = (comment=colorant"rgb(150,150,156)", string=NIGHT.string, number=NIGHT.number,
-                  keyword=NIGHT.keyword, call=NIGHT.call, type=NIGHT.type)
+                  keyword=NIGHT.keyword, call=NIGHT.call, type=NIGHT.type, added=NIGHT.added, removed=NIGHT.removed)
 
 """
 Lines of code in a tooltip, each a row `high` tall, with the colours that code

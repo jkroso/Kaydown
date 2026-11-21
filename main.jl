@@ -12357,11 +12357,12 @@ end
 cursor(::CheckDot) = :hand
 draw(ctx, size, ui::ConcreteRect, d::CheckDot) = (d.rect = (ui.left, ui.top, ui.width, ui.height); nothing)
 
-"What the tooltip of a check's dot says: its line, and what it found when it didn't pass"
+"What the tooltip of a check's dot says: its line, in the colours of its code, and what it found when it didn't pass"
 check_tip(r::Checked) = begin
-  code(words) = Text(words, size=12px, family=codefont(), subfamily=codestyle(), color=TIP_INK, wrap=WrapMode.none)
-  isempty(r.said) && return Box(padding(10px, 7px), code(r.code))
-  Box(padding(10px, 7px), Column(Alignment.Start, child_gap=6px, code(r.code), code(r.said)))
+  code = Column(Alignment.Start, tip_code(split(r.code, '\n'))...)
+  isempty(r.said) && return Box(padding(10px, 7px), code)
+  said = Text(r.said, size=12px, family=codefont(), subfamily=codestyle(), color=TIP_INK, wrap=WrapMode.none)
+  Box(padding(10px, 7px), Column(Alignment.Start, child_gap=6px, code, said))
 end
 
 onmouse(d::CheckDot, ev::MouseMove) = begin
@@ -20566,7 +20567,7 @@ peek_card(e, found) = begin
   k === nothing || return Box(padding(10px, 7px), said(segs[k].link))
   place = Base.invokelatest(definition, e, (line, lo))
   place === nothing && return nothing
-  head, lines = if place isa Method
+  head, lines, lang = if place isa Method
     spot = code_place(place)
     spot === nothing && return nothing
     file, at = spot
@@ -20574,18 +20575,18 @@ peek_card(e, found) = begin
     at = settled_line(place, all, at)
     j = max(1, searchsortedlast(starts, at))
     last = j == length(starts) ? length(all) : starts[j+1] - 1
-    ("$(basename(file)):$at", peek_lines(all, at, last))
+    ("$(basename(file)):$at", peek_lines(all, at, last), "julia")
   else
     at = place[1]
     # A name of a function, like a variable in it, is one line. A name of the whole page shows its code.
     local_name = any(m -> m.at == place && m.span !== nothing, page_bounds(e))
     j = local_name ? nothing : findfirst(c -> c.first <= at <= c.last, code_blocks(e))
     last = local_name ? at : j === nothing ? at + PEEK_LINES - 1 : code_blocks(e)[j].last
-    ("line $at", peek_lines(b.lines, at, min(last, length(b.lines))))
+    l = kinds(b)[at]
+    ("line $at", peek_lines(b.lines, at, min(last, length(b.lines))), l.kind == Kind.code ? shared_lang(l.lang) : "julia")
   end
-  rows = Any[said(head, color=faint)]
-  append!(rows, [said(isempty(l) ? " " : l, family=codefont()) for l in lines])
-  Box(padding(10px, 8px), Column(Alignment.Start, child_gap=1px, rows...))
+  # The code has the colours that it has in the page
+  Box(padding(10px, 8px), Column(Alignment.Start, child_gap=1px, said(head, color=faint), tip_code(lines, lang)...))
 end
 
 """
@@ -25554,6 +25555,31 @@ const TIP_INK = colorant"rgb(240,240,240)"   # on the dark grey that every toolt
 
 "What a tooltip shows: `words`, with room around them"
 tip_label(words) = Box(padding(10px, 7px), label(words, 12px, color=TIP_INK))
+
+# The colours of code in a tooltip. A tooltip is dark grey in each theme, so
+# they're the night theme's, with comments lighter so that they can be read.
+const TIP_CODE = (comment=colorant"rgb(150,150,156)", string=NIGHT.string, number=NIGHT.number,
+                  keyword=NIGHT.keyword, call=NIGHT.call, type=NIGHT.type)
+
+"""
+Lines of code in a tooltip, each a row `high` tall, with the colours that code
+has in the page. `lang` is the code's language, like julia: text that isn't
+code is all `TIP_INK`. The lines inside three quotes, like the middle of a
+docstring, are all the colour of a string.
+"""
+tip_code(lines, lang="julia"; high=17px) = begin
+  face(kind) = Face(codefont(), kind == :comment ? codeslant() : codestyle(), 12px,
+                    kind == :plain ? TIP_INK : getfield(TIP_CODE, kind), false)
+  triple = lowercase(lang) in ("julia", "jl", "python", "py")
+  inside = false   # in three quotes that opened on a line above
+  rows = Any[]
+  for line in lines
+    parts = inside ? [(text=String(line), kind=:string)] : tokens(line, lang)
+    triple && isodd(count("\"\"\"", line)) && (inside = !inside)
+    push!(rows, Box(height(high), Row(Alignment.Start, [p for t in parts if !isempty(t.text) for p in spared(t.text, face(t.kind))]...)))
+  end
+  rows
+end
 
 "What the tooltip of a button in the top bar says"
 tip(b::ToolButton) = begin
@@ -36373,8 +36399,8 @@ end
 "The day of a time in seconds, like 14 Nov 2026"
 day_words(at::Real) = Dates.format(Dates.unix2datetime(at) + (Dates.now() - Dates.now(Dates.UTC)), "d u yyyy")
 
-"What the window says of the commit that last changed a line"
-history_words(a::LineAsked) = begin
+"What the window says of the commit that last changed a line. The line as it was has the colours of code in `lang`, like julia."
+history_words(a::LineAsked, lang="") = begin
   c = a.found
   c === false && return Box(padding(10px, 7px), label("git has nothing on this line.", 12px, color=TIP_INK))
   isempty(c.hash) && return Box(padding(10px, 7px), label("Changed since the last commit.", 12px, color=TIP_INK))
@@ -36384,7 +36410,7 @@ history_words(a::LineAsked) = begin
     push!(rows, said("This commit added the line.", color=RGBA(TIP_INK.r, TIP_INK.g, TIP_INK.b, 0.65)))
   else
     push!(rows, said("Before:", color=RGBA(TIP_INK.r, TIP_INK.g, TIP_INK.b, 0.65)))
-    append!(rows, [said(isempty(l) ? " " : l, family=codefont()) for l in first(a.before, 6)])
+    append!(rows, tip_code([length(l) > 90 ? first(l, 89) * "…" : l for l in first(a.before, 6)], lang))
     length(a.before) > 6 && push!(rows, said("and $(length(a.before) - 6) more", color=RGBA(TIP_INK.r, TIP_INK.g, TIP_INK.b, 0.65)))
   end
   Box(padding(10px, 8px), Column(Alignment.Start, child_gap=3px, [Box(r) for r in rows]...))
@@ -36411,7 +36437,9 @@ line_tick!(e) = begin
   it = item(e, a.line)
   spot = (e.origin[1] + sideways(e) - gutter(e), e.origin[2] + it.top, gutter(e) - NUMBER_GAP / 2, it.content isa Flow ? it.content.lines[1].high : it.tall)
   # The words look as a tooltip does. They stay while the mouse moves, which a tooltip doesn't.
-  popup!(w, Bubble(content=history_words(a), target=spot), anchor=spot, placement=:bottom, gap=4px, key=:line_asked, input=false)
+  l = kinds(b)[a.line]
+  lang = l.kind == Kind.code ? shared_lang(l.lang) : ""
+  popup!(w, Bubble(content=history_words(a, lang), target=spot), anchor=spot, placement=:bottom, gap=4px, key=:line_asked, input=false)
   nothing
 end
 

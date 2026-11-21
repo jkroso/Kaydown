@@ -71,6 +71,16 @@ click_number(i) = begin
   get(e.nodes, :line_asked, nothing)
 end
 shown() = any(p -> p.key == :line_asked, popups(w))
+"Each Text in the layout `x`"
+texts(x) = begin
+  hasfield(typeof(x), :content) && getfield(x, :content) isa AbstractString && return Any[x]
+  out, c = Any[], hasfield(typeof(x), :firstchild) ? x.firstchild : nothing
+  while c !== nothing
+    append!(out, texts(c))
+    c = c.nextsibling
+  end
+  out
+end
 
 @testset "a click on a line's number shows its commit" begin
   @test K.number_at(e, (e.origin[1] - 20px, e.origin[2] + 5px)) == 1
@@ -78,6 +88,9 @@ shown() = any(p -> p.key == :line_asked, popups(w))
   a = click_number(1)
   @test a.found.words == "The walls are taller" && a.before == ["height = 2.4"] && shown()
   @test e.buf.caret[1] == 1
+  # The line as it was has the colours of code, as the file is Julia
+  card = only(p for p in popups(w) if p.key == :line_asked).content.content
+  @test any(x -> x.content == "2.4" && x.color == K.TIP_CODE.number, texts(card))
   # The words stay while the mouse moves, and go at the next key
   onmouse(w, MouseMove(Vec2{px}(300px, 300px), w))
   frames()

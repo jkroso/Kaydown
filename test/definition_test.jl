@@ -188,9 +188,21 @@ end
   lines = ["x = 1", "\"How much paint\"", "paint(w) = w * 2", "\"\"\"", "Two lines", "of words", "\"\"\"", "f(x) = begin", "  x", "end"]
   @test K.peek_lines(lines, 3, 3) == lines[2:3] && K.peek_lines(lines, 8, 10) == lines[4:10] && K.peek_lines(lines, 1, 1) == ["x = 1"]
   @test K.peek_lines(["\"\"\"Short\"\"\"", "g() = 2"], 2, 2) == ["\"\"\"Short\"\"\"", "g() = 2"]
-  # A name of another file: where it is, and its documentation and code
-  card(p) = (c = K.peek_card(e, K.cmd_words(e, point(p))); c === nothing ? nothing : [x.content for x in texts(c)])
+  # A name of another file: where it is, and its documentation and code. Each row is a line, in one or more parts.
+  rows(c) = (out = Any[]; r = c.firstchild.firstchild; while r !== nothing; push!(out, texts(r)); r = r.nextsibling end; out)
+  card(p) = (c = K.peek_card(e, K.cmd_words(e, point(p))); c === nothing ? nothing : [join(x.content for x in r) for r in rows(c)])
   @test card(at("Walls.paint(wall)", "paint")) == ["walls.jl:7", "\"How much paint a wall takes\"", "paint(w::Wall) = w.long * 2.4 / 10"]
+  # The code has the colours that it has in the page, made for the dark grey of a tooltip
+  colour(c, words) = only(x.color for r in rows(c) for x in r if x.content == words)
+  c = K.peek_card(e, K.cmd_words(e, point(at("Walls.paint(wall)", "paint"))))
+  @test colour(c, "\"How much paint a wall takes\"") == K.TIP_CODE.string && colour(c, "Wall") == K.TIP_CODE.type
+  @test colour(c, "2.4") == K.TIP_CODE.number && colour(c, "walls.jl:7") != K.TIP_CODE.string
+  # The lines inside three quotes are all the colour of a string, though they have words like for and end
+  tip = K.tip_code(["\"\"\"", "Shows it for a time, to the end", "\"\"\"", "f(x) = begin"])
+  @test [[x.color for x in texts(r)] for r in tip[2:3]] == [[K.TIP_CODE.string], [K.TIP_CODE.string]]
+  @test K.TIP_CODE.keyword in [x.color for x in texts(tip[4])]
+  # The tooltip of a check's dot has its code in colour too
+  @test K.TIP_CODE.number in [x.color for x in texts(K.check_tip(K.Checked("total == 12", :pass, "")))]
   # A name of a function of this file: its lines. A name made in a function: the one line.
   @test card(at("total + area(r)", "area"))[1:2] == ["line 11", "area(r::Room) = sum(w -> w.long, r.walls) * HEIGHT"]
   @test card(at("total + area(r)", "total")) == ["line $(line("total = round"))", "  total = round(total, digits=1)   # a string with area( in it: \"area(r)\""]

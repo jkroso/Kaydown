@@ -8,9 +8,10 @@
 # Code in a string, like the $(c.count) in "Clicked $(c.count) times", has the
 # colours of code. Its $( and ) have the colour of a keyword.
 #
-# CSS, Less and SCSS are read a line at a time too: see "CSS, Less and SCSS"
-# below. What a line of them leaves open, like a comment, is a character, as the
-# quote of a string in three quotes is for the other languages.
+# HTML, CSS, Less and SCSS are read a line at a time too: see "HTML" and
+# "CSS, Less and SCSS" below. What a line of them leaves open, like a <script>
+# or a comment, is a character, as the quote of a string in three quotes is for
+# the other languages.
 
 "What a language's code looks like"
 struct Language
@@ -244,14 +245,20 @@ tokens(text::AbstractString, name::AbstractString, open::Char='\0') = first(read
 The quote of the string in three quotes that's still open at the end of the
 line `text`, or '\\0' when there's none. `open` is the quote of the one that's
 open at its start. A line with no three quotes leaves things as they were, so
-for most lines this is quick. For CSS, Less and SCSS it's what the line leaves
-open: see "CSS, Less and SCSS".
+for most lines this is quick. For HTML, CSS, Less and SCSS it's what the line
+leaves open: see "HTML" and "CSS, Less and SCSS".
 """
 left_open(text::AbstractString, name::AbstractString, open::Char='\0') =
-  iscss(name) || occursin("\"\"\"", text) || occursin("'''", text) ? last(read_line(text, name, open)) : open
+  ishtml(name) || iscss(name) || occursin("\"\"\"", text) || occursin("'''", text) ? last(read_line(text, name, open)) : open
 
 "The parts of the line `text`, and what `left_open` says of it"
 read_line(text, name, open) = begin
+  if ishtml(name)
+    chars = collect(text)
+    marks = Tuple{Int,Int,Symbol}[]
+    left = html!(marks, chars, open)
+    return (marked(chars, marks), left)
+  end
   if iscss(name)
     chars = collect(text)
     marks = Tuple{Int,Int,Symbol}[]
@@ -274,6 +281,28 @@ read_line(text, name, open) = begin
   (marked(chars, marks), left[])
 end
 
+# --- HTML ---------------------------------------------------------------------------------
+#
+# A tag's name and its < and > have the colour of a keyword, the names of its
+# attributes the colour of a type, and their values the colour of a string. A
+# comment is a comment, and a character like &amp; has the colour of a number.
+# The CSS in a <style> and the JavaScript in a <script> have their own colours.
+#
+# What a line leaves open, for the next line to start in:
+
+const IN_TEXT = '\0'             # the page's text
+const IN_TAG = '<'               # a tag, among its attributes
+const IN_SCRIPT_TAG = 'S'        # the tag that starts a <script>
+const IN_STYLE_TAG = 'T'         # the tag that starts a <style>
+const IN_COMMENT = '!'           # a comment, which --> ends
+const IN_SCRIPT = 'j'            # the JavaScript of a <script>
+const IN_SCRIPT_COMMENT = 'J'    # a comment in it, which */ ends
+const IN_TEMPLATE = 'b'          # a string in it between two `, which can run over several lines
+# and the CSS of a <style>, which leaves open what a line of CSS does: see "CSS, Less and SCSS"
+
+"True when `name` is a language that's read as HTML"
+ishtml(name) = lowercase(name) in ("html", "htm", "xhtml", "svg", "xml")
+
 "Where `s` starts in `chars`, from `i` up to `upto`, or nothing. With `anycase`, capitals are the same as small letters."
 found(chars, s, i, upto=length(chars); anycase=false) = begin
   n = length(s)
@@ -281,6 +310,131 @@ found(chars, s, i, upto=length(chars); anycase=false) = begin
     all(j -> anycase ? lowercase(chars[k+j-1]) == s[j] : chars[k+j-1] == s[j], 1:n) && return k
   end
   nothing
+end
+
+"""
+Marks the parts of a line of HTML, `chars`, which starts in `state`: one of
+the characters above. Gives what the line leaves open.
+"""
+html!(marks, chars, state::Char) = begin
+  n = length(chars)
+  i = 1
+  while i <= n
+    if state == IN_COMMENT
+      k = found(chars, "-->", i)
+      k === nothing && (push!(marks, (i, n, :comment)); return state)
+      push!(marks, (i, k + 2, :comment))
+      i, state = k + 3, IN_TEXT
+    elseif state in (IN_TAG, IN_SCRIPT_TAG, IN_STYLE_TAG)
+      i, state = attributes!(marks, chars, i, state)
+    elseif state in (IN_SCRIPT, IN_SCRIPT_COMMENT, IN_TEMPLATE) || state in CSS_OPENS
+      script = state in (IN_SCRIPT, IN_SCRIPT_COMMENT, IN_TEMPLATE)
+      stop = found(chars, script ? "</script" : "</style", i; anycase=true)
+      upto = stop === nothing ? n : stop - 1
+      state = script ? script!(marks, chars, i, upto, state) : css!(marks, chars, i, upto, state)
+      stop === nothing && return state
+      i, state = stop, IN_TEXT   # the tag that ends it is read as a tag
+    elseif chars[i] == '<' && starts(chars, "<!--", i)
+      push!(marks, (i, i + 3, :comment))
+      i, state = i + 4, IN_COMMENT
+    elseif chars[i] == '<' && i < n && (isletter(chars[i+1]) || chars[i+1] in "/!?")
+      j = chars[i+1] in "/!?" ? i + 2 : i + 1
+      k = j
+      while k <= n && (isname(chars[k]) || chars[k] in "-:.") k += 1 end
+      push!(marks, (i, k - 1, :keyword))
+      name = lowercase(String(chars[j:k-1]))
+      state = chars[i+1] == '/' ? IN_TAG : name == "script" ? IN_SCRIPT_TAG : name == "style" ? IN_STYLE_TAG : IN_TAG
+      i = k
+    elseif chars[i] == '&'
+      k = something(findnext(==(';'), chars, i), 0)
+      if i + 1 < k <= i + 32 && all(c -> isname(c) || c == '#', chars[i+1:k-1])
+        push!(marks, (i, k, :number))
+        i = k + 1
+      else
+        i += 1
+      end
+    else
+      i += 1
+    end
+  end
+  state
+end
+
+"Marks the attributes of a tag, from `chars[i]` to its >. Gives where it stopped, and what's open there."
+attributes!(marks, chars, i, state) = begin
+  n = length(chars)
+  while i <= n
+    c = chars[i]
+    if c == '>' || (c == '/' && i < n && chars[i+1] == '>')
+      k = c == '>' ? i : i + 1
+      push!(marks, (i, k, :keyword))
+      return k + 1, state == IN_SCRIPT_TAG && c == '>' ? IN_SCRIPT : state == IN_STYLE_TAG && c == '>' ? IN_STYLE : IN_TEXT
+    elseif c == '"' || c == '\''
+      k = something(findnext(==(c), chars, i + 1), n)
+      push!(marks, (i, k, :string))
+      i = k + 1
+    elseif isletter(c) || c in "_:@"
+      k = i
+      while k <= n && !(isspace(chars[k]) || chars[k] in "=>/\"'") k += 1 end
+      push!(marks, (i, k - 1, :type))
+      i = k
+    else
+      i += 1
+    end
+  end
+  n + 1, state
+end
+
+"""
+Marks the JavaScript of a <script>, from `chars[i]` to `chars[upto]`, which
+starts in `state`. A comment between /* and */ and a string between two ` can
+run over several lines. Gives what's open at `upto`.
+"""
+script!(marks, chars, i, upto, state) = begin
+  part = chars[1:upto]
+  while i <= upto
+    if state == IN_SCRIPT_COMMENT
+      k = found(part, "*/", i)
+      k === nothing && (push!(marks, (i, upto, :comment)); return state)
+      push!(marks, (i, k + 1, :comment))
+      i, state = k + 2, IN_SCRIPT
+    elseif state == IN_TEMPLATE
+      k = i
+      while k <= upto && part[k] != '`'
+        part[k] == '\\' && (k += 1)
+        k += 1
+      end
+      k > upto && (push!(marks, (i, upto, :string)); return state)
+      push!(marks, (i, k, :string))
+      i, state = k + 1, IN_SCRIPT
+    else
+      # The code up to the next /* or `, which isn't in a string, has the colours of JavaScript
+      j, q = i, '\0'
+      while j <= upto
+        c = part[j]
+        if q != '\0'
+          c == '\\' ? (j += 1) : c == q && (q = '\0')
+        elseif c in "'\""
+          q = c
+        elseif c == '/' && j < upto && part[j+1] == '/'
+          j = upto + 1
+          break
+        elseif (c == '/' && j < upto && part[j+1] == '*') || c == '`'
+          break
+        end
+        j += 1
+      end
+      i < min(j, upto + 1) && code!(marks, part[1:min(j - 1, upto)], JAVASCRIPT, i)
+      j > upto && return state
+      if part[j] == '/'
+        i, state = j, IN_SCRIPT_COMMENT
+      else
+        push!(marks, (j, j, :string))
+        i, state = j + 1, IN_TEMPLATE
+      end
+    end
+  end
+  state
 end
 
 # --- CSS, Less and SCSS -----------------------------------------------------------------------
@@ -302,7 +456,7 @@ end
 # %name, which only @extend uses, has the colour of a selector, and the #{ and }
 # of #{...} have the colour of a keyword.
 #
-# What a line leaves open:
+# The CSS of a <style> in HTML is read the same way. What a line leaves open:
 
 const IN_STYLE = 'c'               # nothing: the line starts among the rules
 const IN_STYLE_COMMENT = 'C'       # a comment among them, which */ ends

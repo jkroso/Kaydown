@@ -108,6 +108,30 @@ end
   @test whole("the end\"\"\" g(\"x\")", "julia")
 end
 
+@testset "HTML" begin
+  html(line, open='\0') = parts(line, "html", open)
+  @test html("<a href=\"x.html\" hidden>Go &amp; see</a>") ==
+    ["<a" => :keyword, "href" => :type, "=" => :plain, "\"x.html\"" => :string, "hidden" => :type, ">" => :keyword,
+     "Go " => :plain, "&amp;" => :number, " see" => :plain, "</a" => :keyword, ">" => :keyword]
+  @test html("<!doctype html> <!-- a note -->") == ["<!doctype" => :keyword, "html" => :type, ">" => :keyword, "<!--" => :comment, " a note -->" => :comment]
+  @test whole("<p class='x'>a < b</p>", "html")
+  # A comment and a tag can run over several lines
+  @test left_open("<!-- starts here", "html") == '!' && html("still --> <b>", '!') == ["still -->" => :comment, "<b" => :keyword, ">" => :keyword]
+  @test left_open("<meta name=\"a\"", "html") == '<' && html("  content=\"b\">", '<') == ["content" => :type, "=" => :plain, "\"b\"" => :string, ">" => :keyword]
+  # The text of a <script> is JavaScript, and of a <style> CSS
+  @test left_open("<script type=\"module\">", "html") == 'j'
+  @test html("const x = 'a' // done", 'j') == ["const" => :keyword, " x = " => :plain, "'a'" => :string, "// done" => :comment]
+  @test html("f(1) </script>", 'j') == ["f" => :call, "(" => :plain, "1" => :number, ") " => :plain, "</script" => :keyword, ">" => :keyword]
+  @test left_open("const s = `one", "html", 'j') == 'b' && html("two` + 1", 'b') == ["two`" => :string, " + " => :plain, "1" => :number]
+  @test left_open("x /* a", "html", 'j') == 'J' && left_open("b */ y", "html", 'J') == 'j'
+  @test left_open("<style>", "html") == 'c'
+  @test html("  .block { color: #a6c8e8; margin: 0 2px !important }", 'c') ==
+    [".block" => :keyword, " { " => :plain, "color" => :type, ": " => :plain, "#a6c8e8" => :number, "; " => :plain, "margin" => :type, ": " => :plain,
+     "0" => :number, "2px" => :number, "!important" => :keyword, " }" => :plain]
+  @test html("  --ink: var(--ink-2); /* the text", 'c') == ["--ink" => :type, ": " => :plain, "var" => :call, "(--ink-2); " => :plain, "/* the text" => :comment]
+  @test left_open("  /* Layout: a", "html", 'c') == 'C' && left_open("  b */", "html", 'C') == 'c' && left_open("</style> <p>", "html", 'c') == '\0'
+end
+
 "The parts of each of `lines`, a file in `lang`, as `parts` gives them. Each line starts in what the one above left open."
 file(lines, lang) = begin
   open = '\0'

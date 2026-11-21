@@ -12798,11 +12798,17 @@ BLOCKS[CHECK] = BlockKind("Check", "check2-square", CheckView, check_html)
 
 const FILE_CHECK = r"^\s*#\s*check:\s*(.*\S)\s*$"
 
-"The checks of a file of Julia code: the line of each, and its code"
-file_checks(lines) = begin
+"""
+The checks of a file of Julia code: the line of each, and its code. `opens[i]`
+is the quote of a string in three quotes that's open at the start of line i,
+as `string_opens` gives it. A line in such a string, like the middle of a
+docstring or of a prompt for an agent, is text and not a check.
+"""
+file_checks(lines, opens=nothing) = begin
   out = Tuple{Int,String}[]
   for (i, l) in enumerate(lines)
     occursin("check:", l) || continue
+    opens === nothing || opens[i] == '\0' || continue
     m = match(FILE_CHECK, l)
     m === nothing || push!(out, (i, String(m[1])))
   end
@@ -12822,7 +12828,7 @@ file_checks_tick!(e) = begin
   b = e.buf
   s = get(e.nodes, :file_checks, nothing)
   if s === nothing || s.version != b.version
-    s = (version=b.version, found=file_checks(b.lines), ran=s === nothing ? nothing : s.ran,
+    s = (version=b.version, found=file_checks(b.lines, string_opens(b)), ran=s === nothing ? nothing : s.ran,
          results=s === nothing ? Dict{String,Checked}() : s.results)
   end
   key = (unique(last.(s.found)), CODE_RUNS[])

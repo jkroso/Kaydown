@@ -47,6 +47,26 @@ went(code) = results()[code].went
   @test K.file_checks(["# checks: none", "x = 1  # check: not at the start", "# check:", "  # check: indented(1)"]) == [(4, "indented(1)")]
 end
 
+@testset "a check in a string in three quotes is text, not a check" begin
+  # As in the prompt that Ask For Checks gives an agent, in main.jl
+  other = joinpath(dir, "prompt.jl")
+  write(other, """
+  \"\"\"
+  # check: in_docstring()
+  \"\"\"
+  # check: real(1)
+  ask() = \"\"\"
+    A check is a comment over a function, like this one:
+
+        # check: in_prompt()
+    \"\"\"
+  # check: real(2)
+  """)
+  o = K.build_editor(other)
+  K.file_checks_tick!(o)
+  @test o.nodes[:file_checks].found == [(4, "real(1)"), (10, "real(2)")]
+end
+
 @testset "a check of a function that hasn't run yet says to run it" begin
   @test went("twice(2) == 4") == :stop
   note = K.check_note(results()["twice(2) == 4"], false)

@@ -177,7 +177,7 @@ Try it on the bar of the block above. The window shows `progress.jl`, with the c
 
 It works on Ladder's own parts too, like the count of words at the top right. Most of those are in one very long file. The window shows the whole of it, with the function at the top, and ⌘Return and ⌘S work there as they do in any file. The app that you installed writes its own files again each time it starts, so a change to one of its own parts lasts until you quit. To keep the change, put the caret in the function and run the command Keep This Change. It adds the function to your startup page, whose code runs each time Ladder starts.
 
-The command Show Code does the same for the next thing that you click. Press ⌘⇧P and type its name to run it. Esc gives the mouse back.
+The command Show Code does the same. Press ⌘⇧P and run it: a blue A goes round what the caret is on, and Return shows its code. To see the code of something else, click it.
 
 You can ask for a change in words too. Press ⌘⇧P and run Ask For Change. It changes what the caret was on. A blue line with the letter A goes round that, and the command shows the same blue A. To change something else, click it. Type what you want, like `make this bar thinner`, and press Return. Ladder gives your words, and the place of the function that draws the thing, to Claude Code. Claude Code changes the function, and the thing is drawn the new way. A label on the thing then says what changed. This needs Claude Code on your Mac.
 

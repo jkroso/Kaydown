@@ -28410,7 +28410,7 @@ starts something that takes a while, like Rename or Ask For Change, waits for
 Run. A command that takes nothing runs at once anyway.
 """
 runs_at_once(::Val) = false
-runs_at_once(::Union{Val{:go_to},Val{:theme},Val{:text_size},Val{:key_bindings},Val{:spelling},Val{:autosave},Val{:insert},Val{:rename_in_code}}) = true
+runs_at_once(::Union{Val{:go_to},Val{:theme},Val{:text_size},Val{:key_bindings},Val{:spelling},Val{:autosave},Val{:insert},Val{:rename_in_code},Val{:show_code}}) = true
 
 """
 Run the palette's command when it runs at once and each of its chips has
@@ -34845,11 +34845,14 @@ page_title(e) = something(first_answer(PAGE_TITLES, e), email_title(e), Some(not
 #
 # A function draws each thing that a window shows: the method of `describe`
 # for the thing's type. Hold ⌘ and ⌥ and click a thing, and Ladder shows that
-# method in a window beside this one. Show Code, in the command palette, does
-# the same for the next thing that you click, and esc gives the mouse back.
-# While ⌘ and ⌥ are down, or after Show Code, a line goes round the thing
-# under the mouse, with a label: the name of its type, and the file and the
-# line of its method.
+# method in a window beside this one. While ⌘ and ⌥ are down, a line goes
+# round the thing under the mouse, with a label: the name of its type, and the
+# file and the line of its method.
+#
+# Show Code, in the command palette, takes the thing as its node, as Ask For
+# Change does: it starts as what the caret is on, shown as a blue A, and a
+# click chooses another and shows its code at once. Return shows the code of
+# A. A block of Julia code shows where it is in its file.
 #
 # The window with the code shows a file that Ladder loaded. Code that you run
 # there runs in the module that the file made, and not in a module of its own:
@@ -34926,14 +34929,12 @@ end
 
 """
 The tool of a window of the editor `editor` that shows the code of a thing.
-`picking` is true after Show Code, until a click or esc. `swallow` is true
-from a click that it took until the button comes up. `asked` is the change
+`swallow` is true from a click that it took until the button comes up. `asked` is the change
 that an agent is making, or made a moment ago: see "ask for a change to a
 thing".
 """
 @def mutable struct CodePicker
   editor::Any = nothing
-  picking::Bool = false
   swallow::Bool = false
   asked::Any = nothing
 end
@@ -34942,10 +34943,10 @@ code_picker(e) = get!(() -> CodePicker(editor=e), e.nodes, :code_picker)::CodePi
 
 """
 True while a click in the window `w` shows the code of the thing that it's on:
-after Show Code, or while ⌘ and ⌥ are down with no other key that's held. With
-⇧ or ⌃ down as well, as with a key that holds all four, it isn't.
+while ⌘ and ⌥ are down with no other key that's held. With ⇧ or ⌃ down as
+well, as with a key that holds all four, it isn't.
 """
-picks(t::CodePicker, w) = t.picking || only_held(w, Keys.cmd | Keys.opt)
+picks(t::CodePicker, w) = only_held(w, Keys.cmd | Keys.opt)
 
 "Give the window of `e` its picker, unless it has a tool, like the layout inspector"
 code_tick!(e) = begin
@@ -34970,13 +34971,11 @@ tool_input(t::CodePicker, w, ::KeyPress{Keys.mouse_left}) = begin
   end
   picks(t, w) || return false
   found = code_under(w)
-  t.picking = false
   t.swallow = true   # the window's parts see neither the press nor the release
   found === nothing || show_code!(t.editor, found[2])
   true
 end
 tool_input(t::CodePicker, w, ::KeyRelease{Keys.mouse_left}) = (was = t.swallow; t.swallow = false; was)
-tool_input(t::CodePicker, w, ::KeyPress{Keys.escape}) = (was = t.picking; t.picking = false; was)
 
 const PICK_LINE = colorant"rgb(48,128,236)"
 
@@ -35036,10 +35035,19 @@ show_code!(e, m::Method) = begin
   place = code_place(m)
   place === nothing && return nothing
   file, line = place
-  by = window_of(e)
   k = findfirst(o -> o !== e && !isempty(o.buf.path) && (o.buf.path == file || page_key(o.buf.path) == file), editors)
   # Julia knows the line that the method was on when its file was loaded. The file can have changed since, on the disk or in its window.
-  line = settled_line(m, k === nothing ? text(file) : editors[k].buf.lines, line)
+  show_place!(e, file, settled_line(m, k === nothing ? text(file) : editors[k].buf.lines, line))
+end
+
+"""
+Show line `line` of the file `file` in a window beside the window of `e`, with
+the caret on it, near the top of the window. A window that shows the file
+already comes to the front. It gives the editor of that window.
+"""
+show_place!(e, file::AbstractString, line::Int) = begin
+  by = window_of(e)
+  k = findfirst(o -> o !== e && !isempty(o.buf.path) && (o.buf.path == file || page_key(o.buf.path) == file), editors)
   if k === nothing
     shown = build_editor(file)
     foreach(name -> setfield!(shown, name, getfield(e, name)), SHARED)
@@ -35079,10 +35087,6 @@ redraw_windows!() =
     redraw_in!(o, 0)
   end
 
-"Show the code that draws the next thing that you click. Esc leaves it."
-show_code!(e) = (code_picker(e).picking = true; redraw_in!(e, 0); nothing)
-
-add_command!(show_code!, title="Show the code that draws the next thing that you click")
 
 
 # --- a page as an app -------------------------------------------------------------------------
@@ -35834,6 +35838,31 @@ end
 add_command!(ask_for_change!, title="Ask an agent to change a block of code, or a part of the window, in your own words")
 add_command!(show_change!, title="Show the last change that an agent made, and reject any part of it")
 add_command!(undo_change!, title="Put back the files that an agent changed last, as they were before")
+
+# Show Code takes the same node as Ask For Change: see "the code of a thing"
+"""
+Show the code of `node`: the function that draws a part of the window, in a
+window beside this one, or a block of Julia code. `node` starts as what the
+caret is on, as the node of Ask For Change does, and a click chooses another.
+"""
+show_code!(e, node::ToChange) = begin
+  if node.node !== nothing
+    m = drawn_by(node.node)
+    m === nothing || return show_code!(e, m)
+  end
+  lines = text(node.file)
+  line = code_start(lines, node.first)
+  b = e.buf
+  # A block of the page or the file that this window shows is shown here
+  if !isempty(b.path) && page_key(b.path) == node.file
+    show_line!(e, line)
+    e.nodes[:hold] = (line, 24px - PAGE_TOP)
+    return e
+  end
+  show_place!(e, node.file, line)
+end
+
+add_command!(show_code!, title="Show the code that draws a part of the window, or a block of Julia code")
 add_command!(keep_change!, name=:keep_this_change, title="Keep the function at the caret for each time that Ladder starts: a change to Ladder's own code")
 
 # --- a folder's own page ----------------------------------------------------------------

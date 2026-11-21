@@ -1,6 +1,6 @@
-# Tests for the code of a thing, in main.jl: a click with ⌘ and ⌥ down, or the
-# next click after Show Code, shows the method of `describe` that draws the
-# thing under the mouse, in a window beside this one. Code that runs in that
+# Tests for the code of a thing, in main.jl: a click with ⌘ and ⌥ down, or
+# Show Code with the thing as its node, shows the method of `describe` that
+# draws the thing, in a window beside this one. Code that runs in that
 # window runs in the module that the file made, so a new method draws the
 # thing at once. Run them with `julia -O0 --project=. test/show_code_test.jl`.
 # They click in windows that aren't on the screen. Set `LADDER_SHOTS` to a
@@ -8,7 +8,7 @@
 
 @use Test: @test, @testset
 @use "../main" => K
-@use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse
+@use "github.com/jkroso/MiniFB.jl" Window KeyPress KeyRelease MouseMove Keys onkey onmouse Typed ontype
 @use "github.com/jkroso/UI.jl/Interface/draw" frame rect window_tool
 @use "github.com/jkroso/UI.jl/Interface/save" save_png
 @use GeometryBasics: Vec2
@@ -129,24 +129,37 @@ end
   @test length(code_windows()) == 1
 end
 
-@testset "Show Code takes the next click" begin
+@testset "Show Code takes what the caret is on, or what a click chooses" begin
   shown = only(code_windows())
   shown.buf.caret = shown.buf.anchor = (1, 0)
-  K.show_code!(e)
-  t = K.code_picker(e)
-  @test t.picking
+  # The caret on the block: Show Code has the block's thing as A, and Return shows its code
+  K.focus(e)
+  e.buf.caret = e.buf.anchor = (3, 0)
+  frames()
+  press(k, held...) = (foreach(h -> w.keys |= h, held); onkey(w, KeyPress{k}(0, w)); foreach(h -> w.keys ⊻= h, held); haskey(e.nodes, :palette) && (e.nodes[:palette].moved = 0.0); frames())
+  press(Keys.p, Keys.cmd, Keys.shft)
+  foreach(c -> ontype(w, Typed(c, w)), "show code"); frames()
+  press(Keys.enter)
+  p = K.palette(e)
+  @test p.command.name == :show_code && K.chip_value(p, K.palette_chips(p), 1).node === node() && e.popup == :commands
+  press(Keys.enter)
+  @test e.popup == :none && shown.buf.caret[1] == first_line
+  # A click chooses the thing and shows its code at once. The thing doesn't get the click.
+  shown.buf.caret = shown.buf.anchor = (1, 0)
+  e.buf.caret = e.buf.anchor = (7, 0)
+  frames()
+  press(Keys.p, Keys.cmd, Keys.shft)
+  foreach(c -> ontype(w, Typed(c, w)), "show code"); frames()
+  press(Keys.enter)
+  @test K.chip_value(p, K.palette_chips(p), 1).node isa K.Document
   n = node().clicks
   click()
-  @test !t.picking && node().clicks == n && shown.buf.caret[1] == first_line
-  # The click after that is the block's own again
+  @test e.popup == :none && node().clicks == n && shown.buf.caret[1] == first_line
+  # The click after that is the block's own again, once the bar has slid down
+  e.nodes[:palette].moved = 0.0
+  frames()
   click()
   @test node().clicks == n + 1
-  # Esc gives the mouse back
-  K.show_code!(e)
-  onkey(w, KeyPress{Keys.escape}(0, w))
-  @test !t.picking
-  click()
-  @test node().clicks == n + 2
   @test haskey(K.COMMANDS, :show_code)
 end
 

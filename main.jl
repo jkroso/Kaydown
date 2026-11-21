@@ -1391,6 +1391,7 @@ build_editor(path) = begin
   path = abspath(expanduser(path))
   e = Editor()
   load_sheet_font()
+  load_omni_font()
   e.nodes[:input] = own!(e, TextInput(placeholder="Find a file", font_family=SANS, font_size=15px,
                                       look=(_, text) -> Row(width(grow=grow), height(grow=grow), clip=true, text)))
   if isdir(path)
@@ -28178,7 +28179,7 @@ open_finder!(e) = begin
   i.text = ""
   i.cursor = i.anchor = 0
   # The command palette has the same field, with other words in it and smaller text beside a chip
-  i.placeholder, i.font_size = "Find a file", 15px
+  i.placeholder, i.font_size, i.font_family = "Find a file", 15px, SANS
   list_files!(e)
   focus(i)
 end
@@ -28328,6 +28329,25 @@ const OMNI_ROW = 70.0          # a row of a list with a name and what it does un
 const OMNI_ROW_ONE = 50.0      # a row with a name only
 # The weight of a name in a list, and of the letters typed that it has. Centient's Medium looked fuzzy in the Mac's font.
 const OMNI_NAME, OMNI_MATCH = "SemiBold", "Heavy"
+# The palette's text is in Manrope, as Centient's omnibar is. fonts/ has a file for each weight,
+# cut from Centient's variable font. A Ladder without those files uses the Mac's font.
+# The keys beside a command stay in the Mac's font, because Manrope has no ⌘, ⇧, ⌥ or ⌃.
+const OMNI_FONT_FILES = [joinpath(@__DIR__, "fonts", "Manrope-$w.ttf") for w in ("Regular", "Medium", "SemiBold", "Bold", "ExtraBold")]
+const omni_family = Ref(SANS)
+"The family of the palette's text: Manrope once its files are read, and the Mac's font before that or without them"
+omni_font() = omni_family[]
+"""
+Read the palette's font from its files. As with the sheet's font, a built app
+forgets them when it starts. The files are looked for each time, not when the
+app is built, because a built app can run on a Mac that doesn't have them.
+"""
+load_omni_font() = omni_family[] = all(isfile, OMNI_FONT_FILES) ? (foreach(register_font, OMNI_FONT_FILES); "Manrope") : SANS
+"""
+The name of the face of the palette's font for `weight`. A font from a file is
+found only by the name of its weight, spelled as UI.jl spells it: \"SemiBold\",
+not \"Semibold\", and \"ExtraBold\" for \"Heavy\". The Mac's font takes any of them.
+"""
+omni_weight(weight::AbstractString) = omni_font() == SANS ? weight : weight_name(weight_of(weight))
 const OMNI_LIST_MOST = 464.0   # the most of the commands' rows that show before the list scrolls
 const OMNI_CHOICES_MOST = 200.0   # and of the rows of a chip's list that's searched
 const OMNI_POP_GAP = 10.0      # between a list and what it hangs over
@@ -29655,7 +29675,7 @@ end
 
 # --- where each part is ---
 
-omni_wide(text::AbstractString, size::Real, weight="") = isempty(text) ? 0.0 : num(measure(Face(SANS, weight, px(size), colours.ink, false), text))
+omni_wide(text::AbstractString, size::Real, weight="") = isempty(text) ? 0.0 : num(measure(Face(omni_font(), omni_weight(weight), px(size), colours.ink, false), text))
 
 "What a chip shows while the keyboard isn't in it, or while it takes no text: what's said, or its name. The second is true for the name."
 chip_words(p::CommandPalette, chips, k::Int) = (x = chip_value(p, chips, k); x === UNSAID ? (chip_name(chips[k]), true) : (worded(x), false))
@@ -29804,7 +29824,8 @@ strip_text(i::TextInput) = String(strip(i.text))
 "Put `child` at `(x, y)` of the window, in a layer of its own"
 omni_at(x, y, child) = Row(width(grow=grow), height(grow=grow), Alignment.Start, padding(px(y), 0px, 0px, px(x)), child)
 
-omni_label(text, size, colour; weight="") = label(text, px(size), color=colour, weight=weight)
+omni_label(text, size, colour; weight="", family=omni_font()) =
+  Text(text, size=px(size), family=family, subfamily=family == omni_font() ? omni_weight(weight) : weight, color=colour, wrap=WrapMode.none)
 
 describe(p::CommandPalette) = begin
   e = editor(p)
@@ -29816,6 +29837,7 @@ describe(p::CommandPalette) = begin
   p.pick = clamp(p.pick, 1, max(1, length(p.rows)))
   i.color, i.placeholder_color = c.ink, p.command === nothing ? c.muted : c.placeholder
   i.font_size = p.command === nothing ? 15px : 13px
+  i.font_family = omni_font()
   was = p.plan
   plan = p.plan = palette_plan(e, p)
   # A text field scrolls by how wide it was in the frame before. When a chip grew or shrank, the next frame shows the field at its new width at once.
@@ -29991,7 +30013,7 @@ end
 
 "A key as a row shows it: its sign in a box"
 omni_key(c, sign, on) = Box(height(22px), padding(8px, 0px), radius(4px), background(on ? c.key_on : c.key),
-                            border(1px, :solid, on ? c.key_on_line : c.key_line), omni_label(sign, 11, on ? c.key_on_ink : c.key_ink))
+                            border(1px, :solid, on ? c.key_on_line : c.key_line), omni_label(sign, 11, on ? c.key_on_ink : c.key_ink, family=SANS))
 
 "The signs of the keys of a shortcut, one for each key, as Centient shows them: ⌘, ⇧ and P for ⌘⇧P"
 key_signs(s::Shortcut) = String[sign for stroke in s for sign in [[sign for (key, _, sign) in HOLDS if key in stroke.held]; get(() -> uppercase(KEY_OF[stroke.key]), KEY_SIGNS, stroke.key)]]

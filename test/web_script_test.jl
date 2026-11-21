@@ -176,12 +176,13 @@ end
       fetch('missing.json').catch(e => { window.failed = e.message })
       var s = document.createElement('script'); s.textContent = "order.push('added')"; document.head.appendChild(s)
     </script></body></html>"""; load=address -> get(files, address, nothing), base="https://example.com/index.html")
-  @test js(l, "order.join(', ')") == "head, file, after the broken one, body loading, added, ready interactive, onload, load complete"
+  # A module runs after the page's other scripts, and before the page is ready
+  @test js(l, "order.join(', ')") == "head, file, after the broken one, body loading, added, module, ready interactive, onload, load complete"
   @test js(l, "bodyThere && fromFile === 'https://example.com/app.js'") == true
   @test js(l, "JSON.parse(document.getElementById('data').textContent).kept") == true
   @test js(l, "fetched + ' ' + failed") == "42 Load failed"
   @test lines(l) == ["hello 1 [2, \"x\"] {a: null}"]
-  @test any(t -> occursin("module", t), lines(l, :warn))
+  @test !any(t -> occursin("module", t), lines(l, :warn))
   # The script that couldn't be read is in the log, with its line, and the scripts after it ran
   @test length(lines(l, :error)) == 1 && occursin("SyntaxError", lines(l, :error)[1])
   # The page is laid out as the scripts left it, and what's for a reader with no scripts isn't in it

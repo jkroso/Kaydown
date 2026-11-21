@@ -37,15 +37,22 @@
 # browser lets a script read another site's file only when that site agrees.
 # With none, a script reads whatever `load` gives.
 #
+# A `<script type="module">` runs too, with the modules that it imports, and
+# so does `import()`. The page's `<script type="importmap">` says where a
+# name like `three` is. Modules wait for their files, and run after the
+# page's other scripts, in the page's order: see "modules" below and
+# module.jl. The page is ready (`DOMContentLoaded`) once they've run. A
+# module may take 30 seconds when it first runs, since that's often where it
+# builds what the page shows.
+#
 # What a script can't do here:
 #
-# - `import` and `<script type="module">`. Such a script is left out, and the log says so.
 # - `document.write`. The page is read before its first script runs, so a
 #   script in the <head> sees the whole page.
 # - Send anything: `fetch` and XMLHttpRequest only get, through `load`, and a
 #   form that sends with "post" goes nowhere.
 # - Workers, WebSocket, shadow trees and custom elements. A <canvas> draws in 2D
-#   only: see context.jl.
+#   (context.jl) and with WebGL (gl.jl), but not with WebGPU.
 # - `getComputedStyle` knows only what `computed` gives: see live.jl.
 #
 # A list like `childNodes` or `children` is the nodes as they were when it was
@@ -62,6 +69,23 @@
 @use "./form" sent
 @use "./window" WINDOW
 @use "./context" => Drawing
+@use "./module" Converted script_of wrapped LOADER
+@use "./gl" giveback!
+
+"The modules of a page: where its import map says each name is, and each module that was asked for"
+mutable struct Modules
+  imports::Vector{Pair{String,String}}                           # a name, or the start of an address, and the address that it's at
+  scopes::Vector{Pair{String,Vector{Pair{String,String}}}}       # the same for the modules whose address starts with the first
+  made::Dict{String,Any}         # each module by its address: (its Converted, the addresses that it imports, its own address), or the error that stopped it
+  defined::Set{String}           # the modules that the page has the function of
+  named::IdDict{Element,String}  # the address that each <script type="module"> with no file is known by
+  limit::Any                     # how many seconds the page's other scripts may run, or nothing for no limit
+end
+Modules(limit=nothing) = Modules(Pair{String,String}[], Pair{String,Vector{Pair{String,String}}}[], Dict{String,Any}(), Set{String}(), IdDict{Element,String}(), limit)
+
+# How many seconds a module may take when it first runs. A module often builds what the page shows then, like a scene
+# of three.js, which can take longer than the page's other scripts may.
+const MODULE_LIMIT = 30
 
 "The scripts of a page, and what they need of it"
 mutable struct Scripts
@@ -90,6 +114,8 @@ mutable struct Scripts
   focused::Function              # told the element that has the keyboard now, or nothing
   allowed::Function              # true when a script may read what's at an address, with `fetch` or XMLHttpRequest
   pending::Vector{Element}       # the <script> elements whose file is on its way
+  modules::Modules
+  unready::Bool                  # the page waits for its modules before it says that it's ready
 end
 
 # No more lines than this are kept in the log: a script in a loop can print for ever
@@ -107,9 +133,18 @@ Scripts(doc::Document; load=address -> nothing, base="", say=(level, text) -> no
         scroll=(y...) -> 0.0, go=nothing, focused=e -> nothing, allowed=address -> true) = begin
   s = Scripts(Context(; limit), doc, Dict{Int,Node}(), IdDict{Node,Int}(), 0, 0, false, Tuple{Symbol,String}[], say, load, String(base),
               place, at, computed, window, Dict{String,Object}(), IdDict{Element,Bool}(), IdDict{Element,Element}(), Dict{String,Any}(), time(),
-              scroll, go, focused, allowed, Element[])
+              scroll, go, focused, allowed, Element[], Modules(limit), false)
   apart!(s, doc.root)
   made = JS.evaluate(s.js, WINDOW; name="window.js")(natives(s))
+  JS.evaluate(s.js, LOADER; name="modules.js")(Dict{String,Any}(
+    # What `import()` asks: the address of the module, once it's there with what it imports, false while a file is on its way
+    "gather" => (name, from) -> begin
+      address = module_address(s, name, from)
+      address === nothing && error("No module is named $name")
+      got = gather!(s, address)
+      got === :waiting ? false : got === true ? address : error(got)
+    end,
+    "resolve" => (name, from) -> something(module_address(s, name, from), name)))
   for name in ("tick", "waiting", "click", "fire", "script", "ready", "alive", "rejected", "focus", "input", "submit")
     s.hooks[name] = made[name]
   end
@@ -130,7 +165,11 @@ note!(s::Scripts, level::Symbol, text::AbstractString) = begin
   nothing
 end
 
-"Do `f`, which runs a script. What the script throws goes in the log, and `default` is given."
+"""
+Do `f`, which runs a script. What the script throws goes in the log, and
+`default` is given. A script that used WebGL made its OpenGL context current,
+and the one that was current before comes back.
+"""
 guarded(f, s::Scripts, default=nothing) =
   try
     f()
@@ -138,6 +177,8 @@ guarded(f, s::Scripts, default=nothing) =
     e isa ScriptError || rethrow()
     note!(s, :error, sprint(showerror, e))
     default
+  finally
+    giveback!()
   end
 
 # --- nodes and their numbers --------------------------------------------------------------
@@ -459,11 +500,10 @@ run!(s::Scripts, e::Element) = begin
   haskey(s.ran, e) && return
   s.ran[e] = true
   type = lowercase(strip(attr(e, "type")))
-  if type == "module"
-    note!(s, :warn, "A <script type=\"module\"> was left out: this engine runs no modules")
-    return
-  end
+  type == "module" && return run_module!(s, e)
+  type == "importmap" && return (mapped!(s, text(e)); nothing)
   type in SCRIPT || return   # data that the page keeps in a <script>, like JSON or a template
+  haskey(e.attrs, "nomodule") && return   # it's for a browser that runs no modules
   src = strip(attr(e, "src"))
   code = isempty(src) ? text(e) : loaded(s, src)
   if code === :waiting
@@ -493,9 +533,11 @@ start!(s::Scripts) = begin
     c.tag == "script" ? push!(found, c) : visit(c)
   end
   visit(s.doc.root)
-  # A script that an earlier script took out of the page doesn't run
-  foreach(e -> connected(s, e) && run!(s, e), found)
-  guarded(() -> s.hooks["ready"](), s)
+  # A script that an earlier script took out of the page doesn't run. Modules run after the rest.
+  foreach(e -> connected(s, e) && !ismodule(e) && run!(s, e), found)
+  foreach(e -> connected(s, e) && ismodule(e) && run!(s, e), found)
+  # The page is ready once its modules have run
+  any(ismodule, s.pending) ? (s.unready = true) : guarded(() -> s.hooks["ready"](), s)
   s
 end
 
@@ -510,6 +552,10 @@ step!(s::Scripts) = begin
     waited = copy(s.pending)
     empty!(s.pending)
     foreach(e -> connected(s, e) && run!(s, e), waited)
+  end
+  if s.unready && !any(ismodule, s.pending)
+    s.unready = false
+    guarded(() -> s.hooks["ready"](), s)
   end
   wait = guarded(() -> s.hooks["tick"](1000 * (time() - s.started)), s, -1.0)
   length(s.nodes) > 2 * s.kept + 2000 && sweep!(s)
@@ -553,6 +599,138 @@ fire!(s::Scripts, e::Union{Element,Nothing}, type::AbstractString, init=Dict{Str
 
 "Run `code` in the page, and give the value of its last statement. What the script throws is thrown here, as a `ScriptError`."
 evaluate(s::Scripts, code::AbstractString; kw...) = JS.evaluate(s.js, code; kw...)
+
+# --- modules ------------------------------------------------------------------------------
+
+ismodule(e::Element) = lowercase(strip(attr(e, "type"))) == "module"
+
+"Add what the import map `json` says to the page's map. A map that can't be read is left out, and the log says so."
+mapped!(s::Scripts, json::AbstractString) = begin
+  m = s.modules
+  got = guarded(s) do
+    JS.evaluate(s.js, "(m => [Object.entries(m.imports || {}), Object.entries(m.scopes || {}).map(([k, v]) => [k, Object.entries(v)])])(\n" * json * "\n)"; name="importmap")
+  end
+  got isa AbstractVector || return
+  whole(k) = occursin(r"^(\.{0,2}/|[a-zA-Z][a-zA-Z0-9+.-]*:)", k) ? resolve(home(s), k) : String(k)
+  entries(list) = [whole(String(k)) => resolve(home(s), String(v)) for (k, v) in list if v isa AbstractString]
+  append!(m.imports, entries(got[1]))
+  append!(m.scopes, [resolve(home(s), String(k)) => entries(v) for (k, v) in got[2]])
+  # The longest start of an address is tried first
+  sort!(m.scopes, by=p -> -length(p.first))
+end
+
+"What `map` says that `name` is: its address, the address that the longest start of it is at with the rest added, or nothing"
+mapped(map::Vector{Pair{String,String}}, name::AbstractString) = begin
+  best = nothing
+  for (k, v) in map
+    k == name && return v
+    endswith(k, '/') && startswith(name, k) && (best === nothing || length(k) > length(best[1])) && (best = (k, v))
+  end
+  best === nothing ? nothing : best[2] * name[ncodeunits(best[1])+1:end]
+end
+
+"""
+The address of the module that a module at the address `from` names `name`:
+with the import map, or from `from` for a name like `./a.js`. Nothing for a
+name that the import map doesn't know, like `three` with no map.
+"""
+module_address(s::Scripts, name::AbstractString, from::AbstractString) = begin
+  name = String(strip(name))
+  url = occursin(r"^\.{0,2}/", name) ? resolve(from, name) : occursin(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", name) ? name : nothing
+  key = something(url, name)
+  for (scope, map) in s.modules.scopes
+    startswith(from, scope) || continue
+    found = mapped(map, key)
+    found === nothing || return found
+  end
+  found = mapped(s.modules.imports, key)
+  found === nothing ? url : found
+end
+
+"""
+Get the module at `address` and each module that it imports, and give the
+page the function of each. `code` is the module's code, for one that's
+written in the page, and `from` the address that it imports from. Gives true
+once all are there, :waiting while a file is on its way, or the words of the
+error that stopped one.
+"""
+gather!(s::Scripts, address::AbstractString; code=nothing, from=address) = begin
+  m = s.modules
+  queue, seen, waiting = String[address], Set{String}(), false
+  while !isempty(queue)
+    a = popfirst!(queue)
+    (a in seen || a in m.defined) && continue
+    push!(seen, a)
+    if !haskey(m.made, a)
+      text = a == address && code !== nothing ? code : loaded(s, a)
+      text === :waiting && (waiting = true; continue)
+      text === nothing && return (m.made[a] = "The module $a could not be loaded")
+      here = a == address ? from : a
+      c = script_of(text)
+      imports = String[]
+      for name in c.imports
+        found = module_address(s, name, here)
+        found === nothing && return (m.made[a] = "The module $a imports \"$name\", which the page's import map doesn't name")
+        push!(imports, found)
+      end
+      m.made[a] = (c, imports, here)
+    end
+    made = m.made[a]
+    made isa AbstractString && return made
+    append!(queue, made[2])
+  end
+  waiting && return :waiting
+  # The page gets the function of each module that's new. One with an `await` outside a function is an async function.
+  for a in seen
+    a in m.defined && continue
+    c, imports, here = m.made[a]
+    try
+      JS.evaluate(s.js, wrapped(c, a, here, imports); name=here)
+    catch e
+      e isa ScriptError || rethrow()
+      try
+        JS.evaluate(s.js, wrapped(c, a, here, imports; async=true); name=here)
+      catch
+        return (m.made[a] = sprint(showerror, e))
+      end
+    end
+    push!(m.defined, a)
+  end
+  true
+end
+
+"Run the module of the <script type=\"module\"> element `e`, once it and the modules that it imports are there"
+run_module!(s::Scripts, e::Element) = begin
+  src = strip(attr(e, "src"))
+  address = if isempty(src)
+    # A module that's written in the page is named by its place among them, and imports from the page's address
+    get!(() -> home(s) * "#module" * string(length(s.modules.named) + 1), s.modules.named, e)
+  else
+    resolve(home(s), src)
+  end
+  got = isempty(src) ? gather!(s, address; code=text(e), from=home(s)) : gather!(s, address)
+  # Modules run in the page's order, so one waits for those before it. Its files are asked for meanwhile.
+  if got === :waiting || any(p -> p !== e && ismodule(p) && !haskey(s.ran, p), s.pending)
+    delete!(s.ran, e)
+    any(p -> p === e, s.pending) || push!(s.pending, e)
+    return
+  end
+  id = number(s, e)
+  if got !== true
+    note!(s, :error, got)
+    guarded(() -> s.hooks["fire"](id, "error"), s)
+    return
+  end
+  longer = s.modules.limit !== nothing && s.modules.limit < MODULE_LIMIT
+  longer && JS.limit!(s.js, MODULE_LIMIT)
+  try
+    guarded(() -> JS.evaluate(s.js, "globalThis[Symbol.for('ladder.modules')].run(" * repr(address) * ")"; name=address), s)
+  finally
+    longer && JS.limit!(s.js, s.modules.limit)
+  end
+  isempty(src) || guarded(() -> s.hooks["fire"](id, "load"), s)
+  nothing
+end
 
 "Forget the number of each node that no script holds any more, so that Julia can free the nodes that left the page"
 sweep!(s::Scripts) = begin

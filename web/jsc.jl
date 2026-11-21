@@ -17,6 +17,11 @@
 #   JavaScript to Julia    null and undefined are nothing, a number is a Float64, an array is a Vector{Any}, and any
 #                          other object is an `Object`: `o["name"]` reads a property of it and `o(args...)` calls it
 #
+# A function that a script calls very often, like one of WebGL's, can be
+# `Raw(f)`: `f(c, args)` gets the script's values as they are, as JSValueRefs,
+# and reads them with `number`, `flag`, `text` and `bytes`. That skips making a
+# Julia value of each. `bytes` gives a typed array's memory itself, with no copy.
+#
 # A script that throws makes `evaluate` and `call` throw a `ScriptError`, which
 # has the message, the line and the stack. A Julia function that throws while a
 # script calls it throws an Error in the script, which the script can catch.
@@ -276,7 +281,12 @@ value(c::Context, d::Union{AbstractDict,NamedTuple}) = begin
   end
   object
 end
-value(c::Context, f::Function) = begin
+"A Julia function that a script calls with its values as they are: `f(c, args)`, where `args` holds a JSValueRef of each"
+struct Raw
+  f::Function
+end
+
+value(c::Context, f::Union{Function,Raw}) = begin
   made = with(s -> ccall((:JSObjectMakeFunctionWithCallback, LIB), Handle, (Handle, Handle, Ptr{Cvoid}), c.ref, s, CALLED[]), "")
   # The function is kept for as long as the context is, since its Julia function is found by where it is
   protect(c, made)
@@ -299,6 +309,7 @@ called(ctx::Handle, fn::Handle, this::Handle, argc::Csize_t, argv::Ptr{Handle}, 
   try
     c = CONTEXTS[ccall((:JSContextGetGlobalContext, LIB), Handle, (Handle,), ctx)].value::Context
     f = c.natives[fn]
+    f isa Raw && return value(c, f.f(c, unsafe_wrap(Array, argv, Int(argc))))
     value(c, f((julia(c, unsafe_load(argv, i)) for i in 1:argc)...))
   catch e
     c === nothing && return C_NULL
@@ -306,6 +317,39 @@ called(ctx::Handle, fn::Handle, this::Handle, argc::Csize_t, argv::Ptr{Handle}, 
     unsafe_store!(exception, ccall((:JSObjectMakeError, LIB), Handle, (Handle, Csize_t, Ptr{Handle}, Ptr{Handle}), c.ref, 1, message, C_NULL))
     ccall((:JSValueMakeUndefined, LIB), Handle, (Handle,), c.ref)
   end
+end
+
+# --- what a Raw function reads -------------------------------------------------------------
+
+"The number that a script's value is, as `Number(v)` gives it"
+number(c::Context, v::Handle) = ccall((:JSValueToNumber, LIB), Cdouble, (Handle, Handle, Ptr{Handle}), c.ref, v, C_NULL)
+"True or false, as `Boolean(v)` gives it"
+flag(c::Context, v::Handle) = ccall((:JSValueToBoolean, LIB), Bool, (Handle, Handle), c.ref, v)
+"True for null and undefined"
+none(c::Context, v::Handle) = kind(c, v) <= 1
+
+# How many bytes each element of each kind of typed array has, by JavaScriptCore's number for the kind
+const ELEMENT = (1, 2, 4, 1, 1, 2, 4, 4, 8, 1, 0, 8, 8)
+
+"""
+The memory of a typed array or an ArrayBuffer: a pointer to its first byte,
+how many bytes it has, and how many bytes each element has. Nothing for any
+other value. It's good while the script still holds the array.
+"""
+bytes(c::Context, v::Handle) = begin
+  isobject(c, v) || return nothing
+  t = ccall((:JSValueGetTypedArrayType, LIB), Cint, (Handle, Handle, Ptr{Handle}), c.ref, v, C_NULL)
+  if t == 9   # an ArrayBuffer
+    p = ccall((:JSObjectGetArrayBufferBytesPtr, LIB), Ptr{UInt8}, (Handle, Handle, Ptr{Handle}), c.ref, v, C_NULL)
+    n = ccall((:JSObjectGetArrayBufferByteLength, LIB), Csize_t, (Handle, Handle, Ptr{Handle}), c.ref, v, C_NULL)
+    return (p, Int(n), 1)
+  end
+  (0 <= t <= 12 && t != 10) || return nothing
+  # The pointer is to the start of the array's buffer, which the array can start into
+  p = ccall((:JSObjectGetTypedArrayBytesPtr, LIB), Ptr{UInt8}, (Handle, Handle, Ptr{Handle}), c.ref, v, C_NULL)
+  at = ccall((:JSObjectGetTypedArrayByteOffset, LIB), Csize_t, (Handle, Handle, Ptr{Handle}), c.ref, v, C_NULL)
+  n = ccall((:JSObjectGetTypedArrayByteLength, LIB), Csize_t, (Handle, Handle, Ptr{Handle}), c.ref, v, C_NULL)
+  (p + at, Int(n), ELEMENT[t+1])
 end
 
 # --- Julia runs a script ------------------------------------------------------------------
@@ -377,4 +421,4 @@ __init__() = begin
   STOP[] = @cfunction(stop, Bool, (Handle, Ptr{Cvoid}))
 end
 
-export Context, Object, ScriptError, evaluate, call
+export Context, Object, ScriptError, Raw, evaluate, call

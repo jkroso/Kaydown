@@ -25,8 +25,9 @@
 # (`onload`) or can't be (`onerror`), since most scripts wait for that before
 # they draw it. Here that's said a moment after the `src` is set.
 #
-# What a script can't do: `getContext('webgl')` and the other kinds give null.
-# See the top of canvas.jl for what a 2D context leaves out.
+# `getContext('webgl2')` and `getContext('webgl')` give WebGL: see gl.jl. A
+# canvas has one kind of context, and asking for another gives null. See the
+# top of canvas.jl for what a 2D context leaves out.
 
 @use "./jsc" Context evaluate
 @use "./dom" Element attr
@@ -34,6 +35,7 @@
 @use "./canvas" save! restore! matrix! turn! image! times BLENDS SAME
 @use "./video" frame play spot play! pause! seek!
 @use "./main" Pictures film
+@use "./gl" => Webgl
 
 const CONTEXT = raw"""
 (function (native) {
@@ -190,6 +192,8 @@ const source = from => {
   if (el instanceof HTMLImageElement || el instanceof HTMLCanvasElement || el instanceof HTMLVideoElement || (el instanceof SVGElement && el.localName === 'image')) return el[ID]
   throw new TypeError('A canvas draws an <img>, a <canvas>, a <video>, an ImageBitmap or an OffscreenCanvas')
 }
+// WebGL makes a texture of the same pictures
+global[Symbol.for('ladder.source')] = source
 
 // --- the context --------------------------------------------------------------------------
 
@@ -363,14 +367,19 @@ const side = (name, start) => ({
     this.setAttribute(name, String(Math.max(0, Math.trunc(Number(v)) || 0)))
     if (this[CTX]) { this[CTX][STATE] = fresh(); this[CTX][STACK] = [] }
     native.resize(this[ID])
+    const gl = this[Symbol.for('ladder.webgl.context')]
+    if (gl) gl[Symbol.for('ladder.webgl.resize')]()
   },
 })
 Object.defineProperties(HTMLCanvasElement.prototype, {
   width: side('width', 300),
   height: side('height', 150),
-  getContext: {configurable: true, writable: true, value: function getContext(kind) {
-    if (kind !== '2d') return null
-    return this[CTX] || (this[CTX] = new CanvasRenderingContext2D(KEY, this))
+  getContext: {configurable: true, writable: true, value: function getContext(kind, attrs) {
+    const gl = this[Symbol.for('ladder.webgl.context')]
+    if (kind === '2d') return gl ? null : this[CTX] || (this[CTX] = new CanvasRenderingContext2D(KEY, this))
+    if (kind !== 'webgl2' && kind !== 'webgl' && kind !== 'experimental-webgl') return null
+    const make = global[Symbol.for('ladder.webgl')]
+    return this[CTX] || !make ? null : make(this, kind, attrs)
   }},
   toDataURL: {configurable: true, writable: true, value: function toDataURL(kind, quality) { return native.url(this[ID], String(kind ?? 'image/png'), quality ?? null) }},
   toBlob: {configurable: true, writable: true, value: function toBlob(done, kind, quality) {
@@ -674,7 +683,9 @@ start!(js::Context; node, load=address -> nothing, now=() -> 0.0, changed=() -> 
     "pause" => id -> (e = node(id)::Element; pause!(play(e), now(), haskey(e.attrs, "loop")); changed(); nothing),
     "seek" => (id, t) -> (e = node(id)::Element; reel(e); seek!(play(e), now(), t, haskey(e.attrs, "loop")); changed(); nothing),
   )
-  evaluate(js, CONTEXT; name="canvas.js")(natives)
+  ending = evaluate(js, CONTEXT; name="canvas.js")(natives)
+  Webgl.start!(js; node, picture, board=at)
+  ending
 end
 
 export start!

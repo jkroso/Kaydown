@@ -20,8 +20,9 @@
 # there (`globalAlpha`, `globalCompositeOperation`). Reading and writing
 # pixels. A PNG, a JPEG or a WebP of the surface.
 #
-# What isn't: `filter`, `letterSpacing` and the like, `isPointInStroke`, and
-# any context but `2d`: nothing draws in 3D (WebGL).
+# What isn't: `filter`, `letterSpacing` and the like, and `isPointInStroke`.
+# A canvas of WebGL (gl.jl) puts its picture on the same surface, through
+# `ready`, just before the surface is drawn.
 
 @use Skia
 @use Base64: base64encode
@@ -105,6 +106,7 @@ mutable struct Board
   changes::Int                 # how many times it was drawn on
   image::Ptr{Cvoid}            # Skia's picture of the surface as it was after `shown` changes, or C_NULL
   shown::Int
+  ready::Any                   # called with the surface before its picture is made, or nothing: WebGL puts what it drew there
 end
 
 # No surface has more pixels than this, across or down
@@ -122,7 +124,7 @@ extent(e::Element) = begin
 end
 
 Board(wide::Integer, high::Integer; picture=source -> nothing) = begin
-  b = Board(wide, high, UInt8[], C_NULL, C_NULL, State(), State[], Shape(), picture, 0, C_NULL, -1)
+  b = Board(wide, high, UInt8[], C_NULL, C_NULL, State(), State[], Shape(), picture, 0, C_NULL, -1, nothing)
   finalizer(release, b)
   clear!(b, wide, high)
 end
@@ -175,6 +177,7 @@ touch!(b::Board) = (b.changes += 1; nothing)
 "Skia's picture of the surface as it is now, or C_NULL for a surface with no pixels. It's good until the surface is drawn on again."
 image!(b::Board) = begin
   (b.wide == 0 || b.high == 0) && return C_NULL
+  b.ready === nothing || b.ready(b)
   b.image != C_NULL && b.shown == b.changes && return b.image
   b.image == C_NULL || Skia.sk_image_unref(b.image)
   info = Ref(Skia.sk_image_info_t(C_NULL, Skia.SK_COLOR_TYPE_RGBA_8888, Skia.SK_ALPHA_TYPE_PREMUL, b.wide, b.high))

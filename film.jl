@@ -15,6 +15,12 @@
 # of pages/progress.jl beside it. Nothing in this folder changes but the film.
 # It needs ffmpeg: `brew install ffmpeg`.
 #
+# The Readme shows docs/ladder.gif, since GitHub doesn't play a video file of
+# the repo in a Readme. Nothing makes it by itself. After a new film, this
+# makes it again, 1280 pixels wide at 12 frames a second (about 5 MB):
+#
+#     ffmpeg -i build/film/ladder.mp4 -vf "fps=12,scale=1280:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle" docs/ladder.gif
+#
 # `SCENES` is the film: each scene is a function that takes the film. To add
 # one, write a function like the others and put it in the list.
 

@@ -1,5 +1,7 @@
 # Ladder
 
+![A short film of Ladder](docs/ladder.gif)
+
 Ladder brings the composability of the command line to the GUI. On the command line, everything is a file. In Ladder, everything is an object. You don't build apps in Ladder. Instead, you change the behaviour of the objects. There are 3 types of fundamental objects, in this hierarchy: `Directory > File > Component`. Each contains instances of the one below it, and a directory can hold directories too. The specific types of objects available to you aren't important, though. What matters is that you have complete control over the way they behave.
 
 For example, if you want a nice [email client](https://github.com/jkroso/Mail.lad) in Ladder, you just change the way your `~/mail` folder behaves. If you want a nice [Netflix-style media library](https://github.com/jkroso/Media.lad), you just change the way your `~/media` folder presents itself. You don't have a music player in Ladder. You have a music folder that behaves like one. You don't have a blog. You have a `~/blog` that knows how to put itself on the internet.

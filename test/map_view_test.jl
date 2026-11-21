@@ -350,10 +350,12 @@ end
   @test length(Fake.calls) == n && !reddens(corners...)
   @test rect(v).height == tall && K.map_address(v) == "12 Slow Street, Kew" && K.cursor(v.parts[:area]) == :arrow
   shot("map-finding.png")
-  # A click and a drag on the grey box change nothing
+  # A click and a drag on the grey box change nothing, but put the caret on the block as a whole
   click(middle(area()) .+ (0, 60))
   drag(middle(area()), middle(area()) .+ (70, 20))
-  @test K.zooming(e) === nothing && block() == ["12 Slow Street, Kew"]
+  @test K.zooming(e) === nothing && block() == ["12 Slow Street, Kew"] && K.picked(e.buf) !== nothing
+  # The line round the block would tint the pin
+  e.buf.caret = e.buf.anchor = (1, 0); K.touch!(e); frames()
   # The window draws again by itself, and the map shows when the place is known
   @test until(() -> K.map_shows(v))
   @test K.map_words(v) == "" && K.map_address(v) == "12 Slow Street, Kew, Australia" && K.cursor(v.parts[:area]) == :hand && pinned(middle(r))

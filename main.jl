@@ -96,7 +96,8 @@
 #     code and its assembly.
 #   - Move the caret down the page onto a form, a diagram or a picture. A
 #     line goes round it. Return gives it the keyboard, ⌫ takes it away, and
-#     ↑ and ↓ go on to the lines beside it.
+#     ↑ and ↓ go on to the lines beside it. A click on a block puts the caret
+#     on it too, unless the click was on a part of the block that takes clicks.
 #   - ⌘B and ⌘I make the selection bold or italic. ⌘Z and ⌘⇧Z undo and redo.
 #   - Double-click selects a word, triple-click a line. ⌘-click opens a link. In a page
 #     that's read-only, like an email, a click opens it with no key held.
@@ -22375,6 +22376,7 @@ press!(e, pos) = begin
     e.popup = :none
     e.clicked = (time(), (it.first, 0), 0)
     took(e) || focus(e)
+    pick_clicked!(e, it)
     return
   end
   focus(e)
@@ -22419,6 +22421,25 @@ press!(e, pos) = begin
     only_held(e, Keys.shft) || (b.anchor = at)
   end
   touch!(e)
+end
+
+"""
+After a click on the live block that `it` shows, put the caret on the block as a
+whole, as ↑ and ↓ do, so that it has the line round it. A click that a part of
+the block takes for itself, like a click on a button, never comes here. A click
+that a part uses and lets go on to the page, like a stroke of a pen or a click
+in a field, puts the caret on the block too, unless the part moved the caret.
+A click with a key like ⌘ or ⇧ held leaves the caret where it is. The page
+doesn't scroll, because the block is under the mouse.
+"""
+pick_clicked!(e, it::Item) = begin
+  b = e.buf
+  (unmodified(e) && rich(b) && !b.fixed && b.caret == b.stood) || return
+  # A part of the block that changed its lines leaves the caret where it is
+  part(b, it.first) == (it.first, it.last) || return
+  b.caret = b.anchor = (it.first, 0)
+  touch!(e)
+  e.reveal = false
 end
 
 """
@@ -26086,7 +26107,9 @@ end
 #
 # In rich text the caret doesn't go into a part of the page that shows as one
 # thing, like a form, a diagram or a picture. It goes onto the part, and a
-# line goes round the part to show that. See `picked`. From there:
+# line goes round the part to show that. See `picked`. A click on a live block
+# that no part of the block takes for itself puts the caret there too. See
+# `pick_clicked!`. From there:
 #
 #   - Return gives the part the keyboard. A form's first field takes it, and
 #     Tab goes to the next field. A plan, a schedule and a sketch take their

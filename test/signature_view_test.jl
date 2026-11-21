@@ -111,8 +111,8 @@ end
   at(spot(v, 330, 30)); at(spot(v, 340, 80))
   release()
   @test block(1)[end] == "pen 250,60 260,20 270,-40 300,-60 330,30 340,80" && length(v.data.strokes) == 4
-  # No text of the page is selected, and the caret is where it was
-  @test e.buf.caret == caret && e.buf.anchor == e.buf.caret && e.scroll.offset == offset
+  # No text of the page is selected, and the page didn't scroll. The press put the caret on the block as a whole.
+  @test e.buf.caret == (v.first, 0) && K.picked(e.buf) !== nothing && e.buf.anchor == e.buf.caret && e.scroll.offset == offset
   # Once the mouse is up, the wheel scrolls the page again
   at((500, 600)); onscroll(w, Vec2{px}(0px, -30px)); frames()
   @test e.scroll.offset > offset

@@ -56,6 +56,12 @@ click(pos) = begin
 end
 "Run the page's Julia block, as ⌘Return in it does"
 run_page() = (i = findfirst(==("```julia"), e.buf.lines); t = findnext(==("```"), e.buf.lines, i); K.run_code(e, join(e.buf.lines[i+1:t-1], "\n")); frames())
+"Every piece of text that a node shows"
+texts(node, out=String[]) = begin
+  node isa K.Text ? push!(out, node.content) : node isa K.SemanticUI ? texts(K.describe(node), out) :
+  node isa K.GeometricUI && foreach(n -> texts(n, out), node.children)
+  out
+end
 
 @testset "the lines that are checks" begin
   @test K.checks(["# Words", "", "  a == 1  ", "b > 2"]) == ["a == 1", "b > 2"]
@@ -104,6 +110,8 @@ end
   # The dots were drawn in one row, at the left of the page, and the block is as tall as a line
   @test all(d -> d.rect[3] > 0px, dots) && allequal(d.rect[2] for d in dots) && issorted([d.rect[1] for d in dots])
   @test rect(v).height < 30px
+  # How many pass shows after the dots, with the mouse away from the block
+  @test !K.ishovered(v) && "3 of 5 checks pass" in texts(v)
   # The mouse over a dot shows its line, and what it found
   @test K.check_tip(v.results[4]) isa K.Box
   haskey(ENV, "LADDER_SHOTS") && save_png(joinpath(ENV["LADDER_SHOTS"], "check-dots.png"), w)
@@ -185,12 +193,6 @@ line(k) = view().parts[(:line, k)]
 "Click the line of check `k`, `col` characters into its code"
 click_line(k, col=0) = (r = rect(line(k)); click(Vec2{px}(r.left + K.CHECK_INSET + K.measure(K.check_face(), "0") * (col + 0.4), r.top + r.height / 2)))
 field() = K.check_input(view())
-"Every piece of text that a node shows"
-texts(node, out=String[]) = begin
-  node isa K.Text ? push!(out, node.content) : node isa K.SemanticUI ? texts(K.describe(node), out) :
-  node isa K.GeometricUI && foreach(n -> texts(n, out), node.children)
-  out
-end
 
 @testset "each check of the open block is changed where it is, as a line of Julia" begin
   e.buf.caret = e.buf.anchor = (1, 0)

@@ -12467,17 +12467,21 @@ block_tick!(v::CheckView) = begin
   v
 end
 
-"A closed `check` block: a dot for each check, in rows as wide as the page leaves them. With the mouse over it, how many pass shows after the dots."
+"""
+A closed `check` block: a dot for each check, in rows as wide as the page
+leaves them, and after the dots how many pass. With the mouse over it, the
+words also say that a click shows each check.
+"""
 describe_dots(v::CheckView) = begin
   rs = v.results
   dots = [block_part!(() -> CheckDot(of=v, i=i), v, (:dot, i)) for i in eachindex(rs)]
   # The words after the dots need about 280px
   across = max(1, floor(Int, num(editor(v).width - 280px) / num(CHECK_DOT + 6px)))
   rows = [Row(Alignment.Center, dots[i:min(i + across - 1, end)]...) for i in 1:across:length(dots)]
-  words = isempty(rs) ? check_words(rs) : ishovered(v) ? check_words(rs) * ". Click to see each one." : ""
+  words = check_words(rs) * (!isempty(rs) && ishovered(v) ? ". Click to see each one." : "")
   Row(width(grow=grow), Alignment.Center, padding(0px, 4px), child_gap=4px, name="Check",
       (isempty(rows) ? () : (Column(Alignment.Start, rows...),))...,
-      Box(width(grow=grow), Alignment.Start, padding(0px, 0px, 0px, 6px), label(words, 12px, color=colours.faint)))
+      Box(width(grow=grow), Alignment.Start, padding(0px, 0px, 0px, 6px), label(words, 13px, color=colours.dim)))
 end
 
 cursor(::CheckView) = :hand

@@ -65,6 +65,12 @@ names(v) = [basename(x.path) for x in K.contents(picker(v)) if x isa K.FileEntry
 "Click the line of the picker's list that has `name`"
 pick(v, name) = click(middle(only(x for x in K.contents(picker(v)) if x isa K.FileEntry && basename(x.path) == name)))
 shown(v) = (x = K.filter_shown!(v); x.subset === nothing ? [] : K.filter_table(x.data, x.subset))
+"Open the list at the block's name, and take its row Choose a file…"
+choose_file(v) = begin
+  click(middle(v.parts[:source]))
+  c = v.parts[:sources]
+  click(middle(c.parts[(:choice_row, findfirst(r -> r.key == :file, c.rows))]))
+end
 
 @testset "a load block with no file shows a picker of the page's folder" begin
   v = show_block(1)
@@ -84,23 +90,23 @@ shown(v) = (x = K.filter_shown!(v); x.subset === nothing ? [] : K.filter_table(x
   shot("load-picked.png")
 end
 
-@testset "Choose opens the picker in the folder of the block's file" begin
+@testset "Choose a file… opens the picker in the folder of the block's file" begin
   v = show_block(2)
-  @test !K.picks_file(v) && v.parts[(:button, :choose)].words == "Choose"
-  click(middle(v.parts[(:button, :choose)].rect))
-  @test K.picks_file(v) && v.choosing && picker(v).at == K.docdir(e) && v.parts[(:button, :choose)].on
+  @test !K.picks_file(v) && !haskey(v.parts, (:button, :choose))
+  choose_file(v)
+  @test K.picks_file(v) && v.choosing && picker(v).at == K.docdir(e)
   @test K.picker_words(v) == "Choose a CSV, TSV or JSON file to load in place of rows.csv."
   pick(v, "data"); pick(v, "more"); pick(v, "people.tsv")
   @test block(2) == ["from: data/more/people.tsv"] && !v.choosing
   @test shown(v) == [["Name", "Age"], ["Ann", "30"]]
   # The next time, it starts in the folder of that file. A name at the top goes back up to its folder.
-  click(middle(v.parts[(:button, :choose)].rect))
+  choose_file(v)
   @test picker(v).at == joinpath(K.docdir(e), "data", "more")
   click(middle(picker(v).crumbs[joinpath(K.docdir(e), "data")]))
   @test picker(v).at == joinpath(K.docdir(e), "data")
   shot("load-choose.png")
-  # Choose again closes it, and the file stays
-  click(middle(v.parts[(:button, :choose)].rect))
+  # Close closes it, and the file stays
+  click(middle(v.parts[(:button, :close_picker)].rect))
   @test !K.picks_file(v) && block(2) == ["from: data/more/people.tsv"]
 end
 

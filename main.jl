@@ -11045,6 +11045,7 @@ series_colours() = dark_page() ? SERIES_DARK : SERIES_LIGHT
   shown::Any = nothing                     # the version of the page, and what the chart shows of that page
   marks::Vector{Charts.Mark} = Charts.Mark[]   # the parts of the chart, where they were last drawn
   box::NTuple{4,Float64} = (0.0, 0.0, 0.0, 0.0)   # where the chart was last drawn in the window
+  sourcing::Bool = false                   # the list of files to draw is open, after Choose a file…
   parts::Dict{Any,Any} = Dict{Any,Any}()   # its buttons, kept between frames
 end
 
@@ -11152,10 +11153,10 @@ chart_data(e, v::ChartView) = begin
   drawn === nothing || return drawn
   tables = page_tables(e)
   k = isempty(c.from) ? something(findlast(t -> t.last < v.first, tables), findfirst(t -> t.first > v.last, tables), 0) :
-                        something(findfirst(t -> Charts.same(t.under, c.from), tables), 0)
+                        something(named_table(e, tables, c.from), 0)
   k == 0 && return Charts.nothing_to_draw(isempty(c.from) ?
     "This page has no table yet. Put a table, a spreadsheet or a sheet over this chart, and the chart draws its numbers." :
-    "This page has no table under a heading called “$(c.from)”.")
+    "This page has no table called “$(c.from)”. A table is called by the heading over it, with a number after it for the second table under that heading.")
   Charts.data(c, tables[k].rows, headed=tables[k].headed, by_first=tables[k].ranged)
 end
 
@@ -11179,8 +11180,9 @@ describe(v::ChartView) = begin
   with_theme(component_theme(e.zoom)) do
     bar = block_bar(
       [block_button!(v, k, (:kind, k), icon=icon, tip=tip, on=v.spec.kind == k) for (k, icon, tip) in CHART_KINDS]...,
+      rule(), source_button(v),
       (isempty(v.spec.title) ? () : (rule(), Row(width(grow=grow), padding(6px, 0px), clip=true, Box(label(v.spec.title, 13px, weight="Semibold")))))...)
-    Column(block_look()..., clip=true, name="Chart", bar,
+    Column(block_look()..., clip=true, name="Chart", bar, (v.sourcing ? from_picker_section(v) : ())...,
            isempty(d.problem) ? block_part!(() -> PlotArea(of=v), v, :area) : block_note(d.problem))
   end
 end
@@ -11188,6 +11190,7 @@ end
 cursor(::Union{ChartView,PlotArea}) = :arrow
 
 act!(v::ChartView, action, w) = begin
+  action == :close_picker && return (v.sourcing = false; handled)
   action isa Tuple && action[1] == :kind || return handled
   v.spec.kind = action[2]
   write_block!(v, CHART, Charts.written(v.spec))
@@ -11476,13 +11479,12 @@ The rows of the table of the page that a filter reads: the one under the
 heading that `from` names, or the nearest one above line `line`. `tables` are
 the page's tables that are above the filter.
 """
-page_filter_rows(spec::Filters.Filter, tables, line) = begin
+page_filter_rows(e, spec::Filters.Filter, tables, line) = begin
   from = String(strip(spec.from))
-  k = isempty(from) ? something(findlast(t -> t.last < line, tables), 0) :
-                      something(findfirst(t -> Charts.same(t.under, from), tables), 0)
+  k = isempty(from) ? something(findlast(t -> t.last < line, tables), 0) : something(named_table(e, tables, from), 0)
   k == 0 && return no_rows(isempty(from) ?
     "Name a CSV or JSON file with a line like “from: orders.csv”, or put a table over this block." :
-    "There's no file called $from beside this page, and no table under a heading called “$(from)” above this block.")
+    "There's no file called $from beside this page, and no table called “$(from)” above this block.")
   t = tables[k]
   rows = t.headed ? t.rows : [[["Name", "Value"]]; t.rows]   # a sheet's rows have no names
   wide = maximum(length, rows)
@@ -11525,7 +11527,7 @@ filter_subset(e, lines, tables, line; load=false) = begin
   elseif load && isempty(from)
     return found(no_rows("Name a file or a web address with a line like “from: orders.json” or “from: https://example.com/orders”."))
   else
-    isfilterable(from) || return found(page_filter_rows(spec, [t for t in tables if t.last < line], line))
+    isfilterable(from) || return found(page_filter_rows(e, spec, [t for t in tables if t.last < line], line))
     path = abspath(docdir(e), expanduser(from))
     name = basename(path)
   end
@@ -11674,7 +11676,9 @@ menu is open, the words in its field go into the block's lines as they're typed.
 A load block looks for the rows that it asked its server for.
 """
 block_tick!(v::FilterView) = begin
-  v.lang == LOAD && (load_tick!(v); pick_tick!(v))
+  v.lang == LOAD && load_tick!(v)
+  pick_tick!(v)
+  sources_tick!(v)
   from = String(strip(v.spec.from))
   isfilterable(from) && filter_file(abspath(docdir(editor(v)), expanduser(from)), v.spec.at)
   v.asking > 0 || return v
@@ -11727,15 +11731,12 @@ describe(v::FilterView) = begin
     icon = !load ? "funnel" : isempty(url) ? "file-earmark-arrow-down" : "cloud-arrow-down"
     refresh = isempty(url) ? () : (block_button!(v, :refresh, :refresh, icon="arrow-clockwise", words=v.job === nothing ? "Refresh" : "Loading…",
                                                  tip="Ask $(Saves.host(url)) for the rows again", off=v.job !== nothing || !isempty(load_problem(v))),)
-    # A load block with a `from` has a button that picks another file. One without shows the picker anyway.
-    choose = load && !isempty(strip(v.spec.from)) ?
-      (block_button!(v, :choose, :choose, icon="folder2-open", words="Choose", tip=v.choosing ? "Close the list of files" : "Choose another file to load", on=v.choosing),) : ()
     bar = block_bar(Box(width(6px)), Icon(icon, size=14px, color=colours.dim), Box(width(4px)),
-      Box(label(isempty(d.name) ? (load ? "Load" : "Filter") : d.name, 13px, weight="Semibold")),
+      source_button(v),
       (isempty(count) ? () : (rule(), Box(label(count, 12px, color=colours.dim))))...,
       Box(width(grow=grow)),
       (isempty(v.saved) ? () : (Box(label(v.saved, 12px, color=colours.dim)), Box(width(6px))))...,
-      choose..., refresh...,
+      refresh...,
       block_button!(v, :save, :save, icon="download", words="Save", tip="Save the rows that show as a new file", off=s === nothing || isempty(s.rows)))
     picker = picks_file(v) ? picker_section(v) : ()
     # With no `from`, the picker says what to do, so there's nothing else to say
@@ -12102,6 +12103,7 @@ end
 act!(v::FilterView, action, w) = begin
   action == :refresh && return (load_rows!(v); handled)
   action == :choose && return (toggle_picker!(v); handled)
+  action == :close_picker && return (v.choosing = false; handled)
   action == :key && return (ask_load_key!(v, w); handled)
   action == :save || return handled
   # A window that isn't on the screen, like one a test makes, has no panel to ask with
@@ -12578,6 +12580,7 @@ push!(BLOCK_ICONS, "save", "cloud-arrow-up", "arrow-right", "key", "check2", "ex
   failed::Bool = false                     # true when that went wrong
   nokey::Bool = false                      # the Keychain had no key with the name that `key` gives
   choosing::Bool = false                   # the list of folders is open, after a click on Choose
+  sourcing::Bool = false                   # the list of files to save the rows of is open, after Choose a file…
   parts::Dict{Any,Any} = Dict{Any,Any}()   # its buttons, kept between frames
 end
 
@@ -12601,11 +12604,12 @@ save_data(v::SaveView) = begin
   e = editor(v)
   tables = page_tables(e)
   from = String(strip(v.spec.from))
-  k = isempty(from) ? something(findlast(t -> t.last < v.first, tables), 0) :
-                      something(findfirst(t -> Charts.same(t.under, from), tables), 0)
+  # `from` can name a file of rows
+  isfilterable(from) && return filter_file(abspath(docdir(e), expanduser(from)), "")
+  k = isempty(from) ? something(findlast(t -> t.last < v.first, tables), 0) : something(named_table(e, tables, from), 0)
   k == 0 && return no_rows(isempty(from) ?
     "Put a table, a filter or a CSV file's table over this block, and the block saves its rows." :
-    "This page has no table under a heading called “$(from)”.")
+    "This page has no table called “$(from)”, and no file of that name beside it.")
   t = tables[k]
   name = isempty(t.under) ? "the table above" : t.under
   top = kinds(e.buf)[t.first]
@@ -12792,6 +12796,8 @@ end
 
 "In each frame while rows are on their way, a save block looks to see if they have gone"
 block_tick!(v::SaveView) = begin
+  sources_tick!(v)
+  from_pick_tick!(v)
   v.job === nothing && return v
   heard = v.job()
   heard === nothing && return v
@@ -12948,6 +12954,7 @@ act!(v::SaveView, action, w) = begin
     return handled
   end
   action == :choose && return (toggle_save_picker!(v); handled)
+  action == :close_picker && return (v.sourcing = false; handled)
   action == :save && v.job === nothing || return handled
   d = save_data(v)
   # Without a `to`, or after Choose, the rows go where the list of folders and the name field say
@@ -12969,7 +12976,7 @@ describe(v::SaveView) = begin
   key = String(strip(v.spec.key))
   v.job === nothing || redraw_in!(v, 0.2)   # so that a frame comes soon to see if the rows have gone
   with_theme(component_theme(e.zoom)) do
-    what = isempty(d.problem) ? "$(Saves.rows_words(length(d.rows) - 1)) of $(d.name)" : "Save"
+    what = isempty(d.problem) ? "$(Saves.rows_words(length(d.rows) - 1)) of" : "Save the rows of"
     path = asks ? chosen : save_target(v)
     go = v.job !== nothing ? "Sending…" : url ? "Send" : !isempty(path) && isfile(path) ? "Replace" : "Save"
     tip = url ? "Send the rows to $(Saves.host(to))" : isempty(to) ? "Type a name for the file first" :
@@ -12978,7 +12985,7 @@ describe(v::SaveView) = begin
     choose = isempty(strip(v.spec.to)) ? () :
       (block_button!(v, :choose, :choose, icon="folder2-open", words="Choose", tip=v.choosing ? "Close the list of folders" : "Choose another file to save in", on=v.choosing),)
     bar = block_bar(Box(width(6px)), Icon(url ? "cloud-arrow-up" : "save", size=14px, color=colours.dim), Box(width(4px)),
-      Box(label(what, 13px, weight="Semibold")),
+      Box(label(what, 13px, weight="Semibold")), Box(width(6px)), source_button(v),
       (isempty(to) ? () : (Box(width(6px)), Icon("arrow-right", size=12px, color=colours.dim), Box(width(6px)),
                            Box(label(url ? Saves.host(to) : basename(to), 13px))))...,
       (url && !isempty(key) ? (Box(width(10px)), Icon("key", size=12px, color=colours.dim), Box(width(4px)), Box(label(key, 12px, color=colours.dim))) : ())...,
@@ -12994,7 +13001,7 @@ describe(v::SaveView) = begin
       (isempty(icon) ? () : (Icon(icon, size=13px, color=colour),))...,
       Box(width(grow=grow), Text(words, size=12px, family=SANS, color=colour, wrap=WrapMode.words)),
       (v.nokey && Sys.isapple() ? (block_button!(v, :key, :key, icon="key", words="Add Key…", tip="Type the key, and Ladder keeps it in your Keychain"),) : ())...)
-    Column(block_look()..., clip=true, name="Save", bar, picker..., note)
+    Column(block_look()..., clip=true, name="Save", bar, (v.sourcing ? from_picker_section(v) : ())..., picker..., note)
   end
 end
 
@@ -13245,8 +13252,8 @@ end
 # file the block's `from`. The Choose button at the top of a load block opens
 # the picker again, in the folder of the block's file.
 
-"True when the load block `v` shows its file picker: it has no `from` yet, or Choose was clicked"
-picks_file(v::FilterView) = v.lang == LOAD && (v.choosing || isempty(strip(v.spec.from)))
+"True when the filter or the load block `v` shows its file picker: Choose a file… was clicked, or it's a load block with no `from` yet"
+picks_file(v::FilterView) = v.choosing || v.lang == LOAD && isempty(strip(v.spec.from))
 
 "The folder that the picker of the load block `v` starts in: the folder of its file, or the page's folder"
 load_start(v::FilterView) = begin
@@ -13263,15 +13270,19 @@ load_picker(v::FilterView) = block_part!(() -> Breadcrumb(at=load_start(v), open
 picker_words(v::FilterView) = begin
   from = String(strip(v.spec.from))
   isempty(from) ? "Choose a CSV, TSV or JSON file, or write a web address in a line like “from: https://example.com/orders”." :
-                  "Choose a CSV, TSV or JSON file to load in place of $(Saves.isurl(from) ? Saves.host(from) : basename(from))."
+                  "Choose a CSV, TSV or JSON file to $(v.lang == LOAD ? "load" : "filter") in place of $(Saves.isurl(from) ? Saves.host(from) : basename(from))."
 end
 
 "What a load block shows while it picks a file: a line that says what to do, and the breadcrumb"
 picker_section(v::FilterView) = begin
   p = load_picker(v)
   p.room = editor(v).width - 24px
-  (Column(width(grow=grow), Alignment.Start, padding(10px, 12px, 10px, 12px), child_gap=8px, name="Picker",
-     Box(width(grow=grow), Text(picker_words(v), size=12px, family=SANS, color=colours.dim, wrap=WrapMode.words)), p),)
+  words = Box(width(grow=grow), Text(picker_words(v), size=12px, family=SANS, color=colours.dim, wrap=WrapMode.words))
+  # A block that has a `from` can close the list and keep it
+  top = isempty(strip(v.spec.from)) ? words :
+        Row(width(grow=grow), Alignment.Center, child_gap=8px, words,
+            block_button!(v, :close_picker, :close_picker, icon="x-lg", words="Close", tip="Close the list of files"))
+  (Column(width(grow=grow), Alignment.Start, padding(10px, 12px, 10px, 12px), child_gap=8px, name="Picker", top, p),)
 end
 
 "Open the picker of the load block `v`, in the folder of its file, or close it"
@@ -13305,6 +13316,282 @@ pick_tick!(v::FilterView) = begin
 end
 
 BLOCKS[LOAD] = BlockKind("Load", "cloud-arrow-down", (; n) -> FilterView(n=n, lang=LOAD), filter_html)
+
+# --- where a block's rows come from --------------------------------------------------------
+#
+# A filter, a load block, a save block and a chart read rows. The name at the
+# top of each is a button that says where its rows come from. A click opens a
+# list under it, as the buttons of a `find` block do: the table nearest above,
+# each table of the page that it can read, and a last row, Choose a file…. A
+# table there is any table, sheet, spreadsheet, filter, load block or time log
+# of the page, or a line that shows a CSV file. A click on a row makes it the
+# block's `from`. Choose a file… shows a breadcrumb under the top of the block,
+# open, that lists folders and the files that the block can read. A click on
+# a file makes it the block's `from`, and Close keeps the `from` that it has.
+#
+# A `from` line calls a table by the heading over it, like `from: Costs`. The
+# second table under that heading is `from: Costs 2`. A table with no heading
+# over it is called by the name of the page's file.
+
+const SOURCE_MENU = :source_menu   # the key of the list of where a block's rows can come from
+
+"The button at the top of a block that says where its rows come from. A click opens the list of where else they can."
+@def mutable struct SourceButton <: SemanticUI
+  of::Any = nothing   # the block's view
+end
+
+"The list of where a block's rows can come from, while it shows: its rows, the one picked, and the words typed in its field"
+@def mutable struct SourceChooser <: SemanticUI
+  of::Any = nothing          # the block's view
+  asking::Any = nothing      # :source while the list shows
+  rows::Vector{Any} = Any[]
+  pick::Int = 1
+  typed::String = ""
+  parts::Dict{Any,Any} = Dict{Any,Any}()   # its field and its rows, kept between frames
+end
+
+"What a table with no heading over it is called: the name of the page's file"
+headless_name(e) = isempty(e.buf.path) ? "Untitled" : title(e.buf.path)
+
+"What table `n` of `tables`, the tables of the page of `e`, is called in a `from` line: the heading over it, with a number after it for the second table under that heading and the ones after"
+table_name(e, tables, n) = begin
+  base(t) = isempty(t.under) ? headless_name(e) : t.under
+  name = base(tables[n])
+  before = count(k -> Charts.same(base(tables[k]), name), 1:n-1)
+  before == 0 ? name : "$name $(before + 1)"
+end
+
+"""
+Which of `tables`, the tables of the page of `e` in their order, the `from`
+line `from` calls, or nothing. A heading calls the first table under it, and
+a heading with a number after it calls the table of that number under it. The
+name of the page's file calls the tables with no heading over them.
+"""
+named_table(e, tables, from) = begin
+  from = String(strip(from))
+  isempty(from) && return nothing
+  k = findfirst(t -> Charts.same(t.under, from), tables)
+  k === nothing || return k
+  m = match(r"^(.*\S)\s+(\d+)$", from)
+  base, n = m === nothing ? (from, 1) : (String(m[1]), parse(Int, m[2]))
+  ks = [k for (k, t) in enumerate(tables) if Charts.same(isempty(t.under) ? headless_name(e) : t.under, base)]
+  1 <= n <= length(ks) ? ks[n] : nothing
+end
+
+"What a table of the page of `e` is, in a word or two: the kind of block or line that it's in"
+table_kind(e, t) = begin
+  k = kinds(e.buf)[t.first]
+  k.kind == Kind.table && return "table"
+  k.kind == Kind.fence || return "CSV file"
+  k.lang == SHEET ? "sheet" : k.lang == SPREADSHEET ? "spreadsheet" : k.lang == FILTER ? "filter" :
+  k.lang == LOAD ? "load block" : k.lang == TIMELOG ? "time log" : "block"
+end
+
+# The language of each kind of block that reads rows, for writing its lines
+source_lang(v::FilterView) = v.lang
+source_lang(::SaveView) = SAVE
+source_lang(::ChartView) = CHART
+
+"The `from` of the block `v`"
+source_from(v::Union{FilterView,SaveView,ChartView}) = String(strip(v.spec.from))
+
+"""
+The tables that the block `v` can read, by their places among the page's
+tables. A filter, a load block and a save block read the tables above them,
+so a table never reads itself. A chart can read any.
+"""
+source_tables(v::Union{FilterView,SaveView}) = (ts = page_tables(editor(v)); [k for k in eachindex(ts) if ts[k].last < v.first])
+source_tables(v::ChartView) = (ts = page_tables(editor(v)); [k for k in eachindex(ts) if !(v.first <= ts[k].first <= v.last)])
+
+"True for the name of a file that the block `v` can read. A chart draws a CSV or TSV file. The others read JSON too."
+source_files(::ChartView) = istable
+source_files(_) = isfilterable
+
+"What the button of `v` says: where its rows come from"
+source_words(v) = begin
+  from = source_from(v)
+  isempty(from) && return v isa FilterView && v.lang == LOAD ? "Choose rows" : "The table above"
+  Saves.isurl(from) ? Saves.host(from) : source_files(v)(from) ? basename(from) : from
+end
+
+"The button of the block `v` that says where its rows come from"
+source_button(v) = block_part!(() -> SourceButton(of=v), v, :source)
+
+describe(b::SourceButton) = begin
+  v = b.of
+  from = source_from(v)
+  c = get(v.parts, :sources, nothing)
+  open = c !== nothing && c.asking !== nothing
+  icon = Saves.isurl(from) ? "cloud" : !isempty(from) && source_files(v)(from) ? "file-earmark" : "table"
+  Row(height(26px), padding(9px, 0px), child_gap=6px, radius(6px), Alignment.Center, name="Source",
+      border(1px, :solid, open ? colours.accent : colours.line), background(ishovered(b) ? colours.hover : colours.bg),
+    Icon(icon, size=13px, color=colours.dim), Box(label(source_words(v), 12px, weight="Semibold")), Icon("chevron-down", size=9px, color=colours.dim))
+end
+
+cursor(::SourceButton) = :hand
+onkey(b::SourceButton, ev::KeyPress{Keys.mouse_left}) = open_sources!(b, ev.window)
+
+"""
+The rows of the list of where the rows of `v` can come from: the table nearest
+above, each table of the page that `v` can read, the file or the server that
+it reads now, and a row that chooses a file. A load block's rows come from a
+file or a server, so it has no row for the table above.
+"""
+source_rows(v) = begin
+  e = editor(v)
+  ts = page_tables(e)
+  from = source_from(v)
+  rows = Any[]
+  v isa FilterView && v.lang == LOAD || push!(rows, (key="", name="The table above", short="", words=["the table above", "nearest"]))
+  for k in source_tables(v)
+    name, kind = table_name(e, ts, k), table_kind(e, ts[k])
+    push!(rows, (key=name, name=name, short=kind, words=[name, kind]))
+  end
+  isempty(from) || any(r -> r.key == from, rows) || named_table(e, ts, from) !== nothing ||
+    push!(rows, (key=from, name=source_words(v), short=Saves.isurl(from) ? "server" : "file", words=[from]))
+  push!(rows, (key=:file, name="Choose a file…", short="", words=["choose a file", "file"]))
+  rows
+end
+
+"The list of where the rows of the block `v` can come from, kept with the block"
+source_chooser(v) = block_part!(() -> SourceChooser(of=v), v, :sources)
+
+"The field at the top of the list of where rows can come from, that searches it"
+choice_input(c::SourceChooser) = block_part!(c, :filter) do
+  TextInput(placeholder="Filter…", font_family=SANS, font_size=13px,
+            look=(_, text) -> Row(width(grow=grow), height(grow=grow), clip=true, text))
+end
+
+"True when the row `r` of the list is where the block's rows come from now"
+chosen(c::SourceChooser, r) = r.key isa String && r.key == source_from(c.of)
+
+"Show the list of where the rows of the block of `b` can come from, under `b`, with the keyboard in its field"
+open_sources!(b::SourceButton, window) = begin
+  v = b.of
+  c = source_chooser(v)
+  stop_choosing!(c)
+  input = choice_input(c)
+  input.color = colours.ink
+  input.text = ""
+  input.anchor = input.cursor = 0
+  c.asking, c.typed = :source, ""
+  c.rows = source_rows(v)
+  c.pick = something(findfirst(r -> chosen(c, r), c.rows), 1)
+  focus(input)
+  menu = ChoiceMenu(of=c, button=b)
+  c.parts[:menu] = menu
+  popup!(window, menu, anchor=b, placement=:bottom, gap=9px, width=260px, key=SOURCE_MENU,
+         onclose=() -> stop_choosing!(c), theme=component_theme(editor(v).zoom))
+  handled
+end
+
+"Take the list away. The keyboard goes back to the page."
+stop_choosing!(c::SourceChooser) = begin
+  c.asking === nothing && return handled
+  c.asking = nothing
+  c.rows = Any[]
+  w = window_of(c)
+  w === nothing && return handled
+  close_popup!(w, SOURCE_MENU)
+  w.focus === choice_input(c) && focus(editor(c))
+  handled
+end
+
+"""
+What happens in each frame to the list: it closes when a click somewhere else
+took the keyboard from its field, and it keeps the rows that have the words in
+the field. New words pick the row whose name starts with them, or the first.
+"""
+choosing_tick!(c::SourceChooser) = begin
+  c.asking === nothing && return
+  w = window_of(c)
+  (w === nothing || w.focus !== choice_input(c)) && return stop_choosing!(c)
+  typed = String(strip(choice_input(c).text))
+  typed == c.typed && return
+  c.typed = typed
+  c.rows = filter!(r -> choice_matches(r, typed), source_rows(c.of))
+  c.pick = something(findfirst(r -> startswith(lowercase(r.name), lowercase(typed)), c.rows), 1)
+end
+
+"The list of the block `v`, in each frame"
+sources_tick!(v) = (c = get(v.parts, :sources, nothing); c === nothing || choosing_tick!(c); v)
+
+"Take row `k` of the list: its table is where the block's rows come from, or its file picker opens"
+choose!(c::SourceChooser, k::Int) = begin
+  (c.asking !== nothing && k in eachindex(c.rows)) || return stop_choosing!(c)
+  key = c.rows[k].key
+  stop_choosing!(c)
+  v = c.of
+  key == :file ? pick_file!(v) : key == source_from(v) ? close_picker!(v) : set_source!(v, key)
+  handled
+end
+
+"""
+`lines` with `from` as their `from` line, in place of the one there or first.
+An empty `from` takes the line away. An `at` line says where the list is in a
+JSON file, so it goes when `from` is neither a JSON file nor a web address.
+"""
+with_from(lines, from) = begin
+  out = String.(lines)
+  k = findfirst(l -> occursin(r"^\s*from\s*:"i, l), out)
+  if isempty(from)
+    k === nothing || deleteat!(out, k)
+  else
+    k === nothing ? pushfirst!(out, "from: $from") : (out[k] = "from: $from")
+  end
+  lowercase(splitext(from)[2]) in JSONS || Saves.isurl(from) || filter!(l -> !occursin(r"^\s*at\s*:"i, l), out)
+  out
+end
+
+"Make `from` where the rows of the block `v` come from, and close its file picker"
+set_source!(v, from) = (close_picker!(v); write_block!(v, source_lang(v), with_from(v.lines, from)))
+
+# The file picker of each kind of block: a filter's and a load block's is `load_picker`
+pick_file!(v::FilterView) = (v.choosing = false; toggle_picker!(v))
+close_picker!(v::FilterView) = (v.choosing = false; v)
+close_picker!(v::Union{SaveView,ChartView}) = (v.sourcing = false; v)
+
+"The folder that the file picker of `v` starts in: the folder of its file, or the page's folder"
+source_folder(v) = begin
+  e = editor(v)
+  from = source_from(v)
+  path = isempty(from) || Saves.isurl(from) ? "" : abspath(docdir(e), expanduser(from))
+  isfile(path) ? dirname(path) : isdir(docdir(e)) ? docdir(e) : homedir()
+end
+
+"The breadcrumb that picks the file that a save block or a chart reads"
+from_picker(v::Union{SaveView,ChartView}) = block_part!(() -> Breadcrumb(at=source_folder(v), open=true, files=source_files(v)), v, :from_picker)
+
+"Open the file picker of a save block or a chart, in the folder of its file or the page's"
+pick_file!(v::Union{SaveView,ChartView}) = begin
+  v.sourcing = true
+  p = from_picker(v)
+  p.at, p.open = source_folder(v), true
+  v
+end
+
+"What a save block or a chart shows while it picks the file that it reads: what to do, a Close button, and the breadcrumb"
+from_picker_section(v::Union{SaveView,ChartView}) = begin
+  p = from_picker(v)
+  p.room = editor(v).width - 24px
+  words = v isa ChartView ? "Choose a CSV or TSV file to draw." : "Choose a CSV, TSV or JSON file to save the rows of."
+  (Column(width(grow=grow), Alignment.Start, padding(10px, 12px, 10px, 12px), child_gap=8px, name="Picker",
+     Row(width(grow=grow), Alignment.Center, child_gap=8px,
+       Box(width(grow=grow), Text(words, size=12px, family=SANS, color=colours.dim, wrap=WrapMode.words)),
+       block_button!(v, :close_picker, :close_picker, icon="x-lg", words="Close", tip="Close the list of files")),
+     p),)
+end
+
+"When a file has been clicked in the file picker of `v`, it's where the rows of `v` come from, as a path from the page's folder"
+from_pick_tick!(v::Union{SaveView,ChartView}) = begin
+  v.sourcing || return v
+  p = from_picker(v)
+  isfile(p.at) && source_files(v)(p.at) || return v
+  path = p.at
+  # The next time the picker opens, it starts in a folder, not on this file
+  p.at = dirname(path)
+  set_source!(v, tilde(named(editor(v), path)))
+end
 
 # --- a map of a place ---------------------------------------------------------------------------
 #
@@ -16074,7 +16361,7 @@ describe(r::ChoiceRow) = begin
   v = r.of
   r.k <= length(v.rows) || return Box(height(0px))
   row = v.rows[r.k]
-  float_row(row.name, picked=v.pick == r.k, on=chosen(v, row))
+  float_row(row.name, get(row, :short, ""), picked=v.pick == r.k, on=chosen(v, row))
 end
 
 cursor(::ChoiceRow) = :hand
@@ -29813,7 +30100,7 @@ chart_file(e, c::Charts.Chart) = begin
 end
 
 # A chart whose `from` names a CSV file looks at the file in each frame, so it draws the new numbers when the file changes
-block_tick!(v::ChartView) = (path = chart_path(editor(v), v.spec); path === nothing || file_table(path); v)
+block_tick!(v::ChartView) = (path = chart_path(editor(v), v.spec); path === nothing || file_table(path); sources_tick!(v); from_pick_tick!(v); v)
 
 "The line `text` as HTML when it holds only a CSV file: the file's table, or the words that say why it has none. It's nothing for any other line."
 table_html(e, text) = begin

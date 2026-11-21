@@ -704,6 +704,8 @@ from: costs.csv
 where: Supplier is The yard
 ```
 
+The name at the top of a filter is a button. A click on it lists the tables of the page above the filter. Each is called by the heading over it, like Costs, or Costs 2 for the second table under that heading. Click one to filter its rows, or click Choose a file… to pick a file from a list of folders. A load block, a save block and a chart have the same button.
+
 ## Saving rows
 
 A code block in the language `save` writes the rows of the table above it into a file. Nothing is written until you click its button. This block saves the rows that the filter above it shows:

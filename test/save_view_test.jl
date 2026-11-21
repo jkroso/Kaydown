@@ -182,7 +182,7 @@ end
   @test note(show_save(7)) == "costs.md is this page. Name another file."
   @test occursin("no folder called nowhere", note(show_save(8)))
   @test occursin("https://", note(show_save(9)))
-  @test note(show_save(10)) == "This page has no table under a heading called “Nothing here”."
+  @test note(show_save(10)) == "This page has no table called “Nothing here”, and no file of that name beside it."
   v = show_save(11)
   @test occursin("Ladder replaces only a CSV, TSV, JSON or text file", note(v))
   @test button(v).off

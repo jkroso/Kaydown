@@ -31542,6 +31542,11 @@ end
 # selection, they run the code that's selected. With the caret in the line that
 # opens or closes the block, they run every expression of the block.
 #
+# In a Julia file, the command Run All (⌘⇧P) runs every expression of the
+# file, from the top, and shows what each one comes to. An expression that
+# fails doesn't stop the ones under it, so every result shows. Then the first
+# one that failed comes in sight. See `run_all!`.
+#
 # The code of a page runs in a module of the page's own, so a name that one
 # block makes is there for the next, and isn't on another page. The module has
 # the names that a live block has, like Slider and px, and the units of a
@@ -32086,6 +32091,33 @@ run_here!(e; step=false) = begin
   touch!(e)
   true
 end
+
+"""
+Run each piece of the code of a file of Julia code, from the top, and show what
+each one comes to after it, as ⌘Return does for one piece. A piece that fails
+doesn't stop the pieces under it, so every result shows. Then the first piece
+that failed comes in sight, when one did. The caret stays where it was.
+"""
+run_all!(e) = begin
+  b = e.buf
+  julia_file(b) || error("Run All runs the code of a Julia file.")
+  failed = 0
+  for r in statements(b.lines)
+    outcome!(e, r).failed && failed == 0 && (failed = first(r))
+  end
+  if failed > 0
+    r = line_rect(e, failed)
+    _, tall = window_size(e)
+    if r === nothing || r.top < TOPBAR_H || r.top + r.height > tall
+      note_place!(e)   # so ⌘⌥← goes back
+      e.nodes[:hold] = (max(failed - 3, 1), 24px - PAGE_TOP)
+    end
+  end
+  redraw_in!(e, 0)
+  nothing
+end
+
+works_here(e, ::Val{:run_all}) = julia_file(e)
 
 """
 Put each outcome of the page on the lines that its code is on now, and forget
@@ -35789,6 +35821,7 @@ add_command!(go_to_definition!, title="Go to where the name at the caret is defi
 add_command!(rename_in_code!, title="Give a name of the page's Julia code another name, wherever it means the same thing", kind=:edit)
 add_command!(find_uses!, title="List each place that uses the name at the caret, and go to one", kind=:look)
 add_command!(add_check!, title="Write a check of the call at the caret over its function, with the value that the call has now", kind=:edit)
+add_command!(run_all!, title="Run all the code of the file from the top, and show what each piece comes to", kind=:edit)
 add_command!(insert_block!, name=:insert, title="Add a block to the page: a table, a sheet, a chart and so on", kind=:edit)
 add_command!(theme!, title="Use other colours for the page")
 add_command!(text_size!, title="Make the page's text a number of pixels tall")
